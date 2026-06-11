@@ -91,6 +91,7 @@ export default function CustomerOrder({ userProfile }) {
   const [productError, setProductError] = useState("");
 
   const [cart, setCart] = useState([]);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [orders, setOrders] = useState([]);
   const [expandedOrders, setExpandedOrders] = useState({});
 
@@ -559,7 +560,9 @@ const incVatPrice = exVatPrice + vatAmount;
     }));
   };
 
-  const submitOrder = async () => {
+ const submitOrder = async () => {
+  if (isSubmittingOrder) return;
+
   if (!selectedCustomerAccount) {
     alert("Please select customer account.");
     return;
@@ -583,10 +586,7 @@ const incVatPrice = exVatPrice + vatAmount;
   );
   const orderTotal = Number(total || 0);
 
-  if (
-    creditLimit > 0 &&
-    outstandingBalance + orderTotal > creditLimit
-  ) {
+  if (creditLimit > 0 && outstandingBalance + orderTotal > creditLimit) {
     alert(
       `Order exceeds customer credit limit.\n\nOutstanding Balance: £${outstandingBalance.toFixed(
         2
@@ -596,6 +596,8 @@ const incVatPrice = exVatPrice + vatAmount;
     );
     return;
   }
+
+  setIsSubmittingOrder(true);
 
   try {
     const { orderNumber } = await createCustomerOrder({
@@ -638,10 +640,23 @@ const incVatPrice = exVatPrice + vatAmount;
 
     await fetchProducts();
 
-    alert("Order received successfully.");
+    alert(
+  `✅ Order Submitted Successfully
+
+Order Number: ${orderNumber}
+
+Thank you for your order.
+
+Your order has been received and is being processed by FairChoice.
+
+Please quote your Order Number if you need assistance.`
+
+);
   } catch (error) {
     console.error("Order submit error:", error);
     alert("Order failed. Check Supabase table permissions/RLS policies.");
+  } finally {
+    setIsSubmittingOrder(false);
   }
 };
 
@@ -1119,10 +1134,11 @@ const incVatPrice = exVatPrice + vatAmount;
             </div>
 
             <Cart
-              cart={cart}
-              total={total}
-              priceMode={priceMode}
-              onSubmit={submitOrder}
+             cart={cart}
+                total={total}
+                priceMode={priceMode}
+                onSubmit={submitOrder}
+                isSubmitting={isSubmittingOrder}
               onIncrease={increaseQty}
               onDecrease={decreaseQty}
               onRemove={removeItem}

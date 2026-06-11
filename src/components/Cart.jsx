@@ -19,11 +19,13 @@ export default function Cart({
   total,
   priceMode,
   onSubmit,
+  isSubmitting,
   onIncrease,
   onDecrease,
   onRemove,
   onChangeQty,
 }) {
+
   const [editing, setEditing] = useState(false);
 
   const itemCount = cart.reduce((sum, item) => sum + Number(item.qty || 0), 0);
@@ -144,13 +146,13 @@ export default function Cart({
           </div>
         )}
 
-        <button
-          onClick={onSubmit}
-          disabled={cart.length === 0}
-          className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40"
-        >
-          Submit Order
-        </button>
+     <button
+  onClick={onSubmit}
+  disabled={cart.length === 0 || isSubmitting}
+  className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
+>
+  {isSubmitting ? "Submitting..." : "Submit Order"}
+</button>
       </div>
     </div>
   );
