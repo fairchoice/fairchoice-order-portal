@@ -4,10 +4,12 @@ export async function getProducts() {
   const { data, error } = await supabase
     .from("products")
     .select("*")
-    .eq("status", "Active")
+    .eq("status", "active")
+    .or("available_in_wales.eq.true,available_in_england.eq.true")
     .order("brand", { ascending: true })
     .order("series", { ascending: true })
     .order("product_name", { ascending: true });
+    
 
   if (error) throw error;
 
