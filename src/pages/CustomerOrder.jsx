@@ -373,19 +373,19 @@ const getVatRate = (vatType) => {
     ),
   ];
 
-  const brands = [
-    "All Brands",
-    ...new Set(
-      products
-        .filter(
-          (p) =>
-            selectedSubCategory === "All Sub Categories" ||
-            p.subCategory === selectedSubCategory
-        )
-        .map((p) => p.brand)
-        .filter(Boolean)
-    ),
-  ];
+const brands = [
+  "All Brands",
+  ...new Set(
+    products
+      .filter(
+        (p) =>
+          selectedCategory === "All Products" ||
+          p.category === selectedCategory
+      )
+      .map((p) => p.brand)
+      .filter(Boolean)
+  ),
+];
 
   const seriesList = [
   "All Series",
