@@ -70,6 +70,7 @@ const handleImageUpload = async () => {
   };
 
   const [importing, setImporting] = useState(false);
+  const [updatingCodes, setUpdatingCodes] = useState(false);
 
   const normalize = (value) =>
   String(value || "")
@@ -124,21 +125,21 @@ const handleImportExcel = async (e) => {
   .filter((o) => o.option_type === "main_category")
   .map((o) => normalize(o.option_name));
 
-const validSubCategories = productOptions
-  .filter((o) => o.option_type === "sub_category")
-  .map((o) => normalize(o.option_name));
+  const validSubCategories = productOptions
+    .filter((o) => o.option_type === "sub_category")
+    .map((o) => normalize(o.option_name));
 
-const validBrands = productOptions
-  .filter((o) => o.option_type === "brand")
-  .map((o) => normalize(o.option_name));
+  const validBrands = productOptions
+    .filter((o) => o.option_type === "brand")
+    .map((o) => normalize(o.option_name));
 
-const validSeries = productOptions
-  .filter((o) => o.option_type === "series")
-  .map((o) => normalize(o.option_name));
+  const validSeries = productOptions
+    .filter((o) => o.option_type === "series")
+    .map((o) => normalize(o.option_name));
 
-const validationErrors = [];
+  const validationErrors = [];
 
-validRows.forEach((row, index) => {
+  validRows.forEach((row, index) => {
   const rowNumber = index + 2;
 
   if (
@@ -248,7 +249,7 @@ if (validationErrors.length > 0) {
       }
     });
 
-   
+  
     
 
     if (stockMovements.length > 0) {
@@ -273,7 +274,56 @@ if (validationErrors.length > 0) {
   e.target.value = "";
 };
 
+const handleBulkCodeUpdate = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
 
+  setUpdatingCodes(true);
+
+  try {
+    const data = await file.arrayBuffer();
+    const workbook = XLSX.read(data);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet);
+
+    let updatedCount = 0;
+
+    for (const row of rows) {
+      const productName = row.product_name || "";
+      const oldCode = row.old_product_code || "";
+      const newCode = row.new_product_code || "";
+
+      if (!productName || !oldCode || !newCode) continue;
+
+      const { data: product } = await supabase
+        .from("products")
+        .select("id")
+        .eq("product_name", productName)
+        .eq("product_code", oldCode)
+        .single();
+
+      if (!product) continue;
+
+      const { error } = await supabase
+        .from("products")
+        .update({
+          product_code: newCode,
+        })
+        .eq("id", product.id);
+
+      if (!error) updatedCount++;
+    }
+
+    alert(`${updatedCount} product codes updated successfully.`);
+
+    await fetchProducts();
+  } catch (err) {
+    alert("Bulk code update failed: " + err.message);
+  }
+
+  setUpdatingCodes(false);
+  e.target.value = "";
+};
 
  /* ==========================
    Export and Import Tabs
@@ -341,6 +391,8 @@ const handleExportExcel = () => {
 
   if (!error) setProductOptions(data || []);
 };
+
+
 
 useEffect(() => {
   fetchProductOptions();
@@ -465,24 +517,60 @@ const bulkUpdateStatus = async (status) => {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-5">
-        {["add", "edit", "export", "import"].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`p-3 rounded-xl font-bold ${
-              activeTab === tab
-                ? "bg-blue-600 text-white"
-                : "bg-white border text-slate-700"
-            }`}
-          >
-            {tab === "add" && "Add Product"}
-            {tab === "edit" && "Edit Products"}
-            {tab === "export" && "Export Excel"}
-            {tab === "import" && "Import Excel"}
-          </button>
-        ))}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-5">
+  {["add", "edit", "export", "import", "codeupdate"].map((tab) => (
+    <button
+      key={tab}
+      onClick={() => setActiveTab(tab)}
+      className={`p-3 rounded-xl font-bold ${
+        activeTab === tab
+          ? "bg-blue-600 text-white"
+          : "bg-white border text-slate-700"
+      }`}
+    >
+      {tab === "add" && "Add Product"}
+      {tab === "edit" && "Edit Products"}
+      {tab === "export" && "Export Excel"}
+      {tab === "import" && "Import Excel"}
+      {tab === "codeupdate" && "Bulk Code Update"}
+    </button>
+  ))}
+</div>
+
+      {activeTab === "codeupdate" && (
+  <div className="bg-white rounded-2xl shadow-sm p-5">
+    <h3 className="text-xl font-bold mb-4">
+      Bulk Code Update
+    </h3>
+
+    <p className="mb-4 text-slate-600">
+      Excel columns required:
+      product_name,
+      old_product_code,
+      new_product_code
+    </p>
+
+    <label className="inline-block cursor-pointer">
+      <input
+        type="file"
+        accept=".xlsx,.csv"
+        onChange={handleBulkCodeUpdate}
+        disabled={updatingCodes}
+        className="hidden"
+      />
+
+      <div className="bg-orange-600 hover:bg-orange-700 text-white font-bold px-6 py-4 rounded-xl">
+        Upload Code Update File
       </div>
+    </label>
+
+    {updatingCodes && (
+      <div className="mt-4">
+        Updating product codes...
+      </div>
+    )}
+  </div>
+)}
 
       {activeTab === "add" && (
         <div className="bg-white rounded-2xl shadow-sm p-5">
