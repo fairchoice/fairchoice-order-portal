@@ -200,3 +200,15 @@
     width: 100%;
   }
 }
+
+.th-product {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.desc-col {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

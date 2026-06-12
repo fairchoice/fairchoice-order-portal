@@ -45,6 +45,8 @@ function normalizeProduct(raw) {
     availableInWales: raw.available_in_wales === true,
     vatType: raw.vat_type || "20",
     availableFromSupplier: raw.available_from_supplier !== false,
+    recommended: raw.recommended === true,
+    topSeller: raw.top_seller === true,
   };
 }
 export default function CustomerOrder({ userProfile }) {
@@ -360,79 +362,109 @@ const getVatRate = (vatType) => {
   ];
 
   const subCategories = [
-    "All Sub Categories",
-    ...new Set(
-      products
-        .filter(
-          (p) =>
-            selectedCategory === "All Products" ||
-            p.category === selectedCategory
-        )
-        .map((p) => p.subCategory)
-        .filter(Boolean)
-    ),
-  ];
-
-  const brands = [
-    "All Brands",
-    ...new Set(
-      products
-        .filter(
-          (p) =>
-            selectedSubCategory === "All Sub Categories" ||
-            p.subCategory === selectedSubCategory
-        )
-        .map((p) => p.brand)
-        .filter(Boolean)
-    ),
-  ];
-
-  const seriesList = [
-  "All Series",
+  "All Sub Categories",
   ...new Set(
     products
-      .map((p) => p.series)
+      .filter(
+        (p) =>
+          selectedCategory === "All Products" ||
+          p.category === selectedCategory
+      )
+      .map((p) => String(p.subCategory || "").trim())
       .filter(Boolean)
   ),
 ];
 
-  const filteredProducts = useMemo(() => {
-    return products.filter((product) => {
-      if (
-        (orderCountry === "England" && !product.availableInEngland) ||
-        (orderCountry === "Wales" && !product.availableInWales)
-      ) {
-        return false;
-      }
+const brands = [
+  "All Brands",
+  ...new Set(
+    products
+      .filter(
+        (p) =>
+          (selectedCategory === "All Products" ||
+            p.category === selectedCategory) &&
+          (selectedSubCategory === "All Sub Categories" ||
+            p.subCategory === selectedSubCategory)
+      )
+      .map((p) => String(p.brand || "").trim())
+      .filter(Boolean)
+  ),
+];
 
-      const keyword = search.trim().toLowerCase();
 
-      return (
-        product.active &&
-        (selectedCategory === "All Products" ||
-          product.category === selectedCategory) &&
-        (selectedSubCategory === "All Sub Categories" ||
-          product.subCategory === selectedSubCategory) &&
-        (selectedBrand === "All Brands" ||
-          product.brand === selectedBrand) &&
-        (selectedSeries === "All Series" ||
-          product.series === selectedSeries) &&
-        (keyword === "" ||
-          product.name.toLowerCase().includes(keyword) ||
-          product.brand.toLowerCase().includes(keyword) ||
-          product.series.toLowerCase().includes(keyword) ||
-          product.flavour.toLowerCase().includes(keyword))
-      );
-    });
-  }, [
-    products,
-    selectedCategory,
-    selectedSubCategory,
-    selectedBrand,
-    selectedSeries,
-    search,
-    orderCountry,
-  ]);
+const seriesList = [
+  "All Series",
+  ...new Set(
+    products
+      .filter(
+        (p) =>
+          (selectedCategory === "All Products" ||
+            p.category === selectedCategory) &&
+          (selectedSubCategory === "All Sub Categories" ||
+            p.subCategory === selectedSubCategory) &&
+          (selectedBrand === "All Brands" ||
+            p.brand === selectedBrand)
+      )
+      .map((p) => String(p.series || "").trim())
+      .filter(Boolean)
+  ),
+];
+
+const filteredProducts = useMemo(() => {
+  const noFiltersSelected =
+  selectedCategory === "All Products" &&
+  selectedSubCategory === "All Sub Categories" &&
+  selectedBrand === "All Brands" &&
+  selectedSeries === "All Series" &&
+  search.trim() === "";
+
+const baseProducts = noFiltersSelected
+  ? products
+      .filter((p) => p.recommended === true || p.topSeller === true)
+      .slice(0, 10)
+  : products;
+
+  return baseProducts.filter((product) => {
+    if (
+      (orderCountry === "England" && !product.availableInEngland) ||
+      (orderCountry === "Wales" && !product.availableInWales)
+    ) {
+      return false;
+    }
+
+    const keyword = search.trim().toLowerCase();
+
+    const productCategory = String(product.category || "").trim();
+    const productSubCategory = String(product.subCategory || "").trim();
+    const productBrand = String(product.brand || "").trim();
+    const productSeries = String(product.series || "").trim();
+
+    return (
+      product.active &&
+      (selectedCategory === "All Products" ||
+        productCategory === selectedCategory) &&
+      (selectedSubCategory === "All Sub Categories" ||
+        productSubCategory === selectedSubCategory) &&
+      (selectedBrand === "All Brands" ||
+        productBrand === selectedBrand) &&
+      (selectedSeries === "All Series" ||
+        productSeries === selectedSeries) &&
+      (keyword === "" ||
+        String(product.name || "").toLowerCase().includes(keyword) ||
+        productBrand.toLowerCase().includes(keyword) ||
+        productSeries.toLowerCase().includes(keyword) ||
+        String(product.flavour || "").toLowerCase().includes(keyword))
+    );
+  });
+}, [
+  products,
+  selectedCategory,
+  selectedSubCategory,
+  selectedBrand,
+  selectedSeries,
+  search,
+  orderCountry,
+]);
 
   const addToCart = (product, qty = 1) => {
   const quantity = Math.max(1, Number(qty || 1));
@@ -851,7 +883,7 @@ Please quote your Order Number if you need assistance.`
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 p-4">
+    <div className="min-h-screen bg-slate-100 p-4 pb-40">
       <div className="max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
         <div className="bg-gradient-to-r from-blue-950 to-blue-700 text-white px-6 py-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
@@ -1077,22 +1109,35 @@ Please quote your Order Number if you need assistance.`
     </div>
   </div>
 
-  <ProductFilters
-    search={search}
-    setSearch={setSearch}
-    categories={categories}
-    selectedCategory={selectedCategory}
-    setSelectedCategory={setSelectedCategory}
-    brands={brands}
-    selectedBrand={selectedBrand}
-    setSelectedBrand={setSelectedBrand}
-    seriesList={seriesList}
-    selectedSeries={selectedSeries}
-    setSelectedSeries={setSelectedSeries}
-    subCategories={subCategories}
-    selectedSubCategory={selectedSubCategory}
-    setSelectedSubCategory={setSelectedSubCategory}
-  />
+<ProductFilters
+  search={search}
+  setSearch={setSearch}
+  categories={categories}
+  selectedCategory={selectedCategory}
+  brands={brands}
+  selectedBrand={selectedBrand}
+  seriesList={seriesList}
+  selectedSeries={selectedSeries}
+  subCategories={subCategories}
+  selectedSubCategory={selectedSubCategory}
+  setSelectedCategory={(value) => {
+    setSelectedCategory(value);
+    setSelectedSubCategory("All Sub Categories");
+    setSelectedBrand("All Brands");
+    setSelectedSeries("All Series");
+  }}
+  setSelectedSubCategory={(value) => {
+    setSelectedSubCategory(value);
+    setSelectedBrand("All Brands");
+    setSelectedSeries("All Series");
+  }}
+  setSelectedBrand={(value) => {
+    setSelectedBrand(value);
+    setSelectedSeries("All Series");
+  }}
+  setSelectedSeries={setSelectedSeries}
+/>
+
 </div>
 
             <div className="lg:col-span-3">
@@ -1228,46 +1273,43 @@ Please quote your Order Number if you need assistance.`
             </div>
           </div>
         )}
-        <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-xl p-3">
-  <div className="max-w-7xl mx-auto flex items-center justify-between">
-    <div>
-      <div className="text-xs text-slate-500">
-        {cart.reduce((sum, item) => sum + item.qty, 0)} Items
+
+
+     
+      {page === "order" && (
+  <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-xl p-3">
+    <div className="max-w-7xl mx-auto flex items-center justify-between">
+      <div>
+        <div className="text-xs text-slate-500">
+          {cart.reduce((sum, item) => sum + item.qty, 0)} Items
+        </div>
+
+        <div className="font-bold text-xl">
+          £{total.toFixed(2)}
+        </div>
       </div>
 
-      <div className="font-bold text-xl">
-        £{total.toFixed(2)}
-      </div>
-    </div>
-
-    <button
-      onClick={() => {
-        document
-          .querySelector(".checkout-section")
-          ?.scrollIntoView({
+      <button
+        onClick={() => {
+          document.querySelector(".checkout-section")?.scrollIntoView({
             behavior: "smooth",
             block: "start",
           });
-      }}
-      className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-bold"
-    >
-      Checkout
-    </button>
+        }}
+        className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-bold"
+      >
+        Checkout
+      </button>
+    </div>
+  </div>
+)}
 
-    <button
+<button
   onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
   className="fixed bottom-20 right-3 z-50 bg-slate-800 text-white text-xs font-bold px-3 py-2 rounded-full shadow-lg opacity-80 hover:opacity-100"
 >
   ↑ Top
 </button>
-  </div>
-  
-</div>
-
-
-
-
-
 
       </div>
     </div>
