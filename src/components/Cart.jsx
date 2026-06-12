@@ -17,6 +17,11 @@ function getVatRate(vatType) {
 export default function Cart({
   cart,
   total,
+  originalTotal,
+  orderDiscountPercent,
+  setOrderDiscountPercent,
+  discountAmount,
+  canDiscount,
   priceMode,
   onSubmit,
   isSubmitting,
@@ -122,7 +127,7 @@ export default function Cart({
           <span>{itemCount}</span>
         </div>
 
-        {priceMode === "vat" ? (
+          {priceMode === "vat" ? (
           <>
             <div className="flex justify-between text-sm text-slate-600 mb-2">
               <span>Net Total</span>
@@ -136,8 +141,40 @@ export default function Cart({
 
             <div className="flex justify-between font-bold text-2xl border-t pt-2 mt-2">
               <span>Total</span>
-              <span>£{grandTotal.toFixed(2)}</span>
+              <span>£{Number(total || 0).toFixed(2)}</span>
             </div>
+
+            {canDiscount && (
+  <div className="border-t mt-3 pt-3">
+    <div className="flex justify-between items-center mb-2">
+      <span className="font-medium">Discount %</span>
+
+      <input
+        type="number"
+        min="0"
+        max="100"
+        step="0.1"
+        value={orderDiscountPercent}
+        onChange={(e) => setOrderDiscountPercent(e.target.value)}
+        className="w-20 border rounded-lg px-2 py-1 text-right"
+      />
+    </div>
+
+    {Number(orderDiscountPercent || 0) > 0 && (
+      <>
+        <div className="flex justify-between text-sm text-red-600">
+          <span>Discount</span>
+          <span>-£{Number(discountAmount || 0).toFixed(2)}</span>
+        </div>
+
+        <div className="flex justify-between font-bold text-green-700 mt-1">
+          <span>Final Total</span>
+          <span>£{Number(originalTotal || 0).toFixed(2)}</span>
+        </div>
+      </>
+    )}
+  </div>
+)}
           </>
         ) : (
           <div className="flex justify-between font-bold text-2xl">

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase.js";
 
+
 import ProductCard from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
 import Cart from "../components/Cart.jsx";
@@ -47,6 +48,10 @@ function normalizeProduct(raw) {
     availableFromSupplier: raw.available_from_supplier !== false,
     recommended: raw.recommended === true,
     topSeller: raw.top_seller === true,
+    costPrice: Number(raw.cost_price || 0),
+    supplierName: raw.supplier_name || "",
+    salesAccount: raw.sales_account || "",
+    purchaseAccount: raw.purchase_account || "",
   };
 }
 export default function CustomerOrder({ userProfile }) {
@@ -77,8 +82,13 @@ export default function CustomerOrder({ userProfile }) {
   const [selectedCustomerAccount, setSelectedCustomerAccount] = useState(null);
   const [selectedBranch, setSelectedBranch] = useState(null);
 
+  const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
+ 
+
   const [priceMode, setPriceMode] = useState("vat");
   const [companyName, setCompanyName] = useState("");
+
+  const [manualCountry, setManualCountry] = useState("Wales");
 
   const [pricingSettings, setPricingSettings] = useState({
     server_discount_percent: 2,
@@ -107,6 +117,7 @@ export default function CustomerOrder({ userProfile }) {
   const [selectedImage, setSelectedImage] = useState(null);
 
   const [editingId, setEditingId] = useState(null);
+
   const [productForm, setProductForm] = useState({
     productCode: "",
     name: "",
@@ -125,10 +136,18 @@ export default function CustomerOrder({ userProfile }) {
     availableInWales: true,
     vatType: "20",
     availableFromSupplier: true,
+    costPrice: "",
+    supplierName: "",
+    salesAccount: "",
+    purchaseAccount: "",
   });
 
   const orderCountry =
-    selectedBranch?.country || selectedCustomerAccount?.country || "Wales";
+  (isAdmin || isSalesRep)
+    ? manualCountry
+    : selectedBranch?.country ||
+      selectedCustomerAccount?.country ||
+      "Wales";
 
   const roundToFairQuarter = (price) => {
   const value = Number(price || 0);
@@ -151,23 +170,32 @@ const getVatRate = (vatType) => {
 };
 
   const getPrice = (product) => {
+  const mode = String(priceMode || "").toLowerCase();
+
+  const cashPrice = Number(product.cashPrice || 0);
+
+  if (
+    (mode === "server" || mode === "manager") &&
+    cashPrice > 0
+  ) {
+    return cashPrice;
+  }
+
   const exVatPrice = Number(product.vatPrice || 0);
   const vatRate = getVatRate(product.vatType);
   const incVatPrice = exVatPrice + exVatPrice * (vatRate / 100);
 
-  // Ex. VAT mode: product card shows uploaded/imported VAT price only
-  if (priceMode === "vat") {
+  if (mode === "vat") {
     return exVatPrice;
   }
 
-  // Server / Manager / Super: calculate after VAT, then discount, then round
   const discounts = {
     server: pricingSettings.server_discount_percent,
     manager: pricingSettings.manager_discount_percent,
     super: pricingSettings.super_discount_percent,
   };
 
-  const discount = Number(discounts[priceMode] || 0);
+  const discount = Number(discounts[mode] || 0);
   const discountedPrice = incVatPrice * (1 - discount / 100);
 
   return roundToFairQuarter(discountedPrice);
@@ -415,17 +443,20 @@ const seriesList = [
 
 const filteredProducts = useMemo(() => {
   const noFiltersSelected =
-  selectedCategory === "All Products" &&
-  selectedSubCategory === "All Sub Categories" &&
-  selectedBrand === "All Brands" &&
-  selectedSeries === "All Series" &&
-  search.trim() === "";
+    selectedCategory === "All Products" &&
+    selectedSubCategory === "All Sub Categories" &&
+    selectedBrand === "All Brands" &&
+    selectedSeries === "All Series" &&
+    search.trim() === "";
 
-const baseProducts = noFiltersSelected
-  ? products
-      .filter((p) => p.recommended === true || p.topSeller === true)
-      .slice(0, 10)
-  : products;
+  const recommendedProducts = products
+  .filter((p) => p.recommended === true || p.topSeller === true)
+  .slice(0, 10);
+
+const baseProducts =
+  noFiltersSelected
+    ? recommendedProducts
+    : products;
 
   return baseProducts.filter((product) => {
     if (
@@ -588,6 +619,12 @@ const incVatPrice = exVatPrice + vatAmount;
   return sum + Number(item.selectedPrice || 0) * qty;
 }, 0);
 
+ const discountAmount =
+  total * (Number(orderDiscountPercent || 0) / 100);
+
+const finalTotal =
+  Math.max(0, total - discountAmount);
+
   const toggleOrderExpanded = (orderId) => {
     setExpandedOrders((old) => ({
       ...old,
@@ -619,7 +656,7 @@ const incVatPrice = exVatPrice + vatAmount;
   const outstandingBalance = Number(
     selectedCustomerAccount?.outstanding_balance || 0
   );
-  const orderTotal = Number(total || 0);
+  const orderTotal = Number(finalTotal || 0);
 
   if (creditLimit > 0 && outstandingBalance + orderTotal > creditLimit) {
     alert(
@@ -636,34 +673,44 @@ const incVatPrice = exVatPrice + vatAmount;
 
   try {
     const { orderNumber } = await createCustomerOrder({
-      companyName: selectedCustomerAccount.account_name,
-      priceMode,
-      cart,
-      total,
-      customer_account_id: selectedCustomerAccount.id,
-      customer_branch_id: selectedBranch?.id || null,
-      delivery_branch_name: selectedBranch?.branch_name || "",
-      delivery_address: selectedBranch?.delivery_address || "",
-      delivery_postcode: selectedBranch?.postcode || "",
-      customer_country: orderCountry,
-      credit_limit: creditLimit,
-    });
+  companyName: selectedCustomerAccount.account_name,
+  priceMode,
+  cart,
+  total: finalTotal,
 
-    const newOrder = {
-      orderId: orderNumber,
-      customerName: selectedCustomerAccount.account_name,
-      phoneNumber: "",
-      companyName: selectedCustomerAccount.account_name,
-      deliveryAddress: selectedBranch?.delivery_address || "",
-      priceMode,
-      total,
-      createdAt: new Date().toLocaleString(),
-      status: "Received",
-      items: cart,
-    };
+discount_percent: Number(orderDiscountPercent || 0),
+discount_amount: Number(discountAmount || 0),
 
+discount_applied_by: userProfile?.id || "",
+discount_applied_by_name:
+  userProfile?.full_name || userProfile?.name || "",
+
+  customer_account_id: selectedCustomerAccount.id,
+  customer_branch_id: selectedBranch?.id || null,
+  delivery_branch_name: selectedBranch?.branch_name || "",
+  delivery_address: selectedBranch?.delivery_address || "",
+  delivery_postcode: selectedBranch?.postcode || "",
+  customer_country: orderCountry,
+  credit_limit: creditLimit,
+});
+
+   const newOrder = {
+  orderId: orderNumber,
+  customerName: selectedCustomerAccount.account_name,
+  companyName: selectedCustomerAccount.account_name,
+  deliveryAddress: selectedBranch?.delivery_address || "",
+  priceMode,
+  total: finalTotal,
+  order_discount: Number(orderDiscount || 0),
+  discount_applied_by_name:
+    userProfile?.full_name || userProfile?.name || "",
+  createdAt: new Date().toLocaleString(),
+  status: "Received",
+  items: cart,
+};
     setOrders((oldOrders) => [newOrder, ...oldOrders]);
     setCart([]);
+    setOrderDiscount(0);
 
     if (!isCustomer) {
       setSelectedCustomerId("");
@@ -736,8 +783,12 @@ Please quote your Order Number if you need assistance.`
       brand: productForm.brand,
       series: productForm.series,
       flavour: productForm.flavour,
-      cash_price: 0,
-      vat_price: Number(productForm.vatPrice),
+      cash_price: Number(productForm.cashPrice || 0),
+      vat_price: Number(productForm.vatPrice || 0),
+      cost_price: Number(productForm.costPrice || 0),
+      supplier_name: productForm.supplierName || "",
+      sales_account: productForm.salesAccount || "",
+      purchase_account: productForm.purchaseAccount || "",
       carton_size: productForm.cartonSize,
       image_url:
         productForm.image || "https://placehold.co/400x300?text=Product",
@@ -748,6 +799,8 @@ Please quote your Order Number if you need assistance.`
       available_in_wales: productForm.availableInWales,
       vat_type: productForm.vatType,
       available_from_supplier: productForm.availableFromSupplier !== false,
+      
+           
     };
 
     const response = editingId
@@ -784,6 +837,10 @@ Please quote your Order Number if you need assistance.`
       availableInWales: true,
       vatType: "20",
       availableFromSupplier: true,
+      costPrice: "",
+      supplierName: "",
+      salesAccount: "",
+      purchaseAccount: "",
     });
 
     await fetchProducts();
@@ -811,6 +868,10 @@ Please quote your Order Number if you need assistance.`
       availableInWales: product.availableInWales === true,
       vatType: product.vatType || "20",
       availableFromSupplier: product.availableFromSupplier !== false,
+      costPrice: product.costPrice || "",
+      supplierName: product.supplierName || "",
+      salesAccount: product.salesAccount || "",
+      purchaseAccount: product.purchaseAccount || "",
     });
 
     setPage("products");
@@ -1016,7 +1077,7 @@ Please quote your Order Number if you need assistance.`
 </select>
   </div>
 
-  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
     <div>
       <label className="font-bold text-sm block mb-1">
         Customer Details
@@ -1110,6 +1171,22 @@ Please quote your Order Number if you need assistance.`
           ))}
       </select>
     </div>
+
+    <div>
+  <label className="font-bold text-sm block mb-1">
+    Country
+  </label>
+
+  <select
+    className="border rounded-xl p-3 w-full"
+    value={manualCountry}
+    onChange={(e) => setManualCountry(e.target.value)}
+  >
+    <option value="England">England</option>
+    <option value="Wales">Wales</option>
+  </select>
+</div>  
+     
   </div>
 
 <ProductFilters
@@ -1181,17 +1258,22 @@ Please quote your Order Number if you need assistance.`
               </div>
             </div>
 
-            <Cart
-             cart={cart}
-                total={total}
-                priceMode={priceMode}
-                onSubmit={submitOrder}
-                isSubmitting={isSubmittingOrder}
-              onIncrease={increaseQty}
-              onDecrease={decreaseQty}
-              onRemove={removeItem}
-              onChangeQty={changeQty}
-            />
+           <Cart
+            cart={cart}
+            total={finalTotal}
+            originalTotal={total}
+            orderDiscountPercent={orderDiscountPercent}
+            setOrderDiscountPercent={setOrderDiscountPercent}
+            discountAmount={discountAmount}
+            canDiscount={isAdmin || isSalesRep}
+            priceMode={priceMode}
+            onSubmit={submitOrder}
+            isSubmitting={isSubmittingOrder}
+            onIncrease={increaseQty}
+            onDecrease={decreaseQty}
+            onRemove={removeItem}
+            onChangeQty={changeQty}
+          />
           </div>
         )}
 
@@ -1288,7 +1370,7 @@ Please quote your Order Number if you need assistance.`
         </div>
 
         <div className="font-bold text-xl">
-          £{total.toFixed(2)}
+          £{finalTotal.toFixed(2)}
         </div>
       </div>
 
