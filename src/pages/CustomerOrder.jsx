@@ -362,7 +362,7 @@ const getVatRate = (vatType) => {
   ];
 
   const subCategories = [
-<<<<<<< HEAD
+
     "All Sub Categories",
     ...new Set(
       products
@@ -376,36 +376,7 @@ const getVatRate = (vatType) => {
     ),
   ];
 
-const brands = [
-  "All Brands",
-  ...new Set(
-    products
-      .filter(
-        (p) =>
-          selectedCategory === "All Products" ||
-          p.category === selectedCategory
-      )
-      .map((p) => p.brand)
-      .filter(Boolean)
-  ),
-];
 
-  const seriesList = [
-  "All Series",
-=======
-  "All Sub Categories",
->>>>>>> test
-  ...new Set(
-    products
-      .filter(
-        (p) =>
-          selectedCategory === "All Products" ||
-          p.category === selectedCategory
-      )
-      .map((p) => String(p.subCategory || "").trim())
-      .filter(Boolean)
-  ),
-];
 
 const brands = [
   "All Brands",
