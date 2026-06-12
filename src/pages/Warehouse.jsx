@@ -685,6 +685,7 @@ export default function Warehouse({
       const qty = getLineQty(item);
       const price = getLinePrice(item);
       const net = getLineTotal(item);
+      const vatPercent = Number(item.vatPercent || item.vat_percent || 0);
 
      return `
           <tr>
