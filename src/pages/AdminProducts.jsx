@@ -60,7 +60,24 @@ const handleImageUpload = async () => {
 
 
   const [activeTab, setActiveTab] = useState("add");
+  
   const [productOptions, setProductOptions] = useState([]);
+
+  const [suppliers, setSuppliers] = useState([]);
+
+  const fetchSuppliers = async () => {
+  const { data } = await supabase
+    .from("suppliers")
+    .select("*")
+    .order("supplier_name");
+
+  setSuppliers(data || []);
+    };
+
+      useEffect(() => {
+    fetchProductOptions();
+    fetchSuppliers();
+      }, []);
 
   const updateField = (field, value) => {
     setProductForm({
@@ -379,6 +396,10 @@ const handleExportExcel = () => {
       stock: "",
       lowStockAlert: "",
       availableFromSupplier: true,
+      costPrice: "",
+      supplierName: "",
+      salesAccount: "",
+      purchaseAccount: "",
     });
   };
 
@@ -703,6 +724,53 @@ const bulkUpdateStatus = async (status) => {
     value={productForm.vatPrice || ""}
     onChange={(e) => updateField("vatPrice", e.target.value)}
   />
+
+  <input
+  className="input-box"
+  type="number"
+  placeholder="Cash Price"
+  value={productForm.cashPrice || ""}
+  onChange={(e) => updateField("cashPrice", e.target.value)}
+/>
+
+<input
+  className="input-box"
+  type="number"
+  placeholder="Cost Price"
+  value={productForm.costPrice || ""}
+  onChange={(e) => updateField("costPrice", e.target.value)}
+/>
+
+<select
+  className="input-box"
+  value={productForm.supplierName || ""}
+  onChange={(e) => updateField("supplierName", e.target.value)}
+>
+  <option value="">Select Supplier</option>
+
+  {suppliers.map((supplier) => (
+    <option
+      key={supplier.id}
+      value={supplier.supplier_name}
+    >
+      {supplier.supplier_name}
+    </option>
+  ))}
+</select>
+
+<input
+  className="input-box"
+  placeholder="Sales Account"
+  value={productForm.salesAccount || ""}
+  onChange={(e) => updateField("salesAccount", e.target.value)}
+/>
+
+<input
+  className="input-box"
+  placeholder="Purchase Account"
+  value={productForm.purchaseAccount || ""}
+  onChange={(e) => updateField("purchaseAccount", e.target.value)}
+/>
 
   <select
     className="input-box"
