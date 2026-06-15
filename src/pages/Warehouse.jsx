@@ -30,6 +30,11 @@ export default function Warehouse({
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
 
+  const [assignedDrivers, setAssignedDrivers] = useState({});
+
+  const getOrderId = (order) => order.orderId || order.order_number;
+  const getDriverName = (order) => order.driverName || order.driver_name;
+
   /*
     Company information for invoice print.
     Future change:
@@ -194,14 +199,8 @@ export default function Warehouse({
     Server / Manager Offer => Order Form - Not Invoice
   */
   const printCustomerDocument = (order) => {
-    const mode = String(order.priceMode || "").toUpperCase();
-
-    if (mode === "EX VAT" || mode === "ADMIN OFFER") {
-      printInvoice(order);
-    } else {
-      printOrderForm(order);
-    }
-  };
+  printOrderForm(order);
+};
 
   /*
     SALES INVOICE
@@ -705,10 +704,6 @@ export default function Warehouse({
               ${price.toFixed(2)}
             </td>
 
-            <td class="vat-col">
-              ${vatPercent.toFixed(2)}
-            </td>
-
             <td class="net-col">
               ${net.toFixed(2)}
             </td>
@@ -948,7 +943,6 @@ export default function Warehouse({
               <th class="th-desc">Description</th>
               <th class="th-qty">Qty</th>
               <th class="th-price">Price</th>
-              <th class="th-vat">VAT %</th>
               <th class="th-net">Net</th>
             </tr>
           </thead>
@@ -1006,108 +1000,138 @@ export default function Warehouse({
     No prices shown here.
   */
   const printDeliveryNote = (order) => {
-    const rows = getPrintableItems(order)
-      .map(
-        (item) => `
-          <tr>
-            <td>${item.name}</td>
-            <td style="text-align:center;">${getLineQty(item)}</td>
-          </tr>
-        `
-      )
-      .join("");
+  const items = getPrintableItems(order);
 
-    const html = `
-      <html>
-        <head>
-          <title>Delivery Note - ${order.orderId}</title>
+  const totalLines = items.length;
 
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 24px;
-              font-size: 14px;
-              color: #000;
-            }
+  const totalQty = items.reduce(
+    (sum, item) => sum + Number(getLineQty(item) || 0),
+    0
+  );
 
-            h1 {
-              text-align: center;
-              font-size: 22px;
-              margin-bottom: 20px;
-            }
+  const rows = items
+    .map(
+      (item) => `
+        <tr>
+          <td>${item.name || item.productName || item.product_name || "-"}</td>
+          <td style="text-align:center;">${getLineQty(item)}</td>
+        </tr>
+      `
+    )
+    .join("");
 
-            .info {
-              margin-bottom: 16px;
-              line-height: 1.7;
-            }
+  const html = `
+    <html>
+      <head>
+        <title>Delivery Note - ${order.orderId}</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            padding: 24px;
+            font-size: 14px;
+            color: #000;
+          }
 
-            table {
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 18px;
-                table-layout: fixed;
-              }
+          h1 {
+            text-align: center;
+            font-size: 22px;
+            margin-bottom: 20px;
+          }
 
-              th {
-                background: #e5e7eb;
-                font-weight: 700;
-              }
+          .info {
+            margin-bottom: 16px;
+            line-height: 1.7;
+          }
 
-              th,
-              td {
-                border: 1px solid #000;
-                padding: 4px 5px;
-              }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 18px;
+            table-layout: fixed;
+          }
 
-            </style>
-                  </head>
+          th {
+            background: #e5e7eb;
+            font-weight: 700;
+          }
 
-                <body>
-                  <h1>Delivery Note</h1>
+          th,
+          td {
+            border: 1px solid #000;
+            padding: 4px 5px;
+          }
 
-                  <div class="info">
-                    <div><strong>Company:</strong> ${order.companyName || "-"}</div>
-                    <div><strong>Order Number:</strong> ${order.orderId}</div>
-                    <div><strong>Driver:</strong> ${order.driverName || "-"}</div>
-                    <div><strong>Date:</strong> ${new Date().toLocaleDateString()}</div>
-                  </div>
+          .totals {
+            margin-top: 16px;
+            font-weight: bold;
+            line-height: 1.7;
+          }
 
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Product</th>
-                        <th style="text-align:center;">Picked Qty</th>
-                      </tr>
-                    </thead>
+          .signatures {
+            margin-top: 60px;
+            display: flex;
+            justify-content: space-between;
+            gap: 40px;
+          }
 
-                    <tbody>
-                      ${rows}
-                    </tbody>
-                  </table>
+          .signature {
+            flex: 1;
+            border-top: 1px solid #000;
+            padding-top: 8px;
+            text-align: center;
+          }
+        </style>
+      </head>
 
-                  <div class="signatures">
-                    <div class="signature">Driver Signature</div>
-                    <div class="signature">Customer Signature</div>
-                  </div>
+      <body>
+        <h1>Delivery Note</h1>
 
-                  <script>
-                    window.print();
-                  </script>
-                </body>
-              </html>
-            `;
+        <div class="info">
+          <div><strong>Company:</strong> ${order.companyName || "-"}</div>
+          <div><strong>Order Number:</strong> ${order.orderId}</div>
+          <div><strong>Driver:</strong> ${order.driverName || "-"}</div>
+          <div><strong>Date:</strong> ${new Date().toLocaleDateString()}</div>
+        </div>
 
-    const printWindow = window.open("", "_blank");
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th style="text-align:center;">Picked Qty</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
 
-    if (!printWindow) {
-      alert("Popup blocked. Please allow popups to print delivery note.");
-      return;
-    }
+        <div class="totals">
+          <div>Total Lines: ${totalLines}</div>
+          <div>Total Quantity: ${totalQty}</div>
+        </div>
 
-    printWindow.document.write(html);
-    printWindow.document.close();
-  };
+        <div class="signatures">
+          <div class="signature">Driver Signature</div>
+          <div class="signature">Customer Signature</div>
+        </div>
 
+        <script>
+          window.print();
+        </script>
+      </body>
+    </html>
+  `;
+
+  const printWindow = window.open("", "_blank");
+
+  if (!printWindow) {
+    alert("Popup blocked. Please allow popups to print delivery note.");
+    return;
+  }
+
+  printWindow.document.write(html);
+  printWindow.document.close();
+};
   /*
     Export supplier issue summary.
   */
@@ -1158,11 +1182,18 @@ export default function Warehouse({
   /*
     Assign driver to order.
   */
-  const assignDriver = async (order, driverName) => {
-    await updateOrderExtraFields(order.orderId, {
-      driver_name: driverName,
-    });
-  };
+ const assignDriver = async (order, driverName) => {
+  const orderId = getOrderId(order);
+
+  setAssignedDrivers((prev) => ({
+    ...prev,
+    [orderId]: driverName,
+  }));
+
+  await updateOrderExtraFields(orderId, {
+    driver_name: driverName,
+  });
+};
 
   return (
     <div className="p-4">
@@ -1213,6 +1244,8 @@ export default function Warehouse({
             Export Supplier Issues
           </button>
         </div>
+
+        
       </div>
 
       {warehouseOrders.length === 0 && (
@@ -1224,9 +1257,20 @@ export default function Warehouse({
       <div className="space-y-3">
         {warehouseOrders.map((order) => {
           const pickingQty = getPrintableItems(order).reduce(
+            
             (sum, item) => sum + getLineQty(item),
             0
           );
+          
+          const mode = String(order.priceMode || "").toUpperCase();
+
+            const showOrderForm =
+              mode === "SERVER" ||
+              mode === "MANAGER";
+
+            const showInvoice =
+              mode === "VAT" ||
+              mode === "SUPER";
 
           return (
             <div key={order.orderId} className="bg-white border rounded-2xl p-3">
@@ -1264,14 +1308,14 @@ export default function Warehouse({
                     <div className="text-center">Status</div>
                     <div className="text-right">Action</div>
                   </div>
-
+                 
                   {order.items.map((item) => {
                     const sourceStatus = item.sourceStatus || "In Stock";
                     const isInStock = sourceStatus === "In Stock";
                     const isCannotSupply = sourceStatus === "Cannot Supply";
                     const needsSupplier = !isInStock && !isCannotSupply;
 
-                    return (
+                  return (
                       <div
                         key={item.id}
                         className={`grid grid-cols-1 md:grid-cols-[1fr_70px_140px_170px] gap-2 md:gap-0 items-center border rounded-lg px-3 py-2 text-sm ${
@@ -1300,48 +1344,56 @@ export default function Warehouse({
                           {sourceStatus}
                         </div>
 
-                        <div className="flex justify-end gap-2">
-                          {isInStock && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateOrderItem(order.orderId, item.id, {
-                                  sourceStatus: "Cannot Supply",
-                                  includeInPicking: false,
-                                })
-                              }
-                              className={`bg-red-600 text-white ${btn}`}
-                            >
-                              Remove
-                            </button>
-                          )}
 
-                          {!isInStock && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateOrderItem(order.orderId, item.id, {
-                                  sourceStatus: "In Stock",
-                                  includeInPicking: true,
-                                })
-                              }
-                              className={`bg-green-600 text-white ${btn}`}
-                            >
-                              Available
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+    <div className="text-right">
+  {isCannotSupply ? (
+    <button
+  type="button"
+  onClick={() => {
+    if (!window.confirm("Mark this item as Available?")) return;
 
+    updateOrderItem(order.orderId, item.dbId, {
+      sourceStatus: "In Stock",
+      includeInPicking: true,
+      pickedQty: Number(item.qty || 0),
+    });
+  }}
+  className={`bg-green-600 text-white ${btn}`}
+>
+  Available
+</button>
+  ) : (
+   <button
+  type="button"
+  onClick={() => {
+    if (!window.confirm("Mark this item as Cannot Supply?")) return;
+
+    updateOrderItem(order.orderId, item.dbId, {
+      sourceStatus: "Cannot Supply",
+      includeInPicking: false,
+      pickedQty: 0,
+    });
+  }}
+  className={`bg-red-600 text-white ${btn}`}
+>
+  Cannot Supply
+</button>
+  )}
+</div>
+</div>
+);
+})}                     
+               
                   <div className="border-t pt-3 flex flex-col md:flex-row md:items-center md:justify-end gap-2">
-                    <button
-                      onClick={() => printCustomerDocument(order)}
-                      className={`bg-blue-700 text-white ${btn}`}
-                    >
-                      Print Order Form
-                    </button>
+                    
+                    {showOrderForm && (
+                      <button
+                        onClick={() => printOrderForm(order)}
+                        className={`bg-blue-700 text-white ${btn}`}
+                      >
+                        Print Order Form
+                      </button>
+                    )}
 
                     <button
                       onClick={() => printDeliveryNote(order)}
@@ -1350,16 +1402,18 @@ export default function Warehouse({
                       Print Delivery Note
                     </button>
 
-                    <button
-                      onClick={() => printInvoice(order)}
-                      className={`bg-green-700 text-white ${btn}`}
-                    >
-                      Print Invoice
-                    </button>
+                    {showInvoice && (
+                      <button
+                        onClick={() => printInvoice(order)}
+                        className={`bg-green-700 text-white ${btn}`}
+                      >
+                        Print Invoice
+                      </button>
+                    )}
 
-                    
+                                      
                     <select
-                      value={order.driverName || ""}
+                      value={assignedDrivers[order.orderId] ?? order.driverName ?? order.driver_name ?? ""}
                       onChange={(e) => assignDriver(order, e.target.value)}
                       className="border rounded-xl px-3 py-2 text-xs"
                     >
@@ -1373,19 +1427,41 @@ export default function Warehouse({
                     </select>
 
                     <button
-                      onClick={() => {
-                        if (!order.driverName) {
-                          alert("Please assign a driver first.");
-                          return;
-                        }
-
-                        changeOrderStatus(order.orderId, "Ready For Driver");
-                      }}
-                      className={`bg-green-700 text-white ${btn}`}
+                      onClick={() =>
+                        changeOrderStatus(order.orderId, "Received")
+                      }
+                      className={`bg-slate-500 text-white ${btn}`}
                     >
-                      Confirm For Driver
+                      Back To Received
                     </button>
+                   <button
+                    onClick={async () => {
+                      const orderId = order.orderId || order.order_number;
+
+                      const driverName =
+                        assignedDrivers[orderId] ||
+                        order.driverName ||
+                        order.driver_name;
+
+                      if (!driverName) {
+                        alert("Please assign a driver first.");
+                        return;
+                      }
+
+                      await updateOrderExtraFields(orderId, {
+                        driver_name: driverName,
+                      });
+
+                      await changeOrderStatus(orderId, "Ready For Driver");
+                    }}
+                    className={`bg-green-700 text-white ${btn}`}
+                  >
+                    Confirm For Driver
+                  </button>
+                    
                   </div>
+
+
                 </div>
               )}
             </div>
@@ -1394,4 +1470,5 @@ export default function Warehouse({
       </div>
     </div>
   );
+
 }
