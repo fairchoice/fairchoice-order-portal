@@ -1,21 +1,134 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
 
 export default function Driver({
   orders = [],
   changeOrderStatus = () => {},
   updateOrderExtraFields = () => {},
+  refreshOrders = async () => {},
 }) {
   const [expandedOrder, setExpandedOrder] = useState(null);
   const [selectedDriver, setSelectedDriver] = useState("All");
   const [cashCollectionOrder, setCashCollectionOrder] = useState(null);
 
-  const [paymentForm, setPaymentForm] = useState({
-    paymentType: "Cash",
-    paymentAmount: "",
-    paymentCollected: "Yes",
-    paidBy: "",
+  const [creditCustomers, setCreditCustomers] = useState([]);
+const [selectedCreditCustomerId, setSelectedCreditCustomerId] = useState("");
+
+const [savingPayment, setSavingPayment] = useState(false);
+
+  const getDriverItems = (order) =>
+  (order.items || []).filter(
+    (item) => item.includeInPicking !== false
+  );
+
+  const [showPreviousBalance, setShowPreviousBalance] = useState(false);
+
+  const [previousBalanceForm, setPreviousBalanceForm] = useState({
+  amount: "",
+  paymentType: "Cash",
+  whoPaid: "",
+  notes: "",
   });
+ 
+  const [paymentForm, setPaymentForm] = useState({
+  paymentType: "Cash",
+  paymentAmount: "",
+  paymentCollected: "Yes",
+  paidBy: "",  
+  receivedBy: "",
+  paymentAppliesTo: "Today Invoice",
+});
+
+useEffect(() => {
+  refreshOrders();
+}, []);
+
+useEffect(() => {
+  loadCreditCustomers();
+}, []);
+
+const loadCreditCustomers = async () => {
+  const { data, error } = await supabase
+    .from("customer_accounts")
+    .select("id, account_name")
+    .order("account_name");
+
+  if (error) {
+    console.error(error);
+    alert("Could not load customers.");
+    return;
+  }
+
+  setCreditCustomers(data || []);
+};
+
+const savePreviousBalancePayment = async () => {
+  try {
+    const selectedCustomer = creditCustomers.find(
+      (customer) => String(customer.id) === String(selectedCreditCustomerId)
+    );
+
+    const paymentAmount = Number(previousBalanceForm.amount || 0);
+
+    if (!selectedCustomer) {
+      alert("Please select customer.");
+      return;
+    }
+
+    if (!paymentAmount || paymentAmount <= 0) {
+      alert("Please enter amount.");
+      return;
+    }
+
+    if (!previousBalanceForm.whoPaid.trim()) {
+      alert("Please enter who paid.");
+      return;
+    }
+
+    const { error } = await supabase
+  .from("customer_ledger")
+  .insert({
+    customer_name: selectedCustomer.account_name,
+
+    entry_type: "PAYMENT",
+    transaction_type: "PAYMENT",
+
+    reference_no: "PREVIOUS_BALANCE",
+
+    debit: 0,
+    credit: paymentAmount,
+
+    payment_type: previousBalanceForm.paymentType,
+    payment_applies_to: "PREVIOUS_BALANCE",
+
+    paid_by: previousBalanceForm.whoPaid || null,
+    who_paid: previousBalanceForm.whoPaid || null,
+
+    received_by: selectedDriver === "All" ? "Driver" : selectedDriver,
+
+    notes:
+      previousBalanceForm.notes ||
+      `Previous Balance Payment - ${previousBalanceForm.paymentType}`,
+  });
+
+    if (error) throw error;
+
+    alert("Previous Balance Payment saved successfully.");
+
+    setPreviousBalanceForm({
+      amount: "",
+      paymentType: "Cash",
+      whoPaid: "",
+      notes: "",
+    });
+
+    setSelectedCreditCustomerId("");
+    setShowPreviousBalance(false);
+  } catch (error) {
+    console.error("Previous balance payment error:", error);
+    alert("Could not save previous balance payment: " + error.message);
+  }
+};
 
   const driverNames = [
     "All",
@@ -24,43 +137,99 @@ export default function Driver({
         .filter((order) =>
           ["Ready For Driver", "Delivered"].includes(order.status)
         )
-        .map((order) => order.driverName)
+        .map((order) => order.driverName || order.driver_name)
         .filter(Boolean)
     ),
   ];
 
-  const driverOrders = orders.filter((order) => {
-    const driverName = order.driverName;
+      const driverOrders = orders.filter((order) => {
+  const driverName = order.driverName || order.driver_name;
 
-    const matchesStatus =
-      order.status === "Ready For Driver" ||
-      (order.status === "Delivered" && !order.paymentType);
+  const isReadyForDriver = order.status === "Ready For Driver";
 
-    const matchesDriver =
-      selectedDriver === "All" || driverName === selectedDriver;
+  const isDeliveredWaitingPayment =
+    order.status === "Delivered" &&
+    !order.paymentType &&
+    !order.payment_type &&
+    order.paymentCollected !== "Yes" &&
+    order.payment_collected !== "Yes" &&
+    order.paymentCollected !== true &&
+    order.payment_collected !== true;
 
-    return matchesStatus && matchesDriver;
-  });
+  const matchesDriver =
+    selectedDriver === "All" || driverName === selectedDriver;
 
-  const openCashCollection = (order) => {
-    setCashCollectionOrder(order.orderId);
+  return (isReadyForDriver || isDeliveredWaitingPayment) && matchesDriver;
+});
 
-    setPaymentForm({
+        const openCashCollection = (order) => {
+          setCashCollectionOrder(order.orderId);
+
+          setPaymentForm({
       paymentType: order.paymentType || "Cash",
       paymentAmount: order.paymentAmount || "",
       paymentCollected: order.paymentCollected || "Yes",
       paidBy: order.paidBy || "",
+      receivedBy: order.receivedBy || "",
+      paymentAppliesTo: order.paymentAppliesTo || "Today Invoice",
     });
-  };
+        };
+
+const confirmDelivery = async (order, confirmedBy) => {
+  try {
+    await updateOrderExtraFields(order.orderId, {
+      delivered_confirmed_by: confirmedBy,
+    });
+
+    const getInvoiceStatusClass = (status) => {
+  if (status === "PAID") return "status-paid";
+  if (status === "PART PAID") return "status-part-paid";
+  return "status-unpaid";
+};
+
+    await changeOrderStatus(order.orderId, "Delivered");
+
+    const orderTotal = Number(
+      order.finalTotal ||
+      order.final_total ||
+      order.total ||
+      order.totalAmount ||
+      0
+    );
+
+    const { error } = await supabase.from("customer_ledger").insert({
+      customer_name: order.companyName || "Unknown Customer",
+      entry_type: "INVOICE",
+      reference_no: order.orderId,
+      debit: orderTotal,
+      credit: 0,
+      confirmed_by: confirmedBy,
+      notes: "Delivery confirmed",
+      invoice_status: "UNPAID",
+    });
+
+    if (error) throw error;
+
+    openCashCollection(order);
+  } catch (error) {
+    console.error("Delivery confirmation error:", error);
+    alert("Could not confirm delivery: " + error.message);
+  }
+};
 
   const saveCashCollection = async (order) => {
+
+      if (savingPayment) return;
+    setSavingPayment(true);
   try {
+
+  
     const paymentType = paymentForm.paymentType;
     const paymentCollected = paymentForm.paymentCollected;
     const paymentAmount = Number(paymentForm.paymentAmount || 0);
 
     // Only require amount + paid by when money was actually collected
-    if (paymentType !== "Credit" && paymentCollected === "Yes") {
+   if (paymentCollected === "Yes") {
       if (!paymentAmount || paymentAmount <= 0) {
         alert("Please enter payment amount.");
         return;
@@ -72,42 +241,62 @@ export default function Driver({
       }
     }
 
-    await updateOrderExtraFields(order.orderId, {
-      payment_type: paymentType,
-      payment_amount:
-        paymentType === "Credit" || paymentCollected === "No"
-          ? 0
-          : paymentAmount,
-      payment_collected:
-        paymentType === "Credit" ? "No" : paymentCollected,
-      paid_by:
-        paymentType === "Credit" || paymentCollected === "No"
-          ? ""
-          : paymentForm.paidBy,
-    });
+      await updateOrderExtraFields(order.orderId, {
+  payment_type: paymentType,
+
+  payment_amount:
+    paymentType === "Credit" || paymentCollected === "No"
+      ? 0
+      : paymentAmount,
+
+  payment_collected:
+    paymentType === "Credit" ? "No" : paymentCollected,
+
+  paid_by:
+    paymentType === "Credit" || paymentCollected === "No"
+      ? ""
+      : paymentForm.paidBy,
+
+  received_by:
+    paymentType === "Credit" || paymentCollected === "No"
+      ? ""
+      : paymentForm.receivedBy,
+});
 
     // Ledger payment only if money collected
-    if (
-      paymentType !== "Credit" &&
-      paymentCollected === "Yes" &&
-      paymentAmount > 0
-    ) {
-      const { error: ledgerError } = await supabase
+    if (paymentCollected === "Yes" && paymentAmount > 0) {
+      
+
+  const { error: ledgerError } = await supabase
   .from("customer_ledger")
   .insert({
     customer_name: order.companyName || "Unknown Customer",
+
     entry_type: "PAYMENT",
+    transaction_type: "PAYMENT",
+
     reference_no: order.orderId,
+
     debit: 0,
     credit: paymentAmount,
-    notes: paymentType,
+
+    payment_type: paymentType,
+    payment_applies_to: paymentForm.paymentAppliesTo,
+
+    who_paid: paymentForm.paidBy || null,
+    paid_by: paymentForm.paidBy || null,
+    received_by: paymentForm.receivedBy || selectedDriver || "Driver",
+
+    notes: `Driver cash collection - ${paymentType}`,
   });
 
-      if (ledgerError) throw ledgerError;
+
+if (ledgerError) throw ledgerError;
     }
 
-    alert("Cash collection saved.");
+        alert("Cash collection saved.");
     setCashCollectionOrder(null);
+    await refreshOrders();
   } catch (error) {
     console.error("Cash collection error:", error);
     alert("Could not save cash collection: " + error.message);
@@ -122,6 +311,99 @@ export default function Driver({
           Ready For Driver deliveries.
         </p>
       </div>
+
+      <div className="mb-4 flex justify-end">
+  <button
+   onClick={() => setShowPreviousBalance(!showPreviousBalance)}
+    className="bg-slate-800 text-white px-4 py-2 rounded-xl text-sm font-bold"
+  >
+    Previous Balance
+  </button>
+</div>
+
+                {showPreviousBalance && (
+  <div className="mb-4 border rounded-2xl p-4 bg-slate-50 space-y-3">
+    <h3 className="font-bold text-center">Previous Balance Collection</h3>
+
+      <select
+        value={selectedCreditCustomerId}
+        onChange={(e) => setSelectedCreditCustomerId(e.target.value)}
+        className="w-full border rounded-xl p-3 bg-white"
+      >
+        <option value="">Select Customer</option>
+
+        {creditCustomers.map((customer) => (
+          <option
+            key={customer.id}
+            value={customer.id}
+          >
+            {customer.account_name}
+          </option>
+        ))}
+      </select>
+
+    <input
+      type="number"
+      placeholder="Amount Collected"
+      value={previousBalanceForm.amount}
+      onChange={(e) =>
+        setPreviousBalanceForm({
+          ...previousBalanceForm,
+          amount: e.target.value,
+        })
+      }
+      className="w-full border rounded-xl p-3"
+    />
+
+    <select
+      value={previousBalanceForm.paymentType}
+      onChange={(e) =>
+        setPreviousBalanceForm({
+          ...previousBalanceForm,
+          paymentType: e.target.value,
+        })
+      }
+      className="w-full border rounded-xl p-3 bg-white"
+    >
+      <option value="Cash">Cash</option>
+      <option value="Bank Transfer">Bank Transfer</option>
+      <option value="Card">Card</option>
+      <option value="Cheque">Cheque</option>
+    </select>
+
+    <input
+      placeholder="Who paid / shop staff name"
+      value={previousBalanceForm.whoPaid}
+      onChange={(e) =>
+        setPreviousBalanceForm({
+          ...previousBalanceForm,
+          whoPaid: e.target.value,
+        })
+      }
+      className="w-full border rounded-xl p-3"
+    />
+
+    <textarea
+      placeholder="Notes"
+      value={previousBalanceForm.notes}
+      onChange={(e) =>
+        setPreviousBalanceForm({
+          ...previousBalanceForm,
+          notes: e.target.value,
+        })
+      }
+      className="w-full border rounded-xl p-3"
+    />
+
+      <button
+        type="button"
+        onClick={savePreviousBalancePayment}
+        className="w-full bg-green-700 text-white py-3 rounded-xl font-bold"
+      >
+        Save Previous Balance Payment
+      </button>
+          </div>
+        )}
 
       <div className="mb-4">
         <label className="block text-xs font-bold text-slate-500 mb-1">
@@ -156,16 +438,29 @@ export default function Driver({
                   Driver Name
                 </div>
                 <div className="text-lg font-bold">
-                  {order.driverName || "No Driver Assigned"}
+                  {order.driverName || order.driver_name || "No Driver Assigned"}
                 </div>
               </div>
 
               <div className="text-center">
                 <h3 className="font-bold">
-                  {order.orderId} | {order.companyName || "No company"}
+                  {order.orderId || order.order_number} |{" "}
+                  {order.companyName || order.company_name || "No company"}
                 </h3>
+
+                <div className="text-base font-extrabold text-red-600">
+                  Invoice Total: £
+                  {Number(
+                    order.finalTotal ||
+                    order.final_total ||
+                    order.total ||
+                    order.orderTotal ||
+                    order.order_total ||
+                    0
+                  ).toFixed(2)}
+                </div>
                 <p className="text-xs text-slate-500">
-                  {order.status} | {order.items?.length || 0} Items
+                  {order.status} | {getDriverItems(order).length} Items
                 </p>
               </div>
 
@@ -183,17 +478,27 @@ export default function Driver({
 
                 {order.status === "Ready For Driver" && (
                   <button
-                    onClick={async () => {
-                      await changeOrderStatus(order.orderId, "Delivered");
-                      openCashCollection(order);
-                    }}
+                    onClick={() => {
+                    const confirmedBy = window.prompt(
+                      "Who confirmed the order?"
+                    );
+
+                    if (!confirmedBy?.trim()) {
+                      alert("Please enter who confirmed the order.");
+                      return;
+                    }
+
+                    confirmDelivery(order, confirmedBy.trim());
+                  }}
                     className="bg-green-600 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"
                   >
                     Confirm Delivery
                   </button>
                 )}
 
-                {order.status === "Delivered" && !order.paymentType && (
+                {order.status === "Delivered" &&
+                    order.payment_collected !== "Yes" &&
+                    order.payment_collected !== true && (
                   <button
                     onClick={() => openCashCollection(order)}
                     className="bg-yellow-500 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"
@@ -204,9 +509,10 @@ export default function Driver({
               </div>
             </div>
 
+
             {expandedOrder === order.orderId && (
               <div className="mt-3 space-y-2">
-                {(order.items || []).map((item) => (
+                {getDriverItems(order).map((item) => (
                   <div
                     key={item.id}
                     className="flex justify-between border rounded-xl p-2 text-sm"
@@ -238,8 +544,26 @@ export default function Driver({
                   <option value="Credit">Credit</option>
                 </select>
 
-                {paymentForm.paymentType !== "Credit" && (
-                  <>
+                  <select
+                    value={paymentForm.paymentAppliesTo}
+                    onChange={(e) =>
+                      setPaymentForm({
+                        ...paymentForm,
+                        paymentAppliesTo: e.target.value,
+                      })
+                    }
+                    className="w-full border rounded-xl p-3 bg-white"
+                  >
+                    <option value="Today Invoice">
+                      Today's Invoice
+                    </option>
+
+                    <option value="Previous Credit Balance">
+                      Previous Credit Balance
+                    </option>
+
+                    
+                  </select>
                     <input
                       type="number"
                       placeholder="Amount Collected"
@@ -278,16 +602,27 @@ export default function Driver({
                       }
                       className="w-full border rounded-xl p-3"
                     />
-                  </>
-                )}
 
-                <button
-                  onClick={() => saveCashCollection(order)}
-                  className="w-full bg-green-700 text-white py-3 rounded-xl font-bold"
-                >
-                  Save Payment Status
-                </button>
-              </div>
+                    <input
+                      placeholder="Who received payment"
+                      value={paymentForm.receivedBy || ""}
+                      onChange={(e) =>
+                        setPaymentForm({
+                          ...paymentForm,
+                          receivedBy: e.target.value,
+                        })
+                      }
+                      className="w-full border rounded-xl p-3"
+                    />
+             
+                 <button
+                disabled={savingPayment}
+                onClick={() => saveCashCollection(order)}
+                className="w-full bg-green-700 text-white py-3 rounded-xl font-bold disabled:bg-slate-400"
+              >
+                {savingPayment ? "Saving..." : "Save Payment Status"}
+              </button>
+              </div>             
             )}
           </div>
         ))}

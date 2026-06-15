@@ -171,6 +171,17 @@ export default function Cart({
           <span>Final Total</span>
           <span>£{Number(originalTotal || 0).toFixed(2)}</span>
         </div>
+        <button
+        onClick={() => {
+          if (window.confirm("Clear all cart items?")) {
+            localStorage.removeItem("fairchoice_cart");
+            setCart([]);
+          }
+        }}
+        className="text-xs text-red-600 underline"
+      >
+        Clear Cart
+      </button>
       </>
     )}
   </div>
@@ -184,7 +195,11 @@ export default function Cart({
         )}
 
      <button
-  onClick={onSubmit}
+  onClick={() => {
+  if (window.confirm("Submit this order?")) {
+    submitOrder();
+  }
+}}
   disabled={cart.length === 0 || isSubmitting}
   className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
 >

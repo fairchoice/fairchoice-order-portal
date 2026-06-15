@@ -2,10 +2,12 @@ import { useState } from "react";
 
 export default function AdminOrders({
   orders = [],
+  products = [],
   expandedOrders = {},
   toggleOrderExpanded = () => {},
   printPickingList = () => {},
   updateOrderItem = () => {},
+  addOrderItem = () => {},
   changeOrderStatus = () => {},
 } = {}) {
   
@@ -13,6 +15,13 @@ export default function AdminOrders({
 
   const [showArchive, setShowArchive] = useState(false);
   const [statusFilter, setStatusFilter] = useState("All");
+
+  const [showAddItemModal, setShowAddItemModal] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [productSearch, setProductSearch] = useState("");
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [addQty, setAddQty] = useState(1);
+  const [editedQty, setEditedQty] = useState({});
 
   const receivedOrders = orders.filter(
     (order) => order.status === "Received" || order.status === "In Progress"
@@ -55,6 +64,47 @@ export default function AdminOrders({
     if (!ok) return;
     changeOrderStatus(orderId, "Received");
   };
+
+  const openAddItemModal = (order) => {
+  setSelectedOrder(order);
+  setProductSearch("");
+  setSelectedProduct(null);
+  setAddQty(1);
+  setShowAddItemModal(true);
+};
+
+const filteredProducts = products.filter((p) => {
+  const search = productSearch.toLowerCase();
+
+  return (
+    p.name?.toLowerCase().includes(search) ||
+    p.productName?.toLowerCase().includes(search) ||
+    p.productCode?.toLowerCase().includes(search)
+  );
+});
+
+const confirmAddItem = () => {
+  if (!selectedOrder || !selectedProduct) return;
+
+  addOrderItem(selectedOrder.orderId, {
+    id: crypto.randomUUID(),
+    productId: selectedProduct.id,
+    productCode: selectedProduct.productCode || "",
+    name: selectedProduct.name || selectedProduct.productName,
+    qty: Number(addQty || 1),
+    pickedQty: Number(addQty || 1),
+    price: Number(
+      selectedProduct.selectedPrice ??
+      selectedProduct.vatPrice ??
+      selectedProduct.cashPrice ??
+      0
+    ),
+    sourceStatus: "In Stock",
+    includeInPicking: true,
+  });
+
+  setShowAddItemModal(false);
+};
 
   return (
     <div className="p-5">
@@ -188,78 +238,113 @@ export default function AdminOrders({
                   )}
                 </div>
               </div>
+                    {expandedOrders[order.orderId] && (
+  <div className="mt-3 space-y-1">
+          <div className="hidden md:grid grid-cols-[80px_160px_1fr_100px_120px_160px] gap-4 border-b font-bold text-xs text-slate-600 px-6 py-2">
+        <div>Qty</div>
+        <div>Status</div>
+        <div>Product</div>
+        <div className="text-center">Price</div>
+        <div className="text-center">Line Total</div>
+        <div className="text-center">Actions</div>
+      </div>
 
-              {expandedOrders[order.orderId] && (
-                <div className="mt-3 space-y-1">
-                 <div className="hidden md:grid grid-cols-[1fr_80px_180px_120px] border-b font-bold text-xs text-slate-600 px-3 py-2">
-                    <div>Product</div>
-                    <div className="text-center">Pick Qty</div>
-                    <div className="text-center">Status</div>
-                    <div className="text-right">Action</div>
-                  </div>
+    {order.items.map((item) => {
+      const itemPrice = Number(
+        item.price ?? item.unitPrice ?? item.selectedPrice ?? 0
+      );
 
-                  {order.items.map((item) => (
-                    <div
-                    key={item.id}
-                    className={`grid grid-cols-1 md:grid-cols-[1fr_80px_180px_120px] gap-2 md:gap-0 items-center border rounded-lg px-3 py-2 text-sm ${
-                      item.includeInPicking === false
-                        ? "opacity-50 bg-slate-50"
-                        : ""
-                    }`}
-                  >
-                      <div className="font-medium truncate pr-3">
-                        {item.name} x {item.qty}
-                      </div>
+      const itemQty = Number(item.pickedQty ?? item.qty ?? 0);
+      const lineTotal = itemPrice * itemQty;
 
-                      <div className="text-center">
-                        <input
-                          type="number"
-                          min="0"
-                          className="border rounded-lg px-2 py-1 w-16 text-center text-sm"
-                          value={item.pickedQty ?? item.qty}
-                          onChange={(e) =>
-                            updateOrderItem(order.orderId, item.id, {
-                              pickedQty: Number(e.target.value),
-                            })
-                          }
-                        />
-                      </div>
+      return (
+        <div
+          key={item.id}
+         className={`grid grid-cols-1 md:grid-cols-[80px_160px_1fr_100px_120px_160px] gap-4 items-center border rounded-lg px-6 py-2 text-sm ${
+            item.includeInPicking === false ? "opacity-50 bg-slate-50" : ""
+          }`}
+        >
+            <div className="text-center flex items-center justify-center gap-1">
+            <input
+              type="number"
+              min="0"
+              className="border rounded-lg px-2 py-1 w-16 text-center text-sm"
+              value={editedQty[item.dbId] ?? item.pickedQty ?? item.qty}
+              onChange={(e) =>
+                setEditedQty((prev) => ({
+                  ...prev,
+                  [item.dbId]: Number(e.target.value),
+                }))
+              }
+            />
 
-                      <div className="text-center">
-                        <select
-                          className="border rounded-lg px-2 py-1 text-sm"
-                          value={item.sourceStatus || "In Stock"}
-                          onChange={(e) =>
-                            updateOrderItem(order.orderId, item.id, {
-                              sourceStatus: e.target.value,
-                            })
-                          }
-                        >
-                          <option>In Stock</option>
-                          <option>Need Supplier</option>
-                          <option>Different Supplier</option>
-                          <option>Cannot Supply</option>
-                        </select>
-                      </div>
+            <button
+              onClick={() =>
+                updateOrderItem(order.orderId, item.dbId, {
+                  qty: Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty),
+                  pickedQty: Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty),
+                })
+              }
+              className="bg-amber-500 text-white px-2 py-1 rounded text-xs font-bold"
+            >
+              Update
+            </button>
+          </div>
 
-                      <div className="flex justify-end">
-                        <button
-                          onClick={() =>
-                            updateOrderItem(order.orderId, item.id, {
-                              includeInPicking: !item.includeInPicking,
-                            })
-                          }
-                          className={`${
-                            item.includeInPicking === false
-                              ? "bg-blue-600"
-                              : "bg-red-600"
-                          } text-white ${btn}`}
-                        >
-                          {item.includeInPicking === false ? "Add" : "Remove"}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+          <div className="text-center">
+            <select
+              className="border rounded-lg px-2 py-1 text-sm"
+              value={item.sourceStatus || "In Stock"}
+              onChange={(e) =>
+                updateOrderItem(order.orderId, item.id, {
+                  sourceStatus: e.target.value,
+                })
+              }
+            >
+              <option>In Stock</option>
+              <option>Need Supplier</option>
+              <option>Different Supplier</option>
+              <option>Cannot Supply</option>
+            </select>
+          </div>
+
+          <div className="font-medium truncate pr-3">
+            {item.name}            
+          </div>
+
+          <div className="text-center font-semibold">
+            £{itemPrice.toFixed(2)}
+          </div>
+
+          <div className="text-center font-semibold">
+            £{lineTotal.toFixed(2)}
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() =>
+                updateOrderItem(order.orderId, item.id, {
+                  includeInPicking: !item.includeInPicking,
+                })
+              }
+              className={`${
+                item.includeInPicking === false ? "bg-blue-600" : "bg-red-600"
+              } text-white ${btn}`}
+            >
+              {item.includeInPicking === false ? "Add" : "Remove"}
+            </button>
+
+            <button
+              onClick={() => openAddItemModal(order)}
+              className={`bg-green-600 text-white ${btn}`}
+            >
+              Add Item
+            </button>
+          </div>
+        </div>
+      );
+    })}
+             
 
                   {!showArchive && (
                     <div className="flex justify-end pt-3">
@@ -277,6 +362,68 @@ export default function AdminOrders({
           );
         })}
       </div>
+      {showAddItemModal && (
+  <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+    <div className="bg-white rounded-2xl p-4 w-full max-w-xl">
+      <h3 className="text-lg font-bold mb-3">Add Item</h3>
+
+      <input
+        type="text"
+        value={productSearch}
+        onChange={(e) => setProductSearch(e.target.value)}
+        placeholder="Search product..."
+        className="w-full border rounded-lg px-3 py-2 mb-3"
+      />
+
+      <div className="max-h-60 overflow-auto border rounded-lg mb-3">
+        {filteredProducts.slice(0, 30).map((product) => (
+          <button
+            key={product.id}
+            onClick={() => setSelectedProduct(product)}
+            className="w-full text-left px-3 py-2 border-b hover:bg-slate-50"
+          >
+            {product.name || product.productName}
+          </button>
+        ))}
+      </div>
+
+      {selectedProduct && (
+        <div className="border rounded-lg p-3 mb-3">
+          <div className="font-semibold">
+            {selectedProduct.name || selectedProduct.productName}
+          </div>
+
+          <div className="flex items-center gap-3 mt-3">
+            <label className="text-sm font-semibold">Qty</label>
+            <input
+              type="number"
+              min="1"
+              value={addQty}
+              onChange={(e) => setAddQty(Number(e.target.value))}
+              className="border rounded-lg px-3 py-2 w-24"
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={() => setShowAddItemModal(false)}
+          className={`bg-slate-500 text-white ${btn}`}
+        >
+          Cancel
+        </button>
+
+        <button
+          onClick={confirmAddItem}
+          className={`bg-green-600 text-white ${btn}`}
+        >
+          Add To Order
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }
