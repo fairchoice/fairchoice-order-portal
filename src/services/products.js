@@ -4,7 +4,7 @@ export async function getProducts() {
   const { data, error } = await supabase
     .from("products")
     .select("*")
-    .eq("status", "active")
+    .ilike("status", "active")
     .or("available_in_wales.eq.true,available_in_england.eq.true")
     .order("brand", { ascending: true })
     .order("series", { ascending: true })
@@ -16,6 +16,8 @@ export async function getProducts() {
   return (data || []).map((p) => ({
     ...p,
 
+    status: String(p.status || "active").trim().toLowerCase(),
+    active: String(p.status || "active").trim().toLowerCase() === "active",
     productCode: p.product_code,
     name: p.product_name,
     category: p.main_category,
@@ -31,6 +33,8 @@ export async function getProducts() {
     availableInEngland: p.available_in_england,
     availableInWales: p.available_in_wales,
     availableFromSupplier: p.available_from_supplier,
+
+   
   }));
 }
 

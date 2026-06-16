@@ -502,8 +502,10 @@ const bulkUpdateStatus = async (status) => {
     return;
   }
 
+  const cleanStatus = String(status || "active").trim().toLowerCase();
+
   const confirmText =
-    status === "Active"
+    cleanStatus === "active"
       ? "Mark selected products as Active?"
       : "Mark selected products as Inactive?";
 
@@ -511,7 +513,7 @@ const bulkUpdateStatus = async (status) => {
 
   const { error } = await supabase
     .from("products")
-    .update({ status })
+    .update({ status: cleanStatus })
     .in("id", selectedProductIds);
 
   if (error) {
@@ -914,7 +916,7 @@ const bulkUpdateStatus = async (status) => {
   <div>
     {statusFilter === "active" && (
       <button
-        onClick={() => bulkUpdateStatus("Inactive")}
+        onClick={() => bulkUpdateStatus("inactive")}
         disabled={selectedProductIds.length === 0}
         className="bg-red-600 text-white px-5 py-2 rounded-xl font-bold disabled:bg-slate-300"
       >
@@ -924,7 +926,7 @@ const bulkUpdateStatus = async (status) => {
 
     {statusFilter === "inactive" && (
       <button
-        onClick={() => bulkUpdateStatus("Active")}
+        onClick={() => bulkUpdateStatus("active")}
         disabled={selectedProductIds.length === 0}
         className="bg-green-600 text-white px-5 py-2 rounded-xl font-bold disabled:bg-slate-300"
       >
@@ -935,7 +937,7 @@ const bulkUpdateStatus = async (status) => {
     {statusFilter === "all" && (
       <div className="flex gap-2">
         <button
-          onClick={() => bulkUpdateStatus("Active")}
+          onClick={() => bulkUpdateStatus("active")}
           disabled={selectedProductIds.length === 0}
           className="bg-green-600 text-white px-5 py-2 rounded-xl font-bold disabled:bg-slate-300"
         >
@@ -943,7 +945,7 @@ const bulkUpdateStatus = async (status) => {
         </button>
 
         <button
-          onClick={() => bulkUpdateStatus("Inactive")}
+          onClick={() => bulkUpdateStatus("inactive")}
           disabled={selectedProductIds.length === 0}
           className="bg-red-600 text-white px-5 py-2 rounded-xl font-bold disabled:bg-slate-300"
         >
