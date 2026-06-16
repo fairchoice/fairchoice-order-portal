@@ -12,7 +12,7 @@ export default function LoginPage({ onLogin }) {
   const { data, error } = await supabase
     .from("login_users")
     .select("*")
-    .eq("username", cleanUsername)
+    .ilike("username", cleanUsername)
     .eq("password", cleanPassword)
     .eq("active", true)
     .limit(1);
