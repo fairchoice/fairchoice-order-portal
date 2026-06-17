@@ -65,6 +65,8 @@ export default function CustomerOrder({ userProfile }) {
   const isDriver = normalizedRole === "driver";
   const isCustomer = normalizedRole === "customer";
 
+  
+
   const [page, setPage] = useState(() => {
     if (window.location.hash === "#admin") return "orders";
     if (window.location.hash === "#products") return "products";
@@ -83,6 +85,17 @@ export default function CustomerOrder({ userProfile }) {
   const [selectedCustomerAccount, setSelectedCustomerAccount] = useState(null);
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [customerLedger, setCustomerLedger] = useState([]);
+
+  const [salesPaymentForm, setSalesPaymentForm] = useState({
+  customerId: "",
+  amount: "",
+  paymentType: "Cash",
+  whoPaid: "",
+  collectionDate: new Date().toISOString().split("T")[0],
+  notes: "",
+});
+
+const [savingSalesPayment, setSavingSalesPayment] = useState(false);
 
   const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
  

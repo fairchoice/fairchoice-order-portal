@@ -45,8 +45,8 @@ const [handoverHistoryStartDate, setHandoverHistoryStartDate] = useState("");
       setHandoverHistory(history);
     } catch (err) {
       console.error("Load handover history error:", err);
-    }
-  }
+    }  
+   }
 
   loadHistory();
 }, []);
@@ -89,61 +89,86 @@ const [handoverHistoryStartDate, setHandoverHistoryStartDate] = useState("");
 
 console.log("DRIVERS LOADED:", driverData);
 
+const { data: ledgerPaymentData, error: ledgerPaymentError } =
+  await supabase
+    .from("customer_ledger")
+    .select("*")
+    .eq("entry_type", "PAYMENT")
+    .eq("collection_source", "Sales Rep Collection")
+    .order("created_at", { ascending: false });
 
-    setUnpaidInvoices(unpaidData || []);
-    setPayments(
-    (paymentData || []).map((o) => ({
-    id: o.id,
-    customer_name: o.company_name,
-    invoice_no: o.order_number,
-    order_number: o.order_number,
+if (ledgerPaymentError) {
+  console.error("Sales Rep ledger payment error:", ledgerPaymentError);
+}
 
-    invoice_total: Number(o.final_total || o.order_total || 0),
 
-    amount: Number(o.payment_amount || 0),
-    payment_amount: Number(o.payment_amount || 0),
+const orderPayments = (paymentData || []).map((o) => ({
+  id: o.id,
+  customer_name: o.company_name,
+  invoice_no: o.order_number,
+  order_number: o.order_number,
+  invoice_total: Number(o.final_total || o.order_total || 0),
+  amount: Number(o.payment_amount || 0),
+  payment_amount: Number(o.payment_amount || 0),
+  payment_type: o.payment_type || "",
+  paid_by: o.paid_by || "",
+  received_by: o.received_by || "",
+  collected_by: o.driver_name || o.received_by || "",
+  driver_name: o.driver_name || "",
+  collection_type: o.driver_name ? "Driver" : "Office",
+  created_at: o.created_at,
+}));
 
-    payment_type: o.payment_type || "",
-    paid_by: o.paid_by || "",
-    received_by: o.received_by || "",
+const salesRepLedgerPayments = (ledgerPaymentData || []).map((p) => ({
+  id: p.id,
+  customer_name: p.customer_name,
+  invoice_no: p.reference_no || "Sales Rep Collection",
+  order_number: p.reference_no || "Sales Rep Collection",
+  invoice_total: 0,
+  amount: Number(p.credit || 0),
+  payment_amount: Number(p.credit || 0),
+  payment_type: p.payment_type || "",
+  paid_by: p.paid_by || "",
+  received_by: p.received_by || "",
+  collected_by: p.collected_by_name || "",
+  sales_rep_name: p.collected_by_name || "",
+  collected_by_role: p.collected_by_role || "Sales Rep",
+  collection_type: "Sales Rep",
+  created_at: p.created_at,
+}));
 
-    collected_by: o.driver_name || o.received_by || "",
-
-driver_name: o.driver_name || "",
-
-collection_type: o.driver_name ? "Driver" : "Office",
-
-    created_at: o.created_at,
-  }))
-);
-console.log("ORDER PAYMENTS", paymentData);
-    setDrivers(driverData || []);
-  }
-
-async function handleSaveHandover() {
-  try {
+setUnpaidInvoices(unpaidData || []);
+setPayments([...orderPayments, ...salesRepLedgerPayments]);
     
-    if (!collectorName) {
-      alert(`Please select ${collectorType} before saving handover.`);
-      return;
-    }
+ 
+    console.log("ORDER PAYMENTS", paymentData);
+        setDrivers(driverData || []);
+      }
 
-    setSavingHandover(true);
+      async function handleSaveHandover() {
+        try {
+          
+          if (!collectorName) {
+            alert(`Please select ${collectorType} before saving handover.`);
+            return;
+          }
 
-const payload = {
-  collectorType,
-  collectorName,
-  handoverDate,
+          setSavingHandover(true);
 
-  periodStart: handoverPeriodStart.toISOString(),
-  periodEnd: handoverPeriodEnd.toISOString(),
+      const payload = {
+        collectorType,
+        collectorName,
+        handoverDate,
 
-  systemCollection: selectedCollectorSystemTotalSinceLastHandover,
-  cashReceived: Number(cashReceived || 0),
-  difference: handoverDifferenceSinceLastHandover,
+        periodStart: handoverPeriodStart.toISOString(),
+        periodEnd: handoverPeriodEnd.toISOString(),
 
-  reason: handoverReason,
-};
+        systemCollection: selectedCollectorSystemTotalSinceLastHandover,
+        cashReceived: Number(cashReceived || 0),
+        difference: handoverDifferenceSinceLastHandover,
+
+        reason: handoverReason,
+  };
 
     console.log("HANDOVER PAYLOAD:", payload);
 
@@ -168,12 +193,12 @@ if (!confirmed) {
 
     const history = await getHandoverHistory();
     setHandoverHistory(history);
-  } catch (err) {
+    } catch (err) {
     console.error("Save handover error:", err);
     alert(err.message || "Failed to save handover.");
-  } finally {
+    } finally {
     setSavingHandover(false);
-  }
+    }
 }
 
 
