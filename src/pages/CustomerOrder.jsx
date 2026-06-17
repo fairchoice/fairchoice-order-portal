@@ -518,13 +518,16 @@ const filteredProducts = useMemo(() => {
     selectedSeries === "All Series" &&
     search.trim() === "";
 
-  const recommendedProducts = products
-  .filter((p) => p.recommended === true || p.topSeller === true)
-  .slice(0, 10);
+ const isVapeAllProducts =
+  selectedCategory === "Vape" &&
+  selectedSubCategory === "All Sub Categories" &&
+  selectedBrand === "All Brands" &&
+  selectedSeries === "All Series" &&
+  search.trim() === "";
 
 const baseProducts =
-  noFiltersSelected
-    ? recommendedProducts
+  noFiltersSelected || isVapeAllProducts
+    ? products.slice(0, 30)
     : products;
 
     return baseProducts
