@@ -56,6 +56,10 @@ function normalizeProduct(raw) {
   };
 }
 export default function CustomerOrder({ userProfile }) {
+
+  const loggedInUser = JSON.parse(
+  localStorage.getItem("loggedInUser") || "{}"
+);
   const role = userProfile?.role || "Customer";
   const normalizedRole = (role || "").replace(/\s+/g, "").toLowerCase();
 
@@ -94,6 +98,8 @@ export default function CustomerOrder({ userProfile }) {
   collectionDate: new Date().toISOString().split("T")[0],
   notes: "",
 });
+
+
 
 const [savingSalesPayment, setSavingSalesPayment] = useState(false);
 
@@ -783,21 +789,15 @@ const finalTotal =
     paid_by: salesPaymentForm.whoPaid,
     who_paid: salesPaymentForm.whoPaid,
 
-    received_by:
-      userProfile?.full_name ||
-      userProfile?.name ||
-      userProfile?.username ||
-      "Sales Rep",
+   received_by: loggedInUser.staff_name || loggedInUser.username || null,
+  received_by_username: loggedInUser.username || null,
+  received_by_role: loggedInUser.role || null,
+  received_by_staff_id: loggedInUser.staff_id || null,
 
-    collected_by: userProfile?.id || null,
-    collected_by_name:
-      userProfile?.full_name ||
-      userProfile?.name ||
-      userProfile?.username ||
-      "Sales Rep",
-
-    collected_by_role: "Sales Rep",
-    collection_source: "SALES_REP",
+  collected_by: loggedInUser.staff_id || loggedInUser.id || null,
+  collected_by_name: loggedInUser.staff_name || loggedInUser.username || null,
+  collected_by_username: loggedInUser.username || null,
+  collected_by_role: loggedInUser.role || null,
 
     notes: salesPaymentForm.notes || "",
   });
@@ -1645,6 +1645,7 @@ const updateOrderItem = async (orderId, itemId, updates) => {
             onDecrease={decreaseQty}
             onRemove={removeItem}
             onChangeQty={changeQty}
+            submitOrder={submitOrder}
           />
           </div>
         )}

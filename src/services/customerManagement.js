@@ -13,6 +13,59 @@ export async function getCustomerAccounts() {
   return data || [];
 }
 
+export async function getStaffUsers() {
+  const { data, error } = await supabase
+    .from("staff_users")
+    .select("*")
+    .order("staff_name", { ascending: true });
+
+  if (error) throw error;
+  return data || [];
+}
+
+export async function saveStaffUser(staff) {
+  const payload = {
+    staff_name: staff.staff_name,
+    phone: staff.phone || "",
+    email: staff.email || "",
+    role: staff.role || "Staff",
+    active: staff.active ?? true,
+  };
+
+  if (staff.id) {
+    const { data, error } = await supabase
+      .from("staff_users")
+      .update(payload)
+      .eq("id", staff.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  const { data, error } = await supabase
+    .from("staff_users")
+    .insert(payload)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function toggleCustomerActive(id, active) {
+  const { data, error } = await supabase
+    .from("customer_accounts")
+    .update({ active })
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 export async function saveCustomerAccount(account) {
   const payload = {
     account_name: account.account_name,
@@ -78,58 +131,6 @@ export async function saveCustomerBranch(branch) {
   const { data, error } = await supabase
     .from("customer_branches")
     .insert(payload)
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
-}
-
-export async function getStaffUsers() {
-  const { data, error } = await supabase
-    .from("staff_users")
-    .select("*")
-    .order("staff_name", { ascending: true });
-
-  if (error) throw error;
-  return data || [];
-}
-
-export async function saveStaffUser(staff) {
-  const payload = {
-    staff_name: staff.staff_name,
-    email: staff.email || "",
-    role: staff.role || "Sales Rep",
-    active: staff.active ?? true,
-  };
-
-  if (staff.id) {
-    const { data, error } = await supabase
-      .from("staff_users")
-      .update(payload)
-      .eq("id", staff.id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  }
-
-  const { data, error } = await supabase
-    .from("staff_users")
-    .insert(payload)
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
-}
-
-export async function toggleCustomerActive(id, active) {
-  const { data, error } = await supabase
-    .from("customer_accounts")
-    .update({ active })
-    .eq("id", id)
     .select()
     .single();
 

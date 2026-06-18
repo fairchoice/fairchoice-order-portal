@@ -194,12 +194,12 @@ export default function Cart({
           </div>
         )}
 
-     <button
+<button
   onClick={() => {
-  if (window.confirm("Submit this order?")) {
-    submitOrder();
-  }
-}}
+    if (window.confirm("Submit this order?")) {
+      onSubmit();
+    }
+  }}
   disabled={cart.length === 0 || isSubmitting}
   className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
 >

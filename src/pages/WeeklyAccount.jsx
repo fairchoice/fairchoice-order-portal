@@ -94,8 +94,9 @@ const { data: ledgerPaymentData, error: ledgerPaymentError } =
     .from("customer_ledger")
     .select("*")
     .eq("entry_type", "PAYMENT")
-    .eq("collection_source", "Sales Rep Collection")
+    .in("collection_source", ["SALES_REP","Sales Rep Collection","DRIVER","Driver Collection"])
     .order("created_at", { ascending: false });
+    console.log("SALES REP PAYMENTS:", ledgerPaymentData);
 
 if (ledgerPaymentError) {
   console.error("Sales Rep ledger payment error:", ledgerPaymentError);
@@ -133,7 +134,7 @@ const salesRepLedgerPayments = (ledgerPaymentData || []).map((p) => ({
   collected_by: p.collected_by_name || "",
   sales_rep_name: p.collected_by_name || "",
   collected_by_role: p.collected_by_role || "Sales Rep",
-  collection_type: "Sales Rep",
+  collection_type: "Sales Rep Collection",
   created_at: p.created_at,
 }));
 
@@ -252,9 +253,62 @@ if (!confirmed) {
     );
   }
 
-  function editPayment(row) {
-    alert(`Edit Payment coming next for ${row.invoice_no || row.order_number}`);
+function editPayment(row) {
+  const newAmount = window.prompt(
+    "Enter new payment amount:",
+    row.payment_amount || row.amount || ""
+  );
+
+  if (newAmount === null) return;
+
+  const amount = Number(newAmount);
+
+  if (!amount || amount <= 0) {
+    alert("Please enter a valid amount.");
+    return;
   }
+
+  const confirmed = window.confirm(
+    `Update payment to £${amount.toFixed(2)}?`
+  );
+
+  if (!confirmed) return;
+
+  updatePayment(row, amount);
+}
+
+async function updatePayment(row, amount) {
+  try {
+        if (
+        row.collection_type === "Sales Rep" ||
+        row.collection_type === "Sales Rep Collection"
+      ) {
+        const { error } = await supabase
+          .from("customer_ledger")
+          .update({
+            credit: amount,
+          })
+          .eq("id", row.id);
+
+        if (error) throw error;
+    } else {
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          payment_amount: amount,
+        })
+        .eq("id", row.id);
+
+      if (error) throw error;
+    }
+
+    alert("Payment updated successfully.");
+    await loadWeeklyAccountData();
+  } catch (error) {
+    console.error("Update payment error:", error);
+    alert("Could not update payment: " + error.message);
+  }
+}
 
   function getDriverName(driver) {
   return (
@@ -275,26 +329,36 @@ if (!confirmed) {
     0
   );
 
-  const totalCollectionValue = payments.reduce(
-    (sum, p) => sum + paidAmount(p),
-    0
-  );
+  const filteredPayments = payments.filter((p) => {
+  const paymentDate = p.created_at?.slice(0, 10);
+
+  if (startDate && paymentDate < startDate) return false;
+  if (endDate && paymentDate > endDate) return false;
+
+  return true;
+});
+
+const totalCollectionValue = payments.reduce(
+  (sum, p) => sum + paidAmount(p),
+  0
+);
 
   const driverPayments = payments.filter(
   (p) =>
     p.driver_name ||
-      String(p.collected_by_role || "").toLowerCase() === "driver" ||
-      String(p.collection_type || "").toLowerCase() === "driver"
-  );
+    String(p.collected_by_role || "").toLowerCase() === "driver" ||
+    String(p.collection_type || "").toLowerCase() === "driver"
+);
 
-  const salesRepPayments = payments.filter(
-    (p) =>
-      p.sales_rep_name ||
-      String(p.collected_by_role || "").toLowerCase() === "sales rep" ||
-      String(p.collected_by_role || "").toLowerCase() === "salesrep" ||
-      String(p.collection_type || "").toLowerCase() === "sales rep" ||
-      String(p.collection_type || "").toLowerCase() === "salesrep"
-  );
+const salesRepPayments = filteredPayments.filter(
+  (p) =>
+    p.sales_rep_name ||
+    String(p.collected_by_role || "").toLowerCase() === "sales rep" ||
+    String(p.collected_by_role || "").toLowerCase() === "salesrep" ||
+    String(p.collection_type || "").toLowerCase() === "sales rep" ||
+    String(p.collection_type || "").toLowerCase() === "salesrep" ||
+    String(p.collection_type || "").toLowerCase() === "sales rep collection"
+);
 
   const driverTotals = useMemo(() => {
     const grouped = {};
@@ -395,15 +459,6 @@ const selectedCollectorSystemTotal = selectedCollectorPayments.reduce(
   0
 );
 
-const filteredPayments = payments.filter((p) => {
-  const paymentDate = p.created_at?.slice(0, 10);
-
-  if (startDate && paymentDate < startDate) return false;
-  if (endDate && paymentDate > endDate) return false;
-
-  return true;
-});
-
   const handoverDifference =
     Number(cashReceived || 0) - Number(selectedCollectorSystemTotal || 0);
 
@@ -436,22 +491,10 @@ const tabs = [
   return true;
 });
 
-const cashHoldingRows = drivers.map((driver) => {
+const driverCashHoldingRows = drivers.map((driver) => {
   const driverName = getDriverName(driver);
 
-  const lastHandover = handoverHistory
-    .filter(
-      (h) =>
-        h.collector_type === "Driver" &&
-        h.collector_name === driverName
-    )
-    .sort(
-      (a, b) =>
-        new Date(b.period_end || b.created_at) -
-        new Date(a.period_end || a.created_at)
-    )[0];
-
- const weekStart = getMondayStart();
+  const weekStart = getMondayStart();
 
   const driverPaymentsSinceLastHandover = payments.filter((p) => {
     const paymentDate = new Date(p.created_at);
@@ -481,22 +524,23 @@ const cashHoldingRows = drivers.map((driver) => {
 
   const holding = collected - handedOver;
 
-  const daysHolding = Math.floor(
-    (new Date() - startDate) /
-      (1000 * 60 * 60 * 24)
-  );
-
   const lastCollectionDate =
     driverPaymentsSinceLastHandover
       .sort(
         (a, b) =>
-          new Date(b.created_at) -
-          new Date(a.created_at)
+          new Date(b.created_at) - new Date(a.created_at)
       )[0]?.created_at || null;
+
+  const daysHolding = lastCollectionDate
+    ? Math.floor(
+        (new Date() - new Date(lastCollectionDate)) /
+          (1000 * 60 * 60 * 24)
+      )
+    : 0;
 
   return {
     driverName,
-    lastHandoverDate: lastHandover?.handover_date || "-",
+    lastHandoverDate: "-",
     lastCollectionDate,
     collected,
     handedOver,
@@ -504,6 +548,53 @@ const cashHoldingRows = drivers.map((driver) => {
     daysHolding,
   };
 });
+
+const salesRepCashHoldingRows = Object.keys(salesRepTotals).map((repName) => {
+  const weekStart = getMondayStart();
+
+  const repPayments = payments.filter((p) => {
+    const paymentDate = new Date(p.created_at);
+
+    return (
+      paymentDate >= weekStart &&
+      (
+        p.sales_rep_name === repName ||
+        p.collected_by === repName
+      )
+    );
+  });
+
+  const collected = repPayments.reduce(
+    (sum, p) => sum + paidAmount(p),
+    0
+  );
+
+  const handedOver = handoverHistory
+    .filter(
+      (h) =>
+        h.collector_type === "Sales Rep" &&
+        h.collector_name === repName &&
+        new Date(h.created_at) >= weekStart
+    )
+    .reduce((sum, h) => sum + Number(h.cash_received || 0), 0);
+
+  const holding = collected - handedOver;
+
+  return {
+    driverName: repName,
+    lastHandoverDate: "-",
+    lastCollectionDate: repPayments[0]?.created_at || null,
+    collected,
+    handedOver,
+    holding,
+    daysHolding: 0,
+  };
+});
+
+const cashHoldingRows = [
+  ...driverCashHoldingRows,
+  ...salesRepCashHoldingRows,
+];
 
   return (
     <div className="p-4 space-y-4">
@@ -565,9 +656,9 @@ const cashHoldingRows = drivers.map((driver) => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <SummaryCard
               title="Paid Customers"
-              value={new Set(payments.map((p) => p.customer_name)).size}
+              value={new Set(filteredPayments.map((p) => p.customer_name)).size}
             />
-            <SummaryCard title="Payments" value={payments.length} />
+            <SummaryCard title="Payments" value={filteredPayments.length} />
             <SummaryCard
               title="Total Collection"
               value={money(totalCollectionValue)}
