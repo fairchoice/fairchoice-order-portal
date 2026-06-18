@@ -56,6 +56,10 @@ function normalizeProduct(raw) {
   };
 }
 export default function CustomerOrder({ userProfile }) {
+
+  const loggedInUser = JSON.parse(
+  localStorage.getItem("loggedInUser") || "{}"
+);
   const role = userProfile?.role || "Customer";
   const normalizedRole = (role || "").replace(/\s+/g, "").toLowerCase();
 
@@ -64,6 +68,8 @@ export default function CustomerOrder({ userProfile }) {
   const isWarehouse = normalizedRole === "warehouse";
   const isDriver = normalizedRole === "driver";
   const isCustomer = normalizedRole === "customer";
+
+  
 
   const [page, setPage] = useState(() => {
     if (window.location.hash === "#admin") return "orders";
@@ -83,6 +89,19 @@ export default function CustomerOrder({ userProfile }) {
   const [selectedCustomerAccount, setSelectedCustomerAccount] = useState(null);
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [customerLedger, setCustomerLedger] = useState([]);
+
+  const [salesPaymentForm, setSalesPaymentForm] = useState({
+  customerId: "",
+  amount: "",
+  paymentType: "Cash",
+  whoPaid: "",
+  collectionDate: new Date().toISOString().split("T")[0],
+  notes: "",
+});
+
+
+
+const [savingSalesPayment, setSavingSalesPayment] = useState(false);
 
   const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
  
@@ -718,6 +737,94 @@ const finalTotal =
       [orderId]: !old[orderId],
     }));
   };
+
+  const saveSalesRepCollection = async () => {
+  if (savingSalesPayment) return;
+
+  const customer = customerAccounts.find(
+    (c) => String(c.id) === String(salesPaymentForm.customerId)
+  );
+
+  if (!customer) {
+    alert("Please select customer.");
+    return;
+  }
+
+  if (!Number(salesPaymentForm.amount || 0)) {
+    alert("Please enter amount.");
+    return;
+  }
+
+  if (!salesPaymentForm.whoPaid.trim()) {
+    alert("Please enter who paid.");
+    return;
+  }
+
+  if (
+    !window.confirm(
+      `Save collection of £${Number(
+        salesPaymentForm.amount
+      ).toFixed(2)}?`
+    )
+  ) {
+    return;
+  }
+
+  setSavingSalesPayment(true);
+
+  try {
+   const { error } = await supabase
+  .from("customer_ledger")
+  .insert({
+    customer_name: customer.account_name,
+
+    entry_type: "PAYMENT",
+    transaction_type: "PAYMENT",
+
+    reference_no: "SALES_REP_COLLECTION",
+
+    debit: 0,
+    credit: Number(salesPaymentForm.amount),
+
+    payment_type: salesPaymentForm.paymentType,
+    payment_applies_to: "SALES_REP_COLLECTION",
+
+    paid_by: salesPaymentForm.whoPaid,
+    who_paid: salesPaymentForm.whoPaid,
+
+   received_by: loggedInUser.staff_name || loggedInUser.username || null,
+  received_by_username: loggedInUser.username || null,
+  received_by_role: loggedInUser.role || null,
+  received_by_staff_id: loggedInUser.staff_id || null,
+
+  collected_by: loggedInUser.staff_id || loggedInUser.id || null,
+  collected_by_name: loggedInUser.staff_name || loggedInUser.username || null,
+  collected_by_username: loggedInUser.username || null,
+  collected_by_role: loggedInUser.role || null,
+
+    notes: salesPaymentForm.notes || "",
+  });
+
+    if (error) throw error;
+
+    alert("Collection saved successfully.");
+
+    setSalesPaymentForm({
+      customerId: "",
+      amount: "",
+      paymentType: "Cash",
+      whoPaid: "",
+      collectionDate: new Date()
+        .toISOString()
+        .split("T")[0],
+      notes: "",
+    });
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    setSavingSalesPayment(false);
+  }
+};
 
  const submitOrder = async () => {
   if (isSubmittingOrder) return;
@@ -1541,6 +1648,7 @@ const updateOrderItem = async (orderId, itemId, updates) => {
             onDecrease={decreaseQty}
             onRemove={removeItem}
             onChangeQty={changeQty}
+            submitOrder={submitOrder}
           />
           </div>
         )}
@@ -1693,19 +1801,114 @@ const updateOrderItem = async (orderId, itemId, updates) => {
     </div>
   </div>
 )}
-        {isSalesRep && page === "salesCashCollection" && (
-          <div className="p-4">
-            <div className="bg-white border rounded-2xl p-4 shadow-sm">
-              <h2 className="text-xl font-bold mb-2">
-                Sales Rep Cash Collection
-              </h2>
+       {isSalesRep && page === "salesCashCollection" && (
+  <div className="p-4">
+    <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-3">
+      <h2 className="text-xl font-bold">
+        Sales Rep Cash Collection
+      </h2>
 
-              <p className="text-sm text-slate-600">
-                Sales rep cash collection will show here.
-              </p>
-            </div>
-          </div>
-        )}
+      <select
+        value={salesPaymentForm.customerId}
+        onChange={(e) =>
+          setSalesPaymentForm({
+            ...salesPaymentForm,
+            customerId: e.target.value,
+          })
+        }
+        className="w-full border rounded-xl p-3"
+      >
+        <option value="">Select Customer</option>
+
+        {customerAccounts.map((customer) => (
+          <option
+            key={customer.id}
+            value={customer.id}
+          >
+            {customer.account_name}
+          </option>
+        ))}
+      </select>
+
+      <input
+        type="number"
+        placeholder="Amount Collected"
+        value={salesPaymentForm.amount}
+        onChange={(e) =>
+          setSalesPaymentForm({
+            ...salesPaymentForm,
+            amount: e.target.value,
+          })
+        }
+        className="w-full border rounded-xl p-3"
+      />
+
+      <select
+        value={salesPaymentForm.paymentType}
+        onChange={(e) =>
+          setSalesPaymentForm({
+            ...salesPaymentForm,
+            paymentType: e.target.value,
+          })
+        }
+        className="w-full border rounded-xl p-3"
+      >
+        <option value="Cash">Cash</option>
+        <option value="Bank Transfer">
+          Bank Transfer
+        </option>
+        <option value="Account">Account</option>
+        <option value="Cheque">Cheque</option>
+      </select>
+
+      <input
+        placeholder="Who Paid / Shop Staff Name"
+        value={salesPaymentForm.whoPaid}
+        onChange={(e) =>
+          setSalesPaymentForm({
+            ...salesPaymentForm,
+            whoPaid: e.target.value,
+          })
+        }
+        className="w-full border rounded-xl p-3"
+      />
+
+      <input
+        type="date"
+        value={salesPaymentForm.collectionDate}
+        onChange={(e) =>
+          setSalesPaymentForm({
+            ...salesPaymentForm,
+            collectionDate: e.target.value,
+          })
+        }
+        className="w-full border rounded-xl p-3"
+      />
+
+      <textarea
+        placeholder="Notes"
+        value={salesPaymentForm.notes}
+        onChange={(e) =>
+          setSalesPaymentForm({
+            ...salesPaymentForm,
+            notes: e.target.value,
+          })
+        }
+        className="w-full border rounded-xl p-3"
+      />
+
+      <button
+        onClick={saveSalesRepCollection}
+        disabled={savingSalesPayment}
+        className="w-full bg-green-700 text-white py-3 rounded-xl font-bold"
+      >
+        {savingSalesPayment
+          ? "Saving..."
+          : "Save Collection"}
+      </button>
+    </div>
+  </div>
+)}
 
         {isAdmin && page === "products" && (
           <AdminProducts

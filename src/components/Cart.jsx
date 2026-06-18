@@ -200,7 +200,10 @@ export default function Cart({
       onSubmit();
     }
   }}
+<<<<<<< HEAD
   
+=======
+>>>>>>> test
   disabled={cart.length === 0 || isSubmitting}
   className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
 >

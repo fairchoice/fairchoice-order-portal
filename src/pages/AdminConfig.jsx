@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
 import * as XLSX from "xlsx";
 
+
 import {
   getCustomerAccounts,
   saveCustomerAccount,
@@ -15,6 +16,7 @@ import {
 
 export default function AdminConfig() {
   const [activeConfigTab, setActiveConfigTab] = useState("product");
+  const [staffSearch, setStaffSearch] = useState("");
 
   const [showDriverForm, setShowDriverForm] = useState(false);
   const [drivers, setDrivers] = useState([]);
@@ -34,6 +36,7 @@ const [customerSearch, setCustomerSearch] = useState("");
 const [loginUsers, setLoginUsers] = useState([]);
 const [loginForm, setLoginForm] = useState({
   id: null,
+  staff_id: "",
   username: "",
   password: "",
   role: "Sales Rep",
@@ -82,12 +85,12 @@ const [loginForm, setLoginForm] = useState({
     active: true,
   };
 
-  const emptyStaffForm = {
-    staff_name: "",
-    email: "",
-    role: "Sales Rep",
-    active: true,
-  };
+ const emptyStaffForm = {
+  staff_name: "",
+  phone: "",
+  email: "",
+  active: true,
+};
 
   const [customerForm, setCustomerForm] = useState(emptyCustomerForm);
   const [branchForm, setBranchForm] = useState(emptyBranchForm);
@@ -147,10 +150,43 @@ async function loadLoginUsers() {
     setStaffUsers(data || []);
   }
 
+  function editLoginUser(user) {
+  setLoginForm({
+    id: user.id,
+    staff_id: user.staff_id || "",
+    username: user.username || "",
+    password: user.password || "",
+    role: user.role || "Sales Rep",
+    customer_account_id: user.customer_account_id || "",
+    active: user.active ?? true,
+  });
+
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
   async function saveLoginUser() {
   if (!loginForm.username.trim()) {
     alert("Username is required");
     return;
+  }
+
+    if (loginForm.role !== "Customer") {
+    if (!loginForm.staff_id) {
+      alert("Please select a staff member");
+      return;
+    }
+
+    const { data: staffCheck, error: staffCheckError } = await supabase
+      .from("staff_users")
+      .select("id, staff_name, active")
+      .eq("id", loginForm.staff_id)
+      .eq("active", true)
+      .limit(1);
+
+    if (staffCheckError || !staffCheck || staffCheck.length === 0) {
+      alert("Selected staff member is not active.");
+      return;
+    }
   }
 
   if (!loginForm.password.trim()) {
@@ -168,14 +204,16 @@ async function loadLoginUsers() {
     return;
   }
 
-  const payload = {
-    username: loginForm.username.trim(),
-    password: loginForm.password.trim(),
-    role: loginForm.role,
-    customer_account_id:
-      loginForm.role === "Customer" ? loginForm.customer_account_id : null,
-    active: loginForm.active,
-  };
+
+const payload = {
+  staff_id: loginForm.role === "Customer" ? null : loginForm.staff_id,
+  username: loginForm.username.trim(),
+  password: loginForm.password.trim(),
+  role: loginForm.role,
+  customer_account_id:
+    loginForm.role === "Customer" ? loginForm.customer_account_id : null,
+  active: loginForm.active,
+};
 
   let result;
 
@@ -188,20 +226,21 @@ async function loadLoginUsers() {
     result = await supabase.from("login_users").insert([payload]);
   }
 
-  if (result.error) {
-    console.error("Save login user error:", result.error);
-    alert("Could not save login user");
-    return;
-  }
+if (result.error) {
+  console.error("Save login user error:", result.error);
+  alert("Could not save login user: " + result.error.message);
+  return;
+}
 
-  setLoginForm({
-    id: null,
-    username: "",
-    password: "",
-    role: "Sales Rep",
-    customer_account_id: "",
-    active: true,
-  });
+setLoginForm({
+  id: null,
+  staff_id: "",
+  username: "",
+  password: "",
+  role: "Sales Rep",
+  customer_account_id: "",
+  active: true,
+});
 
   loadLoginUsers();
 }
@@ -269,26 +308,26 @@ async function loadLoginUsers() {
     loadCustomers();
   }
 
-  async function handleSaveStaff() {
-    if (!staffForm.staff_name || !staffForm.role) {
-      alert("Staff name and role required");
-      return;
-    }
-
-    await saveStaffUser(staffForm);
-    setStaffForm(emptyStaffForm);
-    loadStaff();
+async function handleSaveStaff() {
+  if (!staffForm.staff_name.trim()) {
+    alert("Staff name required");
+    return;
   }
 
-  function editLoginUser(user) {
-  setLoginForm({
-    id: user.id,
-    username: user.username || "",
-    password: user.password || "",
-    role: user.role || "Sales Rep",
-    customer_account_id: user.customer_account_id || "",
-    active: user.active ?? true,
-  });
+  try {
+    await saveStaffUser(staffForm);
+
+    alert("Staff saved successfully");
+
+    setStaffForm(emptyStaffForm);
+    loadStaff();
+  } catch (error) {
+    console.error("Save staff error:", error);
+    alert(
+      "Could not save staff: " +
+      (error.message || JSON.stringify(error))
+    );
+  }
 }
 
   const savePricingSettings = async () => {
@@ -529,6 +568,12 @@ const processCustomerImport = async () => {
   String(customer.account_name || "")
     .toLowerCase()
     .includes(customerSearch.toLowerCase())
+);
+
+const filteredStaff = staffUsers.filter((staff) =>
+  `${staff.staff_name || ""} ${staff.email || ""}`
+    .toLowerCase()
+    .includes(staffSearch.toLowerCase())
 );
 
   return (
@@ -1040,108 +1085,111 @@ const processCustomerImport = async () => {
   </div>
 )}
 
-      {activeConfigTab === "staff" && (
-        <div className={cardClass}>
-          <h3 className="text-xl font-bold mb-4">Staff Setup</h3>
+  {activeConfigTab === "staff" && (
+  <div className={cardClass}>
+    <h3 className="text-xl font-bold mb-4">Staff Setup</h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
-            <input
-              className={inputClass}
-              placeholder="Staff Name"
-              value={staffForm.staff_name}
-              onChange={(e) =>
-                setStaffForm({ ...staffForm, staff_name: e.target.value })
-              }
-            />
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+      <input
+        className={inputClass}
+        placeholder="Staff Name"
+        value={staffForm.staff_name}
+        onChange={(e) =>
+          setStaffForm({ ...staffForm, staff_name: e.target.value })
+        }
+      />
 
-            <input
-              className={inputClass}
-              placeholder="Email / Login"
-              value={staffForm.email}
-              onChange={(e) =>
-                setStaffForm({ ...staffForm, email: e.target.value })
-              }
-            />
+      <input
+        className={inputClass}
+        placeholder="Phone Number"
+        value={staffForm.phone || ""}
+        onChange={(e) =>
+          setStaffForm({ ...staffForm, phone: e.target.value })
+        }
+      />
 
-            <select
-              className={inputClass}
-              value={staffForm.role}
-              onChange={(e) =>
-                setStaffForm({ ...staffForm, role: e.target.value })
-              }
-            >
-              <option value="Admin">Admin</option>
-              <option value="Sales Rep">Sales Rep</option>
-              <option value="Warehouse">Warehouse</option>
-              <option value="Driver">Driver</option>
-            </select>
+      <input
+        className={inputClass}
+        placeholder="Email Address"
+        value={staffForm.email}
+        onChange={(e) =>
+          setStaffForm({ ...staffForm, email: e.target.value })
+        }
+      />
 
-            <div className="flex gap-2">
-              <button
-                onClick={handleSaveStaff}
-                className="bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-bold"
+      <div className="flex gap-2">
+        <button
+          onClick={handleSaveStaff}
+          className="bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-bold"
+        >
+          {staffForm.id ? "Update Staff" : "Save Staff"}
+        </button>
+
+        {staffForm.id && (
+          <button
+            onClick={() => setStaffForm(emptyStaffForm)}
+            className="bg-slate-500 text-white px-4 py-3 rounded-xl text-sm font-bold"
+          >
+            Cancel Edit
+          </button>
+        )}
+      </div>
+    </div>
+
+    <input
+      className={`${inputClass} mb-3`}
+      placeholder="Search Staff..."
+      value={staffSearch}
+      onChange={(e) => setStaffSearch(e.target.value)}
+    />
+
+    <h3 className="text-lg font-bold mb-3">Staff List</h3>
+
+    <div className="space-y-2">
+      {filteredStaff.map((staff) => (
+        <div
+          key={staff.id}
+          className="flex flex-col md:flex-row md:justify-between gap-3 border rounded-xl p-3 text-sm"
+        >
+          <div>
+            <strong>{staff.staff_name}</strong>
+            <p>Phone: {staff.phone || "-"}</p>
+            <p>Email: {staff.email || "-"}</p>
+            <p>
+              Status:{" "}
+              <span
+                className={
+                  staff.active ? "text-green-600" : "text-red-600"
+                }
               >
-                {staffForm.id ? "Update Staff" : "Save Staff"}
-              </button>
-
-              {staffForm.id && (
-                <button
-                  onClick={() => setStaffForm(emptyStaffForm)}
-                  className="bg-slate-500 text-white px-4 py-3 rounded-xl text-sm font-bold"
-                >
-                  Cancel Edit
-                </button>
-              )}
-            </div>
+                {staff.active ? "Active" : "Inactive"}
+              </span>
+            </p>
           </div>
 
-          <h3 className="text-lg font-bold mb-3">Staff List</h3>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => setStaffForm(staff)}
+              className="bg-blue-600 text-white px-3 py-2 rounded-lg"
+            >
+              Edit Staff
+            </button>
 
-          <div className="space-y-2">
-            {staffUsers.map((staff) => (
-              <div
-                key={staff.id}
-                className="flex flex-col md:flex-row md:justify-between gap-3 border rounded-xl p-3 text-sm"
-              >
-                <div>
-                  <strong>{staff.staff_name}</strong>
-                  <p>{staff.email}</p>
-                  <p>Role: {staff.role}</p>
-                  <p>
-                    Status:{" "}
-                    <span
-                      className={
-                        staff.active ? "text-green-600" : "text-red-600"
-                      }
-                    >
-                      {staff.active ? "Active" : "Inactive"}
-                    </span>
-                  </p>
-                </div>
-
-                <div className="flex gap-2 flex-wrap">
-                  <button
-                    onClick={() => setStaffForm(staff)}
-                    className="bg-blue-600 text-white px-3 py-2 rounded-lg"
-                  >
-                    Edit Staff
-                  </button>
-
-                  <button
-                    onClick={async () => {
-                      await toggleStaffActive(staff.id, !staff.active);
-                      loadStaff();
-                    }}
-                    className="bg-slate-700 text-white px-3 py-2 rounded-lg"
-                  >
-                    {staff.active ? "Make Inactive" : "Make Active"}
-                  </button>
-                </div>
-              </div>
-            ))}
+            <button
+              onClick={async () => {
+                await toggleStaffActive(staff.id, !staff.active);
+                loadStaff();
+              }}
+              className="bg-slate-700 text-white px-3 py-2 rounded-lg"
+            >
+              {staff.active ? "Make Inactive" : "Make Active"}
+            </button>
           </div>
         </div>
-      )}
+      ))}
+    </div>
+  </div>
+)}
 
       {activeConfigTab === "login" && (
   <div>
@@ -1149,6 +1197,31 @@ const processCustomerImport = async () => {
       <h3 className="text-xl font-bold mb-4">Login Setup</h3>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        <select
+  className={inputClass}
+  value={loginForm.staff_id || ""}
+  onChange={(e) => {
+    const selectedStaff = staffUsers.find(
+      (s) => String(s.id) === String(e.target.value)
+    );
+
+  setLoginForm({
+  ...loginForm,
+  staff_id: selectedStaff?.id || "",
+  username: loginForm.username || "",
+});
+  }}
+>
+  <option value="">Select Staff User</option>
+  {staffUsers
+    .filter((staff) => staff.active)
+    .map((staff) => (
+     <option key={staff.id} value={staff.id}>
+  {staff.staff_name} - {staff.email || "No email"}
+</option>
+    ))}
+</select>
+
         <input
           className={inputClass}
           placeholder="Username"

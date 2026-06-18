@@ -16,6 +16,10 @@ const [selectedCreditCustomerId, setSelectedCreditCustomerId] = useState("");
 
 const [savingPayment, setSavingPayment] = useState(false);
 
+const loggedInUser = JSON.parse(
+  localStorage.getItem("loggedInUser") || "{}"
+);
+
   const getDriverItems = (order) =>
   (order.items || []).filter(
     (item) => item.includeInPicking !== false
@@ -104,7 +108,10 @@ const savePreviousBalancePayment = async () => {
     paid_by: previousBalanceForm.whoPaid || null,
     who_paid: previousBalanceForm.whoPaid || null,
 
-    received_by: selectedDriver === "All" ? "Driver" : selectedDriver,
+    received_by: loggedInUser.name || null,
+    received_by_username: loggedInUser.username || null,
+    received_by_role: loggedInUser.role || null,
+    received_by_staff_id: loggedInUser.id || null,
 
     notes:
       previousBalanceForm.notes ||
@@ -124,9 +131,13 @@ const savePreviousBalancePayment = async () => {
 
     setSelectedCreditCustomerId("");
     setShowPreviousBalance(false);
+
   } catch (error) {
     console.error("Previous balance payment error:", error);
-    alert("Could not save previous balance payment: " + error.message);
+    alert(
+      "Could not save previous balance payment: " +
+        (error.message || JSON.stringify(error))
+    );
   }
 };
 
@@ -197,16 +208,25 @@ const confirmDelivery = async (order, confirmedBy) => {
       0
     );
 
-    const { error } = await supabase.from("customer_ledger").insert({
-      customer_name: order.companyName || "Unknown Customer",
-      entry_type: "INVOICE",
-      reference_no: order.orderId,
-      debit: orderTotal,
-      credit: 0,
-      confirmed_by: confirmedBy,
-      notes: "Delivery confirmed",
-      invoice_status: "UNPAID",
-    });
+const { error } = await supabase.from("customer_ledger").insert({
+  customer_name: order.companyName || "Unknown Customer",
+
+  entry_type: "INVOICE",
+  reference_no: order.orderId,
+
+  debit: orderTotal,
+  credit: 0,
+
+  confirmed_by: confirmedBy,
+
+  driver_name: loggedInUser.name || null,
+  driver_username: loggedInUser.username || null,
+  driver_role: loggedInUser.role || null,
+  driver_staff_id: loggedInUser.id || null,
+
+  notes: "Delivery confirmed",
+  invoice_status: "UNPAID",
+});
 
     if (error) throw error;
 
@@ -285,7 +305,10 @@ const confirmDelivery = async (order, confirmedBy) => {
 
     who_paid: paymentForm.paidBy || null,
     paid_by: paymentForm.paidBy || null,
-    received_by: paymentForm.receivedBy || selectedDriver || "Driver",
+    received_by: loggedInUser.name || null,
+    received_by_username: loggedInUser.username || null,
+    received_by_role: loggedInUser.role || null,
+    received_by_staff_id: loggedInUser.id || null,
 
     notes: `Driver cash collection - ${paymentType}`,
   });

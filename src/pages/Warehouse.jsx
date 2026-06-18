@@ -60,20 +60,23 @@ export default function Warehouse({
   /*
     Load active drivers from Supabase.
   */
-  const fetchDrivers = async () => {
-    const { data, error } = await supabase
-      .from("drivers")
-      .select("*")
-      .eq("active", true)
-      .order("name");
+const fetchDrivers = async () => {
+  const { data, error } = await supabase
+    .from("login_users")
+    .select("id, username, role, active")
+    .eq("role", "Driver")
+    .eq("active", true)
+    .order("username");
 
-    if (error) {
-      console.error("Driver load error:", error);
-      return;
-    }
+  if (error) {
+    console.error("Driver load error:", error);
+    return;
+  }
 
-    setDrivers(data || []);
-  };
+  console.log("WAREHOUSE DRIVERS:", data);
+
+  setDrivers(data || []);
+};
 
   useEffect(() => {
     setStartDate("");
@@ -1419,11 +1422,11 @@ export default function Warehouse({
                     >
                       <option value="">Assign Driver</option>
 
-                      {drivers.map((driver) => (
-                        <option key={driver.id} value={driver.name}>
-                          {driver.name}
-                        </option>
-                      ))}
+                   {drivers.map((driver) => (
+                      <option key={driver.id} value={driver.username}>
+                        {driver.username}
+                      </option>
+                    ))}
                     </select>
 
                     <button
