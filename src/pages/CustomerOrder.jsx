@@ -402,6 +402,7 @@ const fetchOrders = async () => {
       customerName: order.company_name,
       phoneNumber: "",
       companyName: order.company_name,
+      branchName: order.delivery_branch_name || "",
       deliveryAddress:
         order.delivery_address || order.delivery_postcode || order.postcode || "",
       priceMode: order.price_mode || "vat",
@@ -885,10 +886,13 @@ discount_applied_by_name:
   credit_limit: creditLimit,
 });
 
-   const newOrder = {
+const newOrder = {
   orderId: orderNumber,
   customerName: selectedCustomerAccount.account_name,
   companyName: selectedCustomerAccount.account_name,
+
+  branchName: selectedBranch?.branch_name || "",
+
   deliveryAddress: selectedBranch?.delivery_address || "",
   priceMode,
   total: finalTotal,

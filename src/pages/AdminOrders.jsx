@@ -23,6 +23,8 @@ export default function AdminOrders({
   const [addQty, setAddQty] = useState(1);
   const [editedQty, setEditedQty] = useState({});
 
+  const [editedStatus, setEditedStatus] = useState({});
+
   const receivedOrders = orders.filter(
     (order) => order.status === "Received" || order.status === "In Progress"
   );
@@ -160,15 +162,18 @@ const confirmAddItem = () => {
               <div className="flex flex-col lg:flex-row lg:justify-between gap-3">
                 <div>
                   <h3 className="font-bold text-lg">
-                  {order.orderId}
-                  <span className="font-semibold text-base ml-2">
-                    | {order.companyName || "No company"}
-                  </span>
+  {order.orderId} | {order.companyName}
 
-                  <span className="ml-3 text-green-600 font-extrabold">
-                    | {order.status}
-                  </span>
-                </h3>
+  {order.branchName && (
+    <span className="ml-2 text-blue-700 font-semibold">
+      | {order.branchName}
+    </span>
+  )}
+
+  <span className="ml-3 text-green-600 font-extrabold">
+    | {order.status}
+  </span>
+</h3>
 
                 <p className="text-xs text-slate-500">
                   {order.createdAt} | {String(order.priceMode).toUpperCase()} |{" "}
@@ -296,8 +301,13 @@ const confirmAddItem = () => {
               className="border rounded-lg px-2 py-1 text-sm"
               value={item.sourceStatus || "In Stock"}
               onChange={(e) =>
-                updateOrderItem(order.orderId, item.id, {
-                  sourceStatus: e.target.value,
+                updateOrderItem(order.orderId, item.dbId, {
+                sourceStatus: e.target.value,
+                includeInPicking:
+                  e.target.value === "Need Supplier" ||
+                  e.target.value === "Cannot Supply"
+                    ? false
+                    : true,
                 })
               }
             >

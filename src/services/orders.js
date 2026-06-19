@@ -17,25 +17,58 @@ export async function createCustomerOrder({
   priceMode,
   cart,
   total,
+
+  discount_percent = 0,
+  discount_amount = 0,
+  discount_applied_by = null,
+  discount_applied_by_name = "",
+
+  customer_account_id = null,
+  customer_branch_id = null,
+  delivery_branch_name = "",
+  delivery_address = "",
+  delivery_postcode = "",
+  customer_country = "",
+  credit_limit = 0,
 }) {
   const orderNumber = "ORD-" + Date.now();
 
   const { data: order, error: orderError } = await supabase
     .from("orders")
-    .insert({
-      order_number: orderNumber,
-      customer_id: null,
-      company_name: companyName.trim(),
-      postcode: "",
-      price_mode: priceMode.toUpperCase(),
-      order_total: total.toFixed(2),
-      status: "Received",
-    })
+   .insert({
+  order_number: orderNumber,
+  customer_id: null,
+  customer_account_id: customer_account_id || null,
+  customer_branch_id: customer_branch_id || null,
+
+  company_name: companyName.trim(),
+
+  delivery_branch_name: delivery_branch_name || "",
+  delivery_address: delivery_address || "",
+  delivery_postcode: delivery_postcode || "",
+  customer_country: customer_country || "",
+
+  postcode: delivery_postcode || "",
+  price_mode: priceMode.toUpperCase(),
+  order_total: total.toFixed(2),
+  
+
+  discount_percent: Number(discount_percent || 0),
+  discount_amount: Number(discount_amount || 0),
+  discount_applied_by: discount_applied_by || null,
+  discount_applied_by_name: discount_applied_by_name || "",
+
+  status: "Received",
+})
     .select()
     .single();
 
   if (orderError) {
-    console.error("ORDER ERROR:", orderError);
+    console.error("ORDER ERROR FULL:", JSON.stringify(orderError, null, 2));
+
+alert(
+  `Order Error:\n\n${orderError.message}\n\n${orderError.details || ""}\n\n${orderError.hint || ""}`
+);
     throw orderError;
   }
 
