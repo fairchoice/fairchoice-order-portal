@@ -1280,11 +1280,18 @@ const fetchDrivers = async () => {
               <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3">
                 <div>
                   <h3 className="font-bold text-lg">
-                    {order.orderId} | {order.companyName}
-                    <span className="ml-3 text-green-600 font-extrabold">
-                      | {order.status}
-                    </span>
-                  </h3>
+  {order.orderId} | {order.companyName}
+
+  {order.branchName && (
+    <span className="ml-2 text-blue-700 font-semibold">
+      | {order.branchName}
+    </span>
+  )}
+
+  <span className="ml-3 text-green-600 font-extrabold">
+    | {order.status}
+  </span>
+</h3>
 
                   <p className="text-xs text-slate-500 mt-1">
                     {order.createdAt} | {String(order.priceMode).toUpperCase()} |{" "}
