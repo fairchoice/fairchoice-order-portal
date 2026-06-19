@@ -81,31 +81,47 @@ function formatCollectionSource(source) {
   setStatementRows(data || []);
 };
        
-  const saveOpeningBalance = async () => {
-    if (!selectedCustomer) {
-      alert("Please select a customer first.");
-      return;
-    }
+const saveOpeningBalance = async () => {
+  if (!selectedCustomer) {
+    alert("Please select a customer first.");
+    return;
+  }
 
-    const { error } = await supabase
-      .from("customer_opening_balances")
-      .update({
-        opening_balance: Number(openingBalanceInput || 0),
-      })
-      .eq("customer_name", selectedCustomer);
+  const amount = Number(openingBalanceInput || 0);
 
-    if (error) {
-      alert("Opening balance update failed: " + error.message);
-      return;
-    }
+  const { data, error } = await supabase
+    .from("customer_opening_balances")
+    .upsert(
+      {
+        customer_name: selectedCustomer,
+        opening_balance: amount,
+      },
+      {
+        onConflict: "customer_name",
+      }
+    )
+    .select();
 
-    setOpeningBalance(Number(openingBalanceInput || 0));
-    setEditOpeningBalance(false);
-    await loadCustomers();
+  console.log("UPSERT RESULT:", data);
+  console.log("UPSERT ERROR:", error);
 
-    alert("Opening balance updated.");
-  };
+  if (error) {
+    alert("Opening balance update failed: " + error.message);
+    return;
+  }
 
+  if (!data || data.length === 0) {
+    alert("Opening balance was not saved. Check Supabase RLS policy.");
+    return;
+  }
+
+  setOpeningBalance(amount);
+  setEditOpeningBalance(false);
+  await loadStatement(selectedCustomer);
+
+  alert("Opening balance updated.");
+};
+   
   const printStatement = () => {
     const statement = document.getElementById("statement-print");
 
@@ -193,10 +209,14 @@ function formatCollectionSource(source) {
 
         <div className="bg-white border rounded-2xl p-4 mb-4">
           <div className="text-sm font-bold text-slate-500">
-            Total Outstanding
+            Current Balance
           </div>
 
-          <div className="text-3xl font-bold text-red-600">
+          <div
+            className={`text-3xl font-bold ${
+              totalOutstanding < 0 ? "text-green-600" : "text-red-600"
+            }`}
+          >
             £{totalOutstanding.toFixed(2)}
           </div>
         </div>

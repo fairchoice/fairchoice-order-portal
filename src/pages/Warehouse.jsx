@@ -166,35 +166,55 @@ const fetchDrivers = async () => {
     VAT Total = order VAT if available.
     Grand Total = order total if available, otherwise net + VAT.
   */
-  const getInvoiceTotals = (order) => {
-    const printableItems = getPrintableItems(order);
+const getInvoiceTotals = (order) => {
+  console.log("ORDER", order);
+  console.log("VAT TOTAL", order.vatTotal);
+  console.log("TOTAL VAT", order.totalVat);
+  console.log("VAT", order.vat);
+  console.log("TOTAL", order.total);
 
-    const totalLines = printableItems.length;
+  const printableItems = getPrintableItems(order);
 
-    const totalQuantity = printableItems.reduce(
-      (sum, item) => sum + getLineQty(item),
-      0
-    );
+  const totalLines = printableItems.length;
 
-    const netTotal = printableItems.reduce(
-      (sum, item) => sum + getLineTotal(item),
-      0
-    );
+  const totalQuantity = printableItems.reduce(
+    (sum, item) => sum + getLineQty(item),
+    0
+  );
 
-    const vatTotal = Number(
-      order.vatTotal ?? order.totalVat ?? order.vat ?? 0
-    );
+  const netTotal = printableItems.reduce((sum, item) => {
+    const qty = getLineQty(item);
+    const price = getLinePrice(item);
 
-    const grandTotal = Number(order.total ?? netTotal + vatTotal);
+    const net = Number(item.net_total ?? item.netTotal ?? qty * price);
 
-    return {
-      totalLines,
-      totalQuantity,
-      netTotal,
-      vatTotal,
-      grandTotal,
-    };
+    return sum + net;
+  }, 0);
+
+  const savedGrandTotal = Number(order.total ?? order.final_total ?? 0);
+
+  const calculatedVat =
+    savedGrandTotal > netTotal
+      ? savedGrandTotal - netTotal
+      : printableItems.reduce((sum, item) => {
+          const qty = getLineQty(item);
+          const price = getLinePrice(item);
+          const net = Number(item.net_total ?? item.netTotal ?? qty * price);
+          const vatPercent = Number(item.vat_percent ?? item.vatPercent ?? 20);
+
+          return sum + (net * vatPercent) / 100;
+        }, 0);
+
+  const grandTotal = netTotal + calculatedVat;
+
+  return {
+    totalLines,
+    totalQuantity,
+    netTotal,
+    vatTotal: calculatedVat,
+    grandTotal,
   };
+};
 
   /*
     Decide whether to print invoice or order form.
@@ -218,46 +238,50 @@ const fetchDrivers = async () => {
     - Company footer
   */
   const printInvoice = (order) => {
-    const printableItems = getPrintableItems(order);
-    const totals = getInvoiceTotals(order);
+  const printableItems = getPrintableItems(order);
+  const totals = getInvoiceTotals(order);
 
-    const invoiceNumber = order.invoiceNumber || order.orderId || "-";
+  const invoiceNumber = order.invoiceNumber || order.orderId || "-";
+  const dueDate = order.dueDate || "-";
 
-    const invoiceDate = order.createdAt
-      ? new Date(order.createdAt).toLocaleDateString()
-      : new Date().toLocaleDateString();
+  const rawInvoiceDate =
+    order.createdAt ||
+    order.created_at ||
+    order.invoiceDate ||
+    order.invoice_date ||
+    order.orderDate ||
+    order.order_date;
 
-    const dueDate = order.dueDate || "-";
+  const invoiceDate =
+    rawInvoiceDate && !isNaN(new Date(rawInvoiceDate).getTime())
+      ? new Date(rawInvoiceDate).toLocaleDateString("en-GB")
+      : new Date().toLocaleDateString("en-GB");
 
-    const rows = printableItems
-      .map((item) => {
-        const qty = getLineQty(item);
-        const price = getLinePrice(item);
-        const net = getLineTotal(item);
-        const vatPercent = Number(item.vatPercent ?? item.vat_percent ?? 20);
+  const rows = printableItems
+    .map((item) => {
+      const qty = getLineQty(item);
+      const price = getLinePrice(item);
+      const net = getLineTotal(item);
+      const vatPercent = Number(item.vatPercent ?? item.vat_percent ?? 20);
 
-       return `
-            
-              <tr>
-              <td class="product-code">
-                ${item.productCode || item.product_code || ""}
-              </td>
+      return `
+        <tr>
+          <td class="product-code">
+            ${item.productCode || item.product_code || ""}
+          </td>
 
-              <td class="desc-col">
-                ${item.name || item.productName || ""}
-              </td>
+          <td class="desc-col">
+            ${item.name || item.productName || ""}
+          </td>
 
-              <td class="qty-col">${qty.toFixed(2)}</td>
-
-              <td class="price-col">${price.toFixed(2)}</td>
-
-              <td class="vat-col">${vatPercent.toFixed(2)}</td>
-
-              <td class="net-col">${net.toFixed(2)}</td>
-            </tr>
-            `;
-      })
-      .join("");
+          <td class="qty-col">${qty.toFixed(2)}</td>
+          <td class="price-col">${price.toFixed(2)}</td>
+          <td class="vat-col">${vatPercent.toFixed(2)}</td>
+          <td class="net-col">${net.toFixed(2)}</td>
+        </tr>
+      `;
+    })
+    .join("");
 
     const html = `
       <html>
@@ -525,10 +549,10 @@ const fetchDrivers = async () => {
               <div class="section invoice-grid">
                 <div>
                   <div class="box-title">Invoice To:</div>
-                  <div>${order.companyName || "-"}</div>
-                  <div>${order.branchName || order.shopName || ""}</div>
-                  <div>${order.deliveryAddress || order.address || ""}</div>
-                  <div>${order.postcode || ""}</div>
+                 <div>${order.companyName || order.company_name || "-"}</div>
+                  <div>${order.branchName || order.branch_name || order.shopName || order.shop_name || ""}</div>
+                  <div>${order.deliveryAddress || order.delivery_address || order.address || ""}</div>
+                  <div>${order.postcode || order.post_code || order.branchPostcode || order.branch_postcode || ""}</div>
                 </div>
 
                 <div>
@@ -628,11 +652,11 @@ const fetchDrivers = async () => {
 
               <div class="deliver">
                 <div class="box-title">Deliver To:</div>
-                <div>${order.companyName || "-"}</div>
-                <div>${order.branchName || order.shopName || ""}</div>
-                <div>${order.deliveryAddress || order.address || ""}</div>
-                <div>${order.postcode || ""}</div>
-              </div>
+               <div>${order.companyName || order.company_name || "-"}</div>
+              <div>${order.branchName || order.branch_name || order.shopName || order.shop_name || ""}</div>
+              <div>${order.deliveryAddress || order.delivery_address || order.address || ""}</div>
+              <div>${order.postcode || order.post_code || order.branchPostcode || order.branch_postcode || ""}</div>
+                            </div>
             </div>
 
             <div class="footer">
@@ -676,6 +700,8 @@ const fetchDrivers = async () => {
 
     const printOrderForm = (order) => {
   const printableItems = getPrintableItems(order);
+
+
   const totals = getInvoiceTotals(order);
 
   const orderDate = order.createdAt
@@ -915,10 +941,10 @@ const fetchDrivers = async () => {
           <div class="invoice-grid">
             <div>
               <div class="box-title">Customer:</div>
-              <div>${order.companyName || "-"}</div>
-              <div>${order.branchName || order.shopName || ""}</div>
-              <div>${order.deliveryAddress || order.address || ""}</div>
-              <div>${order.postcode || ""}</div>
+              <div>${order.companyName || order.company_name || "-"}</div>
+              <div>${order.branchName || order.branch_name || order.shopName || order.shop_name || ""}</div>
+              <div>${order.deliveryAddress || order.delivery_address || order.address || ""}</div>
+              <div>${order.postcode || order.post_code || order.branchPostcode || order.branch_postcode || ""}</div>
             </div>
 
             <div>

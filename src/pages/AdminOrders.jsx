@@ -1,8 +1,11 @@
 import { useState } from "react";
 
+import { getOrderItemPrice } from "../utils/pricing";
+
 export default function AdminOrders({
   orders = [],
   products = [],
+  pricingSettings = {},
   expandedOrders = {},
   toggleOrderExpanded = () => {},
   printPickingList = () => {},
@@ -88,19 +91,39 @@ const filteredProducts = products.filter((p) => {
 const confirmAddItem = () => {
   if (!selectedOrder || !selectedProduct) return;
 
+  const qty = Number(addQty || 1);
+
+  const unitPrice = getOrderItemPrice(
+    selectedProduct,
+    selectedOrder.priceMode,
+    pricingSettings
+  );
+
+  const vatPercent = Number(
+    selectedProduct.vatPercent ?? selectedProduct.vat_percent ?? 20
+  );
+
+  const netTotal = Number(unitPrice) * qty;
+  const vatAmount = (netTotal * vatPercent) / 100;
+  const grossTotal = netTotal + vatAmount;
+
   addOrderItem(selectedOrder.orderId, {
     id: crypto.randomUUID(),
     productId: selectedProduct.id,
-    productCode: selectedProduct.productCode || "",
-    name: selectedProduct.name || selectedProduct.productName,
-    qty: Number(addQty || 1),
-    pickedQty: Number(addQty || 1),
-    price: Number(
-      selectedProduct.selectedPrice ??
-      selectedProduct.vatPrice ??
-      selectedProduct.cashPrice ??
-      0
-    ),
+    productCode: selectedProduct.productCode || selectedProduct.product_code || "",
+    name: selectedProduct.name || selectedProduct.productName || selectedProduct.product_name,
+
+    qty,
+    pickedQty: qty,
+
+    price: unitPrice,
+
+    net_total: netTotal,
+    vat_percent: vatPercent,
+    vat_amount: vatAmount,
+    lineTotal: grossTotal,
+    line_total: grossTotal,
+
     sourceStatus: "In Stock",
     includeInPicking: true,
   });

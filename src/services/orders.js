@@ -3,13 +3,74 @@ import { supabase } from "./supabase";
 export async function getOrders() {
   const { data, error } = await supabase
     .from("orders")
-    .select("*, order_items(*)")
+    .select(`
+      *,
+      order_items(*),
+      customer_accounts(*),
+      customer_branches(*)
+    `)
     .order("created_at", { ascending: false })
     .limit(50);
 
   if (error) throw error;
 
-  return data || [];
+  return (data || []).map((order) => ({
+    ...order,
+
+    orderId: order.order_number,
+    orderNumber: order.order_number,
+
+    companyName: order.company_name || "",
+    branchName:
+  order.delivery_branch_name ||
+  order.customer_branches?.branch_name ||
+  order.customer_branches?.shop_name ||
+  "",
+    deliveryAddress:
+      order.delivery_address ||
+      order.customer_branches?.delivery_address ||
+      order.customer_accounts?.address ||
+      "",
+
+    postcode:
+      order.delivery_postcode ||
+      order.postcode ||
+      order.customer_branches?.postcode ||
+      order.customer_accounts?.postcode ||
+      "",
+   
+
+    priceMode: order.price_mode || "",
+    total: Number(order.order_total || order.total || order.final_total || 0),
+
+    createdAt: order.created_at,
+
+    driverName: order.driver_name || "",
+
+    items: (order.order_items || []).map((item) => ({
+      ...item,
+
+      dbId: item.id,
+      id: item.product_id,
+
+      productId: item.product_id,
+      productCode: item.product_code || "",
+      name: item.product_name || "",
+
+      qty: Number(item.qty || 0),
+      pickedQty: Number(item.picked_qty ?? item.qty ?? 0),
+
+      price: Number(item.price || 0),
+      lineTotal: Number(item.line_total || 0),
+
+      sourceStatus: item.source_status || "In Stock",
+      includeInPicking: item.include_in_picking !== false,
+
+      net_total: item.net_total,
+      vat_percent: item.vat_percent,
+      vat_amount: item.vat_amount,
+    })),
+  }));
 }
 
 export async function createCustomerOrder({
