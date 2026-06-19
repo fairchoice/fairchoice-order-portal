@@ -9,7 +9,7 @@ export default function LoginPage({ onLogin }) {
     const cleanUsername = username.trim().toLowerCase();
     const cleanPassword = password.trim();
 
-<<<<<<< HEAD
+
   const { data, error } = await supabase
     .from("login_users")
     .select("*")
@@ -17,15 +17,7 @@ export default function LoginPage({ onLogin }) {
     .eq("password", cleanPassword)
     .eq("active", true)
     .limit(1);
-=======
-    const { data: loginData, error: loginError } = await supabase
-      .from("login_users")
-      .select("*")
-      .eq("username", cleanUsername)
-      .eq("password", cleanPassword)
-      .eq("active", true)
-      .limit(1);
->>>>>>> test
+
 
     if (loginError || !loginData || loginData.length === 0) {
       alert("Invalid username or password");
