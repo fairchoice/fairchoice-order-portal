@@ -10,7 +10,7 @@ export default function LoginPage({ onLogin }) {
     const cleanPassword = password.trim();
 
 
-  const { data, error } = await supabase
+  const { data: loginData, error: loginError } = await supabase
     .from("login_users")
     .select("*")
     .ilike("username", cleanUsername)
