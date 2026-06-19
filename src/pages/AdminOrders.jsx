@@ -283,17 +283,30 @@ const confirmAddItem = () => {
               }
             />
 
-            <button
-              onClick={() =>
-                updateOrderItem(order.orderId, item.dbId, {
-                  qty: Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty),
-                  pickedQty: Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty),
-                })
-              }
-              className="bg-amber-500 text-white px-2 py-1 rounded text-xs font-bold"
-            >
-              Update
-            </button>
+<button
+  onClick={() => {
+    const status = item.sourceStatus || "In Stock";
+
+    updateOrderItem(order.orderId, item.dbId, {
+      qty: Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty),
+
+      pickedQty:
+        status === "Need Supplier" || status === "Cannot Supply"
+          ? 0
+          : Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty),
+
+      sourceStatus: status,
+
+      includeInPicking:
+        status === "Need Supplier" || status === "Cannot Supply"
+          ? false
+          : true,
+    });
+  }}
+  className="bg-amber-500 text-white px-2 py-1 rounded text-xs font-bold"
+>
+  Update
+</button>
           </div>
 
           <div className="text-center">
