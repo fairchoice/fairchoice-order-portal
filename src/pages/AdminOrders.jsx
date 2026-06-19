@@ -284,88 +284,96 @@ const confirmAddItem = () => {
             />
 
 <button
-  onClick={() => {
-    const status = item.sourceStatus || "In Stock";
+onClick={() => {
+  const status =
+    editedStatus[item.dbId] || item.sourceStatus || "In Stock";
 
-    updateOrderItem(order.orderId, item.dbId, {
-      qty: Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty),
+  const qty = Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty);
 
-      pickedQty:
-        status === "Need Supplier" || status === "Cannot Supply"
-          ? 0
-          : Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty),
+  updateOrderItem(order.orderId, item.dbId, {
+    qty,
 
-      sourceStatus: status,
+    pickedQty:
+      status === "Need Supplier" || status === "Cannot Supply"
+        ? 0
+        : qty,
 
-      includeInPicking:
-        status === "Need Supplier" || status === "Cannot Supply"
-          ? false
-          : true,
-    });
-  }}
+    sourceStatus: status,
+
+    includeInPicking:
+      status === "Need Supplier" || status === "Cannot Supply"
+        ? false
+        : true,
+  });
+}}
   className="bg-amber-500 text-white px-2 py-1 rounded text-xs font-bold"
 >
   Update
 </button>
           </div>
 
-          <div className="text-center">
-            <select
-              className="border rounded-lg px-2 py-1 text-sm"
-              value={item.sourceStatus || "In Stock"}
-              onChange={(e) =>
-                updateOrderItem(order.orderId, item.dbId, {
-                sourceStatus: e.target.value,
-                includeInPicking:
-                  e.target.value === "Need Supplier" ||
-                  e.target.value === "Cannot Supply"
-                    ? false
-                    : true,
-                })
-              }
-            >
-              <option>In Stock</option>
-              <option>Need Supplier</option>
-              <option>Different Supplier</option>
-              <option>Cannot Supply</option>
-            </select>
-          </div>
+<div className="text-center">
+  <select
+    className="border rounded-lg px-2 py-1 text-sm"
+    value={item.sourceStatus || "In Stock"}
+    onChange={(e) =>
+      updateOrderItem(order.orderId, item.dbId, {
+        sourceStatus: e.target.value,
+        includeInPicking:
+          e.target.value === "Need Supplier" ||
+          e.target.value === "Cannot Supply"
+            ? false
+            : true,
+      })
+    }
+  >
+    <option>In Stock</option>
+    <option>Need Supplier</option>
+    <option>Different Supplier</option>
+    <option>Cannot Supply</option>
+  </select>
+</div>
 
-          <div className="font-medium truncate pr-3">
-            {item.name}            
-          </div>
+<div className="font-medium truncate pr-3">
+  {item.name}
+</div>
 
-          <div className="text-center font-semibold">
-            £{itemPrice.toFixed(2)}
-          </div>
+<div className="text-center font-semibold">
+  £{itemPrice.toFixed(2)}
+</div>
 
-          <div className="text-center font-semibold">
-            £{lineTotal.toFixed(2)}
-          </div>
+<div className="text-center font-semibold">
+  £{lineTotal.toFixed(2)}
+</div>
 
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() =>
-                updateOrderItem(order.orderId, item.id, {
-                  includeInPicking: !item.includeInPicking,
-                })
-              }
-              className={`${
-                item.includeInPicking === false ? "bg-blue-600" : "bg-red-600"
-              } text-white ${btn}`}
-            >
-              {item.includeInPicking === false ? "Add" : "Remove"}
-            </button>
+<div className="flex justify-end gap-2">
+  <button
+    onClick={() =>
+      updateOrderItem(order.orderId, item.dbId, {
+        sourceStatus:
+          item.includeInPicking === false ? "In Stock" : "Cannot Supply",
+        includeInPicking: item.includeInPicking === false ? true : false,
+        pickedQty: item.includeInPicking === false ? item.qty : 0,
+        qty: item.qty,
+      })
+    }
+    className={`${
+      item.includeInPicking === false ? "bg-blue-600" : "bg-red-600"
+    } text-white ${btn}`}
+  >
+    {item.includeInPicking === false ? "Add" : "Remove"}
+  </button>
 
-            <button
-              onClick={() => openAddItemModal(order)}
-              className={`bg-green-600 text-white ${btn}`}
-            >
-              Add Item
-            </button>
-          </div>
-        </div>
-      );
+  <button
+    onClick={() => openAddItemModal(order)}
+    className={`bg-green-600 text-white ${btn}`}
+  >
+    Add Item
+  </button>
+</div>
+
+</div>
+   );
     })}
              
 
@@ -385,6 +393,8 @@ const confirmAddItem = () => {
           );
         })}
       </div>
+
+
       {showAddItemModal && (
   <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
     <div className="bg-white rounded-2xl p-4 w-full max-w-xl">
@@ -399,7 +409,7 @@ const confirmAddItem = () => {
       />
 
       <div className="max-h-60 overflow-auto border rounded-lg mb-3">
-        {filteredProducts.slice(0, 30).map((product) => (
+       {filteredProducts.slice(0, 100).map((product) => (
           <button
             key={product.id}
             onClick={() => setSelectedProduct(product)}

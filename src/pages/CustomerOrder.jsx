@@ -1015,16 +1015,42 @@ const updateOrderItem = async (orderId, itemId, updates) => {
 
 
 };
- const addOrderItem = (orderId, newItem) => {
-  setOrders((oldOrders) =>
-    oldOrders.map((order) => {
-      if (order.orderId !== orderId) return order;
+const addOrderItem = async (orderId, newItem) => {
+  const order = orders.find((o) => o.orderId === orderId);
 
-      const updatedItems = [...order.items, newItem];
+  if (!order?.dbId) {
+    alert("Order database ID not found.");
+    return;
+  }
 
-      return recalculateOrder(order, updatedItems);
-    })
-  );
+  const qty = Number(newItem.qty || 1);
+  const price = Number(newItem.price || 0);
+
+  const { error } = await supabase
+    .from("order_items")
+    .insert({
+      order_id: order.dbId,
+      product_id: newItem.productId,
+      product_name: newItem.name,
+      brand: newItem.brand || "",
+      series: newItem.series || "",
+      flavour: newItem.flavour || "",
+      carton_size: newItem.cartonSize || "",
+      qty,
+      picked_qty: qty,
+      price,
+      line_total: price * qty,
+      source_status: "In Stock",
+      include_in_picking: true,
+    });
+
+  if (error) {
+    console.error("Add item error:", error);
+    alert(error.message);
+    return;
+  }
+
+  await fetchOrders();
 };
 
   const saveProduct = async () => {
