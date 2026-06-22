@@ -1,5 +1,9 @@
 import { supabase } from "./supabase";
 
+const normaliseStatus = (status) => status || "Active";
+const normalisePriceMode = (mode) =>
+  mode === "Super" || mode === "super" ? "Admin Offer" : mode || "VAT";
+
 export async function getCustomerAccounts() {
   const { data, error } = await supabase
     .from("customer_accounts")
@@ -67,20 +71,43 @@ export async function toggleCustomerActive(id, active) {
 }
 
 export async function saveCustomerAccount(account) {
+  const fullAddress = [
+    account.address_line_1,
+    account.address_line_2,
+    account.town_city,
+    account.postcode,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  const defaultPriceMode = normalisePriceMode(account.default_price_mode);
+
   const payload = {
     account_name: account.account_name,
     contact_name: account.contact_name || "",
     phone: account.phone || "",
+    mobile: account.mobile || "",
     email: account.email || "",
-    address: account.address || "",
+    vat_number: account.vat_number || "",
+
+    address_line_1: account.address_line_1 || "",
+    address_line_2: account.address_line_2 || "",
+    town_city: account.town_city || "",
+    postcode: account.postcode || "",
+    address: fullAddress || account.address || "",
     country: account.country || "Wales",
+
+    payment_terms: account.payment_terms || "",
     credit_limit: Number(account.credit_limit || 0),
-    default_price_mode: account.default_price_mode || "VAT",
+    default_price_mode: defaultPriceMode === "Admin Offer" ? "VAT" : defaultPriceMode,
+
+    status: normaliseStatus(account.status),
     active: account.active ?? true,
+
     allow_vat: account.allow_vat ?? true,
     allow_server: account.allow_server ?? false,
-    allow_manager: account.allow_manager ?? false,
-    allow_super: account.allow_super ?? false,
+    allow_manager: false,
+    allow_super: false,
   };
 
   if (account.id) {
@@ -160,4 +187,15 @@ export async function toggleStaffActive(id, active) {
 
   if (error) throw error;
   return data;
+}
+
+export async function getCustomerBranches(customerAccountId) {
+  const { data, error } = await supabase
+    .from("customer_branches")
+    .select("*")
+    .eq("customer_account_id", customerAccountId)
+    .order("branch_name", { ascending: true });
+
+  if (error) throw error;
+  return data || [];
 }

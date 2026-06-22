@@ -1,26 +1,45 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase.js";
+import Pricing from "./AdminSetup/Pricing";
+import Suppliers from "./AdminSetup/Suppliers";
+import Staff from "./AdminSetup/Staff";
+import LoginConfig from "./AdminSetup/LoginConfig";
 
+import BackOfficeLayout, {
+  ComingSoonPlaceholder,
+  getComingSoonTitle,
+} from "./AdminSetup/BackOfficeLayout";
+
+import Categories from "./AdminSetup/Categories";
+import Warehouse from "./Warehouse";
+import StockReceipts from "./AdminSetup/StockReceipts";
+import StockHistory from "./AdminSetup/StockHistory";
+import CustomerCredit from "./AdminSetup/CustomerCredit";
+import WeeklyAccount from "./AdminSetup/WeeklyAccount";
+import Customers from "./AdminSetup/Customers";
 
 import ProductCard from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
 import Cart from "../components/Cart.jsx";
 
 import { getProducts } from "../services/products";
+import {
+  applyLocationStockToProducts,
+  saveProductLocationStock,
+} from "../services/locationStock";
+import {
+  applyPromotionRulesToCart,
+  getActivePromotionRules,
+} from "../services/promotionRules";
 import AdminProducts from "./AdminProducts";
+import ProductImportExport from "./AdminSetup/ProductImportExport";
+import ProductPromotions from "./AdminSetup/ProductPromotions";
 import AdminOrders from "./AdminOrders";
-import Warehouse from "./Warehouse";
-import Driver from "./Driver";
-import StockReceipts from "./StockReceipts";
-import StockHistory from "./StockHistory";
-import AdminConfig from "./AdminConfig";
-import CustomerCredit from "./CustomerCredit";
-import WeeklyAccount from "./WeeklyAccount";
+
 
 import { getCustomerAccounts } from "../services/customerManagement";
 
 import {
-  getOrders,
   createCustomerOrder,
   updateOrderStatus,
   updateOrderFields,
@@ -42,19 +61,54 @@ function normalizeProduct(raw) {
     image: raw.image_url || "https://placehold.co/400x300?text=Product",
     stock: Number(raw.stock || 0),
     lowStockAlert: Number(raw.low_stock_alert || 10),
-    active: String(raw.status || "Active").toLowerCase() !== "inactive",
+    active: String(raw.status || "Active").trim().toLowerCase() !== "inactive",
     availableInEngland: raw.available_in_england === true,
     availableInWales: raw.available_in_wales === true,
     vatType: raw.vat_type || "20",
     availableFromSupplier: raw.available_from_supplier !== false,
-    recommended: raw.recommended === true,
-    topSeller: raw.top_seller === true,
+    isNew: Boolean(raw.is_new ?? raw.isNew),
+    isPromotion: Boolean(raw.is_promotion ?? raw.isPromotion),
+    isReduced: Boolean(raw.is_reduced ?? raw.isReduced),
+    comingSoon: Boolean(raw.coming_soon ?? raw.comingSoon),
+    recommended: Boolean(raw.recommended),
+    topSeller: Boolean(raw.top_seller ?? raw.topSeller),
     costPrice: Number(raw.cost_price || 0),
     supplierName: raw.supplier_name || "",
     salesAccount: raw.sales_account || "",
     purchaseAccount: raw.purchase_account || "",
   };
 }
+
+const PRODUCT_LABEL_PRIORITY = [
+  "comingSoon",
+  "isNew",
+  "isPromotion",
+  "isReduced",
+  "recommended",
+  "topSeller",
+];
+
+const getProductLabelValue = (product) =>
+  PRODUCT_LABEL_PRIORITY.find((key) => product?.[key] === true) || "";
+
+const getProductLabelPayload = (labelValue) => ({
+  is_new: labelValue === "isNew",
+  is_promotion: labelValue === "isPromotion",
+  is_reduced: labelValue === "isReduced",
+  coming_soon: labelValue === "comingSoon",
+  recommended: labelValue === "recommended",
+  top_seller: labelValue === "topSeller",
+});
+
+const getProductLabelFormFlags = (labelValue) => ({
+  isNew: labelValue === "isNew",
+  isPromotion: labelValue === "isPromotion",
+  isReduced: labelValue === "isReduced",
+  comingSoon: labelValue === "comingSoon",
+  recommended: labelValue === "recommended",
+  topSeller: labelValue === "topSeller",
+});
+
 export default function CustomerOrder({ userProfile }) {
 
   const loggedInUser = JSON.parse(
@@ -63,7 +117,8 @@ export default function CustomerOrder({ userProfile }) {
   const role = userProfile?.role || "Customer";
   const normalizedRole = (role || "").replace(/\s+/g, "").toLowerCase();
 
-  const isAdmin = normalizedRole === "admin";
+  const isAdmin =
+    normalizedRole === "admin" || normalizedRole === "superadmin";
   const isSalesRep = normalizedRole === "salesrep";
   const isWarehouse = normalizedRole === "warehouse";
   const isDriver = normalizedRole === "driver";
@@ -72,14 +127,16 @@ export default function CustomerOrder({ userProfile }) {
   
 
   const [page, setPage] = useState(() => {
+    if (isCustomer) return "order";
     if (window.location.hash === "#admin") return "orders";
     if (window.location.hash === "#products") return "products";
     if (window.location.hash === "#warehouse") return "warehouse";
-    if (window.location.hash === "#driver") return "driver";
     if (window.location.hash === "#stock-receipts") return "stockreceipts";
     if (window.location.hash === "#stockhistory") return "stockhistory";
     if (window.location.hash === "#config") return "config";
+    if (window.location.hash === "#customers") return "customers";
     if (window.location.hash === "#credit") return "credit";
+    
     return "order";
   });
 
@@ -122,6 +179,7 @@ const [savingSalesPayment, setSavingSalesPayment] = useState(false);
   const [products, setProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [productError, setProductError] = useState("");
+  const [promotionRules, setPromotionRules] = useState([]);
 
   const CART_KEY = "fairchoice_cart";
 
@@ -138,6 +196,32 @@ const [cart, setCart] = useState(() => {
 useEffect(() => {
   localStorage.setItem(CART_KEY, JSON.stringify(cart));
 }, [cart]);
+
+const applyCartPromotions = (cartLines) =>
+  applyPromotionRulesToCart(cartLines, promotionRules, products);
+
+const refreshPromotionRules = async () => {
+  try {
+    const rules = await getActivePromotionRules();
+    setPromotionRules(rules || []);
+  } catch (error) {
+    console.error("Promotion rules loading error:", error);
+  }
+};
+
+useEffect(() => {
+  setCart((oldCart) => {
+    const recalculatedCart = applyPromotionRulesToCart(
+      oldCart,
+      promotionRules,
+      products
+    );
+
+    return JSON.stringify(recalculatedCart) === JSON.stringify(oldCart)
+      ? oldCart
+      : recalculatedCart;
+  });
+}, [promotionRules, products]);
 
 
 const fetchCustomerLedger = async () => {
@@ -213,7 +297,53 @@ useEffect(() => {
     supplierName: "",
     salesAccount: "",
     purchaseAccount: "",
+    locationStocks: {},
+    isNew: false,
+    isPromotion: false,
+    isReduced: false,
+    comingSoon: false,
+    recommended: false,
+    topSeller: false,
+    active: true,
   });
+
+  const getDefaultProductAccounts = async (category) => {
+    const selectedCategory = String(category || "").trim();
+
+    if (!selectedCategory) {
+      return {
+        salesAccount: "",
+        purchaseAccount: "",
+      };
+    }
+
+    const { data, error } = await supabase
+      .from("account_codes")
+      .select("account_code, account_type, main_category")
+      .eq("active", true)
+      .eq("main_category", selectedCategory)
+      .in("account_type", ["Sales", "Purchase"]);
+
+    if (error) {
+      console.error("Default account code loading error:", error);
+      return {
+        salesAccount: "",
+        purchaseAccount: "",
+      };
+    }
+
+    const salesAccount = (data || []).find(
+      (account) => account.account_type === "Sales"
+    );
+    const purchaseAccount = (data || []).find(
+      (account) => account.account_type === "Purchase"
+    );
+
+    return {
+      salesAccount: salesAccount?.account_code || "",
+      purchaseAccount: purchaseAccount?.account_code || "",
+    };
+  };
 
   const orderCountry =
   (isAdmin || isSalesRep)
@@ -274,12 +404,27 @@ const getVatRate = (vatType) => {
   return roundToFairQuarter(discountedPrice);
 };
 
-  useEffect(() => {
-    if (isWarehouse) setPage("orders");
-    if (isDriver) setPage("driver");
-    if (isSalesRep) setPage("order");
-    if (isCustomer) setPage("order");
-  }, [isWarehouse, isDriver, isSalesRep, isCustomer]);
+
+useEffect(() => {
+  if (isAdmin && page === "order" && window.location.hash === "#admin") {
+    setPage("orders");
+    fetchOrders();
+  }
+
+  if (isWarehouse) setPage("orders");
+  if (isDriver) setPage("orders");
+  if (isSalesRep) setPage("order");
+  if (isCustomer) setPage("order");
+}, [isAdmin, isWarehouse, isDriver, isSalesRep, isCustomer]);
+
+useEffect(() => {
+  if (!isCustomer) return;
+  if (page === "order" || page === "paymentHistory") return;
+
+  setPage("order");
+}, [isCustomer, page]);
+
+
 
   useEffect(() => {
     if (!supabase) {
@@ -290,13 +435,13 @@ const getVatRate = (vatType) => {
   
     fetchProducts();
     fetchPricingSettings();
+    refreshPromotionRules();
 
     if (
       [
         "#admin",
         "#products",
         "#warehouse",
-        "#driver",
         "#stock-receipts",
         "#stockhistory",
         "#credit",
@@ -359,12 +504,18 @@ const getVatRate = (vatType) => {
 
     try {
       const data = await getProducts();
-
-      setProducts(
-        (data || [])
-          .map(normalizeProduct)
-          .filter((p) => p.name)
+      const productsForCountry = applyLocationStockToProducts(
+        data || [],
+        orderCountry
       );
+
+      console.log("CUSTOMER PRODUCTS FROM SERVICE:", data);
+      console.log(
+        "TEST PRODUCT LABEL AFTER GETPRODUCTS:",
+        (data || []).find((p) => String(p.productCode).toLowerCase() === "123456b")
+      );
+
+      setProducts((productsForCountry || []).filter((p) => p.name));
     } catch (error) {
       console.error("Product loading error:", error);
       setProductError(error.message);
@@ -373,6 +524,11 @@ const getVatRate = (vatType) => {
 
     setProductsLoading(false);
   };
+
+  useEffect(() => {
+    if (!supabase) return;
+    fetchProducts();
+  }, [orderCountry]);
 
   const fetchPricingSettings = async () => {
     const { data, error } = await supabase
@@ -563,6 +719,11 @@ const baseProducts =
     const productBrand = String(product.brand || "").trim();
     const productSeries = String(product.series || "").trim();
 
+
+  
+
+
+
     return (
       product.active &&
       (selectedCategory === "All Products" ||
@@ -615,12 +776,13 @@ const incVatPrice = exVatPrice + vatAmount;
   const selectedPrice = getPrice(product);
 
   setCart((oldCart) => {
-    const found = oldCart.find((item) => item.id === product.id);
+    const normalCart = oldCart.filter((item) => !item.isPromotionFree);
+    const found = normalCart.find((item) => item.id === product.id);
 
     if (found) {
       const newQty = found.qty + quantity;
 
-      return oldCart.map((item) =>
+      const nextCart = normalCart.map((item) =>
         item.id === product.id
           ? {
               ...item,
@@ -636,10 +798,12 @@ const incVatPrice = exVatPrice + vatAmount;
             }
           : item
       );
+
+      return applyCartPromotions(nextCart);
     }
 
-    return [
-      ...oldCart,
+    return applyCartPromotions([
+      ...normalCart,
       {
         ...product,
         qty: quantity,
@@ -653,39 +817,46 @@ const incVatPrice = exVatPrice + vatAmount;
         includeInPicking: true,
         pickedQty: Math.min(product.stock, quantity),
       },
-    ];
+    ]);
   });
 };
 
   const increaseQty = (id) => {
     setCart((oldCart) =>
-      oldCart.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              qty: item.qty + 1,
-              sourceStatus:
-                item.stock < item.qty + 1 ? "Need Supplier" : "In Stock",
-              pickedQty: Math.min(item.stock, item.qty + 1),
-            }
-          : item
+      applyCartPromotions(
+        oldCart
+          .filter((item) => !item.isPromotionFree)
+          .map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  qty: item.qty + 1,
+                  sourceStatus:
+                    item.stock < item.qty + 1 ? "Need Supplier" : "In Stock",
+                  pickedQty: Math.min(item.stock, item.qty + 1),
+                }
+              : item
+          )
       )
     );
   };
 
   const decreaseQty = (id) => {
     setCart((oldCart) =>
-      oldCart
-        .map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                qty: item.qty - 1,
-                pickedQty: Math.min(item.stock, item.qty - 1),
-              }
-            : item
-        )
-        .filter((item) => item.qty > 0)
+      applyCartPromotions(
+        oldCart
+          .filter((item) => !item.isPromotionFree)
+          .map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  qty: item.qty - 1,
+                  pickedQty: Math.min(item.stock, item.qty - 1),
+                }
+              : item
+          )
+          .filter((item) => item.qty > 0)
+      )
     );
   };
 
@@ -693,22 +864,30 @@ const incVatPrice = exVatPrice + vatAmount;
     const quantity = Math.max(1, Number(value || 1));
 
     setCart((oldCart) =>
-      oldCart.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              qty: quantity,
-              sourceStatus:
-                item.stock < quantity ? "Need Supplier" : "In Stock",
-              pickedQty: Math.min(item.stock, quantity),
-            }
-          : item
+      applyCartPromotions(
+        oldCart
+          .filter((item) => !item.isPromotionFree)
+          .map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  qty: quantity,
+                  sourceStatus:
+                    item.stock < quantity ? "Need Supplier" : "In Stock",
+                  pickedQty: Math.min(item.stock, quantity),
+                }
+              : item
+          )
       )
     );
   };
 
   const removeItem = (id) => {
-    setCart((oldCart) => oldCart.filter((item) => item.id !== id));
+    setCart((oldCart) =>
+      applyCartPromotions(
+        oldCart.filter((item) => !item.isPromotionFree && item.id !== id)
+      )
+    );
   };
 
   const total = cart.reduce((sum, item) => {
@@ -760,7 +939,7 @@ const finalTotal =
 
   if (
     !window.confirm(
-      `Save collection of £${Number(
+      `Save collection of Â£${Number(
         salesPaymentForm.amount
       ).toFixed(2)}?`
     )
@@ -824,7 +1003,8 @@ const finalTotal =
   }
 };
 
- const submitOrder = async () => {
+
+const submitOrder = async () => {
   if (isSubmittingOrder) return;
 
   if (!selectedCustomerAccount) {
@@ -844,19 +1024,37 @@ const finalTotal =
     return;
   }
 
+  const accountStatus =
+    selectedCustomerAccount?.account_status ||
+    selectedCustomerAccount?.status ||
+    "Active";
+
   const creditLimit = Number(selectedCustomerAccount?.credit_limit || 0);
+
   const outstandingBalance = Number(
     selectedCustomerAccount?.outstanding_balance || 0
   );
-  const orderTotal = Number(finalTotal || 0);
 
-  if (creditLimit > 0 && outstandingBalance + orderTotal > creditLimit) {
+  const orderTotal = Number(finalTotal || 0);
+  const projectedBalance = outstandingBalance + orderTotal;
+
+  if (accountStatus === "On Hold") {
+    alert("Customer account is On Hold. Order cannot be submitted.");
+    return;
+  }
+
+  if (accountStatus === "Stopped") {
+    alert("Customer account is Stopped. Please contact Accounts.");
+    return;
+  }
+
+  if (creditLimit > 0 && projectedBalance > creditLimit) {
     alert(
-      `Order exceeds customer credit limit.\n\nOutstanding Balance: £${outstandingBalance.toFixed(
-        2
-      )}\nOrder Total: £${orderTotal.toFixed(
-        2
-      )}\nCredit Limit: £${creditLimit.toFixed(2)}`
+      `Credit limit exceeded.\n\n` +
+        `Credit Limit: Â£${creditLimit.toFixed(2)}\n` +
+        `Outstanding Balance: Â£${outstandingBalance.toFixed(2)}\n` +
+        `Current Order: Â£${orderTotal.toFixed(2)}\n` +
+        `Projected Balance: Â£${projectedBalance.toFixed(2)}`
     );
     return;
   }
@@ -864,6 +1062,7 @@ const finalTotal =
   setIsSubmittingOrder(true);
 
   try {
+
     const { orderNumber } = await createCustomerOrder({
   companyName: selectedCustomerAccount.account_name,
   priceMode,
@@ -887,23 +1086,24 @@ discount_applied_by_name:
 });
 
 const newOrder = {
-  orderId: orderNumber,
-  customerName: selectedCustomerAccount.account_name,
-  companyName: selectedCustomerAccount.account_name,
+    orderId: orderNumber,
+    customerName: selectedCustomerAccount.account_name,
+    companyName: selectedCustomerAccount.account_name,
 
-  branchName: selectedBranch?.branch_name || "",
+    branchName: selectedBranch?.branch_name || "",
 
-  deliveryAddress: selectedBranch?.delivery_address || "",
-  priceMode,
-  total: finalTotal,
-  discount_percent: Number(orderDiscountPercent || 0),
-  discount_amount: Number(discountAmount || 0),
-  discount_applied_by_name:
+   deliveryAddress: selectedBranch?.delivery_address || "",
+   priceMode,
+   total: finalTotal,
+   discount_percent: Number(orderDiscountPercent || 0),
+    discount_amount: Number(discountAmount || 0),
+   discount_applied_by_name:
     userProfile?.full_name || userProfile?.name || "",
-  createdAt: new Date().toLocaleString(),
-  status: "Received",
-  items: cart,
-};
+   createdAt: new Date().toLocaleString(),
+   status: "Received",
+   items: cart,
+    };
+
     setOrders((oldOrders) => [newOrder, ...oldOrders]);
 
     localStorage.removeItem(CART_KEY);
@@ -922,7 +1122,7 @@ const newOrder = {
     await fetchProducts();
 
     alert(
-  `✅ Order Submitted Successfully
+  `âœ… Order Submitted Successfully
 
 Order Number: ${orderNumber}
 
@@ -1061,30 +1261,42 @@ const addOrderItem = async (orderId, newItem) => {
       return;
     }
 
+    const defaultAccounts = await getDefaultProductAccounts(productForm.category);
+    const productFormForSave = {
+      ...productForm,
+      ...getProductLabelFormFlags(getProductLabelValue(productForm)),
+    };
+
     const payload = {
-      product_code: productForm.productCode,
-      product_name: productForm.name,
-      main_category: productForm.category,
-      sub_category: productForm.subCategory,
-      brand: productForm.brand,
-      series: productForm.series,
-      flavour: productForm.flavour,
-      cash_price: Number(productForm.cashPrice || 0),
-      vat_price: Number(productForm.vatPrice || 0),
-      cost_price: Number(productForm.costPrice || 0),
-      supplier_name: productForm.supplierName || "",
-      sales_account: productForm.salesAccount || "",
-      purchase_account: productForm.purchaseAccount || "",
-      carton_size: productForm.cartonSize,
+      product_code: productFormForSave.productCode,
+      product_name: productFormForSave.name,
+      main_category: productFormForSave.category,
+      sub_category: productFormForSave.subCategory,
+      brand: productFormForSave.brand,
+      series: productFormForSave.series,
+      flavour: productFormForSave.flavour,
+      cash_price: Number(productFormForSave.cashPrice || 0),
+      vat_price: Number(productFormForSave.vatPrice || 0),
+      cost_price: Number(productFormForSave.costPrice || 0),
+      supplier_name: productFormForSave.supplierName || "",
+      sales_account: productFormForSave.salesAccount || defaultAccounts.salesAccount || "",
+      purchase_account: productFormForSave.purchaseAccount || defaultAccounts.purchaseAccount || "",
+      carton_size: productFormForSave.cartonSize,
       image_url:
-        productForm.image || "https://placehold.co/400x300?text=Product",
-      stock: Number(productForm.stock || 0),
-      low_stock_alert: Number(productForm.lowStockAlert || 10),
-      status: "Active",
-      available_in_england: productForm.availableInEngland,
-      available_in_wales: productForm.availableInWales,
-      vat_type: productForm.vatType,
-      available_from_supplier: productForm.availableFromSupplier !== false,
+        productFormForSave.image || "https://placehold.co/400x300?text=Product",
+      stock: Number(productFormForSave.stock || 0),
+      low_stock_alert: Number(productFormForSave.lowStockAlert || 10),
+      status: productFormForSave.active === false ? "Inactive" : "Active",
+      available_in_england: productFormForSave.availableInEngland,
+      available_in_wales: productFormForSave.availableInWales,
+      vat_type: productFormForSave.vatType,
+      available_from_supplier: productFormForSave.availableFromSupplier !== false,
+      is_new: productFormForSave.isNew === true,
+      is_promotion: productFormForSave.isPromotion === true,
+      is_reduced: productFormForSave.isReduced === true,
+      coming_soon: productFormForSave.comingSoon === true,
+      recommended: productFormForSave.recommended === true,
+      top_seller: productFormForSave.topSeller === true,
       
            
     };
@@ -1101,6 +1313,19 @@ const addOrderItem = async (orderId, newItem) => {
     if (response.error) {
       console.error("Product save error:", response.error);
       alert("Product save failed.");
+      return;
+    }
+
+    try {
+      await saveProductLocationStock(
+        response.data?.id || editingId,
+        productFormForSave.locationStocks || {}
+      );
+    } catch (stockError) {
+      console.error("Location stock save error:", stockError);
+      alert(
+        `Product was saved, but location stock could not be saved.\n\n${stockError.message}`
+      );
       return;
     }
 
@@ -1127,6 +1352,14 @@ const addOrderItem = async (orderId, newItem) => {
       supplierName: "",
       salesAccount: "",
       purchaseAccount: "",
+      locationStocks: {},
+      isNew: false,
+      isPromotion: false,
+      isReduced: false,
+      comingSoon: false,
+      recommended: false,
+      topSeller: false,
+      active: true,
     });
 
     await fetchProducts();
@@ -1135,21 +1368,24 @@ const addOrderItem = async (orderId, newItem) => {
 
   const editProduct = (product) => {
     setEditingId(product.id);
+    const productLabelFormFlags = getProductLabelFormFlags(
+      getProductLabelValue(product)
+    );
 
     setProductForm({
-      productCode: product.productCode,
-      name: product.name,
-      category: product.category,
-      subCategory: product.subCategory,
-      brand: product.brand,
-      series: product.series,
-      flavour: product.flavour,
-      cashPrice: product.cashPrice,
-      vatPrice: product.vatPrice,
-      cartonSize: product.cartonSize,
-      image: product.image,
-      stock: product.stock,
-      lowStockAlert: product.lowStockAlert,
+      productCode: product.productCode || "",
+      name: product.name || "",
+      category: product.category || "",
+      subCategory: product.subCategory || "",
+      brand: product.brand || "",
+      series: product.series || "",
+      flavour: product.flavour || "",
+      cashPrice: product.cashPrice || "",
+      vatPrice: product.vatPrice || "",
+      cartonSize: product.cartonSize || "",
+      image: product.image || "",
+      stock: product.stock || "",
+      lowStockAlert: product.lowStockAlert || "",
       availableInEngland: product.availableInEngland === true,
       availableInWales: product.availableInWales === true,
       vatType: product.vatType || "20",
@@ -1158,6 +1394,14 @@ const addOrderItem = async (orderId, newItem) => {
       supplierName: product.supplierName || "",
       salesAccount: product.salesAccount || "",
       purchaseAccount: product.purchaseAccount || "",
+      locationStocks: product.locationStocks || {},
+      isNew: productLabelFormFlags.isNew === true,
+      isPromotion: productLabelFormFlags.isPromotion === true,
+      isReduced: productLabelFormFlags.isReduced === true,
+      comingSoon: productLabelFormFlags.comingSoon === true,
+      recommended: productLabelFormFlags.recommended === true,
+      topSeller: productLabelFormFlags.topSeller === true,
+      active: product.active !== false,
     });
 
     setPage("products");
@@ -1232,6 +1476,79 @@ const addOrderItem = async (orderId, newItem) => {
     win.document.close();
   };
 
+  console.log("CURRENT PAGE:", page);
+
+  const comingSoonTitle = getComingSoonTitle(page);
+
+const backOfficeContent = comingSoonTitle ? (
+  <ComingSoonPlaceholder title={comingSoonTitle} />
+) : (
+  <>
+    {page === "orders" && (
+      <AdminOrders
+        orders={orders}
+        products={products}
+        expandedOrders={expandedOrders}
+        toggleOrderExpanded={toggleOrderExpanded}
+        printPickingList={printPickingList}
+        updateOrderItem={updateOrderItem}
+        addOrderItem={addOrderItem}
+        changeOrderStatus={changeOrderStatus}
+      />
+    )}
+
+    {page === "warehouse" && (
+      <Warehouse
+        orders={orders}
+        printPickingList={printPickingList}
+        changeOrderStatus={changeOrderStatus}
+        updateOrderItem={updateOrderItem}
+        updateOrderExtraFields={updateOrderExtraFields}
+      />
+    )}
+
+    {page === "customers" && <Customers />}
+
+    {page === "products" && (
+      <AdminProducts
+        products={products}
+        productForm={productForm}
+        setProductForm={setProductForm}
+        editingId={editingId}
+        saveProduct={saveProduct}
+        fetchProducts={fetchProducts}
+        editProduct={editProduct}
+      />
+    )}
+
+    {page === "credit" && <CustomerCredit />}
+    {page === "weeklyAccount" && <WeeklyAccount />}
+    {page === "stockhistory" && <StockHistory />}
+
+    {page === "stockreceipts" && (
+      <StockReceipts products={products} fetchProducts={fetchProducts} />
+    )}
+
+    {page === "staff" && <Staff />}
+    {page === "loginSetup" && <LoginConfig />}
+    {page === "suppliers" && <Suppliers />}
+    {page === "pricing" && <Pricing />}
+    {page === "categories" && <Categories />}
+    {page === "productImportExport" && (
+      <ProductImportExport
+        products={products}
+        fetchProducts={fetchProducts}
+      />
+    )}
+    {page === "promotions" && (
+      <ProductPromotions
+        products={products}
+        fetchProducts={fetchProducts}
+      />
+    )}
+  </>
+);
+
   return (
     <div className="min-h-screen bg-slate-100 p-4 pb-40">
       <div className="max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
@@ -1287,6 +1604,19 @@ const addOrderItem = async (orderId, newItem) => {
         </div>
       )}
 
+      {isAdmin && page === "order" && (
+        <button
+          type="button"
+          onClick={async () => {
+            setPage("orders");
+            await fetchOrders();
+          }}
+          className="mb-4 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-blue-800"
+        >
+          Back Office
+        </button>
+      )}
+
       {isSalesRep && (
         <div className="flex gap-2">
           <button
@@ -1307,77 +1637,21 @@ const addOrderItem = async (orderId, newItem) => {
     </div>
   </div>
 
-  {isAdmin && (
-    <div className="flex flex-wrap gap-2 mt-4">
-      <button
-        onClick={() => {
-          setPage("order");
-          window.location.hash = "";
-        }}
-        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
-      >
-        Sales Rep Order Form
-      </button>
+{isAdmin && page !== "order" && (
+<BackOfficeLayout
+  page={page}
+  setPage={setPage}
+  fetchOrders={fetchOrders}
+  isAdmin={isAdmin}
+  isSalesRep={isSalesRep}
+  isWarehouse={isWarehouse}
+  isDriver={isDriver}
+  isCustomer={isCustomer}
+>
+  {backOfficeContent}
+</BackOfficeLayout>
+)}
 
-      <button
-        onClick={() => setPage("products")}
-        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
-      >
-        Products
-      </button>
-
-      <button
-        onClick={() => {
-          setPage("orders");
-          fetchOrders();
-        }}
-        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
-      >
-        Received Orders
-      </button>
-
-      <button
-        onClick={async () => {
-          await fetchOrders();
-          setPage("warehouse");
-        }}
-        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
-      >
-        Warehouse
-      </button>
-
-      <button
-        onClick={() => setPage("driver")}
-        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
-      >
-        Driver
-      </button>
-
-      <button
-        onClick={() => setPage("config")}
-        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
-      >
-        Admin Config
-      </button>
-
-      <button
-        onClick={() => {
-          setPage("credit");
-          window.location.hash = "#credit";
-        }}
-        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
-      >
-        Customer Credit
-      </button>
-
-      <button
-        onClick={() => setPage("weeklyAccount")}
-        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
-      >
-        Weekly Account
-      </button>
-    </div>
-  )}
 </div>
 
         {(isAdmin || isSalesRep || isCustomer) && page === "order" && (
@@ -1434,7 +1708,7 @@ const addOrderItem = async (orderId, newItem) => {
 </div>
 
     <div className="text-slate-700">
-      Credit Limit £
+      Credit Limit Â£
       {Number(selectedCustomerAccount?.credit_limit || 0).toFixed(2)}
     </div>
 
@@ -1468,7 +1742,7 @@ const addOrderItem = async (orderId, newItem) => {
 
   {(isAdmin || isSalesRep || selectedCustomerAccount?.allow_super) &&
     pricingSettings?.show_super_offer && (
-      <option value="super">Super Offer</option>
+      <option value="super">Admin Offer</option>
     )}
 </select>
   </div>
@@ -1538,7 +1812,6 @@ const addOrderItem = async (orderId, newItem) => {
     );
 
    if (isCustomer && activeBranches.length <= 1) return null;
-
    return (
     <div>
       <label className="font-bold text-sm block mb-1">
@@ -1644,19 +1917,30 @@ const addOrderItem = async (orderId, newItem) => {
                 )}
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2 md:gap-3">
-                {filteredProducts.map((product) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    addToCart={addToCart}
-                    onImageClick={setSelectedImage}
-                    price={getPrice(product)}
-                    cartQty={
-                      cart.find((item) => item.id === product.id)?.qty || 0
-                    }
-                    onAdd={addToCart}
-                  />
-                ))}
+                {filteredProducts.map((product) => {
+                  console.log("CUSTOMER PRODUCT LABEL CHECK", product.productCode, product.name, {
+                    isNew: product.isNew,
+                    isPromotion: product.isPromotion,
+                    isReduced: product.isReduced,
+                    comingSoon: product.comingSoon,
+                    recommended: product.recommended,
+                    topSeller: product.topSeller,
+                  });
+
+                  return (
+                    <ProductCard
+                      key={product.id}
+                      product={product}
+                      addToCart={addToCart}
+                      onImageClick={setSelectedImage}
+                      price={getPrice(product)}
+                      cartQty={
+                        cart.find((item) => item.id === product.id)?.qty || 0
+                      }
+                      onAdd={addToCart}
+                    />
+                  );
+                })}
               </div>
             </div>
 
@@ -1680,9 +1964,7 @@ const addOrderItem = async (orderId, newItem) => {
           </div>
         )}
 
-        {isAdmin && page === "credit" && <CustomerCredit />}
-        {isAdmin && page === "weeklyAccount" && <WeeklyAccount />}
-
+       
           {isCustomer && page === "paymentHistory" && (
   <div className="p-4">
     <div className="bg-white rounded-2xl shadow-sm border p-4">
@@ -1697,7 +1979,7 @@ const addOrderItem = async (orderId, newItem) => {
             Total Outstanding
           </div>
           <div className="text-2xl font-bold text-red-600">
-            £{Number(
+            Â£{Number(
               customerLedger.length
                 ? customerLedger[customerLedger.length - 1]?.balance || 0
                 : selectedCustomerAccount?.outstanding_balance || 0
@@ -1797,11 +2079,11 @@ const addOrderItem = async (orderId, newItem) => {
                       isPayment ? "text-green-600" : "text-red-600"
                     }`}
                   >
-                    {isPayment ? "-" : ""}£{amount.toFixed(2)}
+                    {isPayment ? "-" : ""}Â£{amount.toFixed(2)}
                   </td>
 
                   <td className="p-3 text-right font-bold">
-                    £{Number(row.balance || 0).toFixed(2)}
+                    Â£{Number(row.balance || 0).toFixed(2)}
                   </td>
 
                   <td className="p-3 text-center">
@@ -1935,60 +2217,8 @@ const addOrderItem = async (orderId, newItem) => {
       </button>
     </div>
   </div>
-)}
-
-        {isAdmin && page === "products" && (
-          <AdminProducts
-            products={products}
-            productForm={productForm}
-            setProductForm={setProductForm}
-            editingId={editingId}
-            saveProduct={saveProduct}
-            fetchProducts={fetchProducts}
-            editProduct={editProduct}
-          />
-        )}
-
-        {(isAdmin || isWarehouse) && page === "orders" && (
-        <AdminOrders
-        orders={orders}
-        products={products}
-        expandedOrders={expandedOrders}
-        toggleOrderExpanded={toggleOrderExpanded}
-        printPickingList={printPickingList}
-        updateOrderItem={updateOrderItem}
-        addOrderItem={addOrderItem}
-        changeOrderStatus={changeOrderStatus}
-      />
-        )}
-
-        {(isAdmin || isWarehouse) && page === "warehouse" && (
-          <Warehouse
-            orders={orders}
-            printPickingList={printPickingList}
-            changeOrderStatus={changeOrderStatus}
-            updateOrderItem={updateOrderItem}
-            updateOrderExtraFields={updateOrderExtraFields}
-          />
-        )}
-
-              {(isAdmin || isDriver) && page === "driver" && (
-                <Driver
-              orders={orders}
-              changeOrderStatus={changeOrderStatus}
-              updateOrderExtraFields={updateOrderExtraFields}
-              refreshOrders={fetchOrders}
-            />
-        )}
-
-        {isAdmin && page === "stockhistory" && <StockHistory />}
-
-        {isAdmin && page === "stockreceipts" && (
-          <StockReceipts products={products} fetchProducts={fetchProducts} />
-        )}
-
-        {isAdmin && page === "config" && <AdminConfig />}
-
+)}      
+     
         {selectedImage && (
           <div
             className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
@@ -2019,8 +2249,6 @@ const addOrderItem = async (orderId, newItem) => {
           </div>
         )}
 
-
-     
       {page === "order" && (isAdmin || isSalesRep || isCustomer) && (
   <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-xl p-3">
     <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -2030,7 +2258,7 @@ const addOrderItem = async (orderId, newItem) => {
         </div>
 
         <div className="font-bold text-xl">
-            £{finalTotal.toFixed(2)}
+            Â£{finalTotal.toFixed(2)}
           </div>
 
           {cart.length > 0 && (
@@ -2067,7 +2295,7 @@ const addOrderItem = async (orderId, newItem) => {
   onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
   className="fixed bottom-20 right-3 z-50 bg-slate-800 text-white text-xs font-bold px-3 py-2 rounded-full shadow-lg opacity-80 hover:opacity-100"
 >
-  ↑ Top
+  â†‘ Top
 </button>
 
       </div>

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../services/supabase";
+import { hasPermission, requirePermission } from "../utils/permissions";
+import { logAction } from "../utils/auditLog";
 
 /*
   Warehouse Page
@@ -22,6 +24,7 @@ export default function Warehouse({
   updateOrderItem,
   updateOrderExtraFields,
 }) {
+  const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
   const [drivers, setDrivers] = useState([]);
   const [expandedOrders, setExpandedOrders] = useState({});
   const [startDate, setStartDate] = useState("");
@@ -201,8 +204,18 @@ const fetchDrivers = async () => {
     EX VAT / Admin Offer => Invoice
     Server / Manager Offer => Order Form - Not Invoice
   */
-  const printCustomerDocument = (order) => {
+  const printCustomerDocument = async (order) => {
+  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
+
   printOrderForm(order);
+  await logAction({
+    user: loggedInUser,
+    action_type: "Printed picking list",
+    page_module: "Warehouse",
+    order_id: order.orderId,
+    old_value: null,
+    new_value: "Customer Document",
+  });
 };
 
   /*
@@ -1192,8 +1205,133 @@ const fetchDrivers = async () => {
     [orderId]: driverName,
   }));
 
+ await updateOrderExtraFields(orderId, {
+    driver_name: driverName,
+  });
+};
+
+const updateWarehouseItem = async (order, item, changes) => {
+  if (
+    !requirePermission(
+      loggedInUser,
+      "can_move_to_warehouse",
+      "You cannot update warehouse order status."
+    )
+  ) {
+    return;
+  }
+
+  await updateOrderItem(order.orderId, item.dbId, changes);
+  await logAction({
+    user: loggedInUser,
+    action_type: "Status changed",
+    page_module: "Warehouse",
+    order_id: order.orderId,
+    product_id: item.productId || item.id,
+    old_value: item.sourceStatus || "In Stock",
+    new_value: changes,
+  });
+};
+
+const printProtectedOrderForm = async (order) => {
+  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
+
+  printOrderForm(order);
+  await logAction({
+    user: loggedInUser,
+    action_type: "Printed picking list",
+    page_module: "Warehouse",
+    order_id: order.orderId,
+    old_value: null,
+    new_value: "Order Form",
+  });
+};
+
+const printProtectedInvoice = async (order) => {
+  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
+
+  printInvoice(order);
+  await logAction({
+    user: loggedInUser,
+    action_type: "Printed picking list",
+    page_module: "Warehouse",
+    order_id: order.orderId,
+    old_value: null,
+    new_value: "Invoice",
+  });
+};
+
+const printProtectedDeliveryNote = async (order) => {
+  if (!requirePermission(loggedInUser, "can_print", "You cannot print delivery notes.")) return;
+
+  printDeliveryNote(order);
+  await logAction({
+    user: loggedInUser,
+    action_type: "Printed delivery note",
+    page_module: "Warehouse",
+    order_id: order.orderId,
+    old_value: null,
+    new_value: "Delivery Note",
+  });
+};
+
+const backToReceived = async (order) => {
+  if (
+    !requirePermission(
+      loggedInUser,
+      "can_move_to_warehouse",
+      "You cannot move warehouse orders."
+    )
+  ) {
+    return;
+  }
+
+  await changeOrderStatus(order.orderId, "Received");
+  await logAction({
+    user: loggedInUser,
+    action_type: "Back to received",
+    page_module: "Warehouse",
+    order_id: order.orderId,
+    old_value: order.status,
+    new_value: "Received",
+  });
+};
+
+const confirmForDriver = async (order) => {
+  if (
+    !requirePermission(
+      loggedInUser,
+      "can_move_to_warehouse",
+      "You cannot confirm orders for driver."
+    )
+  ) {
+    return;
+  }
+
+  const orderId = order.orderId || order.order_number;
+
+  const driverName =
+    assignedDrivers[orderId] ||
+    order.driverName ||
+    order.driver_name;
+
+  if (!driverName) {
+    alert("Please assign a driver first.");
+    return;
+  }
+
   await updateOrderExtraFields(orderId, {
     driver_name: driverName,
+  });
+
+  await changeOrderStatus(orderId, "Ready For Driver");
+  await logAction({
+    user: loggedInUser,
+    action_type: "Confirmed for driver",
+    page_module: "Warehouse",
+    order_id: orderId,
+    old_value: order.status,
+    new_value: "Ready For Driver",
   });
 };
 
@@ -1355,13 +1493,15 @@ const fetchDrivers = async () => {
 
 
     <div className="text-right">
+  {hasPermission(loggedInUser, "can_move_to_warehouse") && (
+  <>
   {isCannotSupply ? (
     <button
   type="button"
   onClick={() => {
     if (!window.confirm("Mark this item as Available?")) return;
 
-    updateOrderItem(order.orderId, item.dbId, {
+    updateWarehouseItem(order, item, {
       sourceStatus: "In Stock",
       includeInPicking: true,
       pickedQty: Number(item.qty || 0),
@@ -1377,7 +1517,7 @@ const fetchDrivers = async () => {
   onClick={() => {
     if (!window.confirm("Mark this item as Cannot Supply?")) return;
 
-    updateOrderItem(order.orderId, item.dbId, {
+    updateWarehouseItem(order, item, {
       sourceStatus: "Cannot Supply",
       includeInPicking: false,
       pickedQty: 0,
@@ -1388,6 +1528,8 @@ const fetchDrivers = async () => {
   Cannot Supply
 </button>
   )}
+  </>
+  )}
 </div>
 </div>
 );
@@ -1395,25 +1537,27 @@ const fetchDrivers = async () => {
                
                   <div className="border-t pt-3 flex flex-col md:flex-row md:items-center md:justify-end gap-2">
                     
-                    {showOrderForm && (
+                    {showOrderForm && hasPermission(loggedInUser, "can_print") && (
                       <button
-                        onClick={() => printOrderForm(order)}
+                        onClick={() => printProtectedOrderForm(order)}
                         className={`bg-blue-700 text-white ${btn}`}
                       >
                         Print Order Form
                       </button>
                     )}
 
+                    {hasPermission(loggedInUser, "can_print") && (
                     <button
-                      onClick={() => printDeliveryNote(order)}
+                      onClick={() => printProtectedDeliveryNote(order)}
                       className={`bg-slate-800 text-white ${btn}`}
                     >
                       Print Delivery Note
                     </button>
+                    )}
 
-                    {showInvoice && (
+                    {showInvoice && hasPermission(loggedInUser, "can_print") && (
                       <button
-                        onClick={() => printInvoice(order)}
+                        onClick={() => printProtectedInvoice(order)}
                         className={`bg-green-700 text-white ${btn}`}
                       >
                         Print Invoice
@@ -1435,38 +1579,22 @@ const fetchDrivers = async () => {
                     ))}
                     </select>
 
+                    {hasPermission(loggedInUser, "can_move_to_warehouse") && (
                     <button
-                      onClick={() =>
-                        changeOrderStatus(order.orderId, "Received")
-                      }
+                      onClick={() => backToReceived(order)}
                       className={`bg-slate-500 text-white ${btn}`}
                     >
                       Back To Received
                     </button>
+                    )}
+                   {hasPermission(loggedInUser, "can_move_to_warehouse") && (
                    <button
-                    onClick={async () => {
-                      const orderId = order.orderId || order.order_number;
-
-                      const driverName =
-                        assignedDrivers[orderId] ||
-                        order.driverName ||
-                        order.driver_name;
-
-                      if (!driverName) {
-                        alert("Please assign a driver first.");
-                        return;
-                      }
-
-                      await updateOrderExtraFields(orderId, {
-                        driver_name: driverName,
-                      });
-
-                      await changeOrderStatus(orderId, "Ready For Driver");
-                    }}
+                    onClick={() => confirmForDriver(order)}
                     className={`bg-green-700 text-white ${btn}`}
                   >
                     Confirm For Driver
                   </button>
+                   )}
                     
                   </div>
 

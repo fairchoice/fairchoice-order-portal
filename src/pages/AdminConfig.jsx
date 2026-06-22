@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
 import * as XLSX from "xlsx";
 
+import ProductSetupOptions from "../components/ProductSetupOptions";
+
 
 import {
   getCustomerAccounts,
@@ -27,8 +29,6 @@ export default function AdminConfig() {
 const [customerImportFileName, setCustomerImportFileName] = useState("");
 
   const [productOptions, setProductOptions] = useState([]);
-  const [optionType, setOptionType] = useState("main_category");
-  const [optionName, setOptionName] = useState("");
 
   const [customerMode, setCustomerMode] = useState("add");
 const [customerSearch, setCustomerSearch] = useState("");
@@ -396,17 +396,22 @@ async function handleSaveStaff() {
     fetchSuppliers();
   };
 
-  const addProductOption = async (e) => {
-    e.preventDefault();
+  const productSetupTypeMap = {
+    mainCategories: "main_category",
+    subCategories: "sub_category",
+    brands: "brand",
+    series: "series",
+  };
 
-    if (!optionName.trim()) {
+  const saveProductOption = async (type, name) => {
+    if (!name.trim()) {
       alert("Enter option name.");
       return;
     }
 
     const { error } = await supabase.from("product_options").insert({
-      option_type: optionType,
-      option_name: optionName.trim(),
+      option_type: type,
+      option_name: name.trim(),
       active: true,
     });
 
@@ -415,8 +420,14 @@ async function handleSaveStaff() {
       return;
     }
 
-    setOptionName("");
     fetchProductOptions();
+  };
+
+  const addProductSetupOption = async (typeKey, value) => {
+    const mappedType = productSetupTypeMap[typeKey];
+    if (!mappedType) return;
+
+    await saveProductOption(mappedType, value);
   };
 
   const deleteProductOption = async (id) => {
@@ -431,6 +442,12 @@ async function handleSaveStaff() {
     }
 
     fetchProductOptions();
+  };
+
+  const deleteProductSetupOption = async (_typeKey, option) => {
+    if (!option?.id) return;
+
+    await deleteProductOption(option.id);
   };
 
   const addDriver = async (e) => {
@@ -554,11 +571,11 @@ const processCustomerImport = async () => {
     series: productOptions.filter((o) => o.option_type === "series"),
   };
 
-  const optionLabels = {
-    main_category: "Main Categories",
-    sub_category: "Sub Categories",
-    brand: "Brands",
-    series: "Series",
+  const productSetupOptionsByType = {
+    mainCategories: groupedOptions.main_category,
+    subCategories: groupedOptions.sub_category,
+    brands: groupedOptions.brand,
+    series: groupedOptions.series,
   };
 
   const inputClass = "w-full border rounded-xl px-3 py-3 text-sm";
@@ -1374,74 +1391,15 @@ const filteredStaff = staffUsers.filter((staff) =>
 )}
 
       {activeConfigTab === "product" && (
-        <div className={cardClass}>
-          <h3 className="font-bold mb-3">Product Dropdown Options</h3>
-
-          <form
-            onSubmit={addProductOption}
-            className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5"
-          >
-            <select
-              value={optionType}
-              onChange={(e) => setOptionType(e.target.value)}
-              className={inputClass}
-            >
-              <option value="main_category">Main Category</option>
-              <option value="sub_category">Sub Category</option>
-              <option value="brand">Brand</option>
-              <option value="series">Series</option>
-            </select>
-
-            <input
-              value={optionName}
-              onChange={(e) => setOptionName(e.target.value)}
-              className={inputClass}
-              placeholder="Enter option name"
-            />
-
-            <button
-              type="submit"
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold"
-            >
-              Add Option
-            </button>
-          </form>
-
-          {["main_category", "sub_category", "brand", "series"].map((type) => (
-            <div key={type} className="mb-5 border rounded-xl p-3">
-              <h4 className="font-bold text-sm mb-2">{optionLabels[type]}</h4>
-
-              <div className="flex flex-wrap gap-2">
-                {groupedOptions[type].map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center gap-2 bg-slate-100 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <span>{item.option_name}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const ok = window.confirm(
-                          `Are you sure you want to delete "${item.option_name}"?`
-                        );
-                        if (!ok) return;
-                        deleteProductOption(item.id);
-                      }}
-                      className="text-red-600 font-bold"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-
-                {groupedOptions[type].length === 0 && (
-                  <p className="text-xs text-slate-500">No options added.</p>
-                )}
-              </div>
-            </div>
-          ))}
+        <div className="mb-4">
+          <ProductSetupOptions
+            optionsByType={productSetupOptionsByType}
+            onAddOption={addProductSetupOption}
+            onDeleteOption={deleteProductSetupOption}
+          />
         </div>
       )}
+
 
       {activeConfigTab === "drivers" && (
         <>

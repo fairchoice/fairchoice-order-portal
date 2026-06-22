@@ -1,9 +1,9 @@
 // src/pages/WeeklyAccount.jsx
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../services/supabase";
+import { supabase } from "../../services/supabase";
 
- import { saveHandover, getHandoverHistory } from "../services/handovers";
+ import { saveHandover, getHandoverHistory } from "../../services/handovers";
 
 export default function WeeklyAccount() {
 

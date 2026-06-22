@@ -2,110 +2,92 @@ import { useState } from "react";
 
 export default function ProductCard({
   product,
-  price,
-  cartQty,
-  onAdd,
+  addToCart,
   onImageClick,
+  price,
+  cartQty = 0,
+  onAdd,
 }) {
-  const [qty, setQty] = useState(1);
+  const [quantity, setQuantity] = useState(1);
 
-  const safeQty = Math.max(1, Number(qty || 1));
-  const stockQty = Number(product.stock || 0);
+  const ribbonLabel =
+    product?.comingSoon ? "COMING SOON" :
+    product?.isNew ? "NEW" :
+    product?.isPromotion ? "PROMOTION" :
+    product?.isReduced ? "REDUCED" :
+    product?.recommended ? "RECOMMENDED" :
+    product?.topSeller ? "TOP SELLER" :
+    "";
 
-  const availableFromSupplier =
-    product.availableFromSupplier ?? product.available_from_supplier ?? true;
+  const productPrice = Number(price ?? product?.vatPrice ?? product?.cashPrice ?? 0);
+  const stockQty = Number(product?.stock || 0);
+  const inStock = stockQty > 0;
+  const handleAdd = onAdd || addToCart;
 
-  const productStatus =
-    stockQty > 0
-      ? "In Stock"
-      : availableFromSupplier
-      ? "Different Supplier"
-      : "Out of Stock";
-
-  const canOrder = productStatus !== "Out of Stock";
+  const handleQuantityChange = (value) => {
+    setQuantity(Math.max(1, Number(value || 1)));
+  };
 
   return (
-    <div className="bg-white border rounded-2xl p-3 shadow-sm flex flex-col gap-2">
-     <img
-        src={product.image || "https://placehold.co/400x300?text=Product"}
-        alt={product.name}
-        onClick={() => onImageClick && onImageClick(product)}
-        className="w-full max-h-[500px] object-contain hover:scale-105 transition duration-300"
-      />
+    <div className="product-card relative overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+      {ribbonLabel && <div className="product-card-ribbon">{ribbonLabel}</div>}
 
-      <h3 className="font-bold text-sm leading-tight line-clamp-2">
-        {product.name}
-      </h3>
-
-      <p className="text-xs text-slate-500">
-        {product.brand} {product.flavour ? `• ${product.flavour}` : ""}
-      </p>
-
-      <p className="font-bold text-lg mt-auto">£{price.toFixed(2)}</p>
-
-      <p
-        className={`text-xs font-bold ${
-          productStatus === "In Stock"
-            ? "text-green-700"
-            : productStatus === "Different Supplier"
-            ? "text-orange-600"
-            : "text-red-600"
-        }`}
+      <button
+        type="button"
+        className="mb-2 block h-28 w-full rounded-md bg-white"
+        onClick={() => onImageClick?.(product)}
       >
-        {productStatus}
-      </p>
+        <img
+          src={product?.image || "https://placehold.co/400x300?text=Product"}
+          alt={product?.name || "Product"}
+          className="h-full w-full object-contain"
+        />
+      </button>
 
-      <p className="text-xs text-slate-500">Stock: {stockQty}</p>
+      <div className="space-y-1">
+        <h3 className="line-clamp-2 min-h-9 text-xs font-bold leading-snug text-slate-900">
+          {product?.name}
+        </h3>
 
-      {cartQty > 0 && (
-        <p className="text-xs font-bold text-green-700">
-          In cart: {cartQty}
-        </p>
-      )}
+        <div className="min-h-8 text-[11px] leading-snug text-slate-500">
+          <div>{product?.brand || ""}</div>
+          <div>{product?.series || ""}</div>
+        </div>
 
-      <div className="flex items-center gap-2">
-        <div className="flex items-center border rounded-xl h-10 overflow-hidden">
+        <div className="text-sm font-extrabold text-slate-900">
+          &pound;{productPrice.toFixed(2)}
+        </div>
+
+        <div className="flex items-center justify-between gap-2 text-[11px]">
+          <span className={inStock ? "font-bold text-green-700" : "font-bold text-red-600"}>
+            {inStock ? "In Stock" : "Out of Stock"}
+          </span>
+          <span className="text-slate-500">Stock: {stockQty}</span>
+        </div>
+
+        <div className="flex items-center gap-2 pt-1">
           <input
             type="number"
             min="1"
-            value={qty}
-            disabled={!canOrder}
-            onChange={(e) => setQty(e.target.value)}
-            className="w-14 h-10 text-center font-bold outline-none disabled:bg-slate-100"
+            value={quantity}
+            onChange={(event) => handleQuantityChange(event.target.value)}
+            className="h-8 w-14 rounded-md border border-slate-300 px-2 text-center text-sm font-bold"
           />
 
-          <div className="flex flex-col border-l h-10">
-            <button
-              type="button"
-              disabled={!canOrder}
-              onClick={() => setQty(safeQty + 1)}
-              className="w-7 h-5 text-xs leading-none disabled:text-slate-300"
-            >
-              ▲
-            </button>
-
-            <button
-              type="button"
-              disabled={!canOrder}
-              onClick={() => setQty(Math.max(1, safeQty - 1))}
-              className="w-7 h-5 text-xs leading-none border-t disabled:text-slate-300"
-            >
-              ▼
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => handleAdd?.(product, quantity)}
+            className="h-8 flex-1 rounded-md bg-blue-600 px-3 text-xs font-bold text-white hover:bg-blue-700"
+          >
+            Add
+          </button>
         </div>
 
-        <button
-          disabled={!canOrder}
-          onClick={() => onAdd(product, safeQty)}
-          className={`flex-1 h-10 rounded-xl font-bold text-white ${
-            canOrder
-              ? "bg-blue-600 hover:bg-blue-700"
-              : "bg-slate-300 cursor-not-allowed"
-          }`}
-        >
-          {canOrder ? "Add" : "Unavailable"}
-        </button>
+        {cartQty > 0 && (
+          <div className="text-center text-[11px] font-bold text-blue-700">
+            {cartQty} in cart
+          </div>
+        )}
       </div>
     </div>
   );

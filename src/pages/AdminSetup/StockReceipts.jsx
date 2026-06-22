@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase } from "../services/supabase.js";
+import { supabase } from "../../services/supabase.js";
 
 export default function StockReceipts({ products = [], fetchProducts }) {
   const [suppliers, setSuppliers] = useState([]);
