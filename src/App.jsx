@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import CustomerOrder from "./pages/CustomerOrder";
-import LoginPage from "./pages/LoginPage";
+import LoginPage from "./pages/AdminSetup/LoginPage";
 
 const SESSION_KEY = "fairchoice_user";
 const LAST_ACTIVE_KEY = "fairchoice_last_active";

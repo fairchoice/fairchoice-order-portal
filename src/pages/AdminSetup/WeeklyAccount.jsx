@@ -1,9 +1,10 @@
 // src/pages/WeeklyAccount.jsx
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../services/supabase";
+import { supabase } from "../../services/supabase";
+import { formatCurrency } from "../../Utils/currency";
 
- import { saveHandover, getHandoverHistory } from "../services/handovers";
+ import { saveHandover, getHandoverHistory } from "../../services/handovers";
 
 export default function WeeklyAccount() {
 
@@ -87,8 +88,6 @@ const [handoverHistoryStartDate, setHandoverHistoryStartDate] = useState("");
 
    
 
-console.log("DRIVERS LOADED:", driverData);
-
 const { data: ledgerPaymentData, error: ledgerPaymentError } =
   await supabase
     .from("customer_ledger")
@@ -96,8 +95,6 @@ const { data: ledgerPaymentData, error: ledgerPaymentError } =
     .eq("entry_type", "PAYMENT")
     .in("collection_source", ["SALES_REP","Sales Rep Collection","DRIVER","Driver Collection"])
     .order("created_at", { ascending: false });
-    console.log("SALES REP PAYMENTS:", ledgerPaymentData);
-
 if (ledgerPaymentError) {
   console.error("Sales Rep ledger payment error:", ledgerPaymentError);
 }
@@ -142,7 +139,6 @@ setUnpaidInvoices(unpaidData || []);
 setPayments([...orderPayments, ...salesRepLedgerPayments]);
     
  
-    console.log("ORDER PAYMENTS", paymentData);
         setDrivers(driverData || []);
       }
 
@@ -170,8 +166,6 @@ setPayments([...orderPayments, ...salesRepLedgerPayments]);
 
         reason: handoverReason,
   };
-
-    console.log("HANDOVER PAYLOAD:", payload);
 
     const confirmed = window.confirm(
   `Save handover for ${collectorName}?\n\n` +
@@ -205,7 +199,7 @@ if (!confirmed) {
 
 
   function money(value) {
-    return `£${Number(value || 0).toFixed(2)}`;
+    return formatCurrency(value);
   }
 
   function formatDate(date) {
@@ -269,7 +263,7 @@ function editPayment(row) {
   }
 
   const confirmed = window.confirm(
-    `Update payment to £${amount.toFixed(2)}?`
+    `Update payment to ${money(amount)}?`
   );
 
   if (!confirmed) return;
@@ -449,10 +443,6 @@ const selectedCollectorSystemTotalSinceLastHandover =
 const handoverDifferenceSinceLastHandover =
   Number(cashReceived || 0) -
   Number(selectedCollectorSystemTotalSinceLastHandover || 0);
-
-console.log("COLLECTOR NAME:", collectorName);
-console.log("PAYMENTS:", payments);
-console.log("MATCHED PAYMENTS:", selectedCollectorPayments);
 
 const selectedCollectorSystemTotal = selectedCollectorPayments.reduce(
   (sum, p) => sum + paidAmount(p),
@@ -946,10 +936,10 @@ const cashHoldingRows = [
             <td className="p-3">{row.collector_type}</td>
             <td className="p-3 font-semibold">{row.collector_name}</td>
             <td className="p-3 text-right">
-              £{Number(row.system_collection || 0).toFixed(2)}
+       {money(row.system_collection)}
             </td>
             <td className="p-3 text-right">
-              £{Number(row.cash_received || 0).toFixed(2)}
+       {money(row.cash_received)}
             </td>
             <td
               className={`p-3 text-right font-bold ${
@@ -960,7 +950,7 @@ const cashHoldingRows = [
                   : "text-gray-700"
               }`}
             >
-              £{Number(row.difference || 0).toFixed(2)}
+       {money(row.difference)}
             </td>
             <td className="p-3">{row.reason || "-"}</td>
           </tr>

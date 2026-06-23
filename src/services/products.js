@@ -1,23 +1,13 @@
 import { supabase } from "./supabase";
+import {
+  buildLocationStockMap,
+  getProductLocationStock,
+} from "./locationStock";
 
-export async function getProducts() {
-  const { data, error } = await supabase
-    .from("products")
-    .select("*")
-    .ilike("status", "active")
-    .or("available_in_wales.eq.true,available_in_england.eq.true")
-    .order("brand", { ascending: true })
-    .order("series", { ascending: true })
-    .order("product_name", { ascending: true });
-    
-
-  if (error) throw error;
-
-  return (data || []).map((p) => ({
+function normalizeProduct(p, locationStocksByProduct = {}) {
+  return {
     ...p,
 
-    status: String(p.status || "active").trim().toLowerCase(),
-    active: String(p.status || "active").trim().toLowerCase() === "active",
     productCode: p.product_code,
     name: p.product_name,
     category: p.main_category,
@@ -26,6 +16,8 @@ export async function getProducts() {
 
     cashPrice: p.cash_price,
     vatPrice: p.vat_price,
+    walesSpecialPrice: Number(p.wales_special_price || 0),
+    englandSpecialPrice: Number(p.england_special_price || 0),
     cartonSize: p.carton_size,
     lowStockAlert: p.low_stock_alert,
     vatType: p.vat_type,
@@ -33,9 +25,79 @@ export async function getProducts() {
     availableInEngland: p.available_in_england,
     availableInWales: p.available_in_wales,
     availableFromSupplier: p.available_from_supplier,
+    costPrice: p.cost_price,
+    supplierName: p.supplier_name,
+    salesAccount: p.sales_account,
+    purchaseAccount: p.purchase_account,
 
-   
-  }));
+    isNew: Boolean(p.is_new),
+    isPromotion: Boolean(p.is_promotion),
+    isReduced: Boolean(p.is_reduced),
+    comingSoon: Boolean(p.coming_soon),
+    recommended: Boolean(p.recommended),
+    topSeller: Boolean(p.top_seller),
+    active: String(p.status || "Active").trim().toLowerCase() !== "inactive",
+    locationStocks: locationStocksByProduct[p.id] || {},
+  };
+}
+
+export async function getProducts() {
+  const { data, error } = await supabase
+    .from("products")
+    .select(
+      [
+        "id",
+        "product_code",
+        "product_name",
+        "main_category",
+        "sub_category",
+        "brand",
+        "series",
+        "flavour",
+        "cash_price",
+        "vat_price",
+        "wales_special_price",
+        "england_special_price",
+        "carton_size",
+        "image_url",
+        "stock",
+        "low_stock_alert",
+        "status",
+        "available_in_england",
+        "available_in_wales",
+        "vat_type",
+        "available_from_supplier",
+        "cost_price",
+        "supplier_name",
+        "sales_account",
+        "purchase_account",
+        "is_new",
+        "is_promotion",
+        "is_reduced",
+        "coming_soon",
+        "recommended",
+        "top_seller",
+      ].join(",")
+    )
+    .order("brand", { ascending: true })
+    .order("series", { ascending: true })
+    .order("product_name", { ascending: true });
+
+  if (error) throw error;
+
+  let locationStocksByProduct = {};
+
+  try {
+    const productIds = (data || []).map((product) => product.id).filter(Boolean);
+    const stockRows = await getProductLocationStock(productIds);
+    locationStocksByProduct = buildLocationStockMap(stockRows);
+  } catch (locationStockError) {
+    console.error("Location stock loading error:", locationStockError);
+  }
+
+  return (data || []).map((product) =>
+    normalizeProduct(product, locationStocksByProduct)
+  );
 }
 
 export async function uploadProductImage(file, productCode) {

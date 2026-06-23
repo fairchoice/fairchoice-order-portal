@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
-import * as XLSX from "xlsx";
 import { supabase } from "../services/supabase";
+import { getActiveStockLocations } from "../services/locationStock";
+import { formatCurrency } from "../Utils/currency";
 
 
 
@@ -59,9 +60,11 @@ const handleImageUpload = async () => {
 };
 
 
-  const [activeTab, setActiveTab] = useState("add");
+  const [activeTab, setActiveTab] = useState("edit");
   
   const [productOptions, setProductOptions] = useState([]);
+  const [accountCodes, setAccountCodes] = useState([]);
+  const [stockLocations, setStockLocations] = useState([]);
 
   const [suppliers, setSuppliers] = useState([]);
 
@@ -77,6 +80,8 @@ const handleImageUpload = async () => {
       useEffect(() => {
     fetchProductOptions();
     fetchSuppliers();
+    fetchAccountCodes();
+    fetchStockLocations();
       }, []);
 
   const updateField = (field, value) => {
@@ -86,297 +91,57 @@ const handleImageUpload = async () => {
     });
   };
 
-  const [importing, setImporting] = useState(false);
-  const [updatingCodes, setUpdatingCodes] = useState(false);
-
-  const normalize = (value) =>
-  String(value || "")
-    .trim()
-    .toLowerCase();
-
-const toBool = (value) => {
-  if (value === true) return true;
-  if (value === false) return false;
-  const v = String(value || "").toLowerCase().trim();
-  return ["true", "yes", "y", "1"].includes(v);
-};
-
-const handleImportExcel = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-
-  setImporting(true);
-
-  try {
-    const data = await file.arrayBuffer();
-    const workbook = XLSX.read(data);
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet);
-
-    const cleanedRows = rows.map((row) => ({
-      product_code: row.product_code || row.productCode || row["Product Code"] || "",
-      main_category: row.main_category || row.category || row.Category || "",
-      sub_category: row.sub_category || row.subCategory || row["Sub Category"] || "",
-      brand: row.brand || row.Brand || "",
-      series: row.series || row.Series || "",
-      flavour: row.flavour || row.Flavour || "",
-      product_name: row.product_name || row.name || row["Product Name"] || "",
-      cash_price: Number(row.cash_price || row.cashPrice || row["Cash Price"] || 0),
-      vat_price: Number(row.vat_price || row.vatPrice || row["VAT Price"] || 0),
-      carton_size: String(row.carton_size || row.cartonSize || row["Carton Size"] || ""),
-      image_url: row.image_url || row.image || row["Image URL"] || "",
-      stock: Number(row.stock || row.Stock || 0),
-      low_stock_alert: Number(row.low_stock_alert || row.lowStockAlert || row["Low Stock Alert"] || 10),
-      status: row.status || row.Status || "active",
-      show_in_england: toBool(row.show_in_england ?? row["Show In England"] ?? true),
-      show_in_wales: toBool(row.show_in_wales ?? row["Show In Wales"] ?? true),
-      vat_type: String(row.vat_type || row.vatType || row["VAT Type"] || "20"),
-      available_in_england: toBool(row.available_in_england ?? row["Available In England"] ?? true),
-      available_in_wales: toBool(row.available_in_wales ?? row["Available In Wales"] ?? true),
-      available_from_supplier: toBool(row.available_from_supplier ?? row["Available From Supplier"] ?? true),
-    }));
-
-    const validRows = cleanedRows.filter((p) => p.product_name && p.product_code);
-
-    const validCategories = productOptions
-  .filter((o) => o.option_type === "main_category")
-  .map((o) => normalize(o.option_name));
-
-  const validSubCategories = productOptions
-    .filter((o) => o.option_type === "sub_category")
-    .map((o) => normalize(o.option_name));
-
-  const validBrands = productOptions
-    .filter((o) => o.option_type === "brand")
-    .map((o) => normalize(o.option_name));
-
-  const validSeries = productOptions
-    .filter((o) => o.option_type === "series")
-    .map((o) => normalize(o.option_name));
-
-  const validationErrors = [];
-
-  validRows.forEach((row, index) => {
-  const rowNumber = index + 2;
-
-  if (
-    row.main_category &&
-    !validCategories.includes(normalize(row.main_category))
-  ) {
-    validationErrors.push(
-      `Row ${rowNumber}: Category "${row.main_category}" not found in Product Settings`
-    );
-  }
-
-  if (
-    row.sub_category &&
-    !validSubCategories.includes(normalize(row.sub_category))
-  ) {
-    validationErrors.push(
-      `Row ${rowNumber}: Sub Category "${row.sub_category}" not found in Product Settings`
-    );
-  }
-
-  if (
-    row.brand &&
-    !validBrands.includes(normalize(row.brand))
-  ) {
-    validationErrors.push(
-      `Row ${rowNumber}: Brand "${row.brand}" not found in Product Settings`
-    );
-  }
-
-  if (
-    row.series &&
-    !validSeries.includes(normalize(row.series))
-  ) {
-    validationErrors.push(
-      `Row ${rowNumber}: Series "${row.series}" not found in Product Settings`
-    );
-  }
-});
-
-if (validationErrors.length > 0) {
-  alert(
-    "Import Stopped.\n\n" +
-    validationErrors.slice(0, 20).join("\n") +
-    "\n\nPlease fix Product Settings or Excel file first."
-  );
-
-  setImporting(false);
-  e.target.value = "";
-  return;
-}
-
-    if (validRows.length === 0) {
-      alert("No valid products found in Excel file.");
-      setImporting(false);
-      e.target.value = "";
-      return;
-    }
-
-    const productCodes = validRows.map((p) => p.product_code);
-
-    const { data: existingProducts, error: existingError } = await supabase
-      .from("products")
-      .select("id, product_code, stock")
-      .in("product_code", productCodes);
-
-    if (existingError) throw existingError;
-
-    const oldStockMap = {};
-    (existingProducts || []).forEach((product) => {
-      oldStockMap[product.product_code] = {
-        id: product.id,
-        stock: Number(product.stock || 0),
-      };
+  const updateLocationStock = (locationId, field, value) => {
+    setProductForm({
+      ...productForm,
+      locationStocks: {
+        ...(productForm.locationStocks || {}),
+        [locationId]: {
+          ...(productForm.locationStocks?.[locationId] || {}),
+          [field]: value,
+        },
+      },
     });
-
-    const { data: savedProducts, error } = await supabase
-      .from("products")
-      .upsert(validRows, {
-        onConflict: "product_code",
-      })
-      .select("id, product_code, stock");
-
-    if (error) throw error;
-
-    const stockMovements = [];
-
-    (savedProducts || []).forEach((product) => {
-      const importedRow = validRows.find(
-        (row) => row.product_code === product.product_code
-      );
-
-      if (!importedRow) return;
-
-      const oldStock = oldStockMap[product.product_code]?.stock ?? 0;
-      const newStock = Number(importedRow.stock || 0);
-      const qtyChange = newStock - oldStock;
-
-      if (qtyChange !== 0) {
-        stockMovements.push({
-          product_id: product.id,
-          movement_type: "IMPORT",
-          qty: qtyChange,
-          stock_before: oldStock,
-          stock_after: newStock,
-          note: "Excel Import",
-        });
-      }
-    });
-
+  };
   
-    
+  const getDefaultAccountsForCategory = (category) => {
+    const selectedCategory = String(category || "").trim().toLowerCase();
 
-    if (stockMovements.length > 0) {
-      const { error: movementError } = await supabase
-        .from("stock_movements")
-        .insert(stockMovements);
-
-      if (movementError) throw movementError;
+    if (!selectedCategory) {
+      return {
+        salesAccount: "",
+        purchaseAccount: "",
+      };
     }
 
-    alert(
-      `${validRows.length} products imported successfully. ${stockMovements.length} stock movements recorded.`
+    const salesAccount = accountCodes.find(
+      (account) =>
+        String(account.account_type || "").toLowerCase() === "sales" &&
+        String(account.main_category || "").trim().toLowerCase() === selectedCategory
     );
 
-    fetchProducts();
-    setActiveTab("edit");
-  } catch (err) {
-    alert("Import failed: " + err.message);
-  }
+    const purchaseAccount = accountCodes.find(
+      (account) =>
+        String(account.account_type || "").toLowerCase() === "purchase" &&
+        String(account.main_category || "").trim().toLowerCase() === selectedCategory
+    );
 
-  setImporting(false);
-  e.target.value = "";
-};
+    return {
+      salesAccount: salesAccount?.account_code || "",
+      purchaseAccount: purchaseAccount?.account_code || "",
+    };
+  };
 
-const handleBulkCodeUpdate = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
+  const handleCategoryChange = (category) => {
+    const defaultAccounts = getDefaultAccountsForCategory(category);
 
-  setUpdatingCodes(true);
-
-  try {
-    const data = await file.arrayBuffer();
-    const workbook = XLSX.read(data);
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet);
-
-    let updatedCount = 0;
-
-    for (const row of rows) {
-      const productName = row.product_name || "";
-      const oldCode = row.old_product_code || "";
-      const newCode = row.new_product_code || "";
-
-      if (!productName || !oldCode || !newCode) continue;
-
-      const { data: product } = await supabase
-        .from("products")
-        .select("id")
-        .eq("product_name", productName)
-        .eq("product_code", oldCode)
-        .single();
-
-      if (!product) continue;
-
-      const { error } = await supabase
-        .from("products")
-        .update({
-          product_code: newCode,
-        })
-        .eq("id", product.id);
-
-      if (!error) updatedCount++;
-    }
-
-    alert(`${updatedCount} product codes updated successfully.`);
-
-    await fetchProducts();
-  } catch (err) {
-    alert("Bulk code update failed: " + err.message);
-  }
-
-  setUpdatingCodes(false);
-  e.target.value = "";
-};
-
- /* ==========================
-   Export and Import Tabs
-========================== */
-const handleExportExcel = () => {
-  const exportData = products.map((p) => ({
-    product_code: p.productCode,
-    main_category: p.category,
-    sub_category: p.subCategory,
-    brand: p.brand,
-    series: p.series,
-    flavour: p.flavour,
-    product_name: p.name,
-    cash_price: p.cashPrice,
-    vat_price: p.vatPrice,
-    carton_size: p.cartonSize,
-    image_url: p.image,
-    stock: p.stock,
-    low_stock_alert: p.lowStockAlert,
-    vat_type: p.vatType,
-    available_in_england: p.availableInEngland,
-    available_in_wales: p.availableInWales,
-    available_from_supplier: p.availableFromSupplier,
-  }));
-
-  const worksheet = XLSX.utils.json_to_sheet(exportData);
-  const workbook = XLSX.utils.book_new();
-
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Products");
-
-  XLSX.writeFile(
-    workbook,
-    `fairchoice-products-${new Date().toISOString().slice(0, 10)}.xlsx`
-  );
-};
-
+    setProductForm({
+      ...productForm,
+      category,
+      salesAccount: defaultAccounts.salesAccount,
+      purchaseAccount: defaultAccounts.purchaseAccount,
+    });
+  };
  const resetForm = () => {
     setProductForm({
       productCode: "",
@@ -388,6 +153,8 @@ const handleExportExcel = () => {
       flavour: "",
       cashPrice: "",
       vatPrice: "",
+      walesSpecialPrice: "",
+      englandSpecialPrice: "",
       vatType: "20",
       availableInEngland: true,
       availableInWales: true,
@@ -400,6 +167,14 @@ const handleExportExcel = () => {
       supplierName: "",
       salesAccount: "",
       purchaseAccount: "",
+      locationStocks: {},
+      isNew: false,
+      isPromotion: false,
+      isReduced: false,
+      comingSoon: false,
+      recommended: false,
+      topSeller: false,
+      active: true,
     });
   };
 
@@ -413,11 +188,49 @@ const handleExportExcel = () => {
   if (!error) setProductOptions(data || []);
 };
 
+const fetchAccountCodes = async () => {
+  const { data, error } = await supabase
+    .from("account_codes")
+    .select("*")
+    .eq("active", true)
+    .order("account_code");
+
+  if (!error) setAccountCodes(data || []);
+};
+
+const fetchStockLocations = async () => {
+  try {
+    const locations = await getActiveStockLocations();
+    setStockLocations(locations || []);
+  } catch (error) {
+    console.error("Stock location loading error:", error);
+  }
+};
+
 
 
 useEffect(() => {
   fetchProductOptions();
 }, []);
+
+useEffect(() => {
+  if (!productForm.category || accountCodes.length === 0) return;
+  if (productForm.salesAccount && productForm.purchaseAccount) return;
+
+  const defaultAccounts = getDefaultAccountsForCategory(productForm.category);
+  if (!defaultAccounts.salesAccount && !defaultAccounts.purchaseAccount) return;
+
+  setProductForm((old) => ({
+    ...old,
+    salesAccount: old.salesAccount || defaultAccounts.salesAccount,
+    purchaseAccount: old.purchaseAccount || defaultAccounts.purchaseAccount,
+  }));
+}, [
+  accountCodes,
+  productForm.category,
+  productForm.salesAccount,
+  productForm.purchaseAccount,
+]);
 
 const mainCategories = productOptions.filter(
   (o) => o.option_type === "main_category"
@@ -434,10 +247,27 @@ const brands = productOptions.filter(
 const seriesList = productOptions.filter(
   (o) => o.option_type === "series"
 );
+
+const selectedCategoryKey = String(productForm.category || "").trim().toLowerCase();
+
+const salesAccountsForCategory = accountCodes.filter(
+  (account) =>
+    String(account.account_type || "").toLowerCase() === "sales" &&
+    String(account.main_category || "").trim().toLowerCase() === selectedCategoryKey
+);
+
+const purchaseAccountsForCategory = accountCodes.filter(
+  (account) =>
+    String(account.account_type || "").toLowerCase() === "purchase" &&
+    String(account.main_category || "").trim().toLowerCase() === selectedCategoryKey
+);
+
 const [productSearch, setProductSearch] = useState("");
 const [statusFilter, setStatusFilter] = useState("active");
 const [stockFilter, setStockFilter] = useState("all");
 const [selectedProductIds, setSelectedProductIds] = useState([]);
+const [pageSize, setPageSize] = useState(10);
+const [currentPage, setCurrentPage] = useState(1);
 
 const [visibleColumns, setVisibleColumns] = useState({
   code: true,
@@ -482,6 +312,21 @@ const filteredAdminProducts = (products || []).filter((p) => {
   return matchesSearch && matchesStatus && matchesStock;
 });
 
+useEffect(() => {
+  setCurrentPage(1);
+  setSelectedProductIds([]);
+}, [productSearch, statusFilter, stockFilter, pageSize, products]);
+
+const totalPages = Math.max(1, Math.ceil(filteredAdminProducts.length / pageSize));
+const safeCurrentPage = Math.min(currentPage, totalPages);
+const pagedProducts = filteredAdminProducts.slice(
+  (safeCurrentPage - 1) * pageSize,
+  safeCurrentPage * pageSize
+);
+const allPagedProductsSelected =
+  pagedProducts.length > 0 &&
+  pagedProducts.every((product) => selectedProductIds.includes(product.id));
+
 const toggleProductSelect = (id) => {
   setSelectedProductIds((old) =>
     old.includes(id) ? old.filter((x) => x !== id) : [...old, id]
@@ -489,10 +334,15 @@ const toggleProductSelect = (id) => {
 };
 
 const toggleSelectAllProducts = () => {
-  if (selectedProductIds.length === filteredAdminProducts.length) {
-    setSelectedProductIds([]);
+  if (allPagedProductsSelected) {
+    const pagedProductIds = pagedProducts.map((p) => p.id);
+    setSelectedProductIds((old) =>
+      old.filter((id) => !pagedProductIds.includes(id))
+    );
   } else {
-    setSelectedProductIds(filteredAdminProducts.map((p) => p.id));
+    setSelectedProductIds((old) => [
+      ...new Set([...old, ...pagedProducts.map((p) => p.id)]),
+    ]);
   }
 };
 
@@ -525,6 +375,44 @@ const bulkUpdateStatus = async (status) => {
   await fetchProducts();
 };
 
+const vatSellingPrice = Number(productForm.vatPrice || 0);
+const costPrice = Number(productForm.costPrice || 0);
+const grossProfit = vatSellingPrice - costPrice;
+const marginPercent =
+  vatSellingPrice > 0 ? (grossProfit / vatSellingPrice) * 100 : 0;
+const markupPercent = costPrice > 0 ? (grossProfit / costPrice) * 100 : 0;
+const productLabelOptions = [
+  { value: "", label: "No Label" },
+  { value: "isNew", label: "New" },
+  { value: "isPromotion", label: "Promotion" },
+  { value: "isReduced", label: "Reduced" },
+  { value: "comingSoon", label: "Coming Soon" },
+  { value: "recommended", label: "Recommended" },
+  { value: "topSeller", label: "Top Seller" },
+];
+
+const selectedProductLabel =
+  [
+    "comingSoon",
+    "isNew",
+    "isPromotion",
+    "isReduced",
+    "recommended",
+    "topSeller",
+  ].find((key) => productForm[key] === true) || "";
+
+const updateProductLabel = (labelValue) => {
+  setProductForm({
+    ...productForm,
+    isNew: labelValue === "isNew",
+    isPromotion: labelValue === "isPromotion",
+    isReduced: labelValue === "isReduced",
+    comingSoon: labelValue === "comingSoon",
+    recommended: labelValue === "recommended",
+    topSeller: labelValue === "topSeller",
+  });
+};
+
   return (
     <div className="p-5 bg-slate-50 min-h-screen">
       <div className="flex items-center gap-3 mb-5">
@@ -540,60 +428,24 @@ const bulkUpdateStatus = async (status) => {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-5">
-  {["add", "edit", "export", "import", "codeupdate"].map((tab) => (
-    <button
-      key={tab}
-      onClick={() => setActiveTab(tab)}
-      className={`p-3 rounded-xl font-bold ${
-        activeTab === tab
-          ? "bg-blue-600 text-white"
-          : "bg-white border text-slate-700"
-      }`}
-    >
-      {tab === "add" && "Add Product"}
-      {tab === "edit" && "Edit Products"}
-      {tab === "export" && "Export Excel"}
-      {tab === "import" && "Import Excel"}
-      {tab === "codeupdate" && "Bulk Code Update"}
-    </button>
-  ))}
-</div>
-
-      {activeTab === "codeupdate" && (
-  <div className="bg-white rounded-2xl shadow-sm p-5">
-    <h3 className="text-xl font-bold mb-4">
-      Bulk Code Update
-    </h3>
-
-    <p className="mb-4 text-slate-600">
-      Excel columns required:
-      product_name,
-      old_product_code,
-      new_product_code
-    </p>
-
-    <label className="inline-block cursor-pointer">
-      <input
-        type="file"
-        accept=".xlsx,.csv"
-        onChange={handleBulkCodeUpdate}
-        disabled={updatingCodes}
-        className="hidden"
-      />
-
-      <div className="bg-orange-600 hover:bg-orange-700 text-white font-bold px-6 py-4 rounded-xl">
-        Upload Code Update File
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-5">
+        {[
+          ["add", "Add Product"],
+          ["edit", "Product List"],
+        ].map(([tab, label]) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`p-3 rounded-xl font-bold ${
+              activeTab === tab
+                ? "bg-blue-600 text-white"
+                : "bg-white border text-slate-700"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
-    </label>
-
-    {updatingCodes && (
-      <div className="mt-4">
-        Updating product codes...
-      </div>
-    )}
-  </div>
-)}
 
       {activeTab === "add" && (
         <div className="bg-white rounded-2xl shadow-sm p-5">
@@ -601,233 +453,398 @@ const bulkUpdateStatus = async (status) => {
             {editingId ? "Edit Product" : "Add Product"}
           </h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-  <input
-    className="input-box"
-    placeholder="Product Name"
-    value={productForm?.name || ""}
-    onChange={(e) => updateField("name", e.target.value)}
-  />
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <section className="bg-white border rounded-2xl p-4 xl:col-span-2">
+              <h4 className="text-lg font-bold mb-4">Product Information</h4>
 
-  <input
-    className="input-box"
-    placeholder="SKU / Product Code"
-    value={productForm?.productCode || ""}
-    onChange={(e) => updateField("productCode", e.target.value)}
-  />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input
+                  className="input-box"
+                  placeholder="Product Name"
+                  value={productForm?.name || ""}
+                  onChange={(e) => updateField("name", e.target.value)}
+                />
 
- <select
-  className="input-box"
-  value={productForm?.category || ""}
-  onChange={(e) => updateField("category", e.target.value)}
->
-  <option value="">Select Main Category</option>
-  {mainCategories.map((item) => (
-    <option key={item.id} value={item.option_name}>
-      {item.option_name}
-    </option>
-  ))}
-</select>
+                <input
+                  className="input-box"
+                  placeholder="Product Code"
+                  value={productForm?.productCode || ""}
+                  onChange={(e) => updateField("productCode", e.target.value)}
+                />
 
-<select
-  className="input-box"
-  value={productForm.subCategory || ""}
-  onChange={(e) => updateField("subCategory", e.target.value)}
->
-  <option value="">Select Sub Category</option>
-  {subCategories.map((item) => (
-    <option key={item.id} value={item.option_name}>
-      {item.option_name}
-    </option>
-  ))}
-</select>
+                <select
+                  className="input-box"
+                  value={productForm?.category || ""}
+                  onChange={(e) => handleCategoryChange(e.target.value)}
+                >
+                  <option value="">Select Main Category</option>
+                  {mainCategories.map((item) => (
+                    <option key={item.id} value={item.option_name}>
+                      {item.option_name}
+                    </option>
+                  ))}
+                </select>
 
-<select
-  className="input-box"
-  value={productForm.brand || ""}
-  onChange={(e) => updateField("brand", e.target.value)}
->
-  <option value="">Select Brand</option>
-  {brands.map((item) => (
-    <option key={item.id} value={item.option_name}>
-      {item.option_name}
-    </option>
-  ))}
-</select>
+                <select
+                  className="input-box"
+                  value={productForm.subCategory || ""}
+                  onChange={(e) => updateField("subCategory", e.target.value)}
+                >
+                  <option value="">Select Sub Category</option>
+                  {subCategories.map((item) => (
+                    <option key={item.id} value={item.option_name}>
+                      {item.option_name}
+                    </option>
+                  ))}
+                </select>
 
-<select
-  className="input-box"
-  value={productForm.series || ""}
-  onChange={(e) => updateField("series", e.target.value)}
->
-  <option value="">Select Series</option>
-  {seriesList.map((item) => (
-    <option key={item.id} value={item.option_name}>
-      {item.option_name}
-    </option>
-  ))}
-</select>
+                <select
+                  className="input-box"
+                  value={productForm.brand || ""}
+                  onChange={(e) => updateField("brand", e.target.value)}
+                >
+                  <option value="">Select Brand</option>
+                  {brands.map((item) => (
+                    <option key={item.id} value={item.option_name}>
+                      {item.option_name}
+                    </option>
+                  ))}
+                </select>
 
-  <input
-    className="input-box"
-    placeholder="Flavour"
-    value={productForm.flavour || ""}
-    onChange={(e) => updateField("flavour", e.target.value)}
-  />
+                <select
+                  className="input-box"
+                  value={productForm.series || ""}
+                  onChange={(e) => updateField("series", e.target.value)}
+                >
+                  <option value="">Select Series</option>
+                  {seriesList.map((item) => (
+                    <option key={item.id} value={item.option_name}>
+                      {item.option_name}
+                    </option>
+                  ))}
+                </select>
 
-  <input
-    className="input-box"
-    placeholder="Carton Size"
-    value={productForm.cartonSize || ""}
-    onChange={(e) => updateField("cartonSize", e.target.value)}
-  />
+                <input
+                  className="input-box"
+                  placeholder="Flavour"
+                  value={productForm.flavour || ""}
+                  onChange={(e) => updateField("flavour", e.target.value)}
+                />
 
-<div className="md:col-span-2 border rounded-xl p-3">
-  <label className="font-bold text-sm block mb-2">
-    Product Image
-  </label>
+                <input
+                  className="input-box"
+                  placeholder="Weight / Size"
+                  value={productForm.cartonSize || ""}
+                  onChange={(e) => updateField("cartonSize", e.target.value)}
+                />
+              </div>
 
-  {productForm.image && (
-    <img
-      src={productForm.image}
-      alt=""
-      className="w-24 h-24 object-cover rounded-xl mb-3 border"
-    />
-  )}
+              <p className="text-xs text-slate-500 mt-3">
+                Pieces Per Box is not wired to a saved product field yet, so it has not been added here.
+              </p>
+            </section>
 
-  <input
-    className="input-box mb-2"
-    placeholder="Image URL"
-    value={productForm.image || ""}
-    onChange={(e) => updateField("image", e.target.value)}
-  />
+            <section className="bg-white border rounded-2xl p-4">
+              <h4 className="text-lg font-bold mb-4">Product Image</h4>
 
-  <input
-    type="file"
-    accept="image/*"
-    onChange={(e) => setImageFile(e.target.files[0])}
-    className="mb-2"
-  />
+              <div className="space-y-3">
+                <div className="border rounded-xl p-3 bg-slate-50">
+                  {productForm.image ? (
+                    <img
+                      src={productForm.image}
+                      alt=""
+                      className="w-full max-h-48 object-contain rounded-xl border bg-white"
+                    />
+                  ) : (
+                    <div className="h-40 rounded-xl border bg-white flex items-center justify-center text-sm text-slate-500">
+                      Image Preview
+                    </div>
+                  )}
+                </div>
 
-  <button
-    type="button"
-    onClick={handleImageUpload}
-    disabled={uploadingImage}
-    className="bg-slate-800 text-white px-4 py-2 rounded-xl font-bold"
-  >
-    {uploadingImage ? "Uploading..." : "Upload Image"}
-  </button>
-</div>
+                <input
+                  className="input-box"
+                  placeholder="Image URL"
+                  value={productForm.image || ""}
+                  onChange={(e) => updateField("image", e.target.value)}
+                />
 
-    <input
-    className="input-box"
-    type="number"
-    placeholder="VAT Net Price"
-    value={productForm.vatPrice || ""}
-    onChange={(e) => updateField("vatPrice", e.target.value)}
-  />
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setImageFile(e.target.files[0])}
+                  className="w-full text-sm"
+                />
 
-  <input
-  className="input-box"
-  type="number"
-  placeholder="Cash Price"
-  value={productForm.cashPrice || ""}
-  onChange={(e) => updateField("cashPrice", e.target.value)}
-/>
+                <button
+                  type="button"
+                  onClick={handleImageUpload}
+                  disabled={uploadingImage}
+                  className="bg-slate-800 text-white px-4 py-2 rounded-xl font-bold disabled:bg-slate-400"
+                >
+                  {uploadingImage ? "Uploading..." : "Upload Image"}
+                </button>
+              </div>
+            </section>
 
-<input
-  className="input-box"
-  type="number"
-  placeholder="Cost Price"
-  value={productForm.costPrice || ""}
-  onChange={(e) => updateField("costPrice", e.target.value)}
-/>
+            <section className="bg-white border rounded-2xl p-4">
+              <h4 className="text-lg font-bold mb-4">Selling Information</h4>
 
-<select
-  className="input-box"
-  value={productForm.supplierName || ""}
-  onChange={(e) => updateField("supplierName", e.target.value)}
->
-  <option value="">Select Supplier</option>
+              <div className="space-y-4">
+                <input
+                  className="input-box"
+                  type="number"
+                  placeholder="VAT Selling Price"
+                  value={productForm.vatPrice || ""}
+                  onChange={(e) => updateField("vatPrice", e.target.value)}
+                />
 
-  {suppliers.map((supplier) => (
-    <option
-      key={supplier.id}
-      value={supplier.supplier_name}
-    >
-      {supplier.supplier_name}
-    </option>
-  ))}
-</select>
+                <input
+                  className="input-box"
+                  type="number"
+                  placeholder="Special Price"
+                  value={productForm.cashPrice || ""}
+                  onChange={(e) => updateField("cashPrice", e.target.value)}
+                />
 
-<input
-  className="input-box"
-  placeholder="Sales Account"
-  value={productForm.salesAccount || ""}
-  onChange={(e) => updateField("salesAccount", e.target.value)}
-/>
+                <input
+                  className="input-box"
+                  type="number"
+                  placeholder="Wales Special Price"
+                  value={productForm.walesSpecialPrice || ""}
+                  onChange={(e) => updateField("walesSpecialPrice", e.target.value)}
+                />
 
-<input
-  className="input-box"
-  placeholder="Purchase Account"
-  value={productForm.purchaseAccount || ""}
-  onChange={(e) => updateField("purchaseAccount", e.target.value)}
-/>
+                <input
+                  className="input-box"
+                  type="number"
+                  placeholder="England Special Price"
+                  value={productForm.englandSpecialPrice || ""}
+                  onChange={(e) => updateField("englandSpecialPrice", e.target.value)}
+                />
 
-  <select
-    className="input-box"
-    value={productForm.vatType || "20"}
-    onChange={(e) => updateField("vatType", e.target.value)}
-  >
-    <option value="20">VAT 20%</option>
-    <option value="5">VAT 5%</option>
-    <option value="0">VAT 0%</option>
-    <option value="exempt">VAT Exempt</option>
-  </select>
+                <select
+                  className="input-box"
+                  value={productForm.vatType || "20"}
+                  onChange={(e) => updateField("vatType", e.target.value)}
+                >
+                  <option value="20">VAT 20%</option>
+                  <option value="5">VAT 5%</option>
+                  <option value="0">VAT 0%</option>
+                  <option value="exempt">VAT Exempt</option>
+                </select>
+              </div>
+            </section>
 
-  <input
-    className="input-box"
-    type="number"
-    placeholder="Stock Quantity"
-    value={productForm.stock || ""}
-    onChange={(e) => updateField("stock", e.target.value)}
-  />
+            <section className="bg-white border rounded-2xl p-4">
+              <h4 className="text-lg font-bold mb-4">Margin Analysis</h4>
 
-  <input
-    className="input-box"
-    type="number"
-    placeholder="Low Stock Alert"
-    value={productForm.lowStockAlert || ""}
-    onChange={(e) => updateField("lowStockAlert", e.target.value)}
-  />
+              <div className="grid grid-cols-1 gap-3">
+                <div className="border rounded-xl p-3 bg-slate-50">
+                  <div className="text-xs text-slate-500 font-bold">Gross Profit</div>
+                  <div className="text-xl font-bold">
+                    {formatCurrency(grossProfit)}
+                  </div>
+                </div>
 
-  <label className="checkbox-box">
-    <input
-      type="checkbox"
-      checked={productForm.availableInEngland === true}
-      onChange={(e) => updateField("availableInEngland", e.target.checked)}
-    />
-    Available in England
-  </label>
+                <div className="border rounded-xl p-3 bg-slate-50">
+                  <div className="text-xs text-slate-500 font-bold">Margin %</div>
+                  <div className="text-xl font-bold">
+                    {marginPercent.toFixed(2)}%
+                  </div>
+                </div>
 
-  <label className="checkbox-box">
-    <input
-      type="checkbox"
-      checked={productForm.availableInWales === true}
-      onChange={(e) => updateField("availableInWales", e.target.checked)}
-    />
-    Available in Wales
-  </label>
-</div>
+                <div className="border rounded-xl p-3 bg-slate-50">
+                  <div className="text-xs text-slate-500 font-bold">Markup %</div>
+                  <div className="text-xl font-bold">
+                    {markupPercent.toFixed(2)}%
+                  </div>
+                </div>
+              </div>
+            </section>
 
-          <label className="checkbox-box">
-          <input
-            type="checkbox"
-            checked={productForm.availableFromSupplier !== false}
-            onChange={(e) => updateField("availableFromSupplier", e.target.checked)}
-          />
-          Available from Different Supplier when stock is 0
-        </label>
+            <section className="bg-white border rounded-2xl p-4">
+              <h4 className="text-lg font-bold mb-4">Inventory</h4>
+
+              <div className="space-y-4">
+                {stockLocations.length === 0 && (
+                  <p className="text-sm text-slate-500">
+                    No active stock locations found.
+                  </p>
+                )}
+
+                {stockLocations.map((location) => {
+                  const locationStock =
+                    productForm.locationStocks?.[location.id] || {};
+
+                  return (
+                    <div
+                      key={location.id}
+                      className="rounded-xl border border-slate-200 p-3"
+                    >
+                      <div className="mb-2 text-sm font-bold text-slate-700">
+                        {location.location_name}
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <input
+                          className="input-box"
+                          type="number"
+                          placeholder="Stock Quantity"
+                          value={locationStock.qty || ""}
+                          onChange={(e) =>
+                            updateLocationStock(location.id, "qty", e.target.value)
+                          }
+                        />
+
+                        <input
+                          className="input-box"
+                          type="number"
+                          placeholder="Low Stock Alert"
+                          value={locationStock.lowStockAlert || ""}
+                          onChange={(e) =>
+                            updateLocationStock(
+                              location.id,
+                              "lowStockAlert",
+                              e.target.value
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="bg-white border rounded-2xl p-4">
+              <h4 className="text-lg font-bold mb-4">Availability</h4>
+
+              <div className="space-y-3">
+                <label className="checkbox-box">
+                  <input
+                    type="checkbox"
+                    checked={productForm.availableInEngland === true}
+                    onChange={(e) => updateField("availableInEngland", e.target.checked)}
+                  />
+                  England
+                </label>
+
+                <label className="checkbox-box">
+                  <input
+                    type="checkbox"
+                    checked={productForm.availableInWales === true}
+                    onChange={(e) => updateField("availableInWales", e.target.checked)}
+                  />
+                  Wales
+                </label>
+
+                <label className="checkbox-box">
+                  <input
+                    type="checkbox"
+                    checked={productForm.availableFromSupplier !== false}
+                    onChange={(e) => updateField("availableFromSupplier", e.target.checked)}
+                  />
+                  Alternative Supplier
+                </label>
+              </div>
+            </section>
+
+            <section className="bg-white border rounded-2xl p-4">
+              <h4 className="text-lg font-bold mb-4">Purchasing</h4>
+
+              <div className="space-y-4">
+                <input
+                  className="input-box"
+                  type="number"
+                  placeholder="Cost Price"
+                  value={productForm.costPrice || ""}
+                  onChange={(e) => updateField("costPrice", e.target.value)}
+                />
+
+                <select
+                  className="input-box"
+                  value={productForm.supplierName || ""}
+                  onChange={(e) => updateField("supplierName", e.target.value)}
+                >
+                  <option value="">Select Supplier</option>
+
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.supplier_name}>
+                      {supplier.supplier_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+
+            <section className="bg-white border rounded-2xl p-4">
+              <h4 className="text-lg font-bold mb-4">Accounting</h4>
+
+              <div className="space-y-4">
+                <select
+                  className="input-box"
+                  value={productForm.salesAccount || ""}
+                  onChange={(e) => updateField("salesAccount", e.target.value)}
+                >
+                  <option value="" disabled>
+                    {productForm.category ? "Select Sales Account" : "Select Main Category first"}
+                  </option>
+                  {salesAccountsForCategory.map((account) => (
+                    <option key={account.id} value={account.account_code}>
+                      {account.account_code} - {account.account_name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="input-box"
+                  value={productForm.purchaseAccount || ""}
+                  onChange={(e) => updateField("purchaseAccount", e.target.value)}
+                >
+                  <option value="" disabled>
+                    {productForm.category ? "Select Purchase Account" : "Select Main Category first"}
+                  </option>
+                  {purchaseAccountsForCategory.map((account) => (
+                    <option key={account.id} value={account.account_code}>
+                      {account.account_code} - {account.account_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+
+            <section className="bg-white border rounded-2xl p-4 xl:col-span-2">
+              <h4 className="text-lg font-bold mb-4">Product Labels</h4>
+
+              <div className="space-y-4">
+                <select
+                  className="input-box"
+                  value={selectedProductLabel}
+                  onChange={(e) => updateProductLabel(e.target.value)}
+                >
+                  {productLabelOptions.map((label) => (
+                    <option key={label.value || "none"} value={label.value}>
+                      {label.label}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="checkbox-box">
+                  <input
+                    type="checkbox"
+                    checked={productForm.active !== false}
+                    onChange={(e) => updateField("active", e.target.checked)}
+                  />
+                  Active
+                </label>
+              </div>
+
+              <p className="text-xs text-slate-500 mt-3">
+                Select one display label only. Active uses the product status field.
+              </p>
+            </section>
+          </div>
 
           <div className="flex justify-end gap-3 mt-6">
             {editingId && (
@@ -884,7 +901,18 @@ const bulkUpdateStatus = async (status) => {
         <option value="low">Low Stock</option>
       </select>
 
-      </div>
+      
+
+      <select
+        className="input-box"
+        value={pageSize}
+        onChange={(e) => setPageSize(Number(e.target.value))}
+      >
+        <option value={10}>10 per page</option>
+        <option value={25}>25 per page</option>
+        <option value={50}>50 per page</option>
+      </select>
+    </div>
 
     <div className="border rounded-2xl p-3 mb-4 bg-slate-50">
       <div className="font-bold mb-2">Show / Hide Columns</div>
@@ -910,7 +938,7 @@ const bulkUpdateStatus = async (status) => {
 
     <div className="mb-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
   <div className="text-sm font-bold text-slate-600">
-    {selectedProductIds.length} selected / {filteredAdminProducts.length} shown
+    {selectedProductIds.length} selected / {filteredAdminProducts.length} found
   </div>
 
   <div>
@@ -963,8 +991,7 @@ const bulkUpdateStatus = async (status) => {
             <input
               type="checkbox"
               checked={
-                filteredAdminProducts.length > 0 &&
-                selectedProductIds.length === filteredAdminProducts.length
+                allPagedProductsSelected
               }
               onChange={toggleSelectAllProducts}
             />
@@ -985,7 +1012,7 @@ const bulkUpdateStatus = async (status) => {
       </thead>
 
       <tbody>
-        {filteredAdminProducts.map((p) => {
+        {pagedProducts.map((p) => {
           const stock = Number(p.stock || 0);
           const lowStockAlert = Number(p.lowStockAlert || 0);
           const isActive = p.active !== false;
@@ -1026,7 +1053,7 @@ const bulkUpdateStatus = async (status) => {
 
               {visibleColumns.vatPrice && (
                 <td className="p-2 border text-right">
-                  £{Number(p.vatPrice || 0).toFixed(2)}
+                  {formatCurrency(p.vatPrice)}
                 </td>
               )}
 
@@ -1086,57 +1113,33 @@ const bulkUpdateStatus = async (status) => {
         )}
       </tbody>
     </table>
+    <div className="mt-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div className="text-sm font-bold text-slate-600">
+        Page {safeCurrentPage} of {totalPages}
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+          disabled={safeCurrentPage <= 1}
+          className="bg-white border px-4 py-2 rounded-xl font-bold disabled:bg-slate-100 disabled:text-slate-400"
+        >
+          Previous
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+          disabled={safeCurrentPage >= totalPages}
+          className="bg-white border px-4 py-2 rounded-xl font-bold disabled:bg-slate-100 disabled:text-slate-400"
+        >
+          Next
+        </button>
+      </div>
+    </div>
   </div>
 )}
-
-       
-      {activeTab === "export" && (
-        <div className="bg-white rounded-2xl shadow-sm p-5">
-          <h3 className="text-xl font-bold mb-4">Export Products</h3>
-          <button
-          onClick={handleExportExcel}
-          className="bg-green-600 text-white px-5 py-3 rounded-xl font-bold"
-        >
-          Export to Excel
-        </button>
-        </div>
-      )}
-
-    {activeTab === "import" && (
-      <div className="bg-white rounded-2xl shadow-sm p-5">
-        <h3 className="text-xl font-bold mb-4">Import Products</h3>
-
-    <div className="space-y-4">
-      <label className="inline-block cursor-pointer">
-        <input
-          type="file"
-          accept=".xlsx,.csv"
-          onChange={handleImportExcel}
-          disabled={importing}
-          className="hidden"
-        />
-
-        <div className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 py-4 rounded-xl text-center min-w-[220px]">
-          📊 Upload Excel File
-        </div>
-      </label>
-
-      <p className="text-sm text-slate-500">
-        Supported files: .xlsx and .csv
-      </p>
-
-      {importing && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-          <p className="font-bold text-blue-700">
-            Importing products...
-          </p>
-        </div>
-      )}
-    
-        </div>
-            
-        </div>
-      )}
     </div>
   );
 }

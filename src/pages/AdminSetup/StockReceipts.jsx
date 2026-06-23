@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase } from "../services/supabase.js";
+import { supabase } from "../../services/supabase.js";
+import { formatCurrency } from "../../Utils/currency";
 
 export default function StockReceipts({ products = [], fetchProducts }) {
   const [suppliers, setSuppliers] = useState([]);
@@ -459,7 +460,7 @@ export default function StockReceipts({ products = [], fetchProducts }) {
             total_cost: lineTotal,
             notes:
               importType === "local"
-                ? `Local purchase total amount: £${Number(localTotalAmount).toFixed(2)}`
+                ? `Local purchase total amount: ${formatCurrency(localTotalAmount)}`
                 : row.notes || "",
             source_type: importType === "local" ? "Local Excel Import" : "Main Supplier Excel Import",
             import_batch_id: importBatchId,
@@ -648,7 +649,7 @@ export default function StockReceipts({ products = [], fetchProducts }) {
                       <td className="border p-2 text-right">
                         {importType === "local"
                           ? "-"
-                          : `£${Number(row.cost_price || 0).toFixed(2)}`}
+                          : formatCurrency(row.cost_price)}
                       </td>
 
                       <td className="border p-2 text-right">
@@ -830,7 +831,7 @@ export default function StockReceipts({ products = [], fetchProducts }) {
 
               <div>
                 <div className="text-slate-500">Total Cost</div>
-                <div className="text-xl font-bold">£{totalCost.toFixed(2)}</div>
+                <div className="text-xl font-bold">{formatCurrency(totalCost)}</div>
               </div>
             </div>
           </div>

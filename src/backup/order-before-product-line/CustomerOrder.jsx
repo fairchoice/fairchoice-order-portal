@@ -1,49 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase.js";
-import Pricing from "./AdminSetup/Pricing";
-import Suppliers from "./AdminSetup/Suppliers";
-import Staff from "./AdminSetup/Staff";
-import LoginConfig from "./AdminSetup/LoginConfig";
 
-import BackOfficeLayout, {
-  ComingSoonPlaceholder,
-  getComingSoonTitle,
-} from "./AdminSetup/BackOfficeLayout";
 
-import Categories from "./AdminSetup/Categories";
-import Warehouse from "./Warehouse";
-import Driver from "./AdminSetup/Driver";
-import StockReceipts from "./AdminSetup/StockReceipts";
-import StockHistory from "./AdminSetup/StockHistory";
-import CustomerCredit from "./AdminSetup/CustomerCredit";
-import WeeklyAccount from "./AdminSetup/WeeklyAccount";
-import Customers from "./AdminSetup/Customers";
-
-import ProductCard, { ProductListRow } from "../components/ProductCard";
+import ProductCard from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
 import Cart from "../components/Cart.jsx";
 
 import { getProducts } from "../services/products";
-import {
-  applyLocationStockToProducts,
-  saveProductLocationStock,
-} from "../services/locationStock";
-import {
-  applyPromotionRulesToCart,
-  getActivePromotionRules,
-  PROMOTION_RULE_KINDS,
-} from "../services/promotionRules";
-import { formatCurrency } from "../Utils/currency";
 import AdminProducts from "./AdminProducts";
-import ProductImportExport from "./AdminSetup/ProductImportExport";
-import ProductPromotions from "./AdminSetup/ProductPromotions";
 import AdminOrders from "./AdminOrders";
-import fairchoiceLogo from "../assets/fairchoice-logo.png";
+import Warehouse from "./Warehouse";
+import Driver from "./Driver";
+import StockReceipts from "./StockReceipts";
+import StockHistory from "./StockHistory";
+import AdminConfig from "./AdminConfig";
+import CustomerCredit from "./CustomerCredit";
+import WeeklyAccount from "./WeeklyAccount";
+import Customers from "./customers/Customers";
+
+
 
 
 import { getCustomerAccounts } from "../services/customerManagement";
 
 import {
+  getOrders,
   createCustomerOrder,
   updateOrderStatus,
   updateOrderFields,
@@ -61,187 +42,23 @@ function normalizeProduct(raw) {
     flavour: raw.flavour || "",
     cashPrice: Number(raw.cash_price || 0),
     vatPrice: Number(raw.vat_price || 0),
-    walesSpecialPrice: Number(raw.wales_special_price || 0),
-    englandSpecialPrice: Number(raw.england_special_price || 0),
     cartonSize: raw.carton_size || "",
     image: raw.image_url || "https://placehold.co/400x300?text=Product",
     stock: Number(raw.stock || 0),
     lowStockAlert: Number(raw.low_stock_alert || 10),
-    status: raw.status || "Active",
-    active: String(raw.status || "Active").trim().toLowerCase() !== "inactive",
+    active: String(raw.status || "Active").toLowerCase() !== "inactive",
     availableInEngland: raw.available_in_england === true,
     availableInWales: raw.available_in_wales === true,
     vatType: raw.vat_type || "20",
     availableFromSupplier: raw.available_from_supplier !== false,
-    isNew: Boolean(raw.is_new ?? raw.isNew),
-    isPromotion: Boolean(raw.is_promotion ?? raw.isPromotion),
-    isReduced: Boolean(raw.is_reduced ?? raw.isReduced),
-    comingSoon: Boolean(raw.coming_soon ?? raw.comingSoon),
-    recommended: Boolean(raw.recommended),
-    topSeller: Boolean(raw.top_seller ?? raw.topSeller),
+    recommended: raw.recommended === true,
+    topSeller: raw.top_seller === true,
     costPrice: Number(raw.cost_price || 0),
     supplierName: raw.supplier_name || "",
     salesAccount: raw.sales_account || "",
     purchaseAccount: raw.purchase_account || "",
   };
 }
-
-const PRODUCT_LABEL_PRIORITY = [
-  "comingSoon",
-  "isNew",
-  "isPromotion",
-  "isReduced",
-  "recommended",
-  "topSeller",
-];
-
-const getProductLabelValue = (product) =>
-  PRODUCT_LABEL_PRIORITY.find((key) => product?.[key] === true) || "";
-
-const getProductLabelPayload = (labelValue) => ({
-  is_new: labelValue === "isNew",
-  is_promotion: labelValue === "isPromotion",
-  is_reduced: labelValue === "isReduced",
-  coming_soon: labelValue === "comingSoon",
-  recommended: labelValue === "recommended",
-  top_seller: labelValue === "topSeller",
-});
-
-const getProductLabelFormFlags = (labelValue) => ({
-  isNew: labelValue === "isNew",
-  isPromotion: labelValue === "isPromotion",
-  isReduced: labelValue === "isReduced",
-  comingSoon: labelValue === "comingSoon",
-  recommended: labelValue === "recommended",
-  topSeller: labelValue === "topSeller",
-});
-
-const PRODUCT_DISPLAY_LIMIT = 20;
-
-const getStableSampleScore = (product, seed) => {
-  const value = `${product?.id || product?.productCode || product?.name || ""}|${seed}`;
-  let hash = 0;
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-
-  return hash;
-};
-
-const stableSampleProducts = (items, limit, seed) => {
-  if (items.length <= limit) return items;
-
-  return [...items]
-    .sort(
-      (a, b) =>
-        getStableSampleScore(a, seed) - getStableSampleScore(b, seed)
-    )
-    .slice(0, limit);
-};
-
-const getOrderProductAvailabilityRank = (product) => {
-  const sourceStatus = String(product?.sourceStatus || "").trim().toLowerCase();
-  const productStatus = String(product?.status || "").trim().toLowerCase();
-
-  if (
-    sourceStatus === "cannot supply" ||
-    productStatus === "cannot supply" ||
-    product?.comingSoon
-  ) {
-    return 3;
-  }
-
-  if (Number(product?.stock || 0) > 0) return 1;
-
-  if (
-    sourceStatus === "need supplier" ||
-    sourceStatus === "pre-order" ||
-    sourceStatus === "pre order" ||
-    productStatus === "need supplier" ||
-    productStatus === "pre-order" ||
-    productStatus === "pre order" ||
-    product?.availableFromSupplier
-  ) {
-    return 2;
-  }
-
-  return 3;
-};
-
-const sortOrderProductsByAvailability = (items) =>
-  [...items].sort((a, b) => {
-    const rankDiff =
-      getOrderProductAvailabilityRank(a) - getOrderProductAvailabilityRank(b);
-
-    if (rankDiff !== 0) return rankDiff;
-
-    return String(a.name || "").localeCompare(String(b.name || ""));
-  });
-
-const getCustomerAddress = (customer, branch) =>
-  branch?.delivery_address ||
-  branch?.postcode ||
-  customer?.address ||
-  customer?.delivery_address ||
-  customer?.postcode ||
-  "-";
-
-const getCreditBalance = (customer, ledger = []) => {
-  if (ledger.length) {
-    return Number(ledger[ledger.length - 1]?.balance || 0);
-  }
-
-  return Number(customer?.outstanding_balance || customer?.credit_balance || 0);
-};
-
-const normalizeCountry = (value) => String(value || "").trim().toLowerCase();
-
-const getCustomerBranches = (customer) =>
-  Array.isArray(customer?.customer_branches) ? customer.customer_branches : [];
-
-const getCustomerAccountCountry = (customer) =>
-  customer?.country ||
-  customer?.account_country ||
-  customer?.defaultCountry ||
-  customer?.default_country ||
-  "";
-
-const getCustomerBranchCountry = (customer) => {
-  const branches = getCustomerBranches(customer);
-  const defaultBranch =
-    branches.find((branch) => branch.default_branch || branch.is_default) ||
-    branches[0];
-
-  return defaultBranch?.country || "";
-};
-
-const customerMatchesCountry = (customer, country) => {
-  const selectedCountry = normalizeCountry(country);
-  if (!selectedCountry) return true;
-
-  const accountCountry = normalizeCountry(getCustomerAccountCountry(customer));
-  if (accountCountry) return accountCountry === selectedCountry;
-
-  return getCustomerBranches(customer).some(
-    (branch) => normalizeCountry(branch.country) === selectedCountry
-  );
-};
-
-const getCountryFilteredBranches = (customer, country, shouldFilter) => {
-  const activeBranches = getCustomerBranches(customer).filter(
-    (branch) => branch.active !== false
-  );
-
-  if (!shouldFilter) return activeBranches;
-
-  const selectedCountry = normalizeCountry(country);
-  if (!selectedCountry) return activeBranches;
-
-  return activeBranches.filter(
-    (branch) => normalizeCountry(branch.country) === selectedCountry
-  );
-};
 export default function CustomerOrder({ userProfile }) {
 
   const loggedInUser = JSON.parse(
@@ -250,8 +67,7 @@ export default function CustomerOrder({ userProfile }) {
   const role = userProfile?.role || "Customer";
   const normalizedRole = (role || "").replace(/\s+/g, "").toLowerCase();
 
-  const isAdmin =
-    normalizedRole === "admin" || normalizedRole === "superadmin";
+  const isAdmin = normalizedRole === "admin";
   const isSalesRep = normalizedRole === "salesrep";
   const isWarehouse = normalizedRole === "warehouse";
   const isDriver = normalizedRole === "driver";
@@ -260,10 +76,10 @@ export default function CustomerOrder({ userProfile }) {
   
 
   const [page, setPage] = useState(() => {
-    if (isCustomer) return "order";
     if (window.location.hash === "#admin") return "orders";
     if (window.location.hash === "#products") return "products";
     if (window.location.hash === "#warehouse") return "warehouse";
+    if (window.location.hash === "#driver") return "driver";
     if (window.location.hash === "#stock-receipts") return "stockreceipts";
     if (window.location.hash === "#stockhistory") return "stockhistory";
     if (window.location.hash === "#config") return "config";
@@ -312,7 +128,6 @@ const [savingSalesPayment, setSavingSalesPayment] = useState(false);
   const [products, setProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [productError, setProductError] = useState("");
-  const [promotionRules, setPromotionRules] = useState([]);
 
   const CART_KEY = "fairchoice_cart";
 
@@ -330,38 +145,13 @@ useEffect(() => {
   localStorage.setItem(CART_KEY, JSON.stringify(cart));
 }, [cart]);
 
-const applyCartPromotions = (cartLines) =>
-  applyPromotionRulesToCart(cartLines, promotionRules, { products, priceMode });
-
-const refreshPromotionRules = async () => {
-  try {
-    const rules = await getActivePromotionRules();
-    setPromotionRules(rules || []);
-  } catch (error) {
-    console.error("Promotion rules loading error:", error);
-  }
-};
-
-useEffect(() => {
-  setCart((oldCart) => {
-    const recalculatedCart = applyPromotionRulesToCart(
-      oldCart,
-      promotionRules,
-      { products, priceMode }
-    );
-
-    return JSON.stringify(recalculatedCart) === JSON.stringify(oldCart)
-      ? oldCart
-      : recalculatedCart;
-  });
-}, [promotionRules, products, priceMode]);
-
 
 const fetchCustomerLedger = async () => {
   const customerName =
     selectedCustomerAccount?.account_name || companyName;
 
   if (!customerName) {
+    console.log("No customer name found for ledger");
     setCustomerLedger([]);
     return;
   }
@@ -382,6 +172,7 @@ const fetchCustomerLedger = async () => {
     return;
   }
 
+  console.log("CUSTOMER LEDGER:", data);
   setCustomerLedger(data || []);
 };
 
@@ -401,7 +192,6 @@ useEffect(() => {
     useState("All Sub Categories");
   const [selectedBrand, setSelectedBrand] = useState("All Brands");
   const [selectedSeries, setSelectedSeries] = useState("All Series");
-  const [productView, setProductView] = useState("grid");
 
   const [selectedImage, setSelectedImage] = useState(null);
 
@@ -417,8 +207,6 @@ useEffect(() => {
     flavour: "",
     cashPrice: "",
     vatPrice: "",
-    walesSpecialPrice: "",
-    englandSpecialPrice: "",
     cartonSize: "",
     image: "",
     stock: "",
@@ -431,53 +219,7 @@ useEffect(() => {
     supplierName: "",
     salesAccount: "",
     purchaseAccount: "",
-    locationStocks: {},
-    isNew: false,
-    isPromotion: false,
-    isReduced: false,
-    comingSoon: false,
-    recommended: false,
-    topSeller: false,
-    active: true,
   });
-
-  const getDefaultProductAccounts = async (category) => {
-    const selectedCategory = String(category || "").trim();
-
-    if (!selectedCategory) {
-      return {
-        salesAccount: "",
-        purchaseAccount: "",
-      };
-    }
-
-    const { data, error } = await supabase
-      .from("account_codes")
-      .select("account_code, account_type, main_category")
-      .eq("active", true)
-      .eq("main_category", selectedCategory)
-      .in("account_type", ["Sales", "Purchase"]);
-
-    if (error) {
-      console.error("Default account code loading error:", error);
-      return {
-        salesAccount: "",
-        purchaseAccount: "",
-      };
-    }
-
-    const salesAccount = (data || []).find(
-      (account) => account.account_type === "Sales"
-    );
-    const purchaseAccount = (data || []).find(
-      (account) => account.account_type === "Purchase"
-    );
-
-    return {
-      salesAccount: salesAccount?.account_code || "",
-      purchaseAccount: purchaseAccount?.account_code || "",
-    };
-  };
 
   const orderCountry =
   (isAdmin || isSalesRep)
@@ -485,24 +227,6 @@ useEffect(() => {
     : selectedBranch?.country ||
       selectedCustomerAccount?.country ||
       "Wales";
-
-  const filteredCustomersForSalesRep = useMemo(() => {
-    if (!isSalesRep) return customerAccounts;
-
-    return customerAccounts.filter((customer) =>
-      customerMatchesCountry(customer, orderCountry)
-    );
-  }, [customerAccounts, isSalesRep, orderCountry]);
-
-  const filteredBranchesForSelectedCustomer = useMemo(
-    () =>
-      getCountryFilteredBranches(
-        selectedCustomerAccount,
-        orderCountry,
-        isSalesRep
-      ),
-    [selectedCustomerAccount, orderCountry, isSalesRep]
-  );
 
   const roundToFairQuarter = (price) => {
   const value = Number(price || 0);
@@ -524,155 +248,24 @@ const getVatRate = (vatType) => {
   return 20;
 };
 
-const normalizePromotionType = (value) =>
-  String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-
-const isVatPriceMode = (mode) => {
-  const normalizedMode = String(mode || "").trim().toLowerCase();
-  return (
-    normalizedMode === "vat" ||
-    normalizedMode === "ex vat" ||
-    normalizedMode === "ex. vat"
-  );
-};
-
-const getPromotionRuleProductId = (rule) =>
-  rule?.product_id ??
-  rule?.productId ??
-  rule?.trigger_product_id ??
-  rule?.triggerProductId ??
-  rule?.selected_product_id ??
-  rule?.selectedProductId ??
-  rule?.product?.id ??
-  rule?.selected_product?.id ??
-  rule?.selectedProduct?.id ??
-  rule?.promotion_product?.product_id ??
-  rule?.promotionProduct?.productId ??
-  rule?.rule_product?.product_id ??
-  rule?.ruleProduct?.productId;
-
-const getPromotionRulePrice = (rule) =>
-  rule?.promotion_price ??
-  rule?.promotionPrice ??
-  rule?.offer_price ??
-  rule?.offerPrice;
-
-const getPromotionRuleProductIds = (rule) => {
-  const directProductId = getPromotionRuleProductId(rule);
-  const ids = directProductId != null ? [directProductId] : [];
-  const relatedProducts =
-    rule?.selected_products ??
-    rule?.selectedProducts ??
-    rule?.products ??
-    rule?.rule_products ??
-    rule?.ruleProducts ??
-    rule?.promotion_products ??
-    rule?.promotionProducts ??
-    [];
-
-  if (Array.isArray(relatedProducts)) {
-    relatedProducts.forEach((item) => {
-      const productId =
-        item?.product_id ??
-        item?.productId ??
-        item?.id ??
-        item?.product?.id;
-      if (productId != null) ids.push(productId);
-    });
-  }
-
-  return ids;
-};
-
-const isPromotionPriceRule = (rule) => {
-  const type = normalizePromotionType(
-    rule?.promotion_type ??
-      rule?.promotionType ??
-      rule?.promotion_type_name ??
-      rule?.promotionTypeName
-  );
-
-  return (
-    type === "promotion_price" ||
-    type === "promotionprice" ||
-    rule?.rule_kind === PROMOTION_RULE_KINDS.PROMOTION_PRICE
-  );
-};
-
-const getActivePromotionPriceRule = (product) => {
-  if (!isVatPriceMode(priceMode)) return null;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  return promotionRules.find((rule) => {
-    const startDate = rule?.start_date ? new Date(rule.start_date) : null;
-    const endDate = rule?.end_date ? new Date(rule.end_date) : null;
-
-    if (startDate) startDate.setHours(0, 0, 0, 0);
-    if (endDate) endDate.setHours(23, 59, 59, 999);
-
-    const startsOk = !startDate || startDate <= today;
-    const endsOk = !endDate || endDate >= today;
-    const productIds = getPromotionRuleProductIds(rule);
-    const promotionPrice = getPromotionRulePrice(rule);
-
-  const activeOk =
-  rule?.active === true ||
-  String(rule?.active).toLowerCase() === "true";
-
-const productMatch = productIds.some(
-  (productId) => String(productId) === String(product?.id)
-);
-
-return (
-  activeOk &&
-  startsOk &&
-  endsOk &&
-  isPromotionPriceRule(rule) &&
-  productMatch &&
-  promotionPrice != null &&
-  promotionPrice !== ""
-);
-
-
-  }) || null;
-};
-
-const getPromotionPrice = (product) => {
-  const rule = getActivePromotionPriceRule(product);
-  if (!rule) return null;
-
-  const promotionPrice = Number(getPromotionRulePrice(rule));
-  return Number.isFinite(promotionPrice) ? promotionPrice : null;
-};
-
-const getPrice = (product) => {
+  const getPrice = (product) => {
   const mode = String(priceMode || "").toLowerCase();
+
+  const cashPrice = Number(product.cashPrice || 0);
+
+  if (
+    (mode === "server" || mode === "manager") &&
+    cashPrice > 0
+  ) {
+    return cashPrice;
+  }
 
   const exVatPrice = Number(product.vatPrice || 0);
   const vatRate = getVatRate(product.vatType);
   const incVatPrice = exVatPrice + exVatPrice * (vatRate / 100);
 
-  if (isVatPriceMode(mode)) {
+  if (mode === "vat") {
     return exVatPrice;
-  }
-
-  if (mode === "server" || mode === "manager") {
-    const country = String(orderCountry || "").toLowerCase();
-    const specialPrice =
-      country === "wales"
-        ? Number(product.walesSpecialPrice || 0)
-        : country === "england"
-        ? Number(product.englandSpecialPrice || 0)
-        : 0;
-
-    if (specialPrice > 0) {
-      return specialPrice;
-    }
   }
 
   const discounts = {
@@ -687,27 +280,12 @@ const getPrice = (product) => {
   return roundToFairQuarter(discountedPrice);
 };
 
-
-useEffect(() => {
-  if (isAdmin && page === "order" && window.location.hash === "#admin") {
-    setPage("orders");
-    fetchOrders();
-  }
-
-  if (isWarehouse) setPage("orders");
-  if (isDriver) setPage("orders");
-  if (isSalesRep) setPage("order");
-  if (isCustomer) setPage("order");
-}, [isAdmin, isWarehouse, isDriver, isSalesRep, isCustomer]);
-
-useEffect(() => {
-  if (!isCustomer) return;
-  if (page === "order" || page === "paymentHistory") return;
-
-  setPage("order");
-}, [isCustomer, page]);
-
-
+  useEffect(() => {
+    if (isWarehouse) setPage("orders");
+    if (isDriver) setPage("driver");
+    if (isSalesRep) setPage("order");
+    if (isCustomer) setPage("order");
+  }, [isWarehouse, isDriver, isSalesRep, isCustomer]);
 
   useEffect(() => {
     if (!supabase) {
@@ -718,13 +296,13 @@ useEffect(() => {
   
     fetchProducts();
     fetchPricingSettings();
-    refreshPromotionRules();
 
     if (
       [
         "#admin",
         "#products",
         "#warehouse",
+        "#driver",
         "#stock-receipts",
         "#stockhistory",
         "#credit",
@@ -738,6 +316,7 @@ useEffect(() => {
     async function loadCustomerAccounts() {
       try {
         const data = await getCustomerAccounts();
+        console.log("CUSTOMERS LOADED:", data);
         setCustomerAccounts(data || []);
       } catch (error) {
         console.error("Customer loading error:", error);
@@ -770,38 +349,15 @@ useEffect(() => {
   useEffect(() => {
     if (!selectedCustomerAccount) return;
 
-    if (filteredBranchesForSelectedCustomer.length === 1) {
-      setSelectedBranchId(filteredBranchesForSelectedCustomer[0].id);
-      setSelectedBranch(filteredBranchesForSelectedCustomer[0]);
-    }
-  }, [selectedCustomerAccount, filteredBranchesForSelectedCustomer]);
+    const branches = (selectedCustomerAccount.customer_branches || []).filter(
+      (b) => b.active !== false
+    );
 
-  useEffect(() => {
-    if (!isSalesRep) return;
-
-    if (
-      selectedCustomerAccount &&
-      !customerMatchesCountry(selectedCustomerAccount, orderCountry)
-    ) {
-      setSelectedCustomerId("");
-      setSelectedCustomerAccount(null);
-      setSelectedBranchId("");
-      setSelectedBranch(null);
-      setCompanyName("");
-      setPriceMode("vat");
-      setCart([]);
-      localStorage.removeItem(CART_KEY);
-      return;
+    if (branches.length === 1) {
+      setSelectedBranchId(branches[0].id);
+      setSelectedBranch(branches[0]);
     }
-
-    if (
-      selectedBranch &&
-      normalizeCountry(selectedBranch.country) !== normalizeCountry(orderCountry)
-    ) {
-      setSelectedBranchId("");
-      setSelectedBranch(null);
-    }
-  }, [isSalesRep, orderCountry, selectedCustomerAccount, selectedBranch]);
+  }, [selectedCustomerAccount]);
 
   const fetchProducts = async () => {
     setProductError("");
@@ -809,24 +365,20 @@ useEffect(() => {
 
     try {
       const data = await getProducts();
-      const productsForCountry = applyLocationStockToProducts(
-        data || [],
-        orderCountry
-      );
 
-      setProducts((productsForCountry || []).filter((p) => p.name));
+      setProducts(
+        (data || [])
+          .map(normalizeProduct)
+          .filter((p) => p.name)
+      );
     } catch (error) {
       console.error("Product loading error:", error);
       setProductError(error.message);
+      setProducts([]);
     }
 
     setProductsLoading(false);
   };
-
-  useEffect(() => {
-    if (!supabase) return;
-    fetchProducts();
-  }, [orderCountry]);
 
   const fetchPricingSettings = async () => {
     const { data, error } = await supabase
@@ -982,67 +534,74 @@ const seriesList = [
 ];
 
 const filteredProducts = useMemo(() => {
-  const keyword = search.trim().toLowerCase();
+  const noFiltersSelected =
+    selectedCategory === "All Products" &&
+    selectedSubCategory === "All Sub Categories" &&
+    selectedBrand === "All Brands" &&
+    selectedSeries === "All Series" &&
+    search.trim() === "";
 
-  return sortOrderProductsByAvailability(
-    products.filter((product) => {
-      if (
-        (orderCountry === "England" && !product.availableInEngland) ||
-        (orderCountry === "Wales" && !product.availableInWales)
-      ) {
-        return false;
-      }
+ const isVapeAllProducts =
+  selectedCategory === "Vape" &&
+  selectedSubCategory === "All Sub Categories" &&
+  selectedBrand === "All Brands" &&
+  selectedSeries === "All Series" &&
+  search.trim() === "";
 
-      const productCategory = String(product.category || "").trim();
-      const productSubCategory = String(product.subCategory || "").trim();
-      const productBrand = String(product.brand || "").trim();
-      const productSeries = String(product.series || "").trim();
+const baseProducts =
+  noFiltersSelected || isVapeAllProducts
+    ? products.slice(0, 30)
+    : products;
 
-      return (
-        product.active &&
-        (selectedCategory === "All Products" ||
-          productCategory === selectedCategory) &&
-        (selectedSubCategory === "All Sub Categories" ||
-          productSubCategory === selectedSubCategory) &&
-        (selectedBrand === "All Brands" ||
-          productBrand === selectedBrand) &&
-        (selectedSeries === "All Series" ||
-          productSeries === selectedSeries) &&
-        (keyword === "" ||
-          String(product.name || "").toLowerCase().includes(keyword) ||
-          String(product.productCode || "").toLowerCase().includes(keyword) ||
-          productBrand.toLowerCase().includes(keyword) ||
-          productSeries.toLowerCase().includes(keyword) ||
-          String(product.flavour || "").toLowerCase().includes(keyword))
-      );
-    })
-  );
+    return baseProducts
+  .filter((product) => {
+    if (
+      (orderCountry === "England" && !product.availableInEngland) ||
+      (orderCountry === "Wales" && !product.availableInWales)
+    ) {
+      return false;
+    }
+
+    const keyword = search.trim().toLowerCase();
+
+    const productCategory = String(product.category || "").trim();
+    const productSubCategory = String(product.subCategory || "").trim();
+    const productBrand = String(product.brand || "").trim();
+    const productSeries = String(product.series || "").trim();
+
+    return (
+      product.active &&
+      (selectedCategory === "All Products" ||
+        productCategory === selectedCategory) &&
+      (selectedSubCategory === "All Sub Categories" ||
+        productSubCategory === selectedSubCategory) &&
+      (selectedBrand === "All Brands" ||
+        productBrand === selectedBrand) &&
+      (selectedSeries === "All Series" ||
+        productSeries === selectedSeries) &&
+      (keyword === "" ||
+        String(product.name || "").toLowerCase().includes(keyword) ||
+        productBrand.toLowerCase().includes(keyword) ||
+        productSeries.toLowerCase().includes(keyword) ||
+        String(product.flavour || "").toLowerCase().includes(keyword))
+    );
+  })
+  .sort((a, b) => {
+    const aInStock = Number(a.stock || 0) > 0;
+    const bInStock = Number(b.stock || 0) > 0;
+
+    if (aInStock && !bInStock) return -1;
+    if (!aInStock && bInStock) return 1;
+
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+
+
+
+
+
 }, [
   products,
-  selectedCategory,
-  selectedSubCategory,
-  selectedBrand,
-  selectedSeries,
-  search,
-  orderCountry,
-]);
-
-const visibleProducts = useMemo(() => {
-  if (selectedSeries !== "All Series") return filteredProducts;
-
-  const sampleSeed = [
-    selectedCategory,
-    selectedSubCategory,
-    selectedBrand,
-    search.trim().toLowerCase(),
-    orderCountry,
-  ].join("|");
-
-  return sortOrderProductsByAvailability(
-    stableSampleProducts(filteredProducts, PRODUCT_DISPLAY_LIMIT, sampleSeed)
-  );
-}, [
-  filteredProducts,
   selectedCategory,
   selectedSubCategory,
   selectedBrand,
@@ -1054,31 +613,26 @@ const visibleProducts = useMemo(() => {
   const addToCart = (product, qty = 1) => {
   const quantity = Math.max(1, Number(qty || 1));
 
-  const selectedPrice = getPrice(product);
-  const exVatPrice =
-    isVatPriceMode(priceMode)
-      ? Number(selectedPrice || 0)
-      : Number(product.vatPrice || 0);
+  const exVatPrice = Number(product.vatPrice || 0);
 const vatRate = getVatRate(product.vatType);
 const vatAmount = exVatPrice * (vatRate / 100);
 const incVatPrice = exVatPrice + vatAmount;
 
+  const selectedPrice = getPrice(product);
+
   setCart((oldCart) => {
-    const normalCart = oldCart.filter((item) => !item.isPromotionFree);
-    const found = normalCart.find((item) => item.id === product.id);
+    const found = oldCart.find((item) => item.id === product.id);
 
     if (found) {
       const newQty = found.qty + quantity;
 
-      const nextCart = normalCart.map((item) =>
+      return oldCart.map((item) =>
         item.id === product.id
           ? {
               ...item,
               qty: newQty,
               selectedPrice,
               exVatPrice,
-              normalSelectedPrice: Number(product.vatPrice || 0),
-              normalPrice: Number(product.vatPrice || 0),
               vatRate,
               vatAmount,
               incVatPrice,
@@ -1088,19 +642,15 @@ const incVatPrice = exVatPrice + vatAmount;
             }
           : item
       );
-
-      return applyCartPromotions(nextCart);
     }
 
-    return applyCartPromotions([
-      ...normalCart,
+    return [
+      ...oldCart,
       {
         ...product,
         qty: quantity,
         selectedPrice,
         exVatPrice,
-        normalSelectedPrice: Number(product.vatPrice || 0),
-        normalPrice: Number(product.vatPrice || 0),
         vatRate,
         vatAmount,
         incVatPrice,
@@ -1109,46 +659,39 @@ const incVatPrice = exVatPrice + vatAmount;
         includeInPicking: true,
         pickedQty: Math.min(product.stock, quantity),
       },
-    ]);
+    ];
   });
 };
 
   const increaseQty = (id) => {
     setCart((oldCart) =>
-      applyCartPromotions(
-        oldCart
-          .filter((item) => !item.isPromotionFree)
-          .map((item) =>
-            item.id === id
-              ? {
-                  ...item,
-                  qty: item.qty + 1,
-                  sourceStatus:
-                    item.stock < item.qty + 1 ? "Need Supplier" : "In Stock",
-                  pickedQty: Math.min(item.stock, item.qty + 1),
-                }
-              : item
-          )
+      oldCart.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              qty: item.qty + 1,
+              sourceStatus:
+                item.stock < item.qty + 1 ? "Need Supplier" : "In Stock",
+              pickedQty: Math.min(item.stock, item.qty + 1),
+            }
+          : item
       )
     );
   };
 
   const decreaseQty = (id) => {
     setCart((oldCart) =>
-      applyCartPromotions(
-        oldCart
-          .filter((item) => !item.isPromotionFree)
-          .map((item) =>
-            item.id === id
-              ? {
-                  ...item,
-                  qty: item.qty - 1,
-                  pickedQty: Math.min(item.stock, item.qty - 1),
-                }
-              : item
-          )
-          .filter((item) => item.qty > 0)
-      )
+      oldCart
+        .map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                qty: item.qty - 1,
+                pickedQty: Math.min(item.stock, item.qty - 1),
+              }
+            : item
+        )
+        .filter((item) => item.qty > 0)
     );
   };
 
@@ -1156,58 +699,35 @@ const incVatPrice = exVatPrice + vatAmount;
     const quantity = Math.max(1, Number(value || 1));
 
     setCart((oldCart) =>
-      applyCartPromotions(
-        oldCart
-          .filter((item) => !item.isPromotionFree)
-          .map((item) =>
-            item.id === id
-              ? {
-                  ...item,
-                  qty: quantity,
-                  sourceStatus:
-                    item.stock < quantity ? "Need Supplier" : "In Stock",
-                  pickedQty: Math.min(item.stock, quantity),
-                }
-              : item
-          )
+      oldCart.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              qty: quantity,
+              sourceStatus:
+                item.stock < quantity ? "Need Supplier" : "In Stock",
+              pickedQty: Math.min(item.stock, quantity),
+            }
+          : item
       )
     );
   };
 
   const removeItem = (id) => {
-    setCart((oldCart) =>
-      applyCartPromotions(
-        oldCart.filter((item) => !item.isPromotionFree && item.id !== id)
-      )
-    );
+    setCart((oldCart) => oldCart.filter((item) => item.id !== id));
   };
 
-  const promotionDiscountAmount = cart.reduce(
-    (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
-    0
-  );
+  const total = cart.reduce((sum, item) => {
+  const qty = Number(item.qty || 0);
 
-  const subtotal = cart.reduce((sum, item) => {
-    if (item.isPromotionFree) return sum;
+  if (priceMode === "vat") {
+    const exVatPrice = Number(item.exVatPrice || item.vatPrice || 0);
+    const vatRate = getVatRate(item.vatRate || item.vatType);
+    return sum + (exVatPrice + exVatPrice * (vatRate / 100)) * qty;
+  }
 
-    const qty = Number(item.qty || 0);
-
-    if (isVatPriceMode(priceMode)) {
-      return sum + Number(
-        item.selectedPrice ?? item.exVatPrice ?? item.vatPrice ?? 0
-      ) * qty;
-    }
-
-    return sum + Number(item.selectedPrice || 0) * qty;
-  }, 0);
-
-  const discountedSubtotal =
-    isVatPriceMode(priceMode)
-      ? Math.max(0, subtotal - promotionDiscountAmount)
-      : subtotal;
-
-  const vatTotal = isVatPriceMode(priceMode) ? discountedSubtotal * 0.2 : 0;
-  const total = isVatPriceMode(priceMode) ? discountedSubtotal + vatTotal : subtotal;
+  return sum + Number(item.selectedPrice || 0) * qty;
+}, 0);
 
  const discountAmount =
   total * (Number(orderDiscountPercent || 0) / 100);
@@ -1246,7 +766,9 @@ const finalTotal =
 
   if (
     !window.confirm(
-      `Save collection of ${formatCurrency(salesPaymentForm.amount)}`
+      `Save collection of £${Number(
+        salesPaymentForm.amount
+      ).toFixed(2)}?`
     )
   ) {
     return;
@@ -1308,8 +830,7 @@ const finalTotal =
   }
 };
 
-
-const submitOrder = async () => {
+ const submitOrder = async () => {
   if (isSubmittingOrder) return;
 
   if (!selectedCustomerAccount) {
@@ -1323,44 +844,25 @@ const submitOrder = async () => {
     alert("Please select delivery branch / shop.");
     return;
   }
-  const paidCartForOrder = cart.filter((item) => !item.isPromotionFree);
 
-  if (paidCartForOrder.length === 0) {
+  if (cart.length === 0) {
     alert("Please add at least one product.");
     return;
   }
 
-  const accountStatus =
-    selectedCustomerAccount?.account_status ||
-    selectedCustomerAccount?.status ||
-    "Active";
-
   const creditLimit = Number(selectedCustomerAccount?.credit_limit || 0);
-
   const outstandingBalance = Number(
     selectedCustomerAccount?.outstanding_balance || 0
   );
-
   const orderTotal = Number(finalTotal || 0);
-  const projectedBalance = outstandingBalance + orderTotal;
 
-  if (accountStatus === "On Hold") {
-    alert("Customer account is On Hold. Order cannot be submitted.");
-    return;
-  }
-
-  if (accountStatus === "Stopped") {
-    alert("Customer account is Stopped. Please contact Accounts.");
-    return;
-  }
-
-  if (creditLimit > 0 && projectedBalance > creditLimit) {
+  if (creditLimit > 0 && outstandingBalance + orderTotal > creditLimit) {
     alert(
-      `Credit limit exceeded.\n\n` +
-        `Credit Limit: ${formatCurrency(creditLimit)}\n` +
-        `Outstanding Balance: ${formatCurrency(outstandingBalance)}\n` +
-        `Current Order: ${formatCurrency(orderTotal)}\n` +
-        `Projected Balance: ${formatCurrency(projectedBalance)}`
+      `Order exceeds customer credit limit.\n\nOutstanding Balance: £${outstandingBalance.toFixed(
+        2
+      )}\nOrder Total: £${orderTotal.toFixed(
+        2
+      )}\nCredit Limit: £${creditLimit.toFixed(2)}`
     );
     return;
   }
@@ -1368,11 +870,10 @@ const submitOrder = async () => {
   setIsSubmittingOrder(true);
 
   try {
-
     const { orderNumber } = await createCustomerOrder({
   companyName: selectedCustomerAccount.account_name,
   priceMode,
-  cart: paidCartForOrder,
+  cart,
   total: finalTotal,
 
 discount_percent: Number(orderDiscountPercent || 0),
@@ -1392,24 +893,23 @@ discount_applied_by_name:
 });
 
 const newOrder = {
-    orderId: orderNumber,
-    customerName: selectedCustomerAccount.account_name,
-    companyName: selectedCustomerAccount.account_name,
+  orderId: orderNumber,
+  customerName: selectedCustomerAccount.account_name,
+  companyName: selectedCustomerAccount.account_name,
 
-    branchName: selectedBranch?.branch_name || "",
+  branchName: selectedBranch?.branch_name || "",
 
-   deliveryAddress: selectedBranch?.delivery_address || "",
-   priceMode,
-   total: finalTotal,
-   discount_percent: Number(orderDiscountPercent || 0),
-    discount_amount: Number(discountAmount || 0),
-   discount_applied_by_name:
+  deliveryAddress: selectedBranch?.delivery_address || "",
+  priceMode,
+  total: finalTotal,
+  discount_percent: Number(orderDiscountPercent || 0),
+  discount_amount: Number(discountAmount || 0),
+  discount_applied_by_name:
     userProfile?.full_name || userProfile?.name || "",
-   createdAt: new Date().toLocaleString(),
-   status: "Received",
-   items: paidCartForOrder,
-    };
-
+  createdAt: new Date().toLocaleString(),
+  status: "Received",
+  items: cart,
+};
     setOrders((oldOrders) => [newOrder, ...oldOrders]);
 
     localStorage.removeItem(CART_KEY);
@@ -1428,7 +928,7 @@ const newOrder = {
     await fetchProducts();
 
     alert(
-  `âœ… Order Submitted Successfully
+  `✅ Order Submitted Successfully
 
 Order Number: ${orderNumber}
 
@@ -1567,44 +1067,30 @@ const addOrderItem = async (orderId, newItem) => {
       return;
     }
 
-    const defaultAccounts = await getDefaultProductAccounts(productForm.category);
-    const productFormForSave = {
-      ...productForm,
-      ...getProductLabelFormFlags(getProductLabelValue(productForm)),
-    };
-
     const payload = {
-      product_code: productFormForSave.productCode,
-      product_name: productFormForSave.name,
-      main_category: productFormForSave.category,
-      sub_category: productFormForSave.subCategory,
-      brand: productFormForSave.brand,
-      series: productFormForSave.series,
-      flavour: productFormForSave.flavour,
-      cash_price: Number(productFormForSave.cashPrice || 0),
-      vat_price: Number(productFormForSave.vatPrice || 0),
-      wales_special_price: Number(productFormForSave.walesSpecialPrice || 0),
-      england_special_price: Number(productFormForSave.englandSpecialPrice || 0),
-      cost_price: Number(productFormForSave.costPrice || 0),
-      supplier_name: productFormForSave.supplierName || "",
-      sales_account: productFormForSave.salesAccount || defaultAccounts.salesAccount || "",
-      purchase_account: productFormForSave.purchaseAccount || defaultAccounts.purchaseAccount || "",
-      carton_size: productFormForSave.cartonSize,
+      product_code: productForm.productCode,
+      product_name: productForm.name,
+      main_category: productForm.category,
+      sub_category: productForm.subCategory,
+      brand: productForm.brand,
+      series: productForm.series,
+      flavour: productForm.flavour,
+      cash_price: Number(productForm.cashPrice || 0),
+      vat_price: Number(productForm.vatPrice || 0),
+      cost_price: Number(productForm.costPrice || 0),
+      supplier_name: productForm.supplierName || "",
+      sales_account: productForm.salesAccount || "",
+      purchase_account: productForm.purchaseAccount || "",
+      carton_size: productForm.cartonSize,
       image_url:
-        productFormForSave.image || "https://placehold.co/400x300?text=Product",
-      stock: Number(productFormForSave.stock || 0),
-      low_stock_alert: Number(productFormForSave.lowStockAlert || 10),
-      status: productFormForSave.active === false ? "Inactive" : "Active",
-      available_in_england: productFormForSave.availableInEngland,
-      available_in_wales: productFormForSave.availableInWales,
-      vat_type: productFormForSave.vatType,
-      available_from_supplier: productFormForSave.availableFromSupplier !== false,
-      is_new: productFormForSave.isNew === true,
-      is_promotion: productFormForSave.isPromotion === true,
-      is_reduced: productFormForSave.isReduced === true,
-      coming_soon: productFormForSave.comingSoon === true,
-      recommended: productFormForSave.recommended === true,
-      top_seller: productFormForSave.topSeller === true,
+        productForm.image || "https://placehold.co/400x300?text=Product",
+      stock: Number(productForm.stock || 0),
+      low_stock_alert: Number(productForm.lowStockAlert || 10),
+      status: "Active",
+      available_in_england: productForm.availableInEngland,
+      available_in_wales: productForm.availableInWales,
+      vat_type: productForm.vatType,
+      available_from_supplier: productForm.availableFromSupplier !== false,
       
            
     };
@@ -1624,19 +1110,6 @@ const addOrderItem = async (orderId, newItem) => {
       return;
     }
 
-    try {
-      await saveProductLocationStock(
-        response.data?.id || editingId,
-        productFormForSave.locationStocks || {}
-      );
-    } catch (stockError) {
-      console.error("Location stock save error:", stockError);
-      alert(
-        `Product was saved, but location stock could not be saved.\n\n${stockError.message}`
-      );
-      return;
-    }
-
     setEditingId(null);
     setProductForm({
       productCode: "",
@@ -1648,8 +1121,6 @@ const addOrderItem = async (orderId, newItem) => {
       flavour: "",
       cashPrice: "",
       vatPrice: "",
-      walesSpecialPrice: "",
-      englandSpecialPrice: "",
       cartonSize: "",
       image: "",
       stock: "",
@@ -1662,14 +1133,6 @@ const addOrderItem = async (orderId, newItem) => {
       supplierName: "",
       salesAccount: "",
       purchaseAccount: "",
-      locationStocks: {},
-      isNew: false,
-      isPromotion: false,
-      isReduced: false,
-      comingSoon: false,
-      recommended: false,
-      topSeller: false,
-      active: true,
     });
 
     await fetchProducts();
@@ -1678,26 +1141,21 @@ const addOrderItem = async (orderId, newItem) => {
 
   const editProduct = (product) => {
     setEditingId(product.id);
-    const productLabelFormFlags = getProductLabelFormFlags(
-      getProductLabelValue(product)
-    );
 
     setProductForm({
-      productCode: product.productCode || "",
-      name: product.name || "",
-      category: product.category || "",
-      subCategory: product.subCategory || "",
-      brand: product.brand || "",
-      series: product.series || "",
-      flavour: product.flavour || "",
-      cashPrice: product.cashPrice || "",
-      vatPrice: product.vatPrice || "",
-      walesSpecialPrice: product.walesSpecialPrice || "",
-      englandSpecialPrice: product.englandSpecialPrice || "",
-      cartonSize: product.cartonSize || "",
-      image: product.image || "",
-      stock: product.stock || "",
-      lowStockAlert: product.lowStockAlert || "",
+      productCode: product.productCode,
+      name: product.name,
+      category: product.category,
+      subCategory: product.subCategory,
+      brand: product.brand,
+      series: product.series,
+      flavour: product.flavour,
+      cashPrice: product.cashPrice,
+      vatPrice: product.vatPrice,
+      cartonSize: product.cartonSize,
+      image: product.image,
+      stock: product.stock,
+      lowStockAlert: product.lowStockAlert,
       availableInEngland: product.availableInEngland === true,
       availableInWales: product.availableInWales === true,
       vatType: product.vatType || "20",
@@ -1706,14 +1164,6 @@ const addOrderItem = async (orderId, newItem) => {
       supplierName: product.supplierName || "",
       salesAccount: product.salesAccount || "",
       purchaseAccount: product.purchaseAccount || "",
-      locationStocks: product.locationStocks || {},
-      isNew: productLabelFormFlags.isNew === true,
-      isPromotion: productLabelFormFlags.isPromotion === true,
-      isReduced: productLabelFormFlags.isReduced === true,
-      comingSoon: productLabelFormFlags.comingSoon === true,
-      recommended: productLabelFormFlags.recommended === true,
-      topSeller: productLabelFormFlags.topSeller === true,
-      active: product.active !== false,
     });
 
     setPage("products");
@@ -1788,115 +1238,27 @@ const addOrderItem = async (orderId, newItem) => {
     win.document.close();
   };
 
-  const comingSoonTitle = getComingSoonTitle(page);
-
-const backOfficeContent = comingSoonTitle ? (
-  <ComingSoonPlaceholder title={comingSoonTitle} />
-) : (
-  <>
-    {page === "orders" && (
-      <AdminOrders
-        orders={orders}
-        products={products}
-        expandedOrders={expandedOrders}
-        toggleOrderExpanded={toggleOrderExpanded}
-        printPickingList={printPickingList}
-        updateOrderItem={updateOrderItem}
-        addOrderItem={addOrderItem}
-        changeOrderStatus={changeOrderStatus}
-        fetchOrders={fetchOrders}
-      />
-    )}
-
-    {page === "warehouse" && (
-      <Warehouse
-        orders={orders}
-        printPickingList={printPickingList}
-        changeOrderStatus={changeOrderStatus}
-        updateOrderItem={updateOrderItem}
-        updateOrderExtraFields={updateOrderExtraFields}
-      />
-    )}
-
-    {page === "driver" && (
-      <Driver
-        orders={orders}
-        changeOrderStatus={changeOrderStatus}
-        updateOrderExtraFields={updateOrderExtraFields}
-        refreshOrders={fetchOrders}
-      />
-    )}
-
-    {page === "customers" && <Customers />}
-
-    {page === "products" && (
-      <AdminProducts
-        products={products}
-        productForm={productForm}
-        setProductForm={setProductForm}
-        editingId={editingId}
-        saveProduct={saveProduct}
-        fetchProducts={fetchProducts}
-        editProduct={editProduct}
-      />
-    )}
-
-    {page === "credit" && <CustomerCredit />}
-    {page === "weeklyAccount" && <WeeklyAccount />}
-    {page === "stockhistory" && <StockHistory />}
-
-    {page === "stockreceipts" && (
-      <StockReceipts products={products} fetchProducts={fetchProducts} />
-    )}
-
-    {page === "staff" && <Staff />}
-    {page === "loginSetup" && <LoginConfig />}
-    {page === "suppliers" && <Suppliers />}
-    {page === "pricing" && <Pricing />}
-    {page === "categories" && <Categories />}
-    {page === "productImportExport" && (
-      <ProductImportExport
-        products={products}
-        fetchProducts={fetchProducts}
-      />
-    )}
-    {page === "promotions" && (
-      <ProductPromotions
-        products={products}
-        fetchProducts={fetchProducts}
-      />
-    )}
-  </>
-);
-
   return (
-    <div className="customer-portal-shell min-h-screen bg-slate-100 p-4 pb-40">
-      <div className="customer-portal-container max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
+    <div className="min-h-screen bg-slate-100 p-4 pb-40">
+      <div className="max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
         
-        <div className="portal-header customer-header bg-gradient-to-r from-blue-950 to-blue-700 text-white px-6 py-5">
-  <div className="portal-header-inner flex items-start justify-between w-full gap-4">
-    <div className="portal-brand-block flex items-start gap-3">
-      <img
-        src={fairchoiceLogo}
-        alt="FairChoice Cash and Carry"
-        className="portal-logo"
-      />
-      <div className="portal-title-block">
-      <h1 className="portal-title text-3xl font-bold">
+        <div className="bg-gradient-to-r from-blue-950 to-blue-700 text-white px-6 py-5">
+  <div className="flex items-start justify-between w-full gap-4">
+    <div>
+      <h1 className="text-3xl font-bold">
         FairChoice Order Portal
       </h1>
 
-      <p className="portal-subtitle text-blue-100 text-sm">
+      <p className="text-blue-100 text-sm">
         {isAdmin
           ? "Backoffice product and order management"
           : isSalesRep
           ? "Sales Rep Order Form"
           : "Customer order form"}
       </p>
-      </div>
     </div>
 
-    <div className="portal-actions flex flex-col items-end gap-2">
+    <div className="flex flex-col items-end gap-2">
       <button
         onClick={() => {
           if (window.confirm("Log out now?")) {
@@ -1905,16 +1267,16 @@ const backOfficeContent = comingSoonTitle ? (
             window.location.reload();
           }
         }}
-        className="logout-btn border border-white/30 px-3 py-1 rounded-lg text-xs font-medium hover:bg-white/10 transition whitespace-nowrap"
+        className="border border-white/30 px-3 py-1 rounded-lg text-xs font-medium hover:bg-white/10 transition whitespace-nowrap"
       >
         Logout
       </button>
 
       {isCustomer && (
-        <div className="customer-nav-buttons flex gap-2">
+        <div className="flex gap-2">
           <button
             onClick={() => setPage("order")}
-            className={`order-tab-btn btn-secondary bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
+            className="bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold"
           >
             Order
           </button>
@@ -1924,38 +1286,25 @@ const backOfficeContent = comingSoonTitle ? (
               await fetchCustomerLedger();
               setPage("paymentHistory");
             }}
-            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold ${page === "paymentHistory" ? "active" : ""}`}
+            className="bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold"
           >
             Payment History
           </button>
         </div>
       )}
 
-      {isAdmin && page === "order" && (
-        <button
-          type="button"
-          onClick={async () => {
-            setPage("orders");
-            await fetchOrders();
-          }}
-          className="back-office-btn mb-4 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-blue-800"
-        >
-          Back Office
-        </button>
-      )}
-
       {isSalesRep && (
-        <div className="customer-nav-buttons flex gap-2">
+        <div className="flex gap-2">
           <button
             onClick={() => setPage("order")}
-            className={`order-tab-btn btn-secondary bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
+            className="bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold"
           >
             Order
           </button>
 
           <button
             onClick={() => setPage("salesCashCollection")}
-            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
+            className="bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold"
           >
             Cash Collection
           </button>
@@ -1964,31 +1313,97 @@ const backOfficeContent = comingSoonTitle ? (
     </div>
   </div>
 
-{isAdmin && page !== "order" && (
-<BackOfficeLayout
-  page={page}
-  setPage={setPage}
-  fetchOrders={fetchOrders}
-  isAdmin={isAdmin}
-  isSalesRep={isSalesRep}
-  isWarehouse={isWarehouse}
-  isDriver={isDriver}
-  isCustomer={isCustomer}
->
-  {backOfficeContent}
-</BackOfficeLayout>
-)}
+  {isAdmin && (
+    <div className="flex flex-wrap gap-2 mt-4">
+      <button
+        onClick={() => {
+          setPage("order");
+          window.location.hash = "";
+        }}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Sales Rep Order Form
+      </button>
 
+      <button
+        onClick={() => setPage("products")}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Products
+      </button>
+
+      <button
+        onClick={() => {
+          setPage("orders");
+          fetchOrders();
+        }}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Received Orders
+      </button>
+
+      <button
+        onClick={async () => {
+          await fetchOrders();
+          setPage("warehouse");
+        }}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Warehouse
+      </button>
+
+      <button
+        onClick={() => setPage("driver")}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Driver
+      </button>
+
+      <button
+        onClick={() => setPage("config")}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Admin Config
+      </button>
+
+      <button
+        onClick={() => setPage("customers")}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Customers
+      </button>
+
+      <button
+        onClick={() => {
+          setPage("credit");
+          window.location.hash = "#credit";
+        }}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Customer Credit
+      </button>
+
+      <button
+        onClick={() => setPage("weeklyAccount")}
+        className="bg-white text-blue-800 px-4 py-2 rounded-xl font-semibold"
+      >
+        Weekly Account
+      </button>
+    </div>
+  )}
 </div>
 
         {(isAdmin || isSalesRep || isCustomer) && page === "order" && (
-          <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
+          <div className="p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
             
  <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3 text-sm font-bold">
 
     {isCustomer && (() => {
-  const activeBranches = filteredBranchesForSelectedCustomer;
+  const activeBranches =
+    (selectedCustomerAccount?.customer_branches || []).filter(
+      (b) => b.active !== false
+    );
 
   if (activeBranches.length <= 1) return null;
 
@@ -2021,15 +1436,19 @@ const backOfficeContent = comingSoonTitle ? (
   );
 })()}
 
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 w-full text-slate-700">
-      <div className="font-semibold">
-        Address: {getCustomerAddress(selectedCustomerAccount, selectedBranch)}
-      </div>
-      <div>{formatCurrency(selectedCustomerAccount?.credit_limit)}
-      </div>
-      <div>
-        Credit Balance {formatCurrency(getCreditBalance(selectedCustomerAccount, customerLedger))}
-      </div>
+    <div className="text-slate-700 font-semibold">
+   {selectedCustomerAccount?.account_name || ""}
+
+  {selectedBranch?.delivery_address
+    ? ` - ${selectedBranch.delivery_address}`
+    : selectedCustomerAccount?.address
+    ? ` - ${selectedCustomerAccount.address}`
+    : ""}
+</div>
+
+    <div className="text-slate-700">
+      Credit Limit £
+      {Number(selectedCustomerAccount?.credit_limit || 0).toFixed(2)}
     </div>
 
           <select
@@ -2062,7 +1481,7 @@ const backOfficeContent = comingSoonTitle ? (
 
   {(isAdmin || isSalesRep || selectedCustomerAccount?.allow_super) &&
     pricingSettings?.show_super_offer && (
-      <option value="super">Admin Offer</option>
+      <option value="super">Super Offer</option>
     )}
 </select>
   </div>
@@ -2116,7 +1535,7 @@ const backOfficeContent = comingSoonTitle ? (
     >
       <option value="">Select Customer</option>
 
-      {filteredCustomersForSalesRep.map((customer) => (
+      {customerAccounts.map((customer) => (
         <option key={customer.id} value={customer.id}>
           {customer.account_name}
         </option>
@@ -2126,9 +1545,13 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {(() => {
-   const activeBranches = filteredBranchesForSelectedCustomer;
+   const activeBranches =
+    (selectedCustomerAccount?.customer_branches || []).filter(
+      (b) => b.active !== false
+    );
 
    if (isCustomer && activeBranches.length <= 1) return null;
+
    return (
     <div>
       <label className="font-bold text-sm block mb-1">
@@ -2210,27 +1633,10 @@ const backOfficeContent = comingSoonTitle ? (
   setSelectedSeries={setSelectedSeries}
 />
 
-  <div className="mt-3 flex justify-end gap-2">
-    {["grid", "list"].map((view) => (
-      <button
-        key={view}
-        type="button"
-        onClick={() => setProductView(view)}
-        className={
-          productView === view
-            ? "rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white"
-            : "rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700"
-        }
-      >
-        {view === "grid" ? "Grid View" : "List View"}
-      </button>
-    ))}
-  </div>
-
 </div>
 
             <div className="lg:col-span-3">
-              {productsLoading && products.length === 0 && (
+              {productsLoading && (
                 <div className="bg-slate-50 border rounded-3xl p-5 mb-4">
                   Loading products from Supabase...
                 </div>
@@ -2250,69 +1656,21 @@ const backOfficeContent = comingSoonTitle ? (
                   </div>
                 )}
 
-              {productView === "grid" ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2 md:gap-3">
-                  {visibleProducts.map((product) => (
-                    (() => {
-                      const activePromotionPriceRule =
-                        getActivePromotionPriceRule(product);
-
-                      return (
-                    <ProductCard
-                      key={product.id}
-                      product={{
-                        ...product,
-                        isPromotion:
-                          product.isPromotion ||
-                          Boolean(activePromotionPriceRule),
-                        promotionName:
-                          activePromotionPriceRule?.promotion_name ||
-                          product.promotionName,
-                      }}
-                      addToCart={addToCart}
-                      onImageClick={setSelectedImage}
-                      price={getPrice(product)}
-                      cartQty={
-                        cart.find((item) => item.id === product.id)?.qty || 0
-                      }
-                      onAdd={addToCart}
-                    />
-                      );
-                    })()
-                  ))}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {visibleProducts.map((product) => (
-                    (() => {
-                      const activePromotionPriceRule =
-                        getActivePromotionPriceRule(product);
-
-                      return (
-                    <ProductListRow
-                      key={product.id}
-                      product={{
-                        ...product,
-                        isPromotion:
-                          product.isPromotion ||
-                          Boolean(activePromotionPriceRule),
-                        promotionName:
-                          activePromotionPriceRule?.promotion_name ||
-                          product.promotionName,
-                      }}
-                      addToCart={addToCart}
-                      onImageClick={setSelectedImage}
-                      price={getPrice(product)}
-                      cartQty={
-                        cart.find((item) => item.id === product.id)?.qty || 0
-                      }
-                      onAdd={addToCart}
-                    />
-                      );
-                    })()
-                  ))}
-                </div>
-              )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2 md:gap-3">
+                {filteredProducts.map((product) => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    addToCart={addToCart}
+                    onImageClick={setSelectedImage}
+                    price={getPrice(product)}
+                    cartQty={
+                      cart.find((item) => item.id === product.id)?.qty || 0
+                    }
+                    onAdd={addToCart}
+                  />
+                ))}
+              </div>
             </div>
 
            <Cart
@@ -2322,7 +1680,6 @@ const backOfficeContent = comingSoonTitle ? (
             orderDiscountPercent={orderDiscountPercent}
             setOrderDiscountPercent={setOrderDiscountPercent}
             discountAmount={discountAmount}
-            promotionDiscountAmount={promotionDiscountAmount}
             canDiscount={isAdmin || isSalesRep}
             priceMode={priceMode}
             onSubmit={submitOrder}
@@ -2336,25 +1693,29 @@ const backOfficeContent = comingSoonTitle ? (
           </div>
         )}
 
-       
-          {isCustomer && page === "paymentHistory" && (
-  <div className="customer-payment-history p-4">
-    <div className="payment-history-card bg-white rounded-2xl shadow-sm border p-4">
+        {isAdmin && page === "credit" && <CustomerCredit />}
+        {isAdmin && page === "weeklyAccount" && <WeeklyAccount />}
+        {isAdmin && page === "customers" && (<Customers />)}
 
-      <div className="payment-history-summary flex items-center justify-between mb-4">
+          {isCustomer && page === "paymentHistory" && (
+  <div className="p-4">
+    <div className="bg-white rounded-2xl shadow-sm border p-4">
+
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">
           Customer Credit Account
         </h2>
 
-        <div className="payment-history-outstanding border rounded-xl px-4 py-2 text-right">
+        <div className="border rounded-xl px-4 py-2 text-right">
           <div className="text-xs text-slate-500 font-bold">
             Total Outstanding
           </div>
-          <div className="text-2xl font-bold text-red-600">{formatCurrency(
+          <div className="text-2xl font-bold text-red-600">
+            £{Number(
               customerLedger.length
                 ? customerLedger[customerLedger.length - 1]?.balance || 0
                 : selectedCustomerAccount?.outstanding_balance || 0
-            )}
+            ).toFixed(2)}
           </div>
         </div>
       </div>
@@ -2363,12 +1724,13 @@ const backOfficeContent = comingSoonTitle ? (
         Statement: {selectedCustomerAccount?.account_name || companyName}
       </h3>
 
-      <div className="customer-ledger-table-wrap overflow-x-auto border rounded-2xl">
-        <table className="customer-ledger-table w-full text-sm">
+      <div className="overflow-x-auto border rounded-2xl">
+        <table className="w-full text-sm">
           <thead className="bg-slate-100">
             <tr className="border-b">
               <th className="text-left p-3">Date</th>
               <th className="text-left p-3">Transaction</th>
+              <th className="text-left p-3">Reference</th>
               <th className="text-left p-3">Status</th>
               <th className="text-right p-3">Amount</th>
               <th className="text-right p-3">Balance</th>
@@ -2426,6 +1788,13 @@ const backOfficeContent = comingSoonTitle ? (
                   </td>
 
                   <td className="p-3">
+                    {row.reference_number ||
+                      row.order_number ||
+                      row.invoice_number ||
+                      "-"}
+                  </td>
+
+                  <td className="p-3">
                     {isInvoice ? (
                       <span className="bg-red-100 text-red-700 px-2 py-1 rounded-lg text-xs font-bold">
                         {status || "UNPAID"}
@@ -2442,10 +1811,11 @@ const backOfficeContent = comingSoonTitle ? (
                       isPayment ? "text-green-600" : "text-red-600"
                     }`}
                   >
-                    {isPayment ? "-" : ""}{formatCurrency(amount)}
+                    {isPayment ? "-" : ""}£{amount.toFixed(2)}
                   </td>
 
-                  <td className="p-3 text-right font-bold">{formatCurrency(row.balance)}
+                  <td className="p-3 text-right font-bold">
+                    £{Number(row.balance || 0).toFixed(2)}
                   </td>
 
                   <td className="p-3 text-center">
@@ -2579,8 +1949,60 @@ const backOfficeContent = comingSoonTitle ? (
       </button>
     </div>
   </div>
-)}      
-     
+)}
+
+        {isAdmin && page === "products" && (
+          <AdminProducts
+            products={products}
+            productForm={productForm}
+            setProductForm={setProductForm}
+            editingId={editingId}
+            saveProduct={saveProduct}
+            fetchProducts={fetchProducts}
+            editProduct={editProduct}
+          />
+        )}
+
+        {(isAdmin || isWarehouse) && page === "orders" && (
+        <AdminOrders
+        orders={orders}
+        products={products}
+        expandedOrders={expandedOrders}
+        toggleOrderExpanded={toggleOrderExpanded}
+        printPickingList={printPickingList}
+        updateOrderItem={updateOrderItem}
+        addOrderItem={addOrderItem}
+        changeOrderStatus={changeOrderStatus}
+      />
+        )}
+
+        {(isAdmin || isWarehouse) && page === "warehouse" && (
+          <Warehouse
+            orders={orders}
+            printPickingList={printPickingList}
+            changeOrderStatus={changeOrderStatus}
+            updateOrderItem={updateOrderItem}
+            updateOrderExtraFields={updateOrderExtraFields}
+          />
+        )}
+
+              {(isAdmin || isDriver) && page === "driver" && (
+                <Driver
+              orders={orders}
+              changeOrderStatus={changeOrderStatus}
+              updateOrderExtraFields={updateOrderExtraFields}
+              refreshOrders={fetchOrders}
+            />
+        )}
+
+        {isAdmin && page === "stockhistory" && <StockHistory />}
+
+        {isAdmin && page === "stockreceipts" && (
+          <StockReceipts products={products} fetchProducts={fetchProducts} />
+        )}
+
+        {isAdmin && page === "config" && <AdminConfig />}
+
         {selectedImage && (
           <div
             className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
@@ -2611,16 +2033,18 @@ const backOfficeContent = comingSoonTitle ? (
           </div>
         )}
 
+
+     
       {page === "order" && (isAdmin || isSalesRep || isCustomer) && (
   <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-xl p-3">
     <div className="max-w-7xl mx-auto flex items-center justify-between">
       <div>
         <div className="text-xs text-slate-500">
-          {cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + item.qty, 0)} Items
+          {cart.reduce((sum, item) => sum + item.qty, 0)} Items
         </div>
 
         <div className="font-bold text-xl">
-            {formatCurrency(finalTotal)}
+            £{finalTotal.toFixed(2)}
           </div>
 
           {cart.length > 0 && (
@@ -2655,9 +2079,9 @@ const backOfficeContent = comingSoonTitle ? (
 
 <button
   onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-  className="fixed bottom-20 right-4 z-50 bg-slate-800 text-white text-sm font-bold px-5 py-3 rounded-full shadow-lg opacity-95 hover:opacity-100"
+  className="fixed bottom-20 right-3 z-50 bg-slate-800 text-white text-xs font-bold px-3 py-2 rounded-full shadow-lg opacity-80 hover:opacity-100"
 >
-  â†‘ Top
+  ↑ Top
 </button>
 
       </div>
