@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
-import { formatCurrency } from "../../Utils/currency";
+import { formatCurrency } from "../../utils/currency";
 
 export default function Driver({
   orders = [],

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase.js";
-import { formatCurrency } from "../../Utils/currency";
+import { formatCurrency } from "../../utils/currency";
 
 export default function StockReceipts({ products = [], fetchProducts }) {
   const [suppliers, setSuppliers] = useState([]);

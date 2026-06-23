@@ -7,7 +7,7 @@ import {
 } from "../../services/customerManagement";
 import { supabase } from "../../services/supabase";
 import CustomerForm from "./CustomerForm";
-import { formatCurrency } from "../../Utils/currency";
+import { formatCurrency } from "../../utils/currency";
 
 const inputClass =
   "h-9 rounded border border-slate-400 px-2 text-sm outline-none focus:border-green-700";

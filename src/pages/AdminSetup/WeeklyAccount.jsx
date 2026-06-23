@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
-import { formatCurrency } from "../../Utils/currency";
+import { formatCurrency } from "../../utils/currency";
 
  import { saveHandover, getHandoverHistory } from "../../services/handovers";
 
