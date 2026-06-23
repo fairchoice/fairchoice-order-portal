@@ -15,7 +15,7 @@ export async function logAction({
 }) {
   if (!user && !user_id && !username) return;
 
-  await supabase.from("audit_logs").insert({
+  const { error } = await supabase.from("audit_logs").insert({
     user_id: user_id || user?.id || null,
     username: username || user?.username || null,
     staff_name: staff_name || user?.staff_name || null,
@@ -28,4 +28,8 @@ export async function logAction({
     new_value,
     created_at: new Date().toISOString(),
   });
+
+  if (error) {
+    console.warn("Audit log skipped:", error.message);
+  }
 }

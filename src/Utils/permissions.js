@@ -1,9 +1,18 @@
 export function hasPermission(user, permissionKey) {
   if (!user) return false;
-  if (user.role === "Super Admin" || user.access_level === "Super Admin") return true;
+
+  if (user.role === "Super Admin" || user.access_level === "Super Admin") {
+    return true;
+  }
+
+  if (user.role === "Admin" || user.access_level === "Admin") {
+    return true;
+  }
+
   if (user.role === "Customer" || user.access_level === "Customer") {
     return permissionKey === "access_customer_portal";
   }
+
   return user.permissions?.[permissionKey] === true;
 }
 
@@ -16,5 +25,6 @@ export function requirePermission(
     alert(message);
     return false;
   }
+
   return true;
 }
