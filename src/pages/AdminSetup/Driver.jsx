@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
+import { formatCurrency } from "../../Utils/currency";
 
 export default function Driver({
   orders = [],
@@ -237,6 +238,69 @@ const { error } = await supabase.from("customer_ledger").insert({
   }
 };
 
+const moveBackToWarehouse = async (order) => {
+  if (order.status === "Delivered") return;
+  if (!window.confirm("Move this order back to Warehouse?")) return;
+
+  await changeOrderStatus(order.orderId, "Warehouse Packing");
+  await refreshOrders();
+};
+
+const moveBackToReceivedOrders = async (order) => {
+  if (order.status === "Delivered") return;
+  if (!window.confirm("Move this order back to Received Orders for correction?")) {
+    return;
+  }
+
+  await changeOrderStatus(order.orderId, "In Progress");
+  await refreshOrders();
+};
+
+const printDeliveryNote = (order) => {
+  const items = getDriverItems(order);
+  const html = `
+    <html>
+      <head>
+        <title>Delivery Note - ${order.orderId || order.order_number}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111827; }
+          h1 { margin: 0 0 12px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 18px; }
+          th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; }
+          th:last-child, td:last-child { text-align: right; }
+        </style>
+      </head>
+      <body>
+        <h1>Delivery Note</h1>
+        <div><strong>Order Number:</strong> ${order.orderId || order.order_number || "-"}</div>
+        <div><strong>Customer:</strong> ${order.companyName || order.company_name || "-"}</div>
+        <div><strong>Date:</strong> ${order.createdAt || order.created_at || "-"}</div>
+        <table>
+          <thead><tr><th>Product</th><th>Qty</th></tr></thead>
+          <tbody>
+            ${items
+              .map(
+                (item) =>
+                  `<tr><td>${item.name || item.productName || item.product_name || ""}</td><td>${item.pickedQty ?? item.qty ?? 0}</td></tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>
+        <script>window.print();</script>
+      </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank", "width=800,height=700");
+  if (!win) {
+    alert("Popup blocked. Please allow popups to print the delivery note.");
+    return;
+  }
+
+  win.document.write(html);
+  win.document.close();
+};
+
   const saveCashCollection = async (order) => {
 
       if (savingPayment) return;
@@ -330,9 +394,6 @@ if (ledgerError) throw ledgerError;
     <div className="p-4">
       <div className="mb-4 text-center">
         <h2 className="text-2xl font-bold">Driver Portal</h2>
-        <p className="text-sm text-slate-500">
-          Ready For Driver deliveries.
-        </p>
       </div>
 
       <div className="mb-4 flex justify-end">
@@ -457,34 +518,24 @@ if (ledgerError) throw ledgerError;
           <div key={order.orderId} className="bg-white border rounded-2xl p-3">
             <div className="flex flex-col gap-3">
               <div className="text-center">
-                <div className="text-xs text-slate-500 font-bold">
-                  Driver Name
-                </div>
-                <div className="text-lg font-bold">
-                  {order.driverName || order.driver_name || "No Driver Assigned"}
-                </div>
-              </div>
-
-              <div className="text-center">
                 <h3 className="font-bold">
                   {order.orderId || order.order_number} |{" "}
                   {order.companyName || order.company_name || "No company"}
                 </h3>
 
                 <div className="text-base font-extrabold text-red-600">
-                  Invoice Total: £
-                  {Number(
+                  Order Value: {formatCurrency(
                     order.finalTotal ||
                     order.final_total ||
                     order.total ||
                     order.orderTotal ||
                     order.order_total ||
                     0
-                  ).toFixed(2)}
-                </div>
+                  )}
                 <p className="text-xs text-slate-500">
-                  {order.status} | {getDriverItems(order).length} Items
+                  {order.createdAt || order.created_at || "-"} | Total Items: {getDriverItems(order).length}
                 </p>
+              </div>
               </div>
 
               <div className="flex flex-wrap justify-center gap-2">
@@ -497,6 +548,13 @@ if (ledgerError) throw ledgerError;
                   className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"
                 >
                   {expandedOrder === order.orderId ? "Hide Order" : "View Order"}
+                </button>
+
+                <button
+                  onClick={() => printDeliveryNote(order)}
+                  className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[130px]"
+                >
+                  Print Delivery Note
                 </button>
 
                 {order.status === "Ready For Driver" && (
@@ -515,8 +573,26 @@ if (ledgerError) throw ledgerError;
                   }}
                     className="bg-green-600 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"
                   >
-                    Confirm Delivery
+                    Delivered
                   </button>
+                )}
+
+                {order.status === "Ready For Driver" && (
+                  <>
+                    <button
+                      onClick={() => moveBackToWarehouse(order)}
+                      className="bg-slate-700 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[130px]"
+                    >
+                      Back To Warehouse
+                    </button>
+
+                    <button
+                      onClick={() => moveBackToReceivedOrders(order)}
+                      className="bg-orange-600 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"
+                    >
+                      Modify Order
+                    </button>
+                  </>
                 )}
 
                 {order.status === "Delivered" &&

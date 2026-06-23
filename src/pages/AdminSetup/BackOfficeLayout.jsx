@@ -40,6 +40,12 @@ const navSections = [
         fetchOrdersBefore: true,
         permission: "access_warehouse",
       },
+      {
+        label: "Driver Portal",
+        page: "driver",
+        fetchOrdersBefore: true,
+        permission: "access_driver",
+      },
     ],
   },
   {
@@ -95,6 +101,7 @@ const pagePermissions = {
   receivedOrders: "access_received_orders",
   orders: "access_received_orders",
   warehouse: "access_warehouse",
+  driver: "access_driver",
   customerPortal: "access_customer_portal",
   customers: "access_customer_setup",
   categories: "access_product_setup",

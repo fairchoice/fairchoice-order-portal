@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
 import * as XLSX from "xlsx";
+import { formatCurrency } from "../Utils/currency";
 
 import ProductSetupOptions from "../components/ProductSetupOptions";
 
@@ -819,8 +820,7 @@ const filteredStaff = staffUsers.filter((staff) =>
               >
                 <strong>{customer.account_name}</strong>
                 <div className="text-xs text-slate-500">
-                  {customer.country} | {customer.default_price_mode} | Credit £
-                  {Number(customer.credit_limit || 0).toFixed(2)}
+                  {customer.country} | {customer.default_price_mode} | Credit {formatCurrency(customer.credit_limit)}
                 </div>
               </button>
             ))}

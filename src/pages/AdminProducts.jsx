@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { supabase } from "../services/supabase";
 import { getActiveStockLocations } from "../services/locationStock";
+import { formatCurrency } from "../Utils/currency";
 
 
 
@@ -152,6 +153,8 @@ const handleImageUpload = async () => {
       flavour: "",
       cashPrice: "",
       vatPrice: "",
+      walesSpecialPrice: "",
+      englandSpecialPrice: "",
       vatType: "20",
       availableInEngland: true,
       availableInWales: true,
@@ -602,6 +605,22 @@ const updateProductLabel = (labelValue) => {
                   onChange={(e) => updateField("cashPrice", e.target.value)}
                 />
 
+                <input
+                  className="input-box"
+                  type="number"
+                  placeholder="Wales Special Price"
+                  value={productForm.walesSpecialPrice || ""}
+                  onChange={(e) => updateField("walesSpecialPrice", e.target.value)}
+                />
+
+                <input
+                  className="input-box"
+                  type="number"
+                  placeholder="England Special Price"
+                  value={productForm.englandSpecialPrice || ""}
+                  onChange={(e) => updateField("englandSpecialPrice", e.target.value)}
+                />
+
                 <select
                   className="input-box"
                   value={productForm.vatType || "20"}
@@ -622,7 +641,7 @@ const updateProductLabel = (labelValue) => {
                 <div className="border rounded-xl p-3 bg-slate-50">
                   <div className="text-xs text-slate-500 font-bold">Gross Profit</div>
                   <div className="text-xl font-bold">
-                    £{grossProfit.toFixed(2)}
+                    {formatCurrency(grossProfit)}
                   </div>
                 </div>
 
@@ -1032,7 +1051,7 @@ const updateProductLabel = (labelValue) => {
 
               {visibleColumns.vatPrice && (
                 <td className="p-2 border text-right">
-                  Â£{Number(p.vatPrice || 0).toFixed(2)}
+                  {formatCurrency(p.vatPrice)}
                 </td>
               )}
 

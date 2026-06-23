@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
+import { formatCurrency } from "../../Utils/currency";
 
 export default function CustomerCredit() {
   const [customers, setCustomers] = useState([]);
@@ -7,6 +8,7 @@ export default function CustomerCredit() {
   const [openingBalance, setOpeningBalance] = useState(0);
   const [statementRows, setStatementRows] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState("All Branches");
+  const [activeTab, setActiveTab] = useState("summary");
 
   const [editOpeningBalance, setEditOpeningBalance] = useState(false);
   const [openingBalanceInput, setOpeningBalanceInput] = useState("");
@@ -158,7 +160,7 @@ function formatCollectionSource(source) {
       return;
     }
 
-    console.log("DOWNLOAD ORDER", order);
+    void order;
   };
 
   let runningBalance = Number(openingBalance || 0);
@@ -186,31 +188,28 @@ function formatCollectionSource(source) {
       ? statementRows
       : statementRows.filter((row) => row.branch_name === selectedBranch);
 
+  const selectedCustomerAccount = customers.find(
+    (customer) => customer.account_name === selectedCustomer
+  );
+  const creditLimit = Number(selectedCustomerAccount?.credit_limit || 0);
+  const availableCredit = creditLimit - totalOutstanding;
+  const transactionRows = filteredRows.filter((row) => row.entry_type === "PAYMENT");
+
   return (
-    <div className="p-4">
-      <div className="flex items-center justify-between gap-3 mb-4">
-        <h2 className="text-2xl font-bold">Customer Credit Accounts</h2>
-
-        <div className="bg-white border rounded-2xl p-4 mb-4">
-          <div className="text-sm font-bold text-slate-500">
-            Total Outstanding
-          </div>
-
-          <div className="text-3xl font-bold text-red-600">
-            £{totalOutstanding.toFixed(2)}
-          </div>
-        </div>
+    <div className="p-4 space-y-4">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <h2 className="text-2xl font-bold">Customer Credit</h2>
 
         <button
           onClick={printStatement}
-          className="bg-blue-600 text-white px-5 py-3 rounded-xl font-bold"
+          className="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-bold"
         >
           Print / Save PDF
         </button>
       </div>
 
-      <div className="bg-white border rounded-2xl p-4 mb-4">
-        <label className="block text-sm font-bold mb-2">Select Customer</label>
+      <div className="bg-white border rounded-2xl p-4 space-y-3">
+        <label className="block text-sm font-bold">Customer</label>
 
         <div className="flex flex-col md:flex-row gap-2">
           <select
@@ -222,10 +221,7 @@ function formatCollectionSource(source) {
             className="border rounded-xl p-3 flex-1"
           >
             {customers.map((customer) => (
-              <option
-                key={customer.id}
-                value={customer.account_name}
-              >
+              <option key={customer.id} value={customer.account_name}>
                 {customer.account_name}
               </option>
             ))}
@@ -240,38 +236,28 @@ function formatCollectionSource(source) {
               disabled={!selectedCustomer}
               className="bg-green-600 text-white px-4 py-3 rounded-xl font-bold disabled:bg-slate-300"
             >
-              Edit O/Balance
+              Edit Opening Balance
             </button>
           )}
         </div>
 
-
-        <div className="font-bold text-lg mt-4">
-          Opening Balance: £{Number(openingBalance || 0).toFixed(2)}
-        </div>
-
         {branches.length > 1 && (
-          <div className="mt-4">
-            <label className="block text-sm font-bold mb-2">Branch</label>
-
-            <select
-              value={selectedBranch}
-              onChange={(e) => setSelectedBranch(e.target.value)}
-              className="border rounded-xl p-3 w-full"
-            >
-              <option value="All Branches">All Branches</option>
-
-              {branches.map((branch) => (
-                <option key={branch} value={branch}>
-                  {branch}
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            value={selectedBranch}
+            onChange={(e) => setSelectedBranch(e.target.value)}
+            className="border rounded-xl p-3 w-full"
+          >
+            <option value="All Branches">All Branches</option>
+            {branches.map((branch) => (
+              <option key={branch} value={branch}>
+                {branch}
+              </option>
+            ))}
+          </select>
         )}
 
         {editOpeningBalance && (
-          <div className="mt-4 flex flex-col md:flex-row gap-2">
+          <div className="flex flex-col md:flex-row gap-2">
             <input
               type="number"
               step="0.01"
@@ -298,160 +284,144 @@ function formatCollectionSource(source) {
         )}
       </div>
 
-      <div id="statement-print">
-        <h3 className="text-xl font-bold mb-3">
-          Statement: {selectedCustomer || "-"}
-        </h3>
+      <div className="flex flex-wrap gap-2">
+        {[
+          ["summary", "Summary"],
+          ["history", "Credit History"],
+          ["transactions", "Transactions"],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={`px-4 py-2 rounded-xl text-sm font-bold ${
+              activeTab === key
+                ? "bg-blue-700 text-white"
+                : "bg-slate-100 text-slate-700 border"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
+      {activeTab === "summary" && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="bg-white border rounded-2xl p-4">
+            <div className="text-sm font-bold text-slate-500">Outstanding Balance</div>
+            <div className="text-2xl font-bold text-red-600">
+              {formatCurrency(totalOutstanding)}
+            </div>
+          </div>
+
+          <div className="bg-white border rounded-2xl p-4">
+            <div className="text-sm font-bold text-slate-500">Credit Limit</div>
+            <div className="text-2xl font-bold">{formatCurrency(creditLimit)}</div>
+          </div>
+
+          <div className="bg-white border rounded-2xl p-4">
+            <div className="text-sm font-bold text-slate-500">Available Credit</div>
+            <div className="text-2xl font-bold text-green-700">
+              {formatCurrency(availableCredit)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "history" && (
+        <div id="statement-print" className="overflow-auto border rounded-2xl bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-100">
+              <tr>
+                <th className="p-3 text-left">Date</th>
+                <th className="p-3 text-left">Reference</th>
+                <th className="p-3 text-left">Description</th>
+                <th className="p-3 text-right">Debit</th>
+                <th className="p-3 text-right">Credit</th>
+                <th className="p-3 text-right">Balance</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {(() => {
+                let historyBalance = Number(openingBalance || 0);
+                return (
+                  <>
+                    <tr className="border-t bg-blue-50">
+                      <td className="p-3">-</td>
+                      <td className="p-3">Opening Balance</td>
+                      <td className="p-3">Opening Balance</td>
+                      <td className="p-3 text-right">{formatCurrency(openingBalance)}</td>
+                      <td className="p-3 text-right">-</td>
+                      <td className="p-3 text-right font-bold">{formatCurrency(historyBalance)}</td>
+                    </tr>
+
+                    {filteredRows.map((row) => {
+                      const debit = Number(row.debit || 0);
+                      const credit = Number(row.credit || 0);
+                      historyBalance += debit - credit;
+                      const description =
+                        row.entry_type === "INVOICE"
+                          ? "Invoice"
+                          : row.entry_type === "PAYMENT"
+                          ? `Payment${row.payment_type ? ` - ${row.payment_type}` : ""}`
+                          : row.entry_type || "Transaction";
+
+                      return (
+                        <tr key={row.id} className="border-t">
+                          <td className="p-3">{new Date(row.created_at).toLocaleDateString()}</td>
+                          <td className="p-3">{row.reference_no || "-"}</td>
+                          <td className="p-3">{description}</td>
+                          <td className="p-3 text-right">{debit ? formatCurrency(debit) : "-"}</td>
+                          <td className="p-3 text-right">{credit ? formatCurrency(credit) : "-"}</td>
+                          <td className="p-3 text-right font-bold">{formatCurrency(historyBalance)}</td>
+                        </tr>
+                      );
+                    })}
+                  </>
+                );
+              })()}
+
+              {filteredRows.length === 0 && (
+                <tr>
+                  <td colSpan="6" className="p-5 text-center text-slate-500">
+                    No credit history found for this customer.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === "transactions" && (
         <div className="overflow-auto border rounded-2xl bg-white">
           <table className="w-full text-sm">
             <thead className="bg-slate-100">
               <tr>
                 <th className="p-3 text-left">Date</th>
-                <th className="p-3 text-left">Transaction</th>
+                <th className="p-3 text-left">Type</th>
                 <th className="p-3 text-left">Reference</th>
-                <th className="p-3 text-left">Status</th>
                 <th className="p-3 text-right">Amount</th>
-                <th className="p-3 text-right">Balance</th>
-                <th className="p-3 text-center">Action</th>
+                <th className="p-3 text-left">Entered By</th>
               </tr>
             </thead>
 
             <tbody>
-              <tr className="border-t bg-blue-50">
-                <td className="p-3 font-bold">Opening Balance</td>
-                <td className="p-3">Opening Balance</td>
-                <td className="p-3"></td>
-                <td className="p-3 font-bold">Opening Balance</td>
-                <td className="p-3 text-right"></td>
-                <td className="p-3 text-right font-bold">
-                  £{runningBalance.toFixed(2)}
-                </td>
-                <td className="p-3 text-center">-</td>
-              </tr>
-
-             {filteredRows.map((row) => {
-                    const isInvoice = row.entry_type === "INVOICE";
-                    const isPayment = row.entry_type === "PAYMENT";
-
-                    const amount = isInvoice
-                      ? Number(row.debit || 0)
-                      : -Number(row.credit || 0);
-
-                    const canDownloadInvoice =
-                      isInvoice &&
-                      row.invoice_status !== "PAID";
-
-                    runningBalance += amount;
-
-                    return (
-                                    <tr key={row.id} className="border-t">
-                    <td className="p-3">
-                      {new Date(row.created_at).toLocaleDateString()}
-                    </td>
-
-                    <td className="p-3">
-                    <div className="font-bold">
-                      {isInvoice
-                        ? "Invoice"
-                        : isPayment
-                        ? "Payment"
-                        : row.entry_type}
-                    </div>
-
-                    {isPayment && (
-                      <div className="text-xs text-slate-500 mt-1">
-                        {row.payment_type && (
-                          <div>Type: {row.payment_type}</div>
-                        )}
-
-                        {row.collected_by_role && (
-                        <div>Role: {row.collected_by_role}</div>
-                      )}
-
-                      {row.who_paid && (
-                        <div>Who Paid: {row.who_paid}</div>
-                      )}
-
-                        {row.payment_applies_to && (
-                          <div>
-                            Applies To:{" "}
-                            {row.payment_applies_to === "PREVIOUS_BALANCE"
-                              ? "Previous Balance"
-                              : "Invoice"}
-                          </div>
-                        )}
-
-                        {row.collected_by_name && (
-                          <div>
-                            Collected By: {row.collected_by_name}
-                          </div>
-                        )}
-
-                        {row.collection_source && (
-                          <div>
-                            Source: {formatCollectionSource(row.collection_source)}
-                          </div>
-                        )}
-                      </div>
-                    )}
+              {transactionRows.map((row) => (
+                <tr key={row.id} className="border-t">
+                  <td className="p-3">{new Date(row.created_at).toLocaleDateString()}</td>
+                  <td className="p-3">{formatCollectionSource(row.collection_source) || row.payment_type || "Payment"}</td>
+                  <td className="p-3">{row.reference_no || "-"}</td>
+                  <td className="p-3 text-right font-bold text-green-700">
+                    {formatCurrency(row.credit)}
                   </td>
+                  <td className="p-3">{row.received_by || row.collected_by_name || row.paid_by || "-"}</td>
+                </tr>
+              ))}
 
-                    <td className="p-3">{row.reference_no || ""}</td>
-
-                      <td className="p-3">
-                      {isInvoice ? (
-                        <span
-                          className={`invoice-status ${
-                            row.invoice_status === "PAID"
-                              ? "status-paid"
-                              : row.invoice_status === "PART PAID"
-                              ? "status-part-paid"
-                              : "status-unpaid"
-                          }`}
-                        >
-                          {row.invoice_status || "UNPAID"}
-                        </span>
-                      ) : (
-                        <span className="font-bold">
-                          {getStatus(row, runningBalance)}
-                        </span>
-                      )}
-                    </td>
-
-                    <td
-                      className={`p-3 text-right font-bold ${
-                        amount < 0 ? "text-green-700" : "text-red-600"
-                      }`}
-                    >
-                      {amount < 0
-                        ? `-£${Math.abs(amount).toFixed(2)}`
-                        : `£${amount.toFixed(2)}`}
-                    </td>
-
-                    <td className="p-3 text-right font-bold">
-                      £{runningBalance.toFixed(2)}
-                    </td>
-                  
-                    <td className="p-3 text-center">
-                {canDownloadInvoice ? (
-                  <button
-                    onClick={() => downloadInvoice(row.reference_no)}
-                    className="bg-blue-600 text-white px-3 py-1 rounded-lg font-bold"
-                  >
-                    Download Invoice
-                  </button>
-                ) : (
-                  "-"
-                )}
-              </td>
-                  </tr>
-                );
-              })}
-
-              {filteredRows.length === 0 && (
+              {transactionRows.length === 0 && (
                 <tr>
-                  <td colSpan="7" className="p-5 text-center text-slate-500">
+                  <td colSpan="5" className="p-5 text-center text-slate-500">
                     No transactions found for this customer.
                   </td>
                 </tr>
@@ -459,7 +429,7 @@ function formatCollectionSource(source) {
             </tbody>
           </table>
         </div>
-      </div>
+      )}
     </div>
   );
 }

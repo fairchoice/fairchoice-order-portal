@@ -506,24 +506,28 @@ export default function ProductPromotions() {
     setSuccess("");
 
     try {
-      await savePromotionRule(
-        {
-          id: bulkRule.id || undefined,
-          promotion_name: bulkRule.promotion_name,
-          promotion_type_id: getBulkTypeId(),
-          active: bulkRule.active,
-          rule_kind: PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE,
-          trigger_brand: bulkRule.trigger_brand,
-          trigger_series: bulkRule.trigger_series,
-          buy_qty: bulkRule.buy_qty,
-          free_series: bulkRule.free_series,
-          free_qty: bulkRule.free_qty,
-          label_type: bulkRule.label_type,
-          start_date: bulkRule.start_date,
-          end_date: bulkRule.end_date,
-        },
-        []
-      );
+  await savePromotionRule(
+  {
+    id: bulkRule.id || undefined,
+    promotion_name: bulkRule.promotion_name,
+    promotion_type_id: getBulkTypeId(),
+    active: bulkRule.active,
+    rule_kind: PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE,
+
+    trigger_brand: bulkRule.trigger_brand,
+    trigger_series: bulkRule.trigger_series,
+    buy_qty: bulkRule.buy_qty,
+
+    free_brand: bulkRule.free_brand,
+    free_series: bulkRule.free_series,
+    free_qty: bulkRule.free_qty,
+
+    label_type: bulkRule.label_type,
+    start_date: bulkRule.start_date,
+    end_date: bulkRule.end_date,
+  },
+  []
+);
 
       setBulkRule(emptyBulkRule);
       setSuccess("Bulk buy promotion saved.");
@@ -656,12 +660,14 @@ export default function ProductPromotions() {
       active: rule.active !== false,
       trigger_brand: rule.trigger_brand || "",
       trigger_series: rule.trigger_series || "",
+      free_brand: rule.free_brand || "",
       buy_qty: rule.buy_qty || 10,
       free_series: rule.free_series || "",
       free_qty: rule.free_qty || 1,
       start_date: rule.start_date || "",
       end_date: rule.end_date || "",
       label_type: rule.label_type || "",
+      
     });
   };
 
@@ -679,8 +685,10 @@ export default function ProductPromotions() {
       promotion_name: rule.promotion_name || "",
       promotion_type_id: rule.promotion_type_id || "",
       active: rule.active !== false,
-      selectedProductIds: rule.trigger_product_id ? [rule.trigger_product_id] : [],
-      offer_price: rule.offer_price || "",
+      selectedProductIds: (rule.product_id || rule.trigger_product_id)
+        ? [rule.product_id || rule.trigger_product_id]
+        : [],
+      offer_price: rule.promotion_price || rule.offer_price || "",
       label_type:
         rule.label_type ||
         (kind === PROMOTION_RULE_KINDS.REDUCED_PRICE ? "reduced" : "promotion"),

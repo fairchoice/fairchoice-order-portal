@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../services/supabase";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
+import { formatCurrency } from "../Utils/currency";
 
 /*
   Warehouse Page
@@ -27,8 +28,8 @@ export default function Warehouse({
   const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
   const [drivers, setDrivers] = useState([]);
   const [expandedOrders, setExpandedOrders] = useState({});
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [searchTerm, setSearchTerm] = useState("");
 
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
@@ -76,41 +77,52 @@ const fetchDrivers = async () => {
     return;
   }
 
-  console.log("WAREHOUSE DRIVERS:", data);
-
   setDrivers(data || []);
 };
 
   useEffect(() => {
-    setStartDate("");
-    setEndDate("");
     fetchDrivers();
   }, []);
 
   /*
-    Only show orders currently in Warehouse Packing.
-    Date filters are optional.
+    Show active warehouse and driver-ready orders.
   */
   const warehouseOrders = useMemo(() => {
-    return orders.filter((order) => {
-      const correctStatus = order.status === "Warehouse Packing";
-      if (!correctStatus) return false;
+    const search = searchTerm.trim().toLowerCase();
 
-      if (!startDate && !endDate) return true;
+    return orders
+      .filter((order) =>
+        ["Warehouse Packing", "Ready For Driver"].includes(order.status)
+      )
+      .filter((order) =>
+        statusFilter === "All" ? true : order.status === statusFilter
+      )
+      .filter((order) => {
+        if (!search) return true;
 
-      const orderDate = new Date(order.createdAt);
+        return (
+          String(order.orderId || order.order_number || "")
+            .toLowerCase()
+            .includes(search) ||
+          String(order.companyName || order.company_name || "")
+            .toLowerCase()
+            .includes(search)
+        );
+      })
+      .sort((a, b) => {
+        const aDate = new Date(a.createdAt || a.created_at || 0).getTime();
+        const bDate = new Date(b.createdAt || b.created_at || 0).getTime();
+        return bDate - aDate;
+      });
+  }, [orders, searchTerm, statusFilter]);
 
-      if (startDate && orderDate < new Date(startDate)) return false;
-
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        if (orderDate > end) return false;
-      }
-
-      return true;
-    });
-  }, [orders, startDate, endDate]);
+  const warehousePackingCount = orders.filter(
+    (order) => order.status === "Warehouse Packing"
+  ).length;
+  const readyForDriverCount = orders.filter(
+    (order) => order.status === "Ready For Driver"
+  ).length;
+  const allWarehouseCount = warehousePackingCount + readyForDriverCount;
 
   /*
     Expand/collapse warehouse order card.
@@ -133,7 +145,7 @@ const fetchDrivers = async () => {
   /*
     Money format helper.
   */
-  const money = (value) => `£${Number(value || 0).toFixed(2)}`;
+  const money = formatCurrency;
 
   /*
     Product quantity helper.
@@ -1154,7 +1166,7 @@ const fetchDrivers = async () => {
     const supplierIssueItems = warehouseOrders.flatMap((order) =>
       order.items
         .filter((item) =>
-          ["Different Supplier", "Need Supplier", "Cannot Supply"].includes(
+          ["Need Supplier", "Cannot Supply"].includes(
             item.sourceStatus
           )
         )
@@ -1335,57 +1347,229 @@ const confirmForDriver = async (order) => {
   });
 };
 
+  const renderWarehouseCard = (order) => {
+    const orderId = getOrderId(order);
+    const pickingQty = getPrintableItems(order).reduce(
+      (sum, item) => sum + getLineQty(item),
+      0
+    );
+    const orderValue = Number(
+      order.finalTotal ||
+        order.final_total ||
+        order.total ||
+        order.orderTotal ||
+        order.order_total ||
+        0
+    );
+    const isReadyForDriver = order.status === "Ready For Driver";
+
+    return (
+      <div key={orderId} className="bg-white border rounded-2xl p-3">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div>
+            <h3 className="font-bold text-base">
+              {orderId} | {order.companyName || order.company_name || "No company"}
+            </h3>
+            <p className="text-sm font-semibold text-slate-700">
+              {pickingQty} Items | {money(orderValue)}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2 items-center">
+            <button
+              onClick={() => toggleExpanded(orderId)}
+              className={`bg-blue-600 text-white ${btn}`}
+            >
+              {expandedOrders[orderId] ? "Hide" : "View Order"}
+            </button>
+
+            {hasPermission(loggedInUser, "can_print") && (
+              <button
+                onClick={() => printPickingList(order)}
+                className={`bg-black text-white ${btn}`}
+              >
+                Picking List
+              </button>
+            )}
+
+            {hasPermission(loggedInUser, "can_print") && (
+              <button
+                onClick={() => printProtectedDeliveryNote(order)}
+                className={`bg-slate-800 text-white ${btn}`}
+              >
+                Delivery Note
+              </button>
+            )}
+
+            <select
+              value={assignedDrivers[orderId] ?? getDriverName(order) ?? ""}
+              onChange={(e) => assignDriver(order, e.target.value)}
+              className="border rounded-lg px-3 py-1.5 text-xs font-semibold"
+              disabled={isReadyForDriver}
+            >
+              <option value="">Assign Driver</option>
+              {drivers.map((driver) => (
+                <option key={driver.id} value={driver.username}>
+                  {driver.username}
+                </option>
+              ))}
+            </select>
+
+            {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
+              <button
+                onClick={() => confirmForDriver(order)}
+                className={`bg-green-700 text-white ${btn}`}
+              >
+                Ready For Driver
+              </button>
+            )}
+          </div>
+        </div>
+
+        {expandedOrders[orderId] && (
+          <div className="mt-3 space-y-3">
+            <div className="hidden md:grid grid-cols-[1fr_70px_140px_170px] border-b font-bold text-xs text-slate-600 px-3 py-2">
+              <div>Product</div>
+              <div className="text-center">Qty</div>
+              <div className="text-center">Status</div>
+              <div className="text-right">Action</div>
+            </div>
+
+            {order.items.map((item) => {
+              const sourceStatus = item.sourceStatus || "In Stock";
+              const isInStock = sourceStatus === "In Stock";
+              const isCannotSupply = sourceStatus === "Cannot Supply";
+              const needsSupplier = !isInStock && !isCannotSupply;
+
+              return (
+                <div
+                  key={item.id}
+                  className={`grid grid-cols-1 md:grid-cols-[1fr_70px_140px_170px] gap-2 md:gap-0 items-center border rounded-lg px-3 py-2 text-sm ${
+                    item.includeInPicking === false ? "opacity-50 bg-slate-50" : ""
+                  }`}
+                >
+                  <div className="font-medium truncate pr-3">{item.name}</div>
+
+                  <div className="text-center font-semibold">
+                    {getLineQty(item)}
+                  </div>
+
+                  <div
+                    className={`text-center font-semibold ${
+                      isCannotSupply
+                        ? "text-red-600"
+                        : needsSupplier
+                        ? "text-amber-600"
+                        : "text-green-700"
+                    }`}
+                  >
+                    {sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus}
+                  </div>
+
+                  <div className="text-right">
+                    {!isReadyForDriver &&
+                      hasPermission(loggedInUser, "can_move_to_warehouse") && (
+                        <>
+                          {isCannotSupply ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!window.confirm("Mark this item as Available?")) return;
+
+                                updateWarehouseItem(order, item, {
+                                  sourceStatus: "In Stock",
+                                  includeInPicking: true,
+                                  pickedQty: Number(item.qty || 0),
+                                });
+                              }}
+                              className={`bg-green-600 text-white ${btn}`}
+                            >
+                              Available
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!window.confirm("Mark this item as Cannot Supply?")) return;
+
+                                updateWarehouseItem(order, item, {
+                                  sourceStatus: "Cannot Supply",
+                                  includeInPicking: false,
+                                  pickedQty: 0,
+                                });
+                              }}
+                              className={`bg-red-600 text-white ${btn}`}
+                            >
+                              Cannot Supply
+                            </button>
+                          )}
+                        </>
+                      )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
+              <div className="border-t pt-3 flex justify-end">
+                <button
+                  onClick={() => backToReceived(order)}
+                  className={`bg-slate-500 text-white ${btn}`}
+                >
+                  Back To Received
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const warehousePackingOrders = warehouseOrders.filter(
+    (order) => order.status === "Warehouse Packing"
+  );
+  const readyForDriverOrders = warehouseOrders.filter(
+    (order) => order.status === "Ready For Driver"
+  );
+
   return (
-    <div className="p-4">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4">
-        <div>
-          <h2 className="text-xl font-bold">Warehouse</h2>
-          <p className="text-xs text-slate-500">
-            Pack orders, print documents, assign driver, then confirm for driver.
-          </p>
+    <div className="p-4 space-y-4">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <h2 className="text-xl font-bold">Warehouse</h2>
+
+        <div className="flex flex-wrap gap-2">
+          {[
+            ["All", `All (${allWarehouseCount})`],
+            ["Warehouse Packing", `Warehouse Packing (${warehousePackingCount})`],
+            ["Ready For Driver", `Ready For Driver (${readyForDriverCount})`],
+          ].map(([status, label]) => (
+            <button
+              key={status}
+              type="button"
+              onClick={() => setStatusFilter(status)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                statusFilter === status
+                  ? "bg-blue-700 text-white"
+                  : "bg-white border text-slate-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
+      </div>
 
-        <div className="flex flex-wrap gap-2 items-end">
-          <button
-            type="button"
-            onClick={() => {
-              setStartDate("");
-              setEndDate("");
-            }}
-            className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
-          >
-            Clear Filters
-          </button>
-
-          <div>
-            <label className="text-xs font-bold">Start Date</label>
-            <input
-              type="date"
-              className="block border rounded-lg px-2 py-1.5 text-xs"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="text-xs font-bold">End Date</label>
-            <input
-              type="date"
-              className="block border rounded-lg px-2 py-1.5 text-xs"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-            />
-          </div>
-
-          <button
-            onClick={exportSupplierIssues}
-            className={`bg-orange-600 text-white ${btn}`}
-          >
-            Export Supplier Issues
-          </button>
-        </div>
-
-        
+      <div className="bg-white border rounded-2xl p-3">
+        <label className="block text-xs font-bold text-slate-500 mb-1">
+          Search
+        </label>
+        <input
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Order number or customer name"
+          className="w-full border rounded-xl px-3 py-2 text-sm"
+        />
       </div>
 
       {warehouseOrders.length === 0 && (
@@ -1394,218 +1578,26 @@ const confirmForDriver = async (order) => {
         </div>
       )}
 
-      <div className="space-y-3">
-        {warehouseOrders.map((order) => {
-          const pickingQty = getPrintableItems(order).reduce(
-            
-            (sum, item) => sum + getLineQty(item),
-            0
-          );
-          
-          const mode = String(order.priceMode || "").toUpperCase();
+      {(statusFilter === "All" || statusFilter === "Warehouse Packing") &&
+        warehousePackingOrders.length > 0 && (
+          <section className="space-y-2">
+            <h3 className="text-sm font-extrabold text-slate-700">
+              Warehouse Packing
+            </h3>
+            {warehousePackingOrders.map(renderWarehouseCard)}
+          </section>
+        )}
 
-            const showOrderForm =
-              mode === "SERVER" ||
-              mode === "MANAGER";
-
-            const showInvoice =
-              mode === "VAT" ||
-              mode === "SUPER";
-
-          return (
-            <div key={order.orderId} className="bg-white border rounded-2xl p-3">
-              <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3">
-                <div>
-                  <h3 className="font-bold text-lg">
-  {order.orderId} | {order.companyName}
-
-  {order.branchName && (
-    <span className="ml-2 text-blue-700 font-semibold">
-      | {order.branchName}
-    </span>
-  )}
-
-  <span className="ml-3 text-green-600 font-extrabold">
-    | {order.status}
-  </span>
-</h3>
-
-                  <p className="text-xs text-slate-500 mt-1">
-                    {order.createdAt} | {String(order.priceMode).toUpperCase()} |{" "}
-                    {order.items.length} Items | Picking: {pickingQty} |{" "}
-                    {money(order.total)}
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2 items-start">
-                  <button
-                    onClick={() => toggleExpanded(order.orderId)}
-                    className={`bg-blue-600 text-white ${btn}`}
-                  >
-                    {expandedOrders[order.orderId] ? "Hide" : "View"}
-                  </button>
-                </div>
-              </div>
-
-              {expandedOrders[order.orderId] && (
-                <div className="mt-3 space-y-3">
-                  <div className="hidden md:grid grid-cols-[1fr_70px_140px_170px] border-b font-bold text-xs text-slate-600 px-3 py-2">
-                    <div>Product</div>
-                    <div className="text-center">Qty</div>
-                    <div className="text-center">Status</div>
-                    <div className="text-right">Action</div>
-                  </div>
-                 
-                  {order.items.map((item) => {
-                    const sourceStatus = item.sourceStatus || "In Stock";
-                    const isInStock = sourceStatus === "In Stock";
-                    const isCannotSupply = sourceStatus === "Cannot Supply";
-                    const needsSupplier = !isInStock && !isCannotSupply;
-
-                  return (
-                      <div
-                        key={item.id}
-                        className={`grid grid-cols-1 md:grid-cols-[1fr_70px_140px_170px] gap-2 md:gap-0 items-center border rounded-lg px-3 py-2 text-sm ${
-                          item.includeInPicking === false
-                            ? "opacity-50 bg-slate-50"
-                            : ""
-                        }`}
-                      >
-                        <div className="font-medium truncate pr-3">
-                          {item.name}
-                        </div>
-
-                        <div className="text-center font-semibold">
-                          {getLineQty(item)}
-                        </div>
-
-                        <div
-                          className={`text-center font-semibold ${
-                            isCannotSupply
-                              ? "text-red-600"
-                              : needsSupplier
-                              ? "text-amber-600"
-                              : "text-green-700"
-                          }`}
-                        >
-                          {sourceStatus}
-                        </div>
-
-
-    <div className="text-right">
-  {hasPermission(loggedInUser, "can_move_to_warehouse") && (
-  <>
-  {isCannotSupply ? (
-    <button
-  type="button"
-  onClick={() => {
-    if (!window.confirm("Mark this item as Available?")) return;
-
-    updateWarehouseItem(order, item, {
-      sourceStatus: "In Stock",
-      includeInPicking: true,
-      pickedQty: Number(item.qty || 0),
-    });
-  }}
-  className={`bg-green-600 text-white ${btn}`}
->
-  Available
-</button>
-  ) : (
-   <button
-  type="button"
-  onClick={() => {
-    if (!window.confirm("Mark this item as Cannot Supply?")) return;
-
-    updateWarehouseItem(order, item, {
-      sourceStatus: "Cannot Supply",
-      includeInPicking: false,
-      pickedQty: 0,
-    });
-  }}
-  className={`bg-red-600 text-white ${btn}`}
->
-  Cannot Supply
-</button>
-  )}
-  </>
-  )}
-</div>
-</div>
-);
-})}                     
-               
-                  <div className="border-t pt-3 flex flex-col md:flex-row md:items-center md:justify-end gap-2">
-                    
-                    {showOrderForm && hasPermission(loggedInUser, "can_print") && (
-                      <button
-                        onClick={() => printProtectedOrderForm(order)}
-                        className={`bg-blue-700 text-white ${btn}`}
-                      >
-                        Print Order Form
-                      </button>
-                    )}
-
-                    {hasPermission(loggedInUser, "can_print") && (
-                    <button
-                      onClick={() => printProtectedDeliveryNote(order)}
-                      className={`bg-slate-800 text-white ${btn}`}
-                    >
-                      Print Delivery Note
-                    </button>
-                    )}
-
-                    {showInvoice && hasPermission(loggedInUser, "can_print") && (
-                      <button
-                        onClick={() => printProtectedInvoice(order)}
-                        className={`bg-green-700 text-white ${btn}`}
-                      >
-                        Print Invoice
-                      </button>
-                    )}
-
-                                      
-                    <select
-                      value={assignedDrivers[order.orderId] ?? order.driverName ?? order.driver_name ?? ""}
-                      onChange={(e) => assignDriver(order, e.target.value)}
-                      className="border rounded-xl px-3 py-2 text-xs"
-                    >
-                      <option value="">Assign Driver</option>
-
-                   {drivers.map((driver) => (
-                      <option key={driver.id} value={driver.username}>
-                        {driver.username}
-                      </option>
-                    ))}
-                    </select>
-
-                    {hasPermission(loggedInUser, "can_move_to_warehouse") && (
-                    <button
-                      onClick={() => backToReceived(order)}
-                      className={`bg-slate-500 text-white ${btn}`}
-                    >
-                      Back To Received
-                    </button>
-                    )}
-                   {hasPermission(loggedInUser, "can_move_to_warehouse") && (
-                   <button
-                    onClick={() => confirmForDriver(order)}
-                    className={`bg-green-700 text-white ${btn}`}
-                  >
-                    Confirm For Driver
-                  </button>
-                   )}
-                    
-                  </div>
-
-
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {(statusFilter === "All" || statusFilter === "Ready For Driver") &&
+        readyForDriverOrders.length > 0 && (
+          <section className="space-y-2">
+            <h3 className="text-sm font-extrabold text-slate-700">
+              Ready For Driver
+            </h3>
+            {readyForDriverOrders.map(renderWarehouseCard)}
+          </section>
+        )}
     </div>
   );
-
 }
+

@@ -129,6 +129,7 @@ export async function savePromotionRule(rule, productIdsToLabel = []) {
     trigger_series: rule.trigger_series || null,
     trigger_product_id: rule.trigger_product_id || null,
     buy_qty: rule.buy_qty ? Number(rule.buy_qty) : null,
+    free_brand: rule.free_brand || null,
     free_series: rule.free_series || null,
     free_product_id: rule.free_product_id || null,
     free_qty: rule.free_qty ? Number(rule.free_qty) : null,
@@ -174,8 +175,182 @@ export async function updateProductPromotionLabels(productIds = [], labelType = 
 const isPromotionFreeLine = (line) =>
   line?.isPromotionFree === true || line?.promotionFreeItem === true;
 
+const normalizeMatchValue = (value) =>
+  String(value || "").trim().toLowerCase();
+
+const normalizePromotionType = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+const isVatPriceMode = (priceMode) => {
+  const mode = normalizeMatchValue(priceMode);
+  return mode === "vat" || mode === "ex vat" || mode === "ex. vat";
+};
+
+const isPromotionPriceRule = (rule) => {
+  const type = normalizePromotionType(
+    rule?.promotion_type ??
+      rule?.promotionType ??
+      rule?.promotion_type_name ??
+      rule?.promotionTypeName
+  );
+
+  return (
+    type === "promotion_price" ||
+    type === "promotionprice" ||
+    rule?.rule_kind === PROMOTION_RULE_KINDS.PROMOTION_PRICE
+  );
+};
+
+const getPromotionRuleProductId = (rule) =>
+  rule?.product_id ??
+  rule?.productId ??
+  rule?.trigger_product_id ??
+  rule?.triggerProductId ??
+  rule?.selected_product_id ??
+  rule?.selectedProductId ??
+  rule?.product?.id ??
+  rule?.selected_product?.id ??
+  rule?.selectedProduct?.id ??
+  rule?.promotion_product?.product_id ??
+  rule?.promotionProduct?.productId ??
+  rule?.rule_product?.product_id ??
+  rule?.ruleProduct?.productId;
+
+const getPromotionRulePrice = (rule) =>
+  rule?.promotion_price ??
+  rule?.promotionPrice ??
+  rule?.offer_price ??
+  rule?.offerPrice;
+
+const getPromotionRuleProductIds = (rule) => {
+  const directProductId = getPromotionRuleProductId(rule);
+  const ids = directProductId != null ? [directProductId] : [];
+  const relatedProducts =
+    rule?.selected_products ??
+    rule?.selectedProducts ??
+    rule?.products ??
+    rule?.rule_products ??
+    rule?.ruleProducts ??
+    rule?.promotion_products ??
+    rule?.promotionProducts ??
+    [];
+
+  if (Array.isArray(relatedProducts)) {
+    relatedProducts.forEach((item) => {
+      const productId =
+        item?.product_id ??
+        item?.productId ??
+        item?.id ??
+        item?.product?.id;
+      if (productId != null) ids.push(productId);
+    });
+  }
+
+  return ids;
+};
+
+const findActivePromotionPriceRule = (productId, activePromotionRules = []) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return activePromotionRules.find((rule) => {
+    const startDate = rule?.start_date ? new Date(rule.start_date) : null;
+    const endDate = rule?.end_date ? new Date(rule.end_date) : null;
+
+    if (startDate) startDate.setHours(0, 0, 0, 0);
+    if (endDate) endDate.setHours(23, 59, 59, 999);
+
+    const startsOk = !startDate || startDate <= today;
+    const endsOk = !endDate || endDate >= today;
+    const promotionPrice = getPromotionRulePrice(rule);
+    const productIds = getPromotionRuleProductIds(rule);
+
+    return (
+      rule?.active === true &&
+      startsOk &&
+      endsOk &&
+      isPromotionPriceRule(rule) &&
+      productIds.some((ruleProductId) => String(ruleProductId) === String(productId)) &&
+      promotionPrice != null &&
+      promotionPrice !== ""
+    );
+  }) || null;
+};
+
+const buildPromotionPriceDiscountLines = (
+  paidLines = [],
+  activePromotionRules = []
+) =>
+  paidLines
+    .map((line) => {
+    const rule = findActivePromotionPriceRule(line?.id, activePromotionRules);
+    if (!rule) return null;
+
+    const promotionPrice = Number(getPromotionRulePrice(rule));
+    if (!Number.isFinite(promotionPrice)) return null;
+
+    const normalSelectedPrice =
+      line.normalSelectedPrice ??
+      line.vatPrice ??
+      line.exVatPrice ??
+      line.selectedPrice ??
+      0;
+    const normalPrice = Number(normalSelectedPrice || 0);
+    const unitDiscount = Math.max(0, normalPrice - promotionPrice);
+    const qty = Number(line.qty || 0);
+    const discountAmount = unitDiscount * qty;
+
+    if (!discountAmount) return null;
+
+    return {
+      id: "promotion-price-discount-" + rule.id + "-" + line.id,
+      name: rule.promotion_name || "Promotion",
+      brand: line.brand || "",
+      series: line.series || "",
+      qty,
+      selectedPrice: 0,
+      price: 0,
+      exVatPrice: 0,
+      vatPrice: 0,
+      sourceStatus: "Promotion",
+      isPromotionFree: true,
+      promotionFreeItem: true,
+      promotionDiscountLine: true,
+      promotionRuleId: rule.id,
+      promotionName: rule.promotion_name,
+      promotionDisplayLabel: rule.promotion_name || "Promotion",
+      promotionDiscountAmount: discountAmount,
+      promotionDiscountVatAmount: discountAmount * (getVatRate(line) / 100),
+      discountedProductNames: line.name ? [line.name] : [],
+      isPromotionPriceDiscount: true,
+    };
+  })
+  .filter(Boolean);
+
+const restorePromotionPriceLines = (paidLines = []) =>
+  paidLines.map((line) => {
+    if (!line?.isPromotionPrice) return line;
+
+    return {
+      ...line,
+      selectedPrice: Number(
+        line.normalSelectedPrice ?? line.vatPrice ?? line.selectedPrice ?? 0
+      ),
+      price: Number(line.normalPrice ?? line.price ?? 0),
+      exVatPrice: Number(line.vatPrice ?? line.exVatPrice ?? 0),
+      promotionRuleId: undefined,
+      promotionName: undefined,
+      promotionDisplayLabel: undefined,
+      isPromotionPrice: false,
+    };
+  });
+
 const lineMatchesSeries = (line, brand, series) =>
-  (!brand || line?.brand === brand) && (!series || line?.series === series);
+  (!brand || normalizeMatchValue(line?.brand) === normalizeMatchValue(brand)) &&
+  (!series || normalizeMatchValue(line?.series) === normalizeMatchValue(series));
 
 const restorePromotionFreeLines = (cartLines = []) => {
   const paidLines = [];
@@ -186,9 +361,12 @@ const restorePromotionFreeLines = (cartLines = []) => {
         ...line,
         isPromotionFree: false,
         promotionFreeItem: false,
+        promotionDiscountLine: false,
       });
       return;
     }
+
+    if (line?.promotionDiscountLine) return;
 
     const matchingPaidLine = paidLines.find(
       (paidLine) => String(paidLine.id) === String(line.id)
@@ -207,62 +385,95 @@ const restorePromotionFreeLines = (cartLines = []) => {
       sourceStatus: line.originalSourceStatus || "In Stock",
       isPromotionFree: false,
       promotionFreeItem: false,
+      promotionDiscountLine: false,
       promotionRuleId: undefined,
       promotionName: undefined,
+      promotionDisplayLabel: undefined,
+      promotionDiscountAmount: undefined,
+      promotionDiscountVatAmount: undefined,
     });
   });
 
   return paidLines.filter((line) => Number(line.qty || 0) > 0);
 };
 
-const splitFreeQuantityFromPaidLines = (paidLines, rule, freeQtyEarned) => {
+const getVatRate = (line) => {
+  const cleaned = String(line?.vatRate || line?.vatType || "20")
+    .replace("%", "")
+    .trim();
+  const rate = Number(cleaned);
+
+  if (rate === 20) return 20;
+  if (rate === 5) return 5;
+  if (rate === 0) return 0;
+
+  return 20;
+};
+
+const getRuleDisplayName = (rule) => {
+  const savedName = String(rule?.promotion_name || "").trim();
+  if (savedName) {
+    return savedName.toLowerCase().startsWith("promotion")
+      ? savedName
+      : `Promotion ${savedName}`;
+  }
+
+  return rule?.buy_qty && rule?.free_qty
+    ? `Promotion Buy ${rule.buy_qty} Get ${rule.free_qty} Free`
+    : "Promotion Buy Get Free";
+};
+
+const buildPromotionDiscountLine = (rule, paidLines, freeQtyEarned) => {
   let remainingFreeQty = freeQtyEarned;
-  const nextPaidLines = [];
-  const freeLines = [];
+  let discountAmount = 0;
+  let discountVatAmount = 0;
+  let discountedQty = 0;
+  const discountedNames = [];
 
-  paidLines.forEach((line) => {
-    const lineQty = Number(line.qty || 0);
-    const canConvert =
-      remainingFreeQty > 0 &&
-      lineQty > 0 &&
-      lineMatchesSeries(line, null, rule.free_series);
+  paidLines
+    .filter((line) => lineMatchesSeries(line, null, rule.free_series))
+    .forEach((line) => {
+      if (remainingFreeQty <= 0) return;
 
-    if (!canConvert) {
-      nextPaidLines.push(line);
-      return;
-    }
+      const lineQty = Number(line.qty || 0);
+      const freeQty = Math.min(lineQty, remainingFreeQty);
+      if (freeQty <= 0) return;
 
-    const freeQty = Math.min(lineQty, remainingFreeQty);
-    const paidQty = lineQty - freeQty;
-    remainingFreeQty -= freeQty;
+      const unitPrice = Number(line.exVatPrice || line.selectedPrice || line.vatPrice || 0);
+      const vatRate = getVatRate(line);
 
-    if (paidQty > 0) {
-      nextPaidLines.push({
-        ...line,
-        qty: paidQty,
-      });
-    }
+      discountAmount += unitPrice * freeQty;
+      discountVatAmount += unitPrice * (vatRate / 100) * freeQty;
+      discountedQty += freeQty;
+      remainingFreeQty -= freeQty;
 
-    freeLines.push({
-      ...line,
-      qty: freeQty,
-      selectedPrice: 0,
-      price: 0,
-      originalSelectedPrice: Number(line.selectedPrice || 0),
-      originalPrice: Number(line.price || line.selectedPrice || 0),
-      originalSourceStatus: line.sourceStatus || "In Stock",
-      sourceStatus: "Promotion Free",
-      promotionDisplayLabel: "FREE PROMOTION ITEM",
-      isPromotionFree: true,
-      promotionFreeItem: true,
-      promotionRuleId: rule.id,
-      promotionName: rule.promotion_name,
+      if (line.name && !discountedNames.includes(line.name)) {
+        discountedNames.push(line.name);
+      }
     });
-  });
+
+  if (!discountedQty || !discountAmount) return null;
 
   return {
-    paidLines: nextPaidLines,
-    freeLines,
+    id: "promotion-discount-" + rule.id,
+    name: getRuleDisplayName(rule),
+    brand: rule.trigger_brand || "",
+    series: rule.free_series || "",
+    qty: discountedQty,
+    selectedPrice: 0,
+    price: 0,
+    exVatPrice: 0,
+    vatPrice: 0,
+    sourceStatus: "Promotion Free",
+    isPromotionFree: true,
+    promotionFreeItem: true,
+    promotionDiscountLine: true,
+    promotionRuleId: rule.id,
+    promotionName: rule.promotion_name,
+    promotionDisplayLabel: getRuleDisplayName(rule),
+    promotionDiscountAmount: discountAmount,
+    promotionDiscountVatAmount: discountVatAmount,
+    discountedProductNames: discountedNames,
   };
 };
 
@@ -278,12 +489,18 @@ export function applyPromotionRulesToCart(
 
   const priceMode = String(options.priceMode || "vat").toLowerCase();
   let paidLines = restorePromotionFreeLines(cartLines);
+  paidLines = restorePromotionPriceLines(paidLines);
 
-  if (priceMode !== "vat") {
+  if (!isVatPriceMode(priceMode)) {
     return paidLines;
   }
 
-  const generatedFreeLines = [];
+  const promotionPriceDiscountLines = buildPromotionPriceDiscountLines(
+    paidLines,
+    activePromotionRules
+  );
+
+  const generatedDiscountLines = [...promotionPriceDiscountLines];
 
   activePromotionRules
     .filter((rule) => rule.rule_kind === PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE)
@@ -301,15 +518,16 @@ export function applyPromotionRulesToCart(
       const freeQtyEarned = Math.floor(buySeriesQty / buyQty) * freeQty;
       if (!freeQtyEarned) return;
 
-      const splitCart = splitFreeQuantityFromPaidLines(
-        paidLines,
+      const discountLine = buildPromotionDiscountLine(
         rule,
+        paidLines,
         freeQtyEarned
       );
 
-      paidLines = splitCart.paidLines;
-      generatedFreeLines.push(...splitCart.freeLines);
+      if (discountLine) {
+        generatedDiscountLines.push(discountLine);
+      }
     });
 
-  return [...paidLines, ...generatedFreeLines];
+  return [...paidLines, ...generatedDiscountLines];
 }

@@ -12,13 +12,14 @@ import BackOfficeLayout, {
 
 import Categories from "./AdminSetup/Categories";
 import Warehouse from "./Warehouse";
+import Driver from "./AdminSetup/Driver";
 import StockReceipts from "./AdminSetup/StockReceipts";
 import StockHistory from "./AdminSetup/StockHistory";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
 import Customers from "./AdminSetup/Customers";
 
-import ProductCard from "../components/ProductCard";
+import ProductCard, { ProductListRow } from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
 import Cart from "../components/Cart.jsx";
 
@@ -30,11 +31,14 @@ import {
 import {
   applyPromotionRulesToCart,
   getActivePromotionRules,
+  PROMOTION_RULE_KINDS,
 } from "../services/promotionRules";
+import { formatCurrency } from "../Utils/currency";
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
 import ProductPromotions from "./AdminSetup/ProductPromotions";
 import AdminOrders from "./AdminOrders";
+import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
 
 import { getCustomerAccounts } from "../services/customerManagement";
@@ -57,10 +61,13 @@ function normalizeProduct(raw) {
     flavour: raw.flavour || "",
     cashPrice: Number(raw.cash_price || 0),
     vatPrice: Number(raw.vat_price || 0),
+    walesSpecialPrice: Number(raw.wales_special_price || 0),
+    englandSpecialPrice: Number(raw.england_special_price || 0),
     cartonSize: raw.carton_size || "",
     image: raw.image_url || "https://placehold.co/400x300?text=Product",
     stock: Number(raw.stock || 0),
     lowStockAlert: Number(raw.low_stock_alert || 10),
+    status: raw.status || "Active",
     active: String(raw.status || "Active").trim().toLowerCase() !== "inactive",
     availableInEngland: raw.available_in_england === true,
     availableInWales: raw.available_in_wales === true,
@@ -109,6 +116,132 @@ const getProductLabelFormFlags = (labelValue) => ({
   topSeller: labelValue === "topSeller",
 });
 
+const PRODUCT_DISPLAY_LIMIT = 20;
+
+const getStableSampleScore = (product, seed) => {
+  const value = `${product?.id || product?.productCode || product?.name || ""}|${seed}`;
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
+};
+
+const stableSampleProducts = (items, limit, seed) => {
+  if (items.length <= limit) return items;
+
+  return [...items]
+    .sort(
+      (a, b) =>
+        getStableSampleScore(a, seed) - getStableSampleScore(b, seed)
+    )
+    .slice(0, limit);
+};
+
+const getOrderProductAvailabilityRank = (product) => {
+  const sourceStatus = String(product?.sourceStatus || "").trim().toLowerCase();
+  const productStatus = String(product?.status || "").trim().toLowerCase();
+
+  if (
+    sourceStatus === "cannot supply" ||
+    productStatus === "cannot supply" ||
+    product?.comingSoon
+  ) {
+    return 3;
+  }
+
+  if (Number(product?.stock || 0) > 0) return 1;
+
+  if (
+    sourceStatus === "need supplier" ||
+    sourceStatus === "pre-order" ||
+    sourceStatus === "pre order" ||
+    productStatus === "need supplier" ||
+    productStatus === "pre-order" ||
+    productStatus === "pre order" ||
+    product?.availableFromSupplier
+  ) {
+    return 2;
+  }
+
+  return 3;
+};
+
+const sortOrderProductsByAvailability = (items) =>
+  [...items].sort((a, b) => {
+    const rankDiff =
+      getOrderProductAvailabilityRank(a) - getOrderProductAvailabilityRank(b);
+
+    if (rankDiff !== 0) return rankDiff;
+
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+
+const getCustomerAddress = (customer, branch) =>
+  branch?.delivery_address ||
+  branch?.postcode ||
+  customer?.address ||
+  customer?.delivery_address ||
+  customer?.postcode ||
+  "-";
+
+const getCreditBalance = (customer, ledger = []) => {
+  if (ledger.length) {
+    return Number(ledger[ledger.length - 1]?.balance || 0);
+  }
+
+  return Number(customer?.outstanding_balance || customer?.credit_balance || 0);
+};
+
+const normalizeCountry = (value) => String(value || "").trim().toLowerCase();
+
+const getCustomerBranches = (customer) =>
+  Array.isArray(customer?.customer_branches) ? customer.customer_branches : [];
+
+const getCustomerAccountCountry = (customer) =>
+  customer?.country ||
+  customer?.account_country ||
+  customer?.defaultCountry ||
+  customer?.default_country ||
+  "";
+
+const getCustomerBranchCountry = (customer) => {
+  const branches = getCustomerBranches(customer);
+  const defaultBranch =
+    branches.find((branch) => branch.default_branch || branch.is_default) ||
+    branches[0];
+
+  return defaultBranch?.country || "";
+};
+
+const customerMatchesCountry = (customer, country) => {
+  const selectedCountry = normalizeCountry(country);
+  if (!selectedCountry) return true;
+
+  const accountCountry = normalizeCountry(getCustomerAccountCountry(customer));
+  if (accountCountry) return accountCountry === selectedCountry;
+
+  return getCustomerBranches(customer).some(
+    (branch) => normalizeCountry(branch.country) === selectedCountry
+  );
+};
+
+const getCountryFilteredBranches = (customer, country, shouldFilter) => {
+  const activeBranches = getCustomerBranches(customer).filter(
+    (branch) => branch.active !== false
+  );
+
+  if (!shouldFilter) return activeBranches;
+
+  const selectedCountry = normalizeCountry(country);
+  if (!selectedCountry) return activeBranches;
+
+  return activeBranches.filter(
+    (branch) => normalizeCountry(branch.country) === selectedCountry
+  );
+};
 export default function CustomerOrder({ userProfile }) {
 
   const loggedInUser = JSON.parse(
@@ -198,7 +331,7 @@ useEffect(() => {
 }, [cart]);
 
 const applyCartPromotions = (cartLines) =>
-  applyPromotionRulesToCart(cartLines, promotionRules, products);
+  applyPromotionRulesToCart(cartLines, promotionRules, { products, priceMode });
 
 const refreshPromotionRules = async () => {
   try {
@@ -214,14 +347,14 @@ useEffect(() => {
     const recalculatedCart = applyPromotionRulesToCart(
       oldCart,
       promotionRules,
-      products
+      { products, priceMode }
     );
 
     return JSON.stringify(recalculatedCart) === JSON.stringify(oldCart)
       ? oldCart
       : recalculatedCart;
   });
-}, [promotionRules, products]);
+}, [promotionRules, products, priceMode]);
 
 
 const fetchCustomerLedger = async () => {
@@ -229,7 +362,6 @@ const fetchCustomerLedger = async () => {
     selectedCustomerAccount?.account_name || companyName;
 
   if (!customerName) {
-    console.log("No customer name found for ledger");
     setCustomerLedger([]);
     return;
   }
@@ -250,7 +382,6 @@ const fetchCustomerLedger = async () => {
     return;
   }
 
-  console.log("CUSTOMER LEDGER:", data);
   setCustomerLedger(data || []);
 };
 
@@ -270,6 +401,7 @@ useEffect(() => {
     useState("All Sub Categories");
   const [selectedBrand, setSelectedBrand] = useState("All Brands");
   const [selectedSeries, setSelectedSeries] = useState("All Series");
+  const [productView, setProductView] = useState("grid");
 
   const [selectedImage, setSelectedImage] = useState(null);
 
@@ -285,6 +417,8 @@ useEffect(() => {
     flavour: "",
     cashPrice: "",
     vatPrice: "",
+    walesSpecialPrice: "",
+    englandSpecialPrice: "",
     cartonSize: "",
     image: "",
     stock: "",
@@ -352,6 +486,24 @@ useEffect(() => {
       selectedCustomerAccount?.country ||
       "Wales";
 
+  const filteredCustomersForSalesRep = useMemo(() => {
+    if (!isSalesRep) return customerAccounts;
+
+    return customerAccounts.filter((customer) =>
+      customerMatchesCountry(customer, orderCountry)
+    );
+  }, [customerAccounts, isSalesRep, orderCountry]);
+
+  const filteredBranchesForSelectedCustomer = useMemo(
+    () =>
+      getCountryFilteredBranches(
+        selectedCustomerAccount,
+        orderCountry,
+        isSalesRep
+      ),
+    [selectedCustomerAccount, orderCountry, isSalesRep]
+  );
+
   const roundToFairQuarter = (price) => {
   const value = Number(price || 0);
   const pounds = Math.floor(value);
@@ -372,24 +524,155 @@ const getVatRate = (vatType) => {
   return 20;
 };
 
-  const getPrice = (product) => {
-  const mode = String(priceMode || "").toLowerCase();
+const normalizePromotionType = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
 
-  const cashPrice = Number(product.cashPrice || 0);
+const isVatPriceMode = (mode) => {
+  const normalizedMode = String(mode || "").trim().toLowerCase();
+  return (
+    normalizedMode === "vat" ||
+    normalizedMode === "ex vat" ||
+    normalizedMode === "ex. vat"
+  );
+};
 
-  if (
-    (mode === "server" || mode === "manager") &&
-    cashPrice > 0
-  ) {
-    return cashPrice;
+const getPromotionRuleProductId = (rule) =>
+  rule?.product_id ??
+  rule?.productId ??
+  rule?.trigger_product_id ??
+  rule?.triggerProductId ??
+  rule?.selected_product_id ??
+  rule?.selectedProductId ??
+  rule?.product?.id ??
+  rule?.selected_product?.id ??
+  rule?.selectedProduct?.id ??
+  rule?.promotion_product?.product_id ??
+  rule?.promotionProduct?.productId ??
+  rule?.rule_product?.product_id ??
+  rule?.ruleProduct?.productId;
+
+const getPromotionRulePrice = (rule) =>
+  rule?.promotion_price ??
+  rule?.promotionPrice ??
+  rule?.offer_price ??
+  rule?.offerPrice;
+
+const getPromotionRuleProductIds = (rule) => {
+  const directProductId = getPromotionRuleProductId(rule);
+  const ids = directProductId != null ? [directProductId] : [];
+  const relatedProducts =
+    rule?.selected_products ??
+    rule?.selectedProducts ??
+    rule?.products ??
+    rule?.rule_products ??
+    rule?.ruleProducts ??
+    rule?.promotion_products ??
+    rule?.promotionProducts ??
+    [];
+
+  if (Array.isArray(relatedProducts)) {
+    relatedProducts.forEach((item) => {
+      const productId =
+        item?.product_id ??
+        item?.productId ??
+        item?.id ??
+        item?.product?.id;
+      if (productId != null) ids.push(productId);
+    });
   }
+
+  return ids;
+};
+
+const isPromotionPriceRule = (rule) => {
+  const type = normalizePromotionType(
+    rule?.promotion_type ??
+      rule?.promotionType ??
+      rule?.promotion_type_name ??
+      rule?.promotionTypeName
+  );
+
+  return (
+    type === "promotion_price" ||
+    type === "promotionprice" ||
+    rule?.rule_kind === PROMOTION_RULE_KINDS.PROMOTION_PRICE
+  );
+};
+
+const getActivePromotionPriceRule = (product) => {
+  if (!isVatPriceMode(priceMode)) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return promotionRules.find((rule) => {
+    const startDate = rule?.start_date ? new Date(rule.start_date) : null;
+    const endDate = rule?.end_date ? new Date(rule.end_date) : null;
+
+    if (startDate) startDate.setHours(0, 0, 0, 0);
+    if (endDate) endDate.setHours(23, 59, 59, 999);
+
+    const startsOk = !startDate || startDate <= today;
+    const endsOk = !endDate || endDate >= today;
+    const productIds = getPromotionRuleProductIds(rule);
+    const promotionPrice = getPromotionRulePrice(rule);
+
+  const activeOk =
+  rule?.active === true ||
+  String(rule?.active).toLowerCase() === "true";
+
+const productMatch = productIds.some(
+  (productId) => String(productId) === String(product?.id)
+);
+
+return (
+  activeOk &&
+  startsOk &&
+  endsOk &&
+  isPromotionPriceRule(rule) &&
+  productMatch &&
+  promotionPrice != null &&
+  promotionPrice !== ""
+);
+
+
+  }) || null;
+};
+
+const getPromotionPrice = (product) => {
+  const rule = getActivePromotionPriceRule(product);
+  if (!rule) return null;
+
+  const promotionPrice = Number(getPromotionRulePrice(rule));
+  return Number.isFinite(promotionPrice) ? promotionPrice : null;
+};
+
+const getPrice = (product) => {
+  const mode = String(priceMode || "").toLowerCase();
 
   const exVatPrice = Number(product.vatPrice || 0);
   const vatRate = getVatRate(product.vatType);
   const incVatPrice = exVatPrice + exVatPrice * (vatRate / 100);
 
-  if (mode === "vat") {
+  if (isVatPriceMode(mode)) {
     return exVatPrice;
+  }
+
+  if (mode === "server" || mode === "manager") {
+    const country = String(orderCountry || "").toLowerCase();
+    const specialPrice =
+      country === "wales"
+        ? Number(product.walesSpecialPrice || 0)
+        : country === "england"
+        ? Number(product.englandSpecialPrice || 0)
+        : 0;
+
+    if (specialPrice > 0) {
+      return specialPrice;
+    }
   }
 
   const discounts = {
@@ -455,7 +738,6 @@ useEffect(() => {
     async function loadCustomerAccounts() {
       try {
         const data = await getCustomerAccounts();
-        console.log("CUSTOMERS LOADED:", data);
         setCustomerAccounts(data || []);
       } catch (error) {
         console.error("Customer loading error:", error);
@@ -488,15 +770,38 @@ useEffect(() => {
   useEffect(() => {
     if (!selectedCustomerAccount) return;
 
-    const branches = (selectedCustomerAccount.customer_branches || []).filter(
-      (b) => b.active !== false
-    );
-
-    if (branches.length === 1) {
-      setSelectedBranchId(branches[0].id);
-      setSelectedBranch(branches[0]);
+    if (filteredBranchesForSelectedCustomer.length === 1) {
+      setSelectedBranchId(filteredBranchesForSelectedCustomer[0].id);
+      setSelectedBranch(filteredBranchesForSelectedCustomer[0]);
     }
-  }, [selectedCustomerAccount]);
+  }, [selectedCustomerAccount, filteredBranchesForSelectedCustomer]);
+
+  useEffect(() => {
+    if (!isSalesRep) return;
+
+    if (
+      selectedCustomerAccount &&
+      !customerMatchesCountry(selectedCustomerAccount, orderCountry)
+    ) {
+      setSelectedCustomerId("");
+      setSelectedCustomerAccount(null);
+      setSelectedBranchId("");
+      setSelectedBranch(null);
+      setCompanyName("");
+      setPriceMode("vat");
+      setCart([]);
+      localStorage.removeItem(CART_KEY);
+      return;
+    }
+
+    if (
+      selectedBranch &&
+      normalizeCountry(selectedBranch.country) !== normalizeCountry(orderCountry)
+    ) {
+      setSelectedBranchId("");
+      setSelectedBranch(null);
+    }
+  }, [isSalesRep, orderCountry, selectedCustomerAccount, selectedBranch]);
 
   const fetchProducts = async () => {
     setProductError("");
@@ -509,17 +814,10 @@ useEffect(() => {
         orderCountry
       );
 
-      console.log("CUSTOMER PRODUCTS FROM SERVICE:", data);
-      console.log(
-        "TEST PRODUCT LABEL AFTER GETPRODUCTS:",
-        (data || []).find((p) => String(p.productCode).toLowerCase() === "123456b")
-      );
-
       setProducts((productsForCountry || []).filter((p) => p.name));
     } catch (error) {
       console.error("Product loading error:", error);
       setProductError(error.message);
-      setProducts([]);
     }
 
     setProductsLoading(false);
@@ -684,79 +982,67 @@ const seriesList = [
 ];
 
 const filteredProducts = useMemo(() => {
-  const noFiltersSelected =
-    selectedCategory === "All Products" &&
-    selectedSubCategory === "All Sub Categories" &&
-    selectedBrand === "All Brands" &&
-    selectedSeries === "All Series" &&
-    search.trim() === "";
+  const keyword = search.trim().toLowerCase();
 
- const isVapeAllProducts =
-  selectedCategory === "Vape" &&
-  selectedSubCategory === "All Sub Categories" &&
-  selectedBrand === "All Brands" &&
-  selectedSeries === "All Series" &&
-  search.trim() === "";
+  return sortOrderProductsByAvailability(
+    products.filter((product) => {
+      if (
+        (orderCountry === "England" && !product.availableInEngland) ||
+        (orderCountry === "Wales" && !product.availableInWales)
+      ) {
+        return false;
+      }
 
-const baseProducts =
-  noFiltersSelected || isVapeAllProducts
-    ? products.slice(0, 30)
-    : products;
+      const productCategory = String(product.category || "").trim();
+      const productSubCategory = String(product.subCategory || "").trim();
+      const productBrand = String(product.brand || "").trim();
+      const productSeries = String(product.series || "").trim();
 
-    return baseProducts
-  .filter((product) => {
-    if (
-      (orderCountry === "England" && !product.availableInEngland) ||
-      (orderCountry === "Wales" && !product.availableInWales)
-    ) {
-      return false;
-    }
-
-    const keyword = search.trim().toLowerCase();
-
-    const productCategory = String(product.category || "").trim();
-    const productSubCategory = String(product.subCategory || "").trim();
-    const productBrand = String(product.brand || "").trim();
-    const productSeries = String(product.series || "").trim();
-
-
-  
-
-
-
-    return (
-      product.active &&
-      (selectedCategory === "All Products" ||
-        productCategory === selectedCategory) &&
-      (selectedSubCategory === "All Sub Categories" ||
-        productSubCategory === selectedSubCategory) &&
-      (selectedBrand === "All Brands" ||
-        productBrand === selectedBrand) &&
-      (selectedSeries === "All Series" ||
-        productSeries === selectedSeries) &&
-      (keyword === "" ||
-        String(product.name || "").toLowerCase().includes(keyword) ||
-        productBrand.toLowerCase().includes(keyword) ||
-        productSeries.toLowerCase().includes(keyword) ||
-        String(product.flavour || "").toLowerCase().includes(keyword))
-    );
-  })
-  .sort((a, b) => {
-    const aInStock = Number(a.stock || 0) > 0;
-    const bInStock = Number(b.stock || 0) > 0;
-
-    if (aInStock && !bInStock) return -1;
-    if (!aInStock && bInStock) return 1;
-
-    return String(a.name || "").localeCompare(String(b.name || ""));
-  });
-
-
-
-
-
+      return (
+        product.active &&
+        (selectedCategory === "All Products" ||
+          productCategory === selectedCategory) &&
+        (selectedSubCategory === "All Sub Categories" ||
+          productSubCategory === selectedSubCategory) &&
+        (selectedBrand === "All Brands" ||
+          productBrand === selectedBrand) &&
+        (selectedSeries === "All Series" ||
+          productSeries === selectedSeries) &&
+        (keyword === "" ||
+          String(product.name || "").toLowerCase().includes(keyword) ||
+          String(product.productCode || "").toLowerCase().includes(keyword) ||
+          productBrand.toLowerCase().includes(keyword) ||
+          productSeries.toLowerCase().includes(keyword) ||
+          String(product.flavour || "").toLowerCase().includes(keyword))
+      );
+    })
+  );
 }, [
   products,
+  selectedCategory,
+  selectedSubCategory,
+  selectedBrand,
+  selectedSeries,
+  search,
+  orderCountry,
+]);
+
+const visibleProducts = useMemo(() => {
+  if (selectedSeries !== "All Series") return filteredProducts;
+
+  const sampleSeed = [
+    selectedCategory,
+    selectedSubCategory,
+    selectedBrand,
+    search.trim().toLowerCase(),
+    orderCountry,
+  ].join("|");
+
+  return sortOrderProductsByAvailability(
+    stableSampleProducts(filteredProducts, PRODUCT_DISPLAY_LIMIT, sampleSeed)
+  );
+}, [
+  filteredProducts,
   selectedCategory,
   selectedSubCategory,
   selectedBrand,
@@ -768,12 +1054,14 @@ const baseProducts =
   const addToCart = (product, qty = 1) => {
   const quantity = Math.max(1, Number(qty || 1));
 
-  const exVatPrice = Number(product.vatPrice || 0);
+  const selectedPrice = getPrice(product);
+  const exVatPrice =
+    isVatPriceMode(priceMode)
+      ? Number(selectedPrice || 0)
+      : Number(product.vatPrice || 0);
 const vatRate = getVatRate(product.vatType);
 const vatAmount = exVatPrice * (vatRate / 100);
 const incVatPrice = exVatPrice + vatAmount;
-
-  const selectedPrice = getPrice(product);
 
   setCart((oldCart) => {
     const normalCart = oldCart.filter((item) => !item.isPromotionFree);
@@ -789,6 +1077,8 @@ const incVatPrice = exVatPrice + vatAmount;
               qty: newQty,
               selectedPrice,
               exVatPrice,
+              normalSelectedPrice: Number(product.vatPrice || 0),
+              normalPrice: Number(product.vatPrice || 0),
               vatRate,
               vatAmount,
               incVatPrice,
@@ -809,6 +1099,8 @@ const incVatPrice = exVatPrice + vatAmount;
         qty: quantity,
         selectedPrice,
         exVatPrice,
+        normalSelectedPrice: Number(product.vatPrice || 0),
+        normalPrice: Number(product.vatPrice || 0),
         vatRate,
         vatAmount,
         incVatPrice,
@@ -890,17 +1182,32 @@ const incVatPrice = exVatPrice + vatAmount;
     );
   };
 
-  const total = cart.reduce((sum, item) => {
-  const qty = Number(item.qty || 0);
+  const promotionDiscountAmount = cart.reduce(
+    (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
+    0
+  );
 
-  if (priceMode === "vat") {
-    const exVatPrice = Number(item.exVatPrice || item.vatPrice || 0);
-    const vatRate = getVatRate(item.vatRate || item.vatType);
-    return sum + (exVatPrice + exVatPrice * (vatRate / 100)) * qty;
-  }
+  const subtotal = cart.reduce((sum, item) => {
+    if (item.isPromotionFree) return sum;
 
-  return sum + Number(item.selectedPrice || 0) * qty;
-}, 0);
+    const qty = Number(item.qty || 0);
+
+    if (isVatPriceMode(priceMode)) {
+      return sum + Number(
+        item.selectedPrice ?? item.exVatPrice ?? item.vatPrice ?? 0
+      ) * qty;
+    }
+
+    return sum + Number(item.selectedPrice || 0) * qty;
+  }, 0);
+
+  const discountedSubtotal =
+    isVatPriceMode(priceMode)
+      ? Math.max(0, subtotal - promotionDiscountAmount)
+      : subtotal;
+
+  const vatTotal = isVatPriceMode(priceMode) ? discountedSubtotal * 0.2 : 0;
+  const total = isVatPriceMode(priceMode) ? discountedSubtotal + vatTotal : subtotal;
 
  const discountAmount =
   total * (Number(orderDiscountPercent || 0) / 100);
@@ -939,9 +1246,7 @@ const finalTotal =
 
   if (
     !window.confirm(
-      `Save collection of Â£${Number(
-        salesPaymentForm.amount
-      ).toFixed(2)}?`
+      `Save collection of ${formatCurrency(salesPaymentForm.amount)}`
     )
   ) {
     return;
@@ -1018,8 +1323,9 @@ const submitOrder = async () => {
     alert("Please select delivery branch / shop.");
     return;
   }
+  const paidCartForOrder = cart.filter((item) => !item.isPromotionFree);
 
-  if (cart.length === 0) {
+  if (paidCartForOrder.length === 0) {
     alert("Please add at least one product.");
     return;
   }
@@ -1051,10 +1357,10 @@ const submitOrder = async () => {
   if (creditLimit > 0 && projectedBalance > creditLimit) {
     alert(
       `Credit limit exceeded.\n\n` +
-        `Credit Limit: Â£${creditLimit.toFixed(2)}\n` +
-        `Outstanding Balance: Â£${outstandingBalance.toFixed(2)}\n` +
-        `Current Order: Â£${orderTotal.toFixed(2)}\n` +
-        `Projected Balance: Â£${projectedBalance.toFixed(2)}`
+        `Credit Limit: ${formatCurrency(creditLimit)}\n` +
+        `Outstanding Balance: ${formatCurrency(outstandingBalance)}\n` +
+        `Current Order: ${formatCurrency(orderTotal)}\n` +
+        `Projected Balance: ${formatCurrency(projectedBalance)}`
     );
     return;
   }
@@ -1066,7 +1372,7 @@ const submitOrder = async () => {
     const { orderNumber } = await createCustomerOrder({
   companyName: selectedCustomerAccount.account_name,
   priceMode,
-  cart,
+  cart: paidCartForOrder,
   total: finalTotal,
 
 discount_percent: Number(orderDiscountPercent || 0),
@@ -1101,7 +1407,7 @@ const newOrder = {
     userProfile?.full_name || userProfile?.name || "",
    createdAt: new Date().toLocaleString(),
    status: "Received",
-   items: cart,
+   items: paidCartForOrder,
     };
 
     setOrders((oldOrders) => [newOrder, ...oldOrders]);
@@ -1277,6 +1583,8 @@ const addOrderItem = async (orderId, newItem) => {
       flavour: productFormForSave.flavour,
       cash_price: Number(productFormForSave.cashPrice || 0),
       vat_price: Number(productFormForSave.vatPrice || 0),
+      wales_special_price: Number(productFormForSave.walesSpecialPrice || 0),
+      england_special_price: Number(productFormForSave.englandSpecialPrice || 0),
       cost_price: Number(productFormForSave.costPrice || 0),
       supplier_name: productFormForSave.supplierName || "",
       sales_account: productFormForSave.salesAccount || defaultAccounts.salesAccount || "",
@@ -1340,6 +1648,8 @@ const addOrderItem = async (orderId, newItem) => {
       flavour: "",
       cashPrice: "",
       vatPrice: "",
+      walesSpecialPrice: "",
+      englandSpecialPrice: "",
       cartonSize: "",
       image: "",
       stock: "",
@@ -1382,6 +1692,8 @@ const addOrderItem = async (orderId, newItem) => {
       flavour: product.flavour || "",
       cashPrice: product.cashPrice || "",
       vatPrice: product.vatPrice || "",
+      walesSpecialPrice: product.walesSpecialPrice || "",
+      englandSpecialPrice: product.englandSpecialPrice || "",
       cartonSize: product.cartonSize || "",
       image: product.image || "",
       stock: product.stock || "",
@@ -1476,8 +1788,6 @@ const addOrderItem = async (orderId, newItem) => {
     win.document.close();
   };
 
-  console.log("CURRENT PAGE:", page);
-
   const comingSoonTitle = getComingSoonTitle(page);
 
 const backOfficeContent = comingSoonTitle ? (
@@ -1494,6 +1804,7 @@ const backOfficeContent = comingSoonTitle ? (
         updateOrderItem={updateOrderItem}
         addOrderItem={addOrderItem}
         changeOrderStatus={changeOrderStatus}
+        fetchOrders={fetchOrders}
       />
     )}
 
@@ -1504,6 +1815,15 @@ const backOfficeContent = comingSoonTitle ? (
         changeOrderStatus={changeOrderStatus}
         updateOrderItem={updateOrderItem}
         updateOrderExtraFields={updateOrderExtraFields}
+      />
+    )}
+
+    {page === "driver" && (
+      <Driver
+        orders={orders}
+        changeOrderStatus={changeOrderStatus}
+        updateOrderExtraFields={updateOrderExtraFields}
+        refreshOrders={fetchOrders}
       />
     )}
 
@@ -1550,26 +1870,33 @@ const backOfficeContent = comingSoonTitle ? (
 );
 
   return (
-    <div className="min-h-screen bg-slate-100 p-4 pb-40">
-      <div className="max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
+    <div className="customer-portal-shell min-h-screen bg-slate-100 p-4 pb-40">
+      <div className="customer-portal-container max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
         
-        <div className="bg-gradient-to-r from-blue-950 to-blue-700 text-white px-6 py-5">
-  <div className="flex items-start justify-between w-full gap-4">
-    <div>
-      <h1 className="text-3xl font-bold">
+        <div className="portal-header customer-header bg-gradient-to-r from-blue-950 to-blue-700 text-white px-6 py-5">
+  <div className="portal-header-inner flex items-start justify-between w-full gap-4">
+    <div className="portal-brand-block flex items-start gap-3">
+      <img
+        src={fairchoiceLogo}
+        alt="FairChoice Cash and Carry"
+        className="portal-logo"
+      />
+      <div className="portal-title-block">
+      <h1 className="portal-title text-3xl font-bold">
         FairChoice Order Portal
       </h1>
 
-      <p className="text-blue-100 text-sm">
+      <p className="portal-subtitle text-blue-100 text-sm">
         {isAdmin
           ? "Backoffice product and order management"
           : isSalesRep
           ? "Sales Rep Order Form"
           : "Customer order form"}
       </p>
+      </div>
     </div>
 
-    <div className="flex flex-col items-end gap-2">
+    <div className="portal-actions flex flex-col items-end gap-2">
       <button
         onClick={() => {
           if (window.confirm("Log out now?")) {
@@ -1578,16 +1905,16 @@ const backOfficeContent = comingSoonTitle ? (
             window.location.reload();
           }
         }}
-        className="border border-white/30 px-3 py-1 rounded-lg text-xs font-medium hover:bg-white/10 transition whitespace-nowrap"
+        className="logout-btn border border-white/30 px-3 py-1 rounded-lg text-xs font-medium hover:bg-white/10 transition whitespace-nowrap"
       >
         Logout
       </button>
 
       {isCustomer && (
-        <div className="flex gap-2">
+        <div className="customer-nav-buttons flex gap-2">
           <button
             onClick={() => setPage("order")}
-            className="bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold"
+            className={`order-tab-btn btn-secondary bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
           >
             Order
           </button>
@@ -1597,7 +1924,7 @@ const backOfficeContent = comingSoonTitle ? (
               await fetchCustomerLedger();
               setPage("paymentHistory");
             }}
-            className="bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold"
+            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold ${page === "paymentHistory" ? "active" : ""}`}
           >
             Payment History
           </button>
@@ -1611,24 +1938,24 @@ const backOfficeContent = comingSoonTitle ? (
             setPage("orders");
             await fetchOrders();
           }}
-          className="mb-4 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-blue-800"
+          className="back-office-btn mb-4 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-blue-800"
         >
           Back Office
         </button>
       )}
 
       {isSalesRep && (
-        <div className="flex gap-2">
+        <div className="customer-nav-buttons flex gap-2">
           <button
             onClick={() => setPage("order")}
-            className="bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold"
+            className={`order-tab-btn btn-secondary bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
           >
             Order
           </button>
 
           <button
             onClick={() => setPage("salesCashCollection")}
-            className="bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold"
+            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
           >
             Cash Collection
           </button>
@@ -1655,16 +1982,13 @@ const backOfficeContent = comingSoonTitle ? (
 </div>
 
         {(isAdmin || isSalesRep || isCustomer) && page === "order" && (
-          <div className="p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
+          <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
             
  <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3 text-sm font-bold">
 
     {isCustomer && (() => {
-  const activeBranches =
-    (selectedCustomerAccount?.customer_branches || []).filter(
-      (b) => b.active !== false
-    );
+  const activeBranches = filteredBranchesForSelectedCustomer;
 
   if (activeBranches.length <= 1) return null;
 
@@ -1697,19 +2021,15 @@ const backOfficeContent = comingSoonTitle ? (
   );
 })()}
 
-    <div className="text-slate-700 font-semibold">
-   {selectedCustomerAccount?.account_name || ""}
-
-  {selectedBranch?.delivery_address
-    ? ` - ${selectedBranch.delivery_address}`
-    : selectedCustomerAccount?.address
-    ? ` - ${selectedCustomerAccount.address}`
-    : ""}
-</div>
-
-    <div className="text-slate-700">
-      Credit Limit Â£
-      {Number(selectedCustomerAccount?.credit_limit || 0).toFixed(2)}
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 w-full text-slate-700">
+      <div className="font-semibold">
+        Address: {getCustomerAddress(selectedCustomerAccount, selectedBranch)}
+      </div>
+      <div>{formatCurrency(selectedCustomerAccount?.credit_limit)}
+      </div>
+      <div>
+        Credit Balance {formatCurrency(getCreditBalance(selectedCustomerAccount, customerLedger))}
+      </div>
     </div>
 
           <select
@@ -1796,7 +2116,7 @@ const backOfficeContent = comingSoonTitle ? (
     >
       <option value="">Select Customer</option>
 
-      {customerAccounts.map((customer) => (
+      {filteredCustomersForSalesRep.map((customer) => (
         <option key={customer.id} value={customer.id}>
           {customer.account_name}
         </option>
@@ -1806,10 +2126,7 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {(() => {
-   const activeBranches =
-    (selectedCustomerAccount?.customer_branches || []).filter(
-      (b) => b.active !== false
-    );
+   const activeBranches = filteredBranchesForSelectedCustomer;
 
    if (isCustomer && activeBranches.length <= 1) return null;
    return (
@@ -1893,10 +2210,27 @@ const backOfficeContent = comingSoonTitle ? (
   setSelectedSeries={setSelectedSeries}
 />
 
+  <div className="mt-3 flex justify-end gap-2">
+    {["grid", "list"].map((view) => (
+      <button
+        key={view}
+        type="button"
+        onClick={() => setProductView(view)}
+        className={
+          productView === view
+            ? "rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white"
+            : "rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700"
+        }
+      >
+        {view === "grid" ? "Grid View" : "List View"}
+      </button>
+    ))}
+  </div>
+
 </div>
 
             <div className="lg:col-span-3">
-              {productsLoading && (
+              {productsLoading && products.length === 0 && (
                 <div className="bg-slate-50 border rounded-3xl p-5 mb-4">
                   Loading products from Supabase...
                 </div>
@@ -1916,21 +2250,25 @@ const backOfficeContent = comingSoonTitle ? (
                   </div>
                 )}
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2 md:gap-3">
-                {filteredProducts.map((product) => {
-                  console.log("CUSTOMER PRODUCT LABEL CHECK", product.productCode, product.name, {
-                    isNew: product.isNew,
-                    isPromotion: product.isPromotion,
-                    isReduced: product.isReduced,
-                    comingSoon: product.comingSoon,
-                    recommended: product.recommended,
-                    topSeller: product.topSeller,
-                  });
+              {productView === "grid" ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2 md:gap-3">
+                  {visibleProducts.map((product) => (
+                    (() => {
+                      const activePromotionPriceRule =
+                        getActivePromotionPriceRule(product);
 
-                  return (
+                      return (
                     <ProductCard
                       key={product.id}
-                      product={product}
+                      product={{
+                        ...product,
+                        isPromotion:
+                          product.isPromotion ||
+                          Boolean(activePromotionPriceRule),
+                        promotionName:
+                          activePromotionPriceRule?.promotion_name ||
+                          product.promotionName,
+                      }}
                       addToCart={addToCart}
                       onImageClick={setSelectedImage}
                       price={getPrice(product)}
@@ -1939,9 +2277,42 @@ const backOfficeContent = comingSoonTitle ? (
                       }
                       onAdd={addToCart}
                     />
-                  );
-                })}
-              </div>
+                      );
+                    })()
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {visibleProducts.map((product) => (
+                    (() => {
+                      const activePromotionPriceRule =
+                        getActivePromotionPriceRule(product);
+
+                      return (
+                    <ProductListRow
+                      key={product.id}
+                      product={{
+                        ...product,
+                        isPromotion:
+                          product.isPromotion ||
+                          Boolean(activePromotionPriceRule),
+                        promotionName:
+                          activePromotionPriceRule?.promotion_name ||
+                          product.promotionName,
+                      }}
+                      addToCart={addToCart}
+                      onImageClick={setSelectedImage}
+                      price={getPrice(product)}
+                      cartQty={
+                        cart.find((item) => item.id === product.id)?.qty || 0
+                      }
+                      onAdd={addToCart}
+                    />
+                      );
+                    })()
+                  ))}
+                </div>
+              )}
             </div>
 
            <Cart
@@ -1951,6 +2322,7 @@ const backOfficeContent = comingSoonTitle ? (
             orderDiscountPercent={orderDiscountPercent}
             setOrderDiscountPercent={setOrderDiscountPercent}
             discountAmount={discountAmount}
+            promotionDiscountAmount={promotionDiscountAmount}
             canDiscount={isAdmin || isSalesRep}
             priceMode={priceMode}
             onSubmit={submitOrder}
@@ -1966,24 +2338,23 @@ const backOfficeContent = comingSoonTitle ? (
 
        
           {isCustomer && page === "paymentHistory" && (
-  <div className="p-4">
-    <div className="bg-white rounded-2xl shadow-sm border p-4">
+  <div className="customer-payment-history p-4">
+    <div className="payment-history-card bg-white rounded-2xl shadow-sm border p-4">
 
-      <div className="flex items-center justify-between mb-4">
+      <div className="payment-history-summary flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">
           Customer Credit Account
         </h2>
 
-        <div className="border rounded-xl px-4 py-2 text-right">
+        <div className="payment-history-outstanding border rounded-xl px-4 py-2 text-right">
           <div className="text-xs text-slate-500 font-bold">
             Total Outstanding
           </div>
-          <div className="text-2xl font-bold text-red-600">
-            Â£{Number(
+          <div className="text-2xl font-bold text-red-600">{formatCurrency(
               customerLedger.length
                 ? customerLedger[customerLedger.length - 1]?.balance || 0
                 : selectedCustomerAccount?.outstanding_balance || 0
-            ).toFixed(2)}
+            )}
           </div>
         </div>
       </div>
@@ -1992,13 +2363,12 @@ const backOfficeContent = comingSoonTitle ? (
         Statement: {selectedCustomerAccount?.account_name || companyName}
       </h3>
 
-      <div className="overflow-x-auto border rounded-2xl">
-        <table className="w-full text-sm">
+      <div className="customer-ledger-table-wrap overflow-x-auto border rounded-2xl">
+        <table className="customer-ledger-table w-full text-sm">
           <thead className="bg-slate-100">
             <tr className="border-b">
               <th className="text-left p-3">Date</th>
               <th className="text-left p-3">Transaction</th>
-              <th className="text-left p-3">Reference</th>
               <th className="text-left p-3">Status</th>
               <th className="text-right p-3">Amount</th>
               <th className="text-right p-3">Balance</th>
@@ -2056,13 +2426,6 @@ const backOfficeContent = comingSoonTitle ? (
                   </td>
 
                   <td className="p-3">
-                    {row.reference_number ||
-                      row.order_number ||
-                      row.invoice_number ||
-                      "-"}
-                  </td>
-
-                  <td className="p-3">
                     {isInvoice ? (
                       <span className="bg-red-100 text-red-700 px-2 py-1 rounded-lg text-xs font-bold">
                         {status || "UNPAID"}
@@ -2079,11 +2442,10 @@ const backOfficeContent = comingSoonTitle ? (
                       isPayment ? "text-green-600" : "text-red-600"
                     }`}
                   >
-                    {isPayment ? "-" : ""}Â£{amount.toFixed(2)}
+                    {isPayment ? "-" : ""}{formatCurrency(amount)}
                   </td>
 
-                  <td className="p-3 text-right font-bold">
-                    Â£{Number(row.balance || 0).toFixed(2)}
+                  <td className="p-3 text-right font-bold">{formatCurrency(row.balance)}
                   </td>
 
                   <td className="p-3 text-center">
@@ -2254,11 +2616,11 @@ const backOfficeContent = comingSoonTitle ? (
     <div className="max-w-7xl mx-auto flex items-center justify-between">
       <div>
         <div className="text-xs text-slate-500">
-          {cart.reduce((sum, item) => sum + item.qty, 0)} Items
+          {cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + item.qty, 0)} Items
         </div>
 
         <div className="font-bold text-xl">
-            Â£{finalTotal.toFixed(2)}
+            {formatCurrency(finalTotal)}
           </div>
 
           {cart.length > 0 && (
@@ -2293,7 +2655,7 @@ const backOfficeContent = comingSoonTitle ? (
 
 <button
   onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-  className="fixed bottom-20 right-3 z-50 bg-slate-800 text-white text-xs font-bold px-3 py-2 rounded-full shadow-lg opacity-80 hover:opacity-100"
+  className="fixed bottom-20 right-4 z-50 bg-slate-800 text-white text-sm font-bold px-5 py-3 rounded-full shadow-lg opacity-95 hover:opacity-100"
 >
   â†‘ Top
 </button>

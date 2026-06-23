@@ -16,6 +16,8 @@ function normalizeProduct(p, locationStocksByProduct = {}) {
 
     cashPrice: p.cash_price,
     vatPrice: p.vat_price,
+    walesSpecialPrice: Number(p.wales_special_price || 0),
+    englandSpecialPrice: Number(p.england_special_price || 0),
     cartonSize: p.carton_size,
     lowStockAlert: p.low_stock_alert,
     vatType: p.vat_type,
@@ -54,6 +56,8 @@ export async function getProducts() {
         "flavour",
         "cash_price",
         "vat_price",
+        "wales_special_price",
+        "england_special_price",
         "carton_size",
         "image_url",
         "stock",

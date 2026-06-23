@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase";
 
 const OPTION_TYPES = [
@@ -28,6 +29,15 @@ const OPTION_TYPES = [
   },
 ];
 
+const PRODUCT_FIELD_BY_OPTION_TYPE = {
+  main_category: "main_category",
+  sub_category: "sub_category",
+  brand: "brand",
+  series: "series",
+};
+
+const ALLOWED_OPTION_TYPES = new Set(OPTION_TYPES.map((type) => type.optionType));
+
 function countLabel(count) {
   return `${count} ${count === 1 ? "Option" : "Options"}`;
 }
@@ -39,6 +49,11 @@ export default function Categories() {
   const [newOption, setNewOption] = useState("");
   const [busy, setBusy] = useState(false);
   const [generatingAccounts, setGeneratingAccounts] = useState(false);
+  const [renameModal, setRenameModal] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [updateExistingProducts, setUpdateExistingProducts] = useState(false);
+  const [categoryImportPreview, setCategoryImportPreview] = useState(null);
+  const [importingCategories, setImportingCategories] = useState(false);
 
   useEffect(() => {
     fetchProductOptions();
@@ -92,9 +107,194 @@ export default function Categories() {
     setSearch("");
     setNewOption("");
     setBusy(false);
+    setRenameModal(null);
+    setRenameValue("");
+    setUpdateExistingProducts(false);
   };
 
   const normalizeText = (value) => String(value || "").trim().toLowerCase();
+  const normalizeName = (value) => String(value || "").trim();
+  const toImportBool = (value) => {
+    if (value === true || value === false) return value;
+    const text = String(value ?? "").trim().toLowerCase();
+    if (["true", "yes", "y", "1"].includes(text)) return true;
+    if (["false", "no", "n", "0"].includes(text)) return false;
+    return null;
+  };
+
+  const downloadCategoryTemplate = () => {
+    const worksheet = XLSX.utils.json_to_sheet([
+      { "Option Type": "main_category", "Option Name": "Drinks", Active: true },
+      { "Option Type": "sub_category", "Option Name": "Cans", Active: true },
+      { "Option Type": "brand", "Option Name": "Coca Cola", Active: true },
+      { "Option Type": "series", "Option Name": "Original", Active: true },
+    ]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Categories");
+    XLSX.writeFile(workbook, "fairchoice-category-import-template.xlsx");
+  };
+
+  const handleCategoryImportFile = async (event) => {
+    const file = event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setImportingCategories(true);
+
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      const { data: existingOptions, error } = await supabase
+        .from("product_options")
+        .select("*");
+
+      if (error) throw error;
+
+      const existingByKey = new Map(
+        (existingOptions || []).map((option) => [
+          `${normalizeText(option.option_type)}:${normalizeText(option.option_name)}`,
+          option,
+        ])
+      );
+      const seenKeys = new Set();
+      const errors = [];
+      const creates = [];
+      const updates = [];
+      let unchanged = 0;
+
+      rows.forEach((row, index) => {
+        const rowNumber = index + 2;
+        const optionType = normalizeName(
+          row["Option Type"] || row.option_type || row.optionType
+        );
+        const optionName = normalizeName(
+          row["Option Name"] || row.option_name || row.optionName
+        );
+        const active = toImportBool(row.Active ?? row.active ?? true);
+        const key = `${normalizeText(optionType)}:${normalizeText(optionName)}`;
+
+        if (!ALLOWED_OPTION_TYPES.has(optionType)) {
+          errors.push({
+            rowNumber,
+            field: "Option Type",
+            message: "Option Type must be main_category, sub_category, brand, or series",
+          });
+        }
+
+        if (!optionName) {
+          errors.push({
+            rowNumber,
+            field: "Option Name",
+            message: "Option Name is required",
+          });
+        }
+
+        if (active === null) {
+          errors.push({
+            rowNumber,
+            field: "Active",
+            message: "Active must be TRUE or FALSE",
+          });
+        }
+
+        if (seenKeys.has(key)) {
+          errors.push({
+            rowNumber,
+            field: "Option Name",
+            message: "Duplicate category option in import file",
+          });
+        }
+        seenKeys.add(key);
+
+        if (!optionType || !optionName || active === null || !ALLOWED_OPTION_TYPES.has(optionType)) {
+          return;
+        }
+
+        const existing = existingByKey.get(key);
+
+        if (existing) {
+          if (Boolean(existing.active) !== Boolean(active)) {
+            updates.push({
+              id: existing.id,
+              option_type: optionType,
+              option_name: optionName,
+              active,
+            });
+          } else {
+            unchanged += 1;
+          }
+          return;
+        }
+
+        creates.push({
+          option_type: optionType,
+          option_name: optionName,
+          active,
+        });
+      });
+
+      setCategoryImportPreview({
+        rowsChecked: rows.length,
+        creates,
+        updates,
+        unchanged,
+        errors,
+      });
+    } catch (error) {
+      alert("Category import preview failed: " + error.message);
+    }
+
+    setImportingCategories(false);
+  };
+
+  const confirmCategoryImport = async () => {
+    if (!categoryImportPreview || categoryImportPreview.errors.length) return;
+
+    const ok = window.confirm(
+      [
+        `Categories checked: ${categoryImportPreview.rowsChecked}`,
+        `Categories created: ${categoryImportPreview.creates.length}`,
+        `Categories updated: ${categoryImportPreview.updates.length}`,
+        `Categories unchanged: ${categoryImportPreview.unchanged}`,
+        "Apply these changes now?",
+      ].join("\n")
+    );
+
+    if (!ok) return;
+
+    setImportingCategories(true);
+
+    try {
+      for (const option of categoryImportPreview.updates) {
+        const { error } = await supabase
+          .from("product_options")
+          .update({ active: option.active })
+          .eq("id", option.id);
+
+        if (error) throw error;
+      }
+
+      if (categoryImportPreview.creates.length) {
+        const { error } = await supabase
+          .from("product_options")
+          .insert(categoryImportPreview.creates);
+
+        if (error) throw error;
+      }
+
+      console.log("Category import applied", categoryImportPreview);
+      alert("Category import completed successfully.");
+      setCategoryImportPreview(null);
+      await fetchProductOptions();
+    } catch (error) {
+      alert("Category import failed: " + error.message);
+    }
+
+    setImportingCategories(false);
+  };
 
   const getNextAvailableAccountCode = (usedCodes, baseCode) => {
     let code = baseCode;
@@ -180,8 +380,6 @@ export default function Categories() {
     let createdCount = 0;
 
     for (const row of rowsToInsert) {
-      console.log("Inserting account code row:", row);
-
       const { error } = await supabase.from("account_codes").insert(row);
 
       if (error) {
@@ -254,13 +452,6 @@ export default function Categories() {
         accountCodes || []
       );
 
-      console.log("Generate Accounts from Categories debug:", {
-        mainCategoryCount: mainCategories.length,
-        mainCategories,
-        existingAccountCodes: accountCodes || [],
-        rowsToInsert,
-      });
-
       alert(
         [
           `Main categories found: ${mainCategories.length}`,
@@ -316,28 +507,121 @@ export default function Categories() {
     setBusy(false);
   };
 
-  const deleteOption = async (option) => {
-    if (!option?.id || busy) return;
+  const countProductsUsingOption = async (option, config) => {
+    const productField = PRODUCT_FIELD_BY_OPTION_TYPE[config?.optionType];
+    if (!productField || !option?.option_name) return 0;
+
+    const { count, error } = await supabase
+      .from("products")
+      .select("id", { count: "exact", head: true })
+      .eq(productField, option.option_name);
+
+    if (error) throw error;
+
+    return count || 0;
+  };
+
+  const openRenameModal = (option) => {
+    if (!activeConfig || !option?.id || busy) return;
+
+    setRenameModal({ option, config: activeConfig });
+    setRenameValue(option.option_name || "");
+    setUpdateExistingProducts(false);
+  };
+
+  const closeRenameModal = () => {
+    if (busy) return;
+
+    setRenameModal(null);
+    setRenameValue("");
+    setUpdateExistingProducts(false);
+  };
+
+  const saveRename = async () => {
+    if (!renameModal?.option?.id || busy) return;
+
+    const option = renameModal.option;
+    const config = renameModal.config;
+    const oldName = String(option.option_name || "").trim();
+    const newName = renameValue.trim();
+    const productField = PRODUCT_FIELD_BY_OPTION_TYPE[config?.optionType];
+
+    if (!newName) {
+      alert("Enter a new name.");
+      return;
+    }
+
+    if (newName === oldName) {
+      closeRenameModal();
+      return;
+    }
 
     const confirmed = window.confirm(
-      `Delete "${option.option_name}"? This cannot be undone.`
+      `Rename '${oldName}' to '${newName}'?`
     );
     if (!confirmed) return;
 
     setBusy(true);
 
-    const { error } = await supabase
-      .from("product_options")
-      .update({ active: false })
-      .eq("id", option.id);
+    try {
+      const { error } = await supabase
+        .from("product_options")
+        .update({ option_name: newName })
+        .eq("id", option.id);
 
-    if (error) {
+      if (error) throw error;
+
+      if (updateExistingProducts && productField) {
+        const { error: productsError } = await supabase
+          .from("products")
+          .update({ [productField]: newName })
+          .eq(productField, oldName);
+
+        if (productsError) throw productsError;
+      }
+
+      await fetchProductOptions();
+      setRenameModal(null);
+      setRenameValue("");
+      setUpdateExistingProducts(false);
+    } catch (error) {
       alert(error.message);
-      setBusy(false);
-      return;
     }
 
-    await fetchProductOptions();
+    setBusy(false);
+  };
+
+  const deleteOption = async (option) => {
+    if (!option?.id || busy || !activeConfig) return;
+
+    setBusy(true);
+
+    try {
+      const productCount = await countProductsUsingOption(option, activeConfig);
+      const confirmed =
+        productCount > 0
+          ? window.confirm(
+              `This category is currently used by ${productCount} products.\n\nDelete anyway?`
+            )
+          : window.confirm(`Delete "${option.option_name}"?`);
+
+      if (!confirmed) {
+        setBusy(false);
+        return;
+      }
+
+      const { error } = await supabase
+        .from("product_options")
+        .update({ active: false })
+        .eq("id", option.id);
+
+      if (error) throw error;
+
+      await fetchProductOptions();
+    } catch (error) {
+      alert(error.message);
+    }
+
     setBusy(false);
   };
 
@@ -370,6 +654,93 @@ export default function Categories() {
               : "Generate Accounts from Categories"}
           </button>
         </div>
+      </div>
+
+      <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 className="font-bold text-slate-900">Category Import</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Import category options separately from product import. Existing names update active status only.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={downloadCategoryTemplate}
+              className="rounded-xl bg-slate-700 px-4 py-3 text-sm font-bold text-white"
+            >
+              Download Category Template
+            </button>
+
+            <label className="cursor-pointer rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white">
+              <input
+                type="file"
+                accept=".xlsx,.csv"
+                onChange={handleCategoryImportFile}
+                disabled={importingCategories}
+                className="hidden"
+              />
+              Upload Category File
+            </label>
+          </div>
+        </div>
+
+        {categoryImportPreview && (
+          <div className="mt-4 rounded-xl border border-slate-200 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+                <div><strong>Checked:</strong> {categoryImportPreview.rowsChecked}</div>
+                <div><strong>Created:</strong> {categoryImportPreview.creates.length}</div>
+                <div><strong>Updated:</strong> {categoryImportPreview.updates.length}</div>
+                <div><strong>Unchanged:</strong> {categoryImportPreview.unchanged}</div>
+                <div><strong>Errors:</strong> {categoryImportPreview.errors.length}</div>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCategoryImportPreview(null)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmCategoryImport}
+                  disabled={categoryImportPreview.errors.length > 0 || importingCategories}
+                  className="rounded-lg bg-green-700 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-300"
+                >
+                  Confirm Import
+                </button>
+              </div>
+            </div>
+
+            {categoryImportPreview.errors.length > 0 && (
+              <div className="mt-3 max-h-56 overflow-auto rounded-lg border">
+                <table className="w-full text-sm">
+                  <thead className="bg-red-50 text-red-700">
+                    <tr>
+                      <th className="p-2 text-left">Row</th>
+                      <th className="p-2 text-left">Field</th>
+                      <th className="p-2 text-left">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categoryImportPreview.errors.map((error, index) => (
+                      <tr key={`${error.rowNumber}-${error.field}-${index}`} className="border-t">
+                        <td className="p-2">{error.rowNumber}</td>
+                        <td className="p-2">{error.field}</td>
+                        <td className="p-2">{error.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -477,28 +848,113 @@ export default function Categories() {
                     No {activeConfig.title.toLowerCase()} found.
                   </div>
                 ) : (
+                  <>
+                  <div className="hidden grid-cols-[1fr_180px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 sm:grid">
+                    <span>{activeConfig.singular}</span>
+                    <span className="text-right">Actions</span>
+                  </div>
+
                   <ul className="divide-y divide-slate-200">
                     {filteredOptions.map((option) => (
                       <li
                         key={option.id}
-                        className="flex min-h-12 items-center justify-between gap-3 bg-white px-4 py-3"
+                        className="grid min-h-12 grid-cols-1 gap-3 bg-white px-4 py-3 sm:grid-cols-[1fr_180px] sm:items-center"
                       >
                         <span className="min-w-0 flex-1 break-words text-sm font-semibold text-slate-900">
                           {option.option_name}
                         </span>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => deleteOption(option)}
-                          className="rounded-lg border border-red-200 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Delete
-                        </button>
+                        <div className="flex items-center gap-2 sm:justify-end">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => openRenameModal(option)}
+                            className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => deleteOption(option)}
+                            className="rounded-lg border border-red-200 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </li>
                     ))}
                   </ul>
+                  </>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameModal && (
+        <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/60 p-0 sm:items-center sm:p-4">
+          <button
+            type="button"
+            className="absolute inset-0 cursor-default"
+            aria-label="Close rename category"
+            onClick={closeRenameModal}
+          />
+
+          <div className="relative mx-auto w-full max-w-md rounded-t-2xl bg-white p-5 shadow-2xl sm:rounded-2xl">
+            <h3 className="text-xl font-bold text-slate-900">
+              Rename {renameModal.config.singular}
+            </h3>
+
+            <div className="mt-4 space-y-4">
+              <div>
+                <p className="text-sm font-bold text-slate-800">Current Name:</p>
+                <p className="mt-1 rounded-xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-900">
+                  {renameModal.option.option_name}
+                </p>
+              </div>
+
+              <label className="block">
+                <span className="text-sm font-bold text-slate-800">New Name:</span>
+                <input
+                  type="text"
+                  value={renameValue}
+                  onChange={(event) => setRenameValue(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                  autoFocus
+                />
+              </label>
+
+              <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={updateExistingProducts}
+                  onChange={(event) =>
+                    setUpdateExistingProducts(event.target.checked)
+                  }
+                  className="mt-1 h-4 w-4"
+                />
+                <span>Update existing products</span>
+              </label>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeRenameModal}
+                disabled={busy}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveRename}
+                disabled={busy || !renameValue.trim()}
+                className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
+import { formatCurrency } from "../Utils/currency";
 
 export default function AdminOrders({
   orders = [],
@@ -11,6 +12,7 @@ export default function AdminOrders({
   updateOrderItem = () => {},
   addOrderItem = () => {},
   changeOrderStatus = () => {},
+  fetchOrders = async () => {},
 } = {}) {
   const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
   
@@ -43,6 +45,29 @@ export default function AdminOrders({
   }
 
   const findOrder = (orderId) => orders.find((order) => order.orderId === orderId);
+
+  const getDisplaySourceStatus = (sourceStatus) =>
+    sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus || "In Stock";
+
+  const sortOrderItems = (items = []) =>
+    [...items].sort((a, b) => {
+      const statusRank = {
+        "In Stock": 1,
+        "Need Supplier": 2,
+        "Pre-Order": 2,
+        "Cannot Supply": 3,
+      };
+
+      const aRank = statusRank[a.sourceStatus] || 99;
+      const bRank = statusRank[b.sourceStatus] || 99;
+
+      if (aRank !== bRank) return aRank - bRank;
+
+      const aGroup = `${a.brand || ""} ${a.series || ""} ${a.productName || a.name || ""}`.toLowerCase();
+      const bGroup = `${b.brand || ""} ${b.series || ""} ${b.productName || b.name || ""}`.toLowerCase();
+
+      return aGroup.localeCompare(bGroup);
+    });
 
   const startPicking = async (orderId) => {
     if (!requirePermission(loggedInUser, "can_receive_order", "You cannot receive orders.")) return;
@@ -103,11 +128,12 @@ export default function AdminOrders({
   const archiveOrder = async (orderId) => {
     if (!requirePermission(loggedInUser, "can_archive_order", "You cannot archive orders.")) return;
 
-    const reason = window.prompt("Reason for archive?");
-    if (!reason) return;
+    const ok = window.confirm(`Archive order ${orderId}?`);
+    if (!ok) return;
 
     const order = findOrder(orderId);
     await changeOrderStatus(orderId, "Archived");
+    await fetchOrders();
     await logAction({
       user: loggedInUser,
       action_type: "Order archived",
@@ -239,15 +265,12 @@ const updatePreparedItem = async (order, item, changes) => {
 };
 
   return (
-    <div className="p-5">
+    <div className="admin-orders-page p-5">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
         <div>
           <h2 className="text-2xl font-bold">
             {showArchive ? "Archive Orders" : "Received Orders"}
           </h2>
-          <p className="text-sm text-slate-500">
-            Prepare picking, then move orders to warehouse for packing.
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -288,28 +311,13 @@ const updatePreparedItem = async (order, item, changes) => {
           );
 
           return (
-            <div key={order.orderId} className="bg-white border rounded-2xl p-3">
+            <div key={order.orderId} className="received-order-card bg-white border rounded-2xl p-3">
               <div className="flex flex-col lg:flex-row lg:justify-between gap-3">
                 <div>
                   <h3 className="font-bold text-lg">
-  {order.orderId} | {order.companyName}
-
-  {order.branchName && (
-    <span className="ml-2 text-blue-700 font-semibold">
-      | {order.branchName}
-    </span>
-  )}
-
-  <span className="ml-3 text-green-600 font-extrabold">
-    | {order.status}
-  </span>
-</h3>
-
-                <p className="text-xs text-slate-500">
-                  {order.createdAt} | {String(order.priceMode).toUpperCase()} |{" "}
-                  {order.items.length} Items | Picking:{" "}
-                  {printableItems.length} | £{Number(order.total || 0).toFixed(2)}
-                </p>
+                    {order.orderId} | {order.companyName}
+                  </h3>
+                  <p className="text-xs text-slate-500">{order.createdAt}</p>
                 </div>
 
                 <div className="flex flex-wrap gap-2 items-start">
@@ -351,6 +359,15 @@ const updatePreparedItem = async (order, item, changes) => {
                     </button>
                   )}
 
+                  {!showArchive && hasPermission(loggedInUser, "can_add_product_to_order") && (
+                    <button
+                      onClick={() => openAddItemModal(order)}
+                      className={`bg-green-600 text-white ${btn}`}
+                    >
+                      Add Product
+                    </button>
+                  )}
+
                   {showArchive ? (
                     hasPermission(loggedInUser, "can_archive_order") && (
                     <button
@@ -384,17 +401,26 @@ const updatePreparedItem = async (order, item, changes) => {
                 </div>
               </div>
                     {expandedOrders[order.orderId] && (
-  <div className="mt-3 space-y-1">
-          <div className="hidden md:grid grid-cols-[80px_160px_1fr_100px_120px_160px] gap-4 border-b font-bold text-xs text-slate-600 px-6 py-2">
-        <div>Qty</div>
-        <div>Status</div>
-        <div>Product</div>
-        <div className="text-center">Price</div>
-        <div className="text-center">Line Total</div>
-        <div className="text-center">Actions</div>
-      </div>
+  <div className="mt-3 received-order-card">
+    <div
+      className="received-item-header"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "55px 45px minmax(360px, 1fr) 130px 85px 75px",
+        columnGap: "8px",
+        alignItems: "center",
+        width: "100%",
+      }}
+    >
+      <div>QNT</div>
+      <div>Upt</div>
+      <div>Product Name</div>
+      <div>Status</div>
+      <div>Line</div>
+      <div>Remove</div>
+    </div>
 
-    {order.items.map((item) => {
+    {sortOrderItems(order.items).map((item) => {
       const itemPrice = Number(
         item.price ?? item.unitPrice ?? item.selectedPrice ?? 0
       );
@@ -404,16 +430,23 @@ const updatePreparedItem = async (order, item, changes) => {
 
       return (
         <div
-          key={item.id}
-         className={`grid grid-cols-1 md:grid-cols-[80px_160px_1fr_100px_120px_160px] gap-4 items-center border rounded-lg px-6 py-2 text-sm ${
+          key={item.dbId || item.id}
+          className={`received-item-row ${
             item.includeInPicking === false ? "opacity-50 bg-slate-50" : ""
           }`}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "55px 45px minmax(360px, 1fr) 130px 85px 75px",
+            columnGap: "8px",
+            alignItems: "center",
+            width: "100%",
+          }}
         >
-            <div className="text-center flex items-center justify-center gap-1">
+          <div>
             <input
               type="number"
               min="0"
-              className="border rounded-lg px-2 py-1 w-16 text-center text-sm"
+              className="received-qty-input"
               value={editedQty[item.dbId] ?? item.pickedQty ?? item.qty}
               disabled={!hasPermission(loggedInUser, "can_receive_order")}
               onChange={(e) =>
@@ -423,107 +456,83 @@ const updatePreparedItem = async (order, item, changes) => {
                 }))
               }
             />
-
-{hasPermission(loggedInUser, "can_receive_order") && (
-<button
-onClick={() => {
-  const status =
-    editedStatus[item.dbId] || item.sourceStatus || "In Stock";
-
-  const qty = Number(editedQty[item.dbId] ?? item.pickedQty ?? item.qty);
-
-  updatePreparedItem(order, item, {
-    qty,
-
-    pickedQty:
-      status === "Need Supplier" || status === "Cannot Supply"
-        ? 0
-        : qty,
-
-    sourceStatus: status,
-
-    includeInPicking:
-      status === "Need Supplier" || status === "Cannot Supply"
-        ? false
-        : true,
-  });
-}}
-  className="bg-amber-500 text-white px-2 py-1 rounded text-xs font-bold"
->
-  Update
-</button>
-)}
           </div>
+          <div>
+            {hasPermission(loggedInUser, "can_receive_order") && (
+              <button
+                onClick={() => {
+                  const status =
+                    editedStatus[item.dbId] || item.sourceStatus || "In Stock";
 
-<div className="text-center">
-  <select
-    className="border rounded-lg px-2 py-1 text-sm"
-    value={item.sourceStatus || "In Stock"}
-    disabled={!hasPermission(loggedInUser, "can_receive_order")}
-    onChange={(e) =>
-      updatePreparedItem(order, item, {
-        sourceStatus: e.target.value,
-        includeInPicking:
-          e.target.value === "Need Supplier" ||
-          e.target.value === "Cannot Supply"
-            ? false
-            : true,
-      })
-    }
-  >
-    <option>In Stock</option>
-    <option>Need Supplier</option>
-    <option>Different Supplier</option>
-    <option>Cannot Supply</option>
-  </select>
-</div>
+                  const qty = Number(
+                    editedQty[item.dbId] ?? item.pickedQty ?? item.qty
+                  );
 
-<div className="font-medium truncate pr-3">
-  {item.name}
-</div>
-
-<div className="text-center font-semibold">
-  £{itemPrice.toFixed(2)}
-</div>
-
-<div className="text-center font-semibold">
-  £{lineTotal.toFixed(2)}
-</div>
-
-<div className="flex justify-end gap-2">
-  {hasPermission(loggedInUser, "can_receive_order") && (
-  <button
-    onClick={() =>
-      updatePreparedItem(order, item, {
-        sourceStatus:
-          item.includeInPicking === false ? "In Stock" : "Cannot Supply",
-        includeInPicking: item.includeInPicking === false ? true : false,
-        pickedQty: item.includeInPicking === false ? item.qty : 0,
-        qty: item.qty,
-      })
-    }
-    className={`${
-      item.includeInPicking === false ? "bg-blue-600" : "bg-red-600"
-    } text-white ${btn}`}
-  >
-    {item.includeInPicking === false ? "Add" : "Remove"}
-  </button>
-  )}
-
-  {hasPermission(loggedInUser, "can_add_product_to_order") && (
-  <button
-    onClick={() => openAddItemModal(order)}
-    className={`bg-green-600 text-white ${btn}`}
-  >
-    Add Item
-  </button>
-  )}
-</div>
-
-</div>
-   );
+                  updatePreparedItem(order, item, {
+                    qty,
+                    pickedQty:
+                      status === "Need Supplier" || status === "Cannot Supply"
+                        ? 0
+                        : qty,
+                    sourceStatus: status,
+                    includeInPicking:
+                      status === "Need Supplier" || status === "Cannot Supply"
+                        ? false
+                        : true,
+                  });
+                }}
+                className="received-upt-btn"
+              >
+                Upt
+              </button>
+            )}
+          </div>
+          <div className="received-product-name">
+            {item.productName || item.name}
+          </div>
+          <div>
+            <select
+              className="received-status-select"
+              value={item.sourceStatus || "In Stock"}
+              disabled={!hasPermission(loggedInUser, "can_receive_order")}
+              onChange={(e) =>
+                updatePreparedItem(order, item, {
+                  sourceStatus: e.target.value,
+                  includeInPicking:
+                    e.target.value === "Need Supplier" ||
+                    e.target.value === "Cannot Supply"
+                      ? false
+                      : true,
+                })
+              }
+            >
+              <option value="In Stock">In Stock</option>
+              <option value="Need Supplier">Pre-Order</option>
+              <option value="Cannot Supply">Cannot Supply</option>
+            </select>
+          </div>
+          <div className="received-line-total">{formatCurrency(lineTotal)}</div>
+          <div>
+            {hasPermission(loggedInUser, "can_receive_order") && (
+              <button
+                disabled={item.includeInPicking === false}
+                onClick={() =>
+                  updatePreparedItem(order, item, {
+                    sourceStatus: "Cannot Supply",
+                    includeInPicking: false,
+                    pickedQty: 0,
+                    qty: item.qty,
+                  })
+                }
+                className="received-remove-btn"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+      );
     })}
-             
 
                   {!showArchive && hasPermission(loggedInUser, "can_move_to_warehouse") && (
                     <div className="flex justify-end pt-3">
@@ -546,7 +555,7 @@ onClick={() => {
       {showAddItemModal && (
   <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
     <div className="bg-white rounded-2xl p-4 w-full max-w-xl">
-      <h3 className="text-lg font-bold mb-3">Add Item</h3>
+      <h3 className="text-lg font-bold mb-3">Add Product</h3>
 
       <input
         type="text"

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatCurrency } from "../Utils/currency";
 
 function getVatRate(vatType) {
   const cleaned = String(vatType || "20")
@@ -21,6 +22,7 @@ export default function Cart({
   orderDiscountPercent,
   setOrderDiscountPercent,
   discountAmount,
+  promotionDiscountAmount = 0,
   canDiscount,
   priceMode,
   onSubmit,
@@ -33,56 +35,62 @@ export default function Cart({
 
   const [editing, setEditing] = useState(false);
 
-  const itemCount = cart.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const paidCart = cart.filter((item) => !item.isPromotionFree);
+  const promotionLines = cart.filter((item) => item.isPromotionFree);
 
-  const netTotal = cart.reduce((sum, item) => {
+  const itemCount = paidCart.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+
+  const netTotal = paidCart.reduce((sum, item) => {
     const qty = Number(item.qty || 0);
-    const exVatPrice = Number(item.exVatPrice || item.vatPrice || 0);
+    const exVatPrice = Number(
+      item.selectedPrice ?? item.exVatPrice ?? item.vatPrice ?? 0
+    );
 
     return sum + exVatPrice * qty;
   }, 0);
 
-  const vatTotal =
-  priceMode === "vat"
-    ? cart.reduce((sum, item) => {
-        const qty = Number(item.qty || 0);
-        const exVatPrice = Number(item.exVatPrice || item.vatPrice || 0);
-        const vatRate = getVatRate(item.vatRate || item.vatType);
+  const promotionNetDiscount = promotionLines.length
+    ? promotionLines.reduce(
+        (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
+        0
+      )
+    : Number(promotionDiscountAmount || 0);
+  const discountedSubtotal = Math.max(0, netTotal - promotionNetDiscount);
+  const vatTotal = priceMode === "vat" ? discountedSubtotal * 0.2 : 0;
 
-        return sum + exVatPrice * (vatRate / 100) * qty;
-      }, 0)
-    : 0;
-
-  const grandTotal = priceMode === "vat" ? netTotal + vatTotal : total;
+  const grandTotal = priceMode === "vat" ? discountedSubtotal + vatTotal : total;
 
   return (
-    <div className="bg-slate-50 border rounded-3xl p-3 md:p-4 sticky bottom-3 md:top-4 z-40 shadow-lg">
+    <div className="cart-panel bg-slate-50 border rounded-3xl p-3 md:p-4 sticky bottom-3 md:top-4 z-40 shadow-lg">
       <div className="flex items-center justify-between gap-3 mb-3">
-        <h3 className="font-bold text-xl">Cart</h3>
+        <h3 className="cart-title font-bold text-xl">Cart</h3>
 
-        {cart.length > 0 && (
+        {paidCart.length > 0 && (
           <button
             onClick={() => setEditing(!editing)}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold text-sm"
+            className="btn-secondary bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold text-sm"
           >
             {editing ? "Done" : "Edit Cart"}
           </button>
         )}
       </div>
 
-      {editing && cart.length > 0 && (
+      {editing && paidCart.length > 0 && (
         <div className="space-y-2 mb-3">
-          {cart.map((item) => (
+          {paidCart.map((item) => (
             <div key={item.id} className="bg-white border rounded-2xl p-3">
               <div className="flex justify-between gap-2">
                 <div className="flex-1">
                   <p className="font-bold text-sm leading-tight">
                     {item.name}
                   </p>
+                  <p className="text-xs text-slate-500">
+                    {item.qty} x {formatCurrency(item.selectedPrice)}
+                  </p>
                 </div>
 
                 <p className="font-bold text-base whitespace-nowrap">
-                  £{(item.qty * item.selectedPrice).toFixed(2)}
+                  {formatCurrency(Number(item.qty || 0) * Number(item.selectedPrice || 0))}
                 </p>
               </div>
 
@@ -104,7 +112,7 @@ export default function Cart({
 
                 <button
                   onClick={() => onIncrease(item.id)}
-                  className="w-8 h-8 bg-blue-600 text-white rounded-lg font-bold"
+                  className="btn-primary w-8 h-8 bg-blue-600 text-white rounded-lg font-bold"
                 >
                   +
                 </button>
@@ -130,18 +138,35 @@ export default function Cart({
           {priceMode === "vat" ? (
           <>
             <div className="flex justify-between text-sm text-slate-600 mb-2">
-              <span>Net Total</span>
-              <span>£{netTotal.toFixed(2)}</span>
+              <span>Subtotal</span>
+              <span>{formatCurrency(netTotal)}</span>
             </div>
+
+            {promotionLines.map((line) => (
+              <div
+                key={line.id || line.promotionRuleId}
+                className="flex justify-between text-sm font-bold text-blue-700 mb-2"
+              >
+                <span>
+                  {String(line.promotionDisplayLabel || line.promotionName || "")
+                    .trim()
+                    .toLowerCase()
+                    .startsWith("promotion")
+                    ? line.promotionDisplayLabel || line.promotionName
+                    : `Promotion ${line.promotionDisplayLabel || line.promotionName || "Free Item"}`}
+                </span>
+                <span>-{formatCurrency(line.promotionDiscountAmount)}</span>
+              </div>
+            ))}
 
             <div className="flex justify-between text-sm text-slate-600 mb-2">
               <span>VAT Total</span>
-              <span>£{vatTotal.toFixed(2)}</span>
+              <span>{formatCurrency(vatTotal)}</span>
             </div>
 
             <div className="flex justify-between font-bold text-2xl border-t pt-2 mt-2">
               <span>Total</span>
-              <span>£{Number(total || 0).toFixed(2)}</span>
+              <span>{formatCurrency(grandTotal)}</span>
             </div>
 
             {canDiscount && (
@@ -164,12 +189,12 @@ export default function Cart({
       <>
         <div className="flex justify-between text-sm text-red-600">
           <span>Discount</span>
-          <span>-£{Number(discountAmount || 0).toFixed(2)}</span>
+          <span>-{formatCurrency(discountAmount)}</span>
         </div>
 
         <div className="flex justify-between font-bold text-green-700 mt-1">
           <span>Final Total</span>
-          <span>£{Number(originalTotal || 0).toFixed(2)}</span>
+          <span>{formatCurrency(originalTotal)}</span>
         </div>
         <button
         onClick={() => {
@@ -190,7 +215,7 @@ export default function Cart({
         ) : (
           <div className="flex justify-between font-bold text-2xl">
             <span>Total</span>
-            <span>£{total.toFixed(2)}</span>
+            <span>{formatCurrency(total)}</span>
           </div>
         )}
 
@@ -200,8 +225,8 @@ export default function Cart({
       onSubmit();
     }
   }}
-  disabled={cart.length === 0 || isSubmitting}
-  className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
+  disabled={paidCart.length === 0 || isSubmitting}
+  className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
 >
   {isSubmitting ? "Submitting..." : "Submit Order"}
 </button>
