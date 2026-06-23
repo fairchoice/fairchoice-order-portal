@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { supabase } from "../services/supabase";
 import { getActiveStockLocations } from "../services/locationStock";
-import { formatCurrency } from "../Utils/currency";
+import { formatCurrency } from "../utils/currency";
 
 
 

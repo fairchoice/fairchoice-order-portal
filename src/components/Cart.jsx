@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { formatCurrency } from "../Utils/currency";
+import { formatCurrency } from "../utils/currency";
 
 function getVatRate(vatType) {
   const cleaned = String(vatType || "20")

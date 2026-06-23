@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../services/supabase";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
-import { formatCurrency } from "../Utils/currency";
+import { formatCurrency } from "../utils/currency";
 
 /*
   Warehouse Page

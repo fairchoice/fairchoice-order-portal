@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
 import * as XLSX from "xlsx";
-import { formatCurrency } from "../Utils/currency";
+import { formatCurrency } from "../utils/currency";
 
 import ProductSetupOptions from "../components/ProductSetupOptions";
 

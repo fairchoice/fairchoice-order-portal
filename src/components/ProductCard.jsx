@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { formatCurrency } from "../Utils/currency";
+import { formatCurrency } from "../utils/currency";
 
 const getProductStatus = (product) => {
   const sourceStatus = String(product?.sourceStatus || "").trim();
