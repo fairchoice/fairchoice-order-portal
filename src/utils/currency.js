@@ -6,3 +6,5 @@ const gbpFormatter = new Intl.NumberFormat("en-GB", {
 export function formatCurrency(value) {
   return gbpFormatter.format(Number(value || 0));
 }
+
+

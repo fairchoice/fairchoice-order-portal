@@ -33,7 +33,7 @@ import {
   getActivePromotionRules,
   PROMOTION_RULE_KINDS,
 } from "../services/promotionRules";
-import { formatCurrency } from "../Utils/currency";
+import { formatCurrency } from "../utils/currency";
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
 import ProductPromotions from "./AdminSetup/ProductPromotions";
