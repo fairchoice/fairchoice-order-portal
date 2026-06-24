@@ -856,7 +856,13 @@ const fetchOrders = async () => {
       customerName: order.company_name,
       phoneNumber: "",
       companyName: order.company_name,
-      branchName: order.delivery_branch_name || "",
+      branchName:
+        order.delivery_branch_name ||
+        order.branch_name ||
+        order.branchName ||
+        order.shop_name ||
+        order.shopName ||
+        "",
       deliveryAddress:
         order.delivery_address || order.delivery_postcode || order.postcode || "",
       priceMode: order.price_mode || "vat",

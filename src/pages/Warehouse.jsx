@@ -1482,6 +1482,12 @@ const confirmForDriver = async (order) => {
     );
     const isReadyForDriver = order.status === "Ready For Driver";
     const priceMode = order.price_mode || order.priceMode || "";
+    const orderDate =
+      order.created_at ||
+      order.createdAt ||
+      order.received_at ||
+      order.receivedAt ||
+      "-";
     const isServerPriceMode = String(priceMode).toLowerCase() === "server";
     const customerPrintLabel = isServerPriceMode
       ? "Print Order Form"
@@ -1494,6 +1500,8 @@ const confirmForDriver = async (order) => {
       order.branch_name ||
       order.delivery_branch_name ||
       order.deliveryBranchName ||
+      order.shop_name ||
+      order.shopName ||
       "";
 
     return (
@@ -1504,12 +1512,9 @@ const confirmForDriver = async (order) => {
               {orderId} | {order.companyName || order.company_name || "No company"}
               {branchName ? ` | ${branchName}` : ""}
             </h3>
-            <p className="text-sm font-semibold text-slate-700">
-              {pickingQty} Items | {money(orderValue)}
-            </p>
           </div>
 
-          <div className="flex flex-wrap gap-2 items-center">
+          <div className="flex flex-wrap gap-2 items-center lg:justify-end">
             <button
               onClick={() => toggleExpanded(orderId)}
               className={`bg-blue-600 text-white ${btn}`}
@@ -1526,6 +1531,21 @@ const confirmForDriver = async (order) => {
               </button>
             )}
           </div>
+        </div>
+        <div
+          className="warehouse-order-summary-line"
+          style={{
+            display: "block",
+            color: "#475569",
+            fontSize: "12px",
+            fontWeight: 700,
+            lineHeight: 1.25,
+            marginTop: "4px",
+            marginBottom: expandedOrders[orderId] ? "8px" : 0,
+          }}
+        >
+          {orderDate} | {priceMode || "-"} | Total Qty: {pickingQty} | Total:{" "}
+          {money(orderValue)}
         </div>
 
         {expandedOrders[orderId] && (
