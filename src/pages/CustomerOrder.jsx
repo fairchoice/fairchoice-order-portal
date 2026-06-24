@@ -249,7 +249,8 @@ const loggedInUser =
   JSON.parse(localStorage.getItem("fairchoice_user") || "null");
 
 
-  const role = userProfile?.role || "Customer";
+  const activeUser = userProfile || loggedInUser || {};
+const role = activeUser?.role || "Customer";
   const normalizedRole = (role || "").replace(/\s+/g, "").toLowerCase();
 
   const isAdmin =
@@ -694,12 +695,29 @@ useEffect(() => {
   if (isAdmin && page === "order" && window.location.hash === "#admin") {
     setPage("orders");
     fetchOrders();
+    return;
   }
 
- if (isWarehouse) setPage("warehouse");
-  if (isDriver) setPage("driver");
-  if (isSalesRep) setPage("order");
-  if (isCustomer) setPage("order");
+  if (isWarehouse) {
+    setPage("warehouse");
+    fetchOrders();
+    return;
+  }
+
+  if (isDriver) {
+    setPage("driver");
+    fetchOrders();
+    return;
+  }
+
+  if (isSalesRep) {
+    setPage("order");
+    return;
+  }
+
+  if (isCustomer) {
+    setPage("order");
+  }
 }, [isAdmin, isWarehouse, isDriver, isSalesRep, isCustomer]);
 
 useEffect(() => {
@@ -1972,7 +1990,7 @@ const backOfficeContent = comingSoonTitle ? (
     </div>
   </div>
 
-{isAdmin && page !== "order" && (
+{(isAdmin || isWarehouse || isDriver) && page !== "order" && (
 <BackOfficeLayout
   page={page}
   setPage={setPage}
