@@ -309,55 +309,53 @@ const updatePreparedItem = async (order, item, changes) => {
           const printableItems = order.items.filter(
             (item) => item.includeInPicking !== false
           );
+          const calculatedItemTotal = order.items.reduce((sum, item) => {
+            const qty = Number(item.pickedQty ?? item.qty ?? item.quantity ?? 0);
+            const price = Number(
+              item.price ?? item.unitPrice ?? item.selectedPrice ?? 0
+            );
+
+            return sum + qty * price;
+          }, 0);
+          const totalQty = order.items.reduce(
+            (sum, item) =>
+              sum + Number(item.pickedQty ?? item.qty ?? item.quantity ?? 0),
+            0
+          );
+          const orderDateTime =
+            order.created_at || order.createdAt || order.orderDate || "-";
+          const priceMode = order.price_mode || order.priceMode || "-";
+          const orderTotal = Number(
+            order.total_amount ??
+              order.final_total ??
+              order.finalTotal ??
+              order.total ??
+              calculatedItemTotal
+          );
 
           return (
             <div key={order.orderId} className="received-order-card bg-white border rounded-2xl p-3">
-              <div className="flex flex-col lg:flex-row lg:justify-between gap-3">
-                <div>
-                  <h3 className="font-bold text-lg">
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-2 items-start">
+                <div className="order-header-left min-w-0">
+                  <div className="order-title font-bold text-lg leading-tight">
                     {order.orderId} | {order.companyName}
-                  </h3>
-                  <p className="text-xs text-slate-500">{order.createdAt}</p>
+                    {order.branchName ? ` | ${order.branchName}` : ""}
+                  </div>
+                  <div
+                    className="order-summary-line mt-1 text-xs leading-tight break-words"
+                    style={{ color: "#475569", display: "block" }}
+                  >
+                    {orderDateTime} | {priceMode} | {formatCurrency(orderTotal)} | Total Qty: {totalQty}
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2 items-start">
+                <div className="flex flex-wrap gap-2 items-start lg:justify-end">
                   <button
                     onClick={() => toggleOrderExpanded(order.orderId)}
                     className={`bg-blue-600 text-white ${btn}`}
                   >
                     {expandedOrders[order.orderId] ? "Hide" : "View / Prepare"}
                   </button>
-
-                  {!showArchive &&
-                    order.status === "Received" &&
-                    hasPermission(loggedInUser, "can_receive_order") && (
-                    <button
-                      onClick={() => startPicking(order.orderId)}
-                      className={`bg-orange-600 text-white ${btn}`}
-                    >
-                      Start Picking
-                    </button>
-                  )}
-
-                  {!showArchive &&
-                    order.status === "In Progress" &&
-                    hasPermission(loggedInUser, "can_change_order_status_in_progress") && (
-                    <button
-                      onClick={() => putBackToReceived(order.orderId)}
-                      className={`bg-slate-500 text-white ${btn}`}
-                    >
-                      Put Back
-                    </button>
-                  )}
-
-                  {!showArchive && hasPermission(loggedInUser, "can_print") && (
-                    <button
-                      onClick={() => printOrderPickingList(order)}
-                      className={`bg-black text-white ${btn}`}
-                    >
-                      Picking List
-                    </button>
-                  )}
 
                   {!showArchive && hasPermission(loggedInUser, "can_add_product_to_order") && (
                     <button
@@ -366,37 +364,6 @@ const updatePreparedItem = async (order, item, changes) => {
                     >
                       Add Product
                     </button>
-                  )}
-
-                  {showArchive ? (
-                    hasPermission(loggedInUser, "can_archive_order") && (
-                    <button
-                      onClick={() => restoreOrder(order.orderId)}
-                      className={`bg-green-600 text-white ${btn}`}
-                    >
-                      Restore
-                    </button>
-                    )
-                  ) : (
-                    <>
-                      {hasPermission(loggedInUser, "can_archive_order") && (
-                      <button
-                        onClick={() => archiveOrder(order.orderId)}
-                        className={`bg-slate-600 text-white ${btn}`}
-                      >
-                        Archive
-                      </button>
-                      )}
-
-                      {hasPermission(loggedInUser, "can_cancel_order") && (
-                      <button
-                        onClick={() => cancelOrder(order.orderId)}
-                        className={`bg-red-600 text-white ${btn}`}
-                      >
-                        Cancel
-                      </button>
-                      )}
-                    </>
                   )}
                 </div>
               </div>
@@ -534,16 +501,78 @@ const updatePreparedItem = async (order, item, changes) => {
       );
     })}
 
-                  {!showArchive && hasPermission(loggedInUser, "can_move_to_warehouse") && (
-                    <div className="flex justify-end pt-3">
+                  <div className="flex flex-wrap justify-end gap-2 pt-3">
+                    {!showArchive &&
+                      order.status === "Received" &&
+                      hasPermission(loggedInUser, "can_receive_order") && (
+                      <button
+                        onClick={() => startPicking(order.orderId)}
+                        className={`bg-orange-600 text-white ${btn}`}
+                      >
+                        Start Picking
+                      </button>
+                    )}
+
+                    {!showArchive &&
+                      order.status === "In Progress" &&
+                      hasPermission(loggedInUser, "can_change_order_status_in_progress") && (
+                      <button
+                        onClick={() => putBackToReceived(order.orderId)}
+                        className={`bg-slate-500 text-white ${btn}`}
+                      >
+                        Put Back
+                      </button>
+                    )}
+
+                    {!showArchive && hasPermission(loggedInUser, "can_print") && (
+                      <button
+                        onClick={() => printOrderPickingList(order)}
+                        className={`bg-black text-white ${btn}`}
+                      >
+                        Picking List
+                      </button>
+                    )}
+
+                    {showArchive ? (
+                      hasPermission(loggedInUser, "can_archive_order") && (
+                      <button
+                        onClick={() => restoreOrder(order.orderId)}
+                        className={`bg-green-600 text-white ${btn}`}
+                      >
+                        Restore
+                      </button>
+                      )
+                    ) : (
+                      <>
+                        {hasPermission(loggedInUser, "can_archive_order") && (
+                        <button
+                          onClick={() => archiveOrder(order.orderId)}
+                          className={`bg-slate-600 text-white ${btn}`}
+                        >
+                          Archive
+                        </button>
+                        )}
+
+                        {hasPermission(loggedInUser, "can_cancel_order") && (
+                        <button
+                          onClick={() => cancelOrder(order.orderId)}
+                          className={`bg-red-600 text-white ${btn}`}
+                        >
+                          Cancel
+                        </button>
+                        )}
+                      </>
+                    )}
+
+                    {!showArchive && hasPermission(loggedInUser, "can_move_to_warehouse") && (
                       <button
                         onClick={() => moveToWarehouse(order.orderId)}
                         className={`bg-purple-700 text-white ${btn}`}
                       >
                         Ready To Pack
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               )}
             </div>

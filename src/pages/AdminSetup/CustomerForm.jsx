@@ -70,6 +70,27 @@ export default function CustomerForm({
     }
   }, [editingCustomer]);
 
+  useEffect(() => {
+    if (!editingCustomer) return;
+
+    const scrollY = window.scrollY;
+
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+
+    return () => {
+      document.body.style.position = "";
+      document.body.style.top = "";
+      document.body.style.left = "";
+      document.body.style.right = "";
+      document.body.style.width = "";
+      window.scrollTo(0, scrollY);
+    };
+  }, [editingCustomer]);
+
   const updateField = (field, value) => {
     setForm((prev) => ({
       ...prev,
@@ -177,15 +198,18 @@ export default function CustomerForm({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-6">
-      <div className="mt-4 w-full max-w-4xl rounded-md bg-white shadow-xl">
-        <div className="border-b border-slate-300 px-5 py-3">
+    <div className="customer-edit-overlay fixed inset-0 z-[9999] flex items-start justify-center overflow-hidden bg-black/50 p-3">
+      <div className="customer-edit-modal flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-xl">
+        <div className="shrink-0 border-b border-slate-300 p-4">
           <h2 className="text-lg font-bold leading-tight">
             {editingCustomer ? "Edit Customer" : "New Customer"}
           </h2>
         </div>
 
-        <div className="px-5 py-4 text-sm">
+        <div
+          className="customer-edit-modal-body min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-32 text-sm"
+          style={{ WebkitOverflowScrolling: "touch" }}
+        >
           <div className="mb-4 flex flex-wrap gap-2">
             {[
               ["customer", "Customer Information"],
@@ -543,7 +567,7 @@ export default function CustomerForm({
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-300 px-5 py-3">
+        <div className="flex flex-none justify-end gap-2 border-t border-slate-300 px-5 py-3">
           <button type="button" onClick={onClose} className={secondaryButtonClass}>
             Cancel
           </button>
