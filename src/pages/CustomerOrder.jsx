@@ -244,9 +244,11 @@ const getCountryFilteredBranches = (customer, country, shouldFilter) => {
 };
 export default function CustomerOrder({ userProfile }) {
 
-  const loggedInUser = JSON.parse(
-  localStorage.getItem("loggedInUser") || "{}"
-);
+const loggedInUser =
+  JSON.parse(localStorage.getItem("loggedInUser") || "null") ||
+  JSON.parse(localStorage.getItem("fairchoice_user") || "null");
+
+
   const role = userProfile?.role || "Customer";
   const normalizedRole = (role || "").replace(/\s+/g, "").toLowerCase();
 
@@ -695,7 +697,7 @@ useEffect(() => {
   }
 
  if (isWarehouse) setPage("warehouse");
-if (isDriver) setPage("driver");
+  if (isDriver) setPage("driver");
   if (isSalesRep) setPage("order");
   if (isCustomer) setPage("order");
 }, [isAdmin, isWarehouse, isDriver, isSalesRep, isCustomer]);
