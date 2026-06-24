@@ -635,6 +635,57 @@
   justify-content: center !important;
 }
 
+.admin-orders-page .received-card-header {
+  width: 100% !important;
+}
+
+.admin-orders-page .order-header-left {
+  min-width: 0 !important;
+}
+
+.admin-orders-page .order-title {
+  color: #0f172a !important;
+  font-weight: 800 !important;
+}
+
+.admin-orders-page .order-summary-line {
+  display: block !important;
+  color: #475569 !important;
+  font-size: 12px !important;
+  line-height: 1.25 !important;
+  margin-top: 4px !important;
+  white-space: normal !important;
+  overflow: visible !important;
+}
+
+.admin-orders-page .received-card-top-actions,
+.admin-orders-page .received-card-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+}
+
+.admin-orders-page .received-card-top-actions {
+  justify-content: flex-end !important;
+}
+
+.admin-orders-page .received-card-actions {
+  justify-content: flex-end !important;
+  padding-top: 10px !important;
+}
+
+.admin-orders-page .received-card-actions button:disabled {
+  opacity: 0.65 !important;
+  cursor: not-allowed !important;
+}
+
+@media (max-width: 640px) {
+  .admin-orders-page .received-card-top-actions,
+  .admin-orders-page .received-card-actions {
+    justify-content: flex-start !important;
+  }
+}
+
 /* FairChoice customer portal theme only */
 :root {
   --fc-header: #0B2F4A;

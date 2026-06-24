@@ -325,8 +325,17 @@ const updatePreparedItem = async (order, item, changes) => {
           const orderDateTime =
             order.created_at || order.createdAt || order.orderDate || "-";
           const priceMode = order.price_mode || order.priceMode || "-";
+          const priceModeKey = String(priceMode || "").toLowerCase();
+          const printButtonLabel =
+            priceModeKey === "server" ? "Print Order Form" : "Print Invoice";
+          const orderNumber =
+            order.order_number || order.orderNumber || order.orderId || "-";
+          const customerName =
+            order.customer_name || order.customerName || order.companyName || "-";
+          const branchName = order.branch_name || order.branchName || "";
           const orderTotal = Number(
             order.total_amount ??
+              order.totalAmount ??
               order.final_total ??
               order.finalTotal ??
               order.total ??
@@ -335,21 +344,22 @@ const updatePreparedItem = async (order, item, changes) => {
 
           return (
             <div key={order.orderId} className="received-order-card bg-white border rounded-2xl p-3">
-              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-2 items-start">
+              <div className="received-card-header grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-2 items-start">
                 <div className="order-header-left min-w-0">
                   <div className="order-title font-bold text-lg leading-tight">
-                    {order.orderId} | {order.companyName}
-                    {order.branchName ? ` | ${order.branchName}` : ""}
+                    {orderNumber} | {customerName}
+                    {branchName ? ` | ${branchName}` : ""}
                   </div>
                   <div
                     className="order-summary-line mt-1 text-xs leading-tight break-words"
                     style={{ color: "#475569", display: "block" }}
                   >
-                    {orderDateTime} | {priceMode} | {formatCurrency(orderTotal)} | Total Qty: {totalQty}
+                    Received: {orderDateTime} | {String(priceMode).toUpperCase()} |{" "}
+                    {formatCurrency(orderTotal)} | Total Qty: {totalQty}
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2 items-start lg:justify-end">
+                <div className="received-card-top-actions flex flex-wrap gap-2 items-start lg:justify-end">
                   <button
                     onClick={() => toggleOrderExpanded(order.orderId)}
                     className={`bg-blue-600 text-white ${btn}`}
@@ -367,6 +377,45 @@ const updatePreparedItem = async (order, item, changes) => {
                   )}
                 </div>
               </div>
+
+              {expandedOrders[order.orderId] && (
+                <div className="received-card-actions">
+                  <button
+                    type="button"
+                    className={`bg-slate-700 text-white ${btn}`}
+                    disabled
+                    title="Export handler is not configured on this screen."
+                  >
+                    Export
+                  </button>
+                  <button
+                    type="button"
+                    className={`bg-amber-600 text-white ${btn}`}
+                    disabled
+                    title="Pre-Order handler is not configured on this screen."
+                  >
+                    Pre-Order
+                  </button>
+                  <button
+                    type="button"
+                    className={`bg-slate-500 text-white ${btn}`}
+                    disabled
+                    title="Supply End handler is not configured on this screen."
+                  >
+                    Supply End
+                  </button>
+                  {hasPermission(loggedInUser, "can_print") && (
+                    <button
+                      type="button"
+                      onClick={() => printOrderPickingList(order)}
+                      className={`bg-black text-white ${btn}`}
+                    >
+                      {printButtonLabel}
+                    </button>
+                  )}
+                </div>
+              )}
+
                     {expandedOrders[order.orderId] && (
   <div className="mt-3 received-order-card">
     <div
