@@ -694,8 +694,8 @@ useEffect(() => {
     fetchOrders();
   }
 
-  if (isWarehouse) setPage("orders");
-  if (isDriver) setPage("orders");
+ if (isWarehouse) setPage("warehouse");
+if (isDriver) setPage("driver");
   if (isSalesRep) setPage("order");
   if (isCustomer) setPage("order");
 }, [isAdmin, isWarehouse, isDriver, isSalesRep, isCustomer]);
