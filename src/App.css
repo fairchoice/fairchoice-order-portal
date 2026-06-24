@@ -943,3 +943,29 @@
     width: 46px !important;
   }
 }
+
+.customer-edit-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  overflow: hidden !important;
+  overscroll-behavior: contain !important;
+}
+
+.customer-edit-modal {
+  max-height: 90dvh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  overscroll-behavior: contain !important;
+  touch-action: pan-y !important;
+}
+
+.customer-edit-modal-body {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior: contain !important;
+  touch-action: pan-y !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  padding-bottom: 120px !important;
+}
