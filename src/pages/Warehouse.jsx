@@ -30,6 +30,8 @@ export default function Warehouse({
   const [expandedOrders, setExpandedOrders] = useState({});
   const [statusFilter, setStatusFilter] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
 
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
@@ -38,6 +40,34 @@ export default function Warehouse({
 
   const getOrderId = (order) => order.orderId || order.order_number;
   const getDriverName = (order) => order.driverName || order.driver_name;
+  const getOrderDateValue = (order) =>
+    order.created_at || order.createdAt || order.received_at || order.receivedAt || "";
+
+  const getOrderTimestamp = (order) => {
+    const rawDate = getOrderDateValue(order);
+    if (!rawDate) return 0;
+
+    if (rawDate instanceof Date) return rawDate.getTime();
+
+    const parsed = new Date(rawDate).getTime();
+    if (!Number.isNaN(parsed)) return parsed;
+
+    const match = String(rawDate).match(
+      /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,\s*(\d{1,2}):(\d{2})(?::(\d{2}))?)?/
+    );
+
+    if (!match) return 0;
+
+    const [, day, month, year, hour = "0", minute = "0", second = "0"] = match;
+    return new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second)
+    ).getTime();
+  };
 
   /*
     Company information for invoice print.
@@ -109,12 +139,28 @@ const fetchDrivers = async () => {
             .includes(search)
         );
       })
+      .filter((order) => {
+        if (!fromDate && !toDate) return true;
+
+        const orderTime = getOrderTimestamp(order);
+        if (!orderTime) return false;
+
+        const fromTime = fromDate
+          ? new Date(`${fromDate}T00:00:00`).getTime()
+          : null;
+        const toTime = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null;
+
+        if (fromTime && orderTime < fromTime) return false;
+        if (toTime && orderTime > toTime) return false;
+
+        return true;
+      })
       .sort((a, b) => {
-        const aDate = new Date(a.createdAt || a.created_at || 0).getTime();
-        const bDate = new Date(b.createdAt || b.created_at || 0).getTime();
+        const aDate = getOrderTimestamp(a);
+        const bDate = getOrderTimestamp(b);
         return bDate - aDate;
       });
-  }, [orders, searchTerm, statusFilter]);
+  }, [orders, searchTerm, statusFilter, fromDate, toDate]);
 
   const warehousePackingCount = orders.filter(
     (order) => order.status === "Warehouse Packing"
@@ -196,11 +242,19 @@ const fetchDrivers = async () => {
       0
     );
 
-    const vatTotal = Number(
-      order.vatTotal ?? order.totalVat ?? order.vat ?? 0
-    );
+    const lineVatTotal = printableItems.reduce((sum, item) => {
+      const explicitLineVat =
+        item.vatTotal ?? item.vat_total ?? item.vatAmount ?? item.vat_amount;
 
-    const grandTotal = Number(order.total ?? netTotal + vatTotal);
+      if (explicitLineVat != null) {
+        return sum + Number(explicitLineVat || 0);
+      }
+
+      const vatPercent = Number(item.vatPercent ?? item.vat_percent ?? 20);
+      return sum + getLineTotal(item) * (vatPercent / 100);
+    }, 0);
+    const vatTotal = lineVatTotal;
+    const grandTotal = netTotal + vatTotal;
 
     return {
       totalLines,
@@ -1206,6 +1260,57 @@ const fetchDrivers = async () => {
     XLSX.writeFile(workbook, "supplier-issues-summary.xlsx");
   };
 
+  const exportWarehouseItems = (allowedStatuses, fileName, sheetName) => {
+    const statusSet = new Set(allowedStatuses);
+    const exportRows = warehouseOrders.flatMap((order) =>
+      (order.items || [])
+        .filter((item) => {
+          const sourceStatus = item.status || item.sourceStatus || item.source_status || "";
+          return statusSet.has(sourceStatus);
+        })
+        .map((item) => {
+          const sourceStatus = item.status || item.sourceStatus || item.source_status || "";
+
+          return {
+            "Order Number": getOrderId(order),
+            Customer: order.companyName || order.company_name || "",
+            Branch: order.branchName || order.branch_name || "",
+            Product: item.productName || item.name || "",
+            Qty: getLineQty(item),
+            Status: sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus,
+            "Order Date": getOrderDateValue(order) || "",
+          };
+        })
+    );
+
+    if (exportRows.length === 0) {
+      alert("No matching warehouse items to export.");
+      return;
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    XLSX.writeFile(workbook, fileName);
+  };
+
+  const exportSupplyNeeded = () => {
+    exportWarehouseItems(
+      ["Cannot Supply", "Need Supplier", "Supply Needed"],
+      `fairchoice-supply-needed-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      "Supply Needed"
+    );
+  };
+
+  const exportPreOrderList = () => {
+    exportWarehouseItems(
+      ["Pre-Order"],
+      `fairchoice-pre-order-list-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      "Pre-Order List"
+    );
+  };
+
   /*
     Assign driver to order.
   */
@@ -1362,6 +1467,20 @@ const confirmForDriver = async (order) => {
         0
     );
     const isReadyForDriver = order.status === "Ready For Driver";
+    const priceMode = order.price_mode || order.priceMode || "";
+    const isServerPriceMode = String(priceMode).toLowerCase() === "server";
+    const customerPrintLabel = isServerPriceMode
+      ? "Print Order Form"
+      : "Print Invoice";
+    const printCustomerDocumentForMode = isServerPriceMode
+      ? printProtectedOrderForm
+      : printProtectedInvoice;
+    const branchName =
+      order.branchName ||
+      order.branch_name ||
+      order.delivery_branch_name ||
+      order.deliveryBranchName ||
+      "";
 
     return (
       <div key={orderId} className="bg-white border rounded-2xl p-3">
@@ -1369,6 +1488,7 @@ const confirmForDriver = async (order) => {
           <div>
             <h3 className="font-bold text-base">
               {orderId} | {order.companyName || order.company_name || "No company"}
+              {branchName ? ` | ${branchName}` : ""}
             </h3>
             <p className="text-sm font-semibold text-slate-700">
               {pickingQty} Items | {money(orderValue)}
@@ -1389,38 +1509,6 @@ const confirmForDriver = async (order) => {
                 className={`bg-black text-white ${btn}`}
               >
                 Picking List
-              </button>
-            )}
-
-            {hasPermission(loggedInUser, "can_print") && (
-              <button
-                onClick={() => printProtectedDeliveryNote(order)}
-                className={`bg-slate-800 text-white ${btn}`}
-              >
-                Delivery Note
-              </button>
-            )}
-
-            <select
-              value={assignedDrivers[orderId] ?? getDriverName(order) ?? ""}
-              onChange={(e) => assignDriver(order, e.target.value)}
-              className="border rounded-lg px-3 py-1.5 text-xs font-semibold"
-              disabled={isReadyForDriver}
-            >
-              <option value="">Assign Driver</option>
-              {drivers.map((driver) => (
-                <option key={driver.id} value={driver.username}>
-                  {driver.username}
-                </option>
-              ))}
-            </select>
-
-            {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
-              <button
-                onClick={() => confirmForDriver(order)}
-                className={`bg-green-700 text-white ${btn}`}
-              >
-                Ready For Driver
               </button>
             )}
           </div>
@@ -1510,16 +1598,57 @@ const confirmForDriver = async (order) => {
               );
             })}
 
-            {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
-              <div className="border-t pt-3 flex justify-end">
+            <div className="border-t pt-3 flex flex-wrap justify-end gap-2">
+              {hasPermission(loggedInUser, "can_print") && (
+                <button
+                  onClick={() => printCustomerDocumentForMode(order)}
+                  className={`bg-black text-white ${btn}`}
+                >
+                  {customerPrintLabel}
+                </button>
+              )}
+
+              {hasPermission(loggedInUser, "can_print") && (
+                <button
+                  onClick={() => printProtectedDeliveryNote(order)}
+                  className={`bg-slate-800 text-white ${btn}`}
+                >
+                  Delivery Note
+                </button>
+              )}
+
+              <select
+                value={assignedDrivers[orderId] ?? getDriverName(order) ?? ""}
+                onChange={(e) => assignDriver(order, e.target.value)}
+                className="border rounded-lg px-3 py-1.5 text-xs font-semibold"
+                disabled={isReadyForDriver}
+              >
+                <option value="">Assign Driver</option>
+                {drivers.map((driver) => (
+                  <option key={driver.id} value={driver.username}>
+                    {driver.username}
+                  </option>
+                ))}
+              </select>
+
+              {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
+                <button
+                  onClick={() => confirmForDriver(order)}
+                  className={`bg-green-700 text-white ${btn}`}
+                >
+                  Ready For Driver
+                </button>
+              )}
+
+              {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
                 <button
                   onClick={() => backToReceived(order)}
                   className={`bg-slate-500 text-white ${btn}`}
                 >
                   Back To Received
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -1570,6 +1699,62 @@ const confirmForDriver = async (order) => {
           placeholder="Order number or customer name"
           className="w-full border rounded-xl px-3 py-2 text-sm"
         />
+      </div>
+
+      <div className="bg-white border rounded-2xl p-3 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+          <label className="block">
+            <span className="block text-xs font-bold text-slate-500 mb-1">
+              From date
+            </span>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="w-full border rounded-xl px-3 py-2 text-sm"
+            />
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-bold text-slate-500 mb-1">
+              To date
+            </span>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="w-full border rounded-xl px-3 py-2 text-sm"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={() => {
+              setFromDate("");
+              setToDate("");
+            }}
+            className="border rounded-xl px-3 py-2 text-sm font-bold text-slate-700"
+          >
+            Clear filter
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2 justify-end">
+          <button
+            type="button"
+            onClick={exportSupplyNeeded}
+            className={`bg-slate-800 text-white ${btn}`}
+          >
+            Export Supply Needed
+          </button>
+          <button
+            type="button"
+            onClick={exportPreOrderList}
+            className={`bg-amber-600 text-white ${btn}`}
+          >
+            Export Pre-Order List
+          </button>
+        </div>
       </div>
 
       {warehouseOrders.length === 0 && (
