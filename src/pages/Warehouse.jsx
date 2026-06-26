@@ -3,6 +3,13 @@ import * as XLSX from "xlsx";
 import { supabase } from "../services/supabase";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
+import { formatCurrency } from "../utils/currency";
+import {
+  calculateOrderTotals,
+  getOrderItemNetTotal,
+  getOrderItemQty,
+  getOrderItemUnitPrice,
+} from "../utils/orderTotals";
 
 /*
   Warehouse Page

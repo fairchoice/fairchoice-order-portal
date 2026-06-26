@@ -5,7 +5,6 @@ import { formatCurrency } from "../utils/currency";
 
 import ProductSetupOptions from "../components/ProductSetupOptions";
 
-
 import {
   getCustomerAccounts,
   saveCustomerAccount,

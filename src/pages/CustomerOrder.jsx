@@ -5,6 +5,8 @@ import Suppliers from "./AdminSetup/Suppliers";
 import Staff from "./AdminSetup/Staff";
 import LoginConfig from "./AdminSetup/LoginConfig";
 
+import { formatCurrency } from "../utils/currency";
+
 import BackOfficeLayout, {
   ComingSoonPlaceholder,
   getComingSoonTitle,
@@ -33,6 +35,14 @@ import {
   getActivePromotionRules,
   PROMOTION_RULE_KINDS,
 } from "../services/promotionRules";
+import {
+  calculateOrderTotals,
+  getOrderItemNetTotal,
+  getOrderItemQty,
+  getOrderItemUnitPrice,
+  getOrderItemVatTotal,
+} from "../utils/orderTotals";
+import { calculateCustomerCredit } from "../utils/customerCredit";
 
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
@@ -187,13 +197,8 @@ const getCustomerAddress = (customer, branch) =>
   customer?.postcode ||
   "-";
 
-const getCreditBalance = (customer, ledger = []) => {
-  if (ledger.length) {
-    return Number(ledger[ledger.length - 1]?.balance || 0);
-  }
-
-  return Number(customer?.outstanding_balance || customer?.credit_balance || 0);
-};
+const getCreditBalance = (customer, ledger = [], openingBalance = 0) =>
+  calculateCustomerCredit(customer, ledger, openingBalance).outstanding;
 
 const normalizeCountry = (value) => String(value || "").trim().toLowerCase();
 
@@ -283,6 +288,7 @@ const role = activeUser?.role || "Customer";
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [paymentHistoryBranchId, setPaymentHistoryBranchId] = useState("");
   const [customerLedger, setCustomerLedger] = useState([]);
+  const [customerOpeningBalance, setCustomerOpeningBalance] = useState(0);
 
   const [salesPaymentForm, setSalesPaymentForm] = useState({
   customerId: "",
@@ -362,36 +368,51 @@ useEffect(() => {
 }, [promotionRules, products]);
 
 
-const fetchCustomerLedger = async () => {
-  const customerName =
-    selectedCustomerAccount?.account_name || companyName;
+const loadCustomerCreditSnapshot = async (customer = selectedCustomerAccount) => {
+  const customerName = customer?.account_name || companyName;
 
   if (!customerName) {
     setCustomerLedger([]);
-    return;
+    setCustomerOpeningBalance(0);
+    return { ledgerRows: [], openingBalance: 0 };
   }
 
-  const { data, error } = await supabase
+  const [{ data: ledgerData, error: ledgerError }, { data: balanceRow }] = await Promise.all([
+    supabase
     .from("customer_ledger")
     .select("*")
     .eq("customer_name", customerName)
-    .order("created_at", { ascending: false });
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("customer_opening_balances")
+      .select("*")
+      .eq("customer_name", customerName)
+      .maybeSingle(),
+  ]);
 
-  if (error) {
-    console.error("Customer ledger loading error:", error);
+  if (ledgerError) {
+    console.error("Customer ledger loading error:", ledgerError);
 
     alert(
-      `Could not load payment history.\n\n${error.message}\n\n${error.details || ""}`
+      `Could not load payment history.\n\n${ledgerError.message}\n\n${ledgerError.details || ""}`
     );
 
-    return;
+    return { ledgerRows: [], openingBalance: 0 };
   }
 
-  setCustomerLedger(data || []);
+  const ledgerRows = ledgerData || [];
+  const openingBalance = Number(balanceRow?.opening_balance || 0);
+
+  setCustomerLedger(ledgerRows);
+  setCustomerOpeningBalance(openingBalance);
+
+  return { ledgerRows, openingBalance };
 };
 
+const fetchCustomerLedger = () => loadCustomerCreditSnapshot();
+
 useEffect(() => {
-  if (page === "paymentHistory") {
+  if (selectedCustomerAccount && (page === "paymentHistory" || page === "order")) {
     fetchCustomerLedger();
   }
 }, [page, selectedCustomerAccount?.id, userProfile?.customer_account_id]);
@@ -1279,25 +1300,6 @@ const visibleProducts = useMemo(() => {
 const finalTotal =
   Math.max(0, total - discountAmount);
 
-const getLedgerAmount = (row) =>
-  Number(
-    row.amount ||
-      row.invoice_amount ||
-      row.payment_amount ||
-      row.debit ||
-      row.credit ||
-      0
-  );
-
-const getLedgerOutstanding = (rows = []) =>
-  rows.reduce((balance, row) => {
-    const type = String(row.entry_type || row.transaction_type || "").toUpperCase();
-    const amount = getLedgerAmount(row);
-
-    if (type === "PAYMENT") return balance - amount;
-    return balance + amount;
-  }, 0);
-
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
 );
@@ -1324,7 +1326,7 @@ const branchOutstandingRows = selectedCustomerBranches.map((branch) => {
   return {
     id: branch.id,
     branchName: branch.branch_name,
-    outstanding: getLedgerOutstanding(rows),
+    outstanding: calculateCustomerCredit(selectedCustomerAccount, rows, 0).outstanding,
   };
 });
 
@@ -1447,6 +1449,10 @@ const completedCustomerOrders = orders.filter((order) => {
 
     alert("Collection saved successfully.");
 
+    if (String(selectedCustomerAccount?.id || "") === String(customer.id || "")) {
+      await loadCustomerCreditSnapshot(selectedCustomerAccount);
+    }
+
     setSalesPaymentForm({
       customerId: "",
       branchId: "",
@@ -1492,11 +1498,16 @@ const submitOrder = async () => {
     selectedCustomerAccount?.status ||
     "Active";
 
-  const creditLimit = Number(selectedCustomerAccount?.credit_limit || 0);
-
-  const outstandingBalance = Number(
-    selectedCustomerAccount?.outstanding_balance || 0
+  const { ledgerRows, openingBalance } = await loadCustomerCreditSnapshot(
+    selectedCustomerAccount
   );
+  const creditSummary = calculateCustomerCredit(
+    selectedCustomerAccount,
+    ledgerRows,
+    openingBalance
+  );
+  const creditLimit = creditSummary.creditLimit;
+  const outstandingBalance = creditSummary.outstanding;
 
   const orderTotal = Number(finalTotal || 0);
   const projectedBalance = outstandingBalance + orderTotal;
@@ -2327,7 +2338,9 @@ const backOfficeContent = comingSoonTitle ? (
       <div>{formatCurrency(selectedCustomerAccount?.credit_limit)}
       </div>
       <div>
-        Credit Balance {formatCurrency(getCreditBalance(selectedCustomerAccount, customerLedger))}
+        Credit Balance {formatCurrency(
+          getCreditBalance(selectedCustomerAccount, customerLedger, customerOpeningBalance)
+        )}
       </div>
     </div>
 
@@ -2650,9 +2663,11 @@ const backOfficeContent = comingSoonTitle ? (
             Total Outstanding
           </div>
           <div className="text-2xl font-bold text-red-600">{formatCurrency(
-              customerLedger.length
-                ? getLedgerOutstanding(customerLedger)
-                : selectedCustomerAccount?.outstanding_balance || 0
+              calculateCustomerCredit(
+                selectedCustomerAccount,
+                customerLedger,
+                customerOpeningBalance
+              ).outstanding
             )}
           </div>
         </div>

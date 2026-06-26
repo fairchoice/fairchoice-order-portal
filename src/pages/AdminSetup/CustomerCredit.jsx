@@ -1,5 +1,17 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
+import { formatCurrency } from "../../utils/currency";
+import {
+  calculateOrderTotals,
+  getOrderItemNetTotal,
+  getOrderItemQty,
+  getOrderItemUnitPrice,
+  getOrderItemVatTotal,
+} from "../../utils/orderTotals";
+import { calculateCustomerCredit } from "../../utils/customerCredit";
+
+const DELIVERED_ORDERS_PAGE_SIZE = 3;
+const HISTORY_PAGE_SIZE = 5;
 
 export default function CustomerCredit() {
   const [customers, setCustomers] = useState([]);
@@ -396,20 +408,6 @@ function formatCollectionSource(source) {
     ...new Set(statementRows.map((row) => row.branch_name).filter(Boolean)),
   ];
 
-  const totalOutstanding =
-    Number(openingBalance || 0) +
-    statementRows.reduce((total, row) => {
-      if (row.entry_type === "INVOICE") {
-        return total + Number(row.debit || 0);
-      }
-
-      if (row.entry_type === "PAYMENT") {
-        return total - Number(row.credit || 0);
-      }
-
-      return total;
-    }, 0);
-
   const filteredRows =
     selectedBranch === "All Branches"
       ? statementRows
@@ -459,8 +457,14 @@ function formatCollectionSource(source) {
   const selectedCustomerAccount = customers.find(
     (customer) => customer.account_name === selectedCustomer
   );
-  const creditLimit = Number(selectedCustomerAccount?.credit_limit || 0);
-  const availableCredit = creditLimit - totalOutstanding;
+  const creditSummary = calculateCustomerCredit(
+    selectedCustomerAccount,
+    statementRows,
+    openingBalance
+  );
+  const totalOutstanding = creditSummary.outstanding;
+  const creditLimit = creditSummary.creditLimit;
+  const availableCredit = creditSummary.availableCredit;
   const transactionRows = filteredRows.filter((row) => row.entry_type === "PAYMENT");
 
   return (
