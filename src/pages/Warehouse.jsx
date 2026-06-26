@@ -9,6 +9,7 @@ import {
   getOrderItemNetTotal,
   getOrderItemQty,
   getOrderItemUnitPrice,
+  getOrderPayableTotal,
 } from "../utils/orderTotals";
 
 /*
@@ -1427,7 +1428,7 @@ const confirmForDriver = async (order) => {
       priceMode: order.priceMode || order.price_mode,
     });
     const pickingQty = cardTotals.totalQty;
-    const orderValue = cardTotals.totalAmount;
+    const orderValue = getOrderPayableTotal(order);
     const isReadyForDriver = order.status === "Ready For Driver";
     const priceMode = order.price_mode || order.priceMode || "";
     const orderDate =

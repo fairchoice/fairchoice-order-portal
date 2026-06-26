@@ -201,13 +201,7 @@ const confirmDelivery = async (order, confirmedBy) => {
 
     await changeOrderStatus(order.orderId, "Delivered");
 
-    const orderTotal = Number(
-      order.finalTotal ||
-      order.final_total ||
-      order.total ||
-      order.totalAmount ||
-      0
-    );
+    const orderTotal = getOrderPayableTotal(order);
 
 const { error } = await supabase.from("customer_ledger").insert({
   customer_name: order.companyName || "Unknown Customer",
@@ -524,14 +518,7 @@ if (ledgerError) throw ledgerError;
                 </h3>
 
                 <div className="text-base font-extrabold text-red-600">
-                  Order Value: {formatCurrency(
-                    order.finalTotal ||
-                    order.final_total ||
-                    order.total ||
-                    order.orderTotal ||
-                    order.order_total ||
-                    0
-                  )}
+                  Order Value: {formatCurrency(getOrderPayableTotal(order))}
                 <p className="text-xs text-slate-500">
                   {order.createdAt || order.created_at || "-"} | Total Items: {getDriverItems(order).length}
                 </p>
