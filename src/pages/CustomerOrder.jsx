@@ -267,19 +267,23 @@ const role = activeUser?.role || "Customer";
 
   
 
-  const [page, setPage] = useState(() => {
-    if (isCustomer) return "order";
-    if (window.location.hash === "#admin") return "orders";
-    if (window.location.hash === "#products") return "products";
-    if (window.location.hash === "#warehouse") return "warehouse";
-    if (window.location.hash === "#stock-receipts") return "stockreceipts";
-    if (window.location.hash === "#stockhistory") return "stockhistory";
-    if (window.location.hash === "#config") return "config";
-    if (window.location.hash === "#customers") return "customers";
-    if (window.location.hash === "#credit") return "credit";
-    
-    return "order";
-  });
+ const [page, setPage] = useState(() => {
+  if (isCustomer) return "order";
+  if (isDriver) return "driver";
+  if (isWarehouse) return "warehouse";
+  if (isAdmin && window.location.hash === "#admin") return "orders";
+
+  if (window.location.hash === "#products") return "products";
+  if (window.location.hash === "#warehouse") return "warehouse";
+  if (window.location.hash === "#driver") return "driver";
+  if (window.location.hash === "#stock-receipts") return "stockreceipts";
+  if (window.location.hash === "#stockhistory") return "stockhistory";
+  if (window.location.hash === "#config") return "config";
+  if (window.location.hash === "#customers") return "customers";
+  if (window.location.hash === "#credit") return "credit";
+
+  return isAdmin ? "orders" : "order";
+});
 
   const [customerAccounts, setCustomerAccounts] = useState([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -789,18 +793,22 @@ useEffect(() => {
     fetchPricingSettings();
     refreshPromotionRules();
 
-    if (
-      [
-        "#admin",
-        "#products",
-        "#warehouse",
-        "#stock-receipts",
-        "#stockhistory",
-        "#credit",
-      ].includes(window.location.hash)
-    ) {
-      fetchOrders();
-    }
+ if (
+  isAdmin ||
+  isWarehouse ||
+  isDriver ||
+  [
+    "#admin",
+    "#products",
+    "#warehouse",
+    "#driver",
+    "#stock-receipts",
+    "#stockhistory",
+    "#credit",
+  ].includes(window.location.hash)
+) {
+  fetchOrders();
+}
   }, []);
 
   useEffect(() => {
