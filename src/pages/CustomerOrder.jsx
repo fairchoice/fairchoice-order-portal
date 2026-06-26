@@ -33,7 +33,18 @@ import {
   getActivePromotionRules,
   PROMOTION_RULE_KINDS,
 } from "../services/promotionRules";
+<<<<<<< HEAD
 import { formatCurrency } from "../utils/currency";
+=======
+import { formatCurrency } from "../Utils/currency";
+import {
+  calculateOrderTotals,
+  getOrderItemNetTotal,
+  getOrderItemQty,
+  getOrderItemUnitPrice,
+  getOrderItemVatTotal,
+} from "../utils/orderTotals";
+>>>>>>> test
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
 import ProductPromotions from "./AdminSetup/ProductPromotions";
@@ -281,10 +292,12 @@ const role = activeUser?.role || "Customer";
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const [selectedCustomerAccount, setSelectedCustomerAccount] = useState(null);
   const [selectedBranch, setSelectedBranch] = useState(null);
+  const [paymentHistoryBranchId, setPaymentHistoryBranchId] = useState("");
   const [customerLedger, setCustomerLedger] = useState([]);
 
   const [salesPaymentForm, setSalesPaymentForm] = useState({
   customerId: "",
+  branchId: "",
   amount: "",
   paymentType: "Cash",
   whoPaid: "",
@@ -357,7 +370,7 @@ useEffect(() => {
       ? oldCart
       : recalculatedCart;
   });
-}, [promotionRules, products, priceMode]);
+}, [promotionRules, products]);
 
 
 const fetchCustomerLedger = async () => {
@@ -690,6 +703,52 @@ const getPrice = (product) => {
   return roundToFairQuarter(discountedPrice);
 };
 
+const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
+  const quantity = Math.max(1, Number(nextQty || 1));
+  const selectedPrice = Number(getPrice(item) || 0);
+  const exVatPrice = isVatPriceMode(priceMode)
+    ? selectedPrice
+    : Number(item.vatPrice || item.vat_price || selectedPrice || 0);
+  const vatRate = getVatRate(item.vatType || item.vat_type);
+  const vatAmount = exVatPrice * (vatRate / 100);
+  const incVatPrice = exVatPrice + vatAmount;
+  const lineTotal = quantity * selectedPrice;
+
+  return {
+    ...item,
+    qty: quantity,
+    quantity,
+    selectedPrice,
+    price: selectedPrice,
+    unit_price: selectedPrice,
+    unitPrice: selectedPrice,
+    amount: lineTotal,
+    line_total: lineTotal,
+    lineTotal,
+    total: lineTotal,
+    exVatPrice,
+    normalSelectedPrice: Number(item.vatPrice || item.vat_price || 0),
+    normalPrice: Number(item.vatPrice || item.vat_price || 0),
+    vatRate,
+    vatAmount,
+    incVatPrice,
+  };
+};
+
+useEffect(() => {
+  setCart((oldCart) => {
+    const normalCart = oldCart.filter((item) => !item.isPromotionFree);
+    const recalculatedCart = normalCart.map((item) =>
+      recalculateCartItemForPriceMode(item, item.qty)
+    );
+    const nextCart = applyCartPromotions(recalculatedCart);
+
+    return JSON.stringify(nextCart) === JSON.stringify(oldCart)
+      ? oldCart
+      : nextCart;
+  });
+}, [priceMode, orderCountry, pricingSettings, promotionRules, products]);
+
 
 useEffect(() => {
   if (isAdmin && page === "order" && window.location.hash === "#admin") {
@@ -698,6 +757,7 @@ useEffect(() => {
     return;
   }
 
+<<<<<<< HEAD
   if (isWarehouse) {
     setPage("warehouse");
     fetchOrders();
@@ -718,6 +778,12 @@ useEffect(() => {
   if (isCustomer) {
     setPage("order");
   }
+=======
+  if (isWarehouse) setPage("warehouse");
+  if (isDriver) setPage("driver");
+  if (isSalesRep) setPage("order");
+  if (isCustomer) setPage("order");
+>>>>>>> test
 }, [isAdmin, isWarehouse, isDriver, isSalesRep, isCustomer]);
 
 useEffect(() => {
@@ -873,6 +939,10 @@ const fetchOrders = async () => {
     const mappedOrders = (data || []).map((order) => ({
       dbId: order.id,
       orderId: order.order_number,
+      customerAccountId: order.customer_account_id || "",
+      customer_account_id: order.customer_account_id || "",
+      customerBranchId: order.customer_branch_id || order.branch_id || "",
+      customer_branch_id: order.customer_branch_id || order.branch_id || "",
       customerName: order.company_name,
       phoneNumber: "",
       companyName: order.company_name,
@@ -886,8 +956,18 @@ const fetchOrders = async () => {
       deliveryAddress:
         order.delivery_address || order.delivery_postcode || order.postcode || "",
       priceMode: order.price_mode || "vat",
-      total: Number(order.order_total || 0),
-      finalTotal: Number(order.final_total || order.order_total || 0),
+      total: Number(order.order_total || order.total || 0),
+      orderTotal: Number(order.order_total || order.total || 0),
+      totalAmount: Number(order.total_amount || 0),
+      finalTotal: Number(
+        order.final_total ||
+          order.finalTotal ||
+          order.total_amount ||
+          order.order_total ||
+          order.total ||
+          0
+      ),
+      vatTotal: Number(order.vat_total || order.total_vat || order.vat || 0),
       discount_percent: Number(order.discount_percent || 0),
       discount_amount: Number(order.discount_amount || 0),
       discount_applied_by: order.discount_applied_by || "",
@@ -907,6 +987,8 @@ const fetchOrders = async () => {
       items: (order.order_items || []).map((item) => ({
         dbId: item.id,
         id: item.product_id,
+        productCode: item.product_code || item.code || "",
+        product_code: item.product_code || item.code || "",
         name: item.product_name,
         brand: item.brand || "",
         series: item.series || "",
@@ -915,6 +997,10 @@ const fetchOrders = async () => {
         qty: Number(item.qty || 0),
         selectedPrice: Number(item.price || 0),
         price: Number(item.price || 0),
+        lineTotal: Number(item.line_total || item.lineTotal || 0),
+        line_total: Number(item.line_total || item.lineTotal || 0),
+        vatRate: Number(item.vat_percent || item.vatPercent || 20),
+        vatTotal: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
         stock: Number(item.stock_before || 0),
         sourceStatus: item.source_status || "In Stock",
         pickedQty: Number(item.picked_qty || item.qty || 0),
@@ -1080,15 +1166,6 @@ const visibleProducts = useMemo(() => {
   const addToCart = (product, qty = 1) => {
   const quantity = Math.max(1, Number(qty || 1));
 
-  const selectedPrice = getPrice(product);
-  const exVatPrice =
-    isVatPriceMode(priceMode)
-      ? Number(selectedPrice || 0)
-      : Number(product.vatPrice || 0);
-const vatRate = getVatRate(product.vatType);
-const vatAmount = exVatPrice * (vatRate / 100);
-const incVatPrice = exVatPrice + vatAmount;
-
   setCart((oldCart) => {
     const normalCart = oldCart.filter((item) => !item.isPromotionFree);
     const found = normalCart.find((item) => item.id === product.id);
@@ -1098,20 +1175,16 @@ const incVatPrice = exVatPrice + vatAmount;
 
       const nextCart = normalCart.map((item) =>
         item.id === product.id
-          ? {
-              ...item,
-              qty: newQty,
-              selectedPrice,
-              exVatPrice,
-              normalSelectedPrice: Number(product.vatPrice || 0),
-              normalPrice: Number(product.vatPrice || 0),
-              vatRate,
-              vatAmount,
-              incVatPrice,
-              sourceStatus:
-                product.stock < newQty ? "Need Supplier" : "In Stock",
-              pickedQty: Math.min(product.stock, newQty),
-            }
+          ? recalculateCartItemForPriceMode(
+              {
+                ...item,
+                ...product,
+                sourceStatus:
+                  product.stock < newQty ? "Need Supplier" : "In Stock",
+                pickedQty: Math.min(product.stock, newQty),
+              },
+              newQty
+            )
           : item
       );
 
@@ -1120,21 +1193,16 @@ const incVatPrice = exVatPrice + vatAmount;
 
     return applyCartPromotions([
       ...normalCart,
-      {
-        ...product,
-        qty: quantity,
-        selectedPrice,
-        exVatPrice,
-        normalSelectedPrice: Number(product.vatPrice || 0),
-        normalPrice: Number(product.vatPrice || 0),
-        vatRate,
-        vatAmount,
-        incVatPrice,
+      recalculateCartItemForPriceMode(
+        {
+          ...product,
         sourceStatus:
           product.stock < quantity ? "Need Supplier" : "In Stock",
         includeInPicking: true,
         pickedQty: Math.min(product.stock, quantity),
-      },
+        },
+        quantity
+      ),
     ]);
   });
 };
@@ -1146,13 +1214,15 @@ const incVatPrice = exVatPrice + vatAmount;
           .filter((item) => !item.isPromotionFree)
           .map((item) =>
             item.id === id
-              ? {
-                  ...item,
-                  qty: item.qty + 1,
-                  sourceStatus:
-                    item.stock < item.qty + 1 ? "Need Supplier" : "In Stock",
-                  pickedQty: Math.min(item.stock, item.qty + 1),
-                }
+              ? recalculateCartItemForPriceMode(
+                  {
+                    ...item,
+                    sourceStatus:
+                      item.stock < item.qty + 1 ? "Need Supplier" : "In Stock",
+                    pickedQty: Math.min(item.stock, item.qty + 1),
+                  },
+                  item.qty + 1
+                )
               : item
           )
       )
@@ -1166,11 +1236,15 @@ const incVatPrice = exVatPrice + vatAmount;
           .filter((item) => !item.isPromotionFree)
           .map((item) =>
             item.id === id
-              ? {
-                  ...item,
-                  qty: item.qty - 1,
-                  pickedQty: Math.min(item.stock, item.qty - 1),
-                }
+              ? item.qty - 1 <= 0
+                ? { ...item, qty: 0, quantity: 0, pickedQty: 0 }
+                : recalculateCartItemForPriceMode(
+                    {
+                      ...item,
+                      pickedQty: Math.min(item.stock, item.qty - 1),
+                    },
+                    item.qty - 1
+                  )
               : item
           )
           .filter((item) => item.qty > 0)
@@ -1187,13 +1261,15 @@ const incVatPrice = exVatPrice + vatAmount;
           .filter((item) => !item.isPromotionFree)
           .map((item) =>
             item.id === id
-              ? {
-                  ...item,
-                  qty: quantity,
-                  sourceStatus:
-                    item.stock < quantity ? "Need Supplier" : "In Stock",
-                  pickedQty: Math.min(item.stock, quantity),
-                }
+              ? recalculateCartItemForPriceMode(
+                  {
+                    ...item,
+                    sourceStatus:
+                      item.stock < quantity ? "Need Supplier" : "In Stock",
+                    pickedQty: Math.min(item.stock, quantity),
+                  },
+                  quantity
+                )
               : item
           )
       )
@@ -1241,6 +1317,83 @@ const incVatPrice = exVatPrice + vatAmount;
 const finalTotal =
   Math.max(0, total - discountAmount);
 
+const getLedgerAmount = (row) =>
+  Number(
+    row.amount ||
+      row.invoice_amount ||
+      row.payment_amount ||
+      row.debit ||
+      row.credit ||
+      0
+  );
+
+const getLedgerOutstanding = (rows = []) =>
+  rows.reduce((balance, row) => {
+    const type = String(row.entry_type || row.transaction_type || "").toUpperCase();
+    const amount = getLedgerAmount(row);
+
+    if (type === "PAYMENT") return balance - amount;
+    return balance + amount;
+  }, 0);
+
+const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
+  (branch) => branch.active !== false
+);
+const filteredCustomerLedger = paymentHistoryBranchId
+  ? customerLedger.filter(
+      (row) =>
+        String(row.branch_id || row.customer_branch_id || "") ===
+          String(paymentHistoryBranchId) ||
+        String(row.branch_name || "") ===
+          String(
+            selectedCustomerBranches.find(
+              (branch) => String(branch.id) === String(paymentHistoryBranchId)
+            )?.branch_name || ""
+          )
+    )
+  : customerLedger;
+const branchOutstandingRows = selectedCustomerBranches.map((branch) => {
+  const rows = customerLedger.filter(
+    (row) =>
+      String(row.branch_id || row.customer_branch_id || "") === String(branch.id) ||
+      String(row.branch_name || "") === String(branch.branch_name)
+  );
+
+  return {
+    id: branch.id,
+    branchName: branch.branch_name,
+    outstanding: getLedgerOutstanding(rows),
+  };
+});
+
+const isFinalOrderStatus = (status) =>
+  ["delivered", "delivery confirmed", "completed"].includes(
+    String(status || "").trim().toLowerCase()
+  );
+
+const selectedCustomerAccountId = String(selectedCustomerAccount?.id || "");
+const selectedCustomerName = String(
+  selectedCustomerAccount?.account_name || companyName || ""
+).trim().toLowerCase();
+
+const completedCustomerOrders = orders.filter((order) => {
+  if (!isFinalOrderStatus(order.status)) return false;
+
+  const orderCustomerAccountId = String(
+    order.customerAccountId || order.customer_account_id || ""
+  );
+
+  if (selectedCustomerAccountId && orderCustomerAccountId) {
+    return orderCustomerAccountId === selectedCustomerAccountId;
+  }
+
+  const orderCustomerName = String(
+    order.companyName || order.customerName || ""
+  ).trim().toLowerCase();
+
+  return Boolean(selectedCustomerName && orderCustomerName === selectedCustomerName);
+});
+
   const toggleOrderExpanded = (orderId) => {
     setExpandedOrders((old) => ({
       ...old,
@@ -1254,6 +1407,13 @@ const finalTotal =
   const customer = customerAccounts.find(
     (c) => String(c.id) === String(salesPaymentForm.customerId)
   );
+  const salesCustomerBranches = (customer?.customer_branches || []).filter(
+    (branch) => branch.active !== false
+  );
+  const selectedSalesBranch =
+    salesCustomerBranches.find(
+      (branch) => String(branch.id) === String(salesPaymentForm.branchId)
+    ) || null;
 
   if (!customer) {
     alert("Please select customer.");
@@ -1285,7 +1445,6 @@ const finalTotal =
   .from("customer_ledger")
   .insert({
     customer_name: customer.account_name,
-
     entry_type: "PAYMENT",
     transaction_type: "PAYMENT",
 
@@ -1296,6 +1455,7 @@ const finalTotal =
 
     payment_type: salesPaymentForm.paymentType,
     payment_applies_to: "SALES_REP_COLLECTION",
+    collection_source: "SALES_REP_COLLECTION",
 
     paid_by: salesPaymentForm.whoPaid,
     who_paid: salesPaymentForm.whoPaid,
@@ -1310,7 +1470,15 @@ const finalTotal =
   collected_by_username: loggedInUser.username || null,
   collected_by_role: loggedInUser.role || null,
 
-    notes: salesPaymentForm.notes || "",
+    notes: [
+      selectedSalesBranch ? `Branch: ${selectedSalesBranch.branch_name}` : "",
+      salesPaymentForm.collectionDate
+        ? `Collection date: ${salesPaymentForm.collectionDate}`
+        : "",
+      salesPaymentForm.notes || "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
   });
 
     if (error) throw error;
@@ -1319,6 +1487,7 @@ const finalTotal =
 
     setSalesPaymentForm({
       customerId: "",
+      branchId: "",
       amount: "",
       paymentType: "Cash",
       whoPaid: "",
@@ -1474,27 +1643,19 @@ Please quote your Order Number if you need assistance.`
 };
 
 const recalculateOrder = (order, updatedItems) => {
-  const subtotal = updatedItems.reduce((sum, item) => {
-    const qty = Number(item.pickedQty ?? item.qty ?? 0);
-
-    const price = Number(
-      item.price ??
-      item.selectedPrice ??
-      item.unitPrice ??
-      0
-    );
-
-    return sum + qty * price;
-  }, 0);
+  const totals = calculateOrderTotals(updatedItems, {
+    priceMode: order.priceMode || order.price_mode,
+  });
 
   const discountPercent = Number(order.discount_percent || 0);
-  const discountAmount = subtotal * (discountPercent / 100);
-  const finalTotal = Math.max(0, subtotal - discountAmount);
+  const discountAmount = totals.totalAmount * (discountPercent / 100);
+  const finalTotal = Math.max(0, totals.totalAmount - discountAmount);
 
   return {
     ...order,
     items: updatedItems,
     total: finalTotal,
+    finalTotal,
     discount_amount: discountAmount,
   };
 };
@@ -1746,9 +1907,10 @@ const addOrderItem = async (orderId, newItem) => {
   };
 
   const printPickingList = (order) => {
-    const printableItems = order.items.filter(
-      (item) => item.includeInPicking !== false
-    );
+    const totals = calculateOrderTotals(order.items || [], {
+      priceMode: order.priceMode || order.price_mode,
+    });
+    const printableItems = totals.invoiceItems;
 
     const rows = printableItems
       .map(
@@ -1760,7 +1922,7 @@ const addOrderItem = async (orderId, newItem) => {
               <small>${item.sourceStatus || "In Stock"}</small>
             </td>
             <td style="text-align:right;font-size:18px;font-weight:bold;">
-              ${item.pickedQty ?? item.qty}
+              ${getOrderItemQty(item)}
             </td>
           </tr>
         `
@@ -1790,10 +1952,7 @@ const addOrderItem = async (orderId, newItem) => {
           <div class="line"></div>
           <table>${rows}</table>
           <div class="line"></div>
-          <div><b>Total Items:</b> ${printableItems.reduce(
-            (s, i) => s + Number(i.pickedQty ?? i.qty),
-            0
-          )}</div>
+          <div><b>Total Items:</b> ${totals.totalQty}</div>
           <br />
           <div>Picker: __________________</div>
           <br />
@@ -1807,6 +1966,158 @@ const addOrderItem = async (orderId, newItem) => {
 
     if (!win) {
       alert("Popup blocked. Please allow popups to print the picking list.");
+      return;
+    }
+
+    win.document.write(html);
+    win.document.close();
+  };
+
+  const escapeDocumentText = (value) =>
+    String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
+  const formatOrderDocumentDate = (value) => {
+    if (!value) return "-";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-GB");
+  };
+
+  const getOrderDocumentTitle = (documentType) => {
+    if (documentType === "deliveryNote") return "Delivery Note";
+    if (documentType === "orderForm") return "Order Form";
+    return "Sales Invoice";
+  };
+
+  const openCustomerOrderDocument = (order, documentType) => {
+    const priceMode = order.priceMode || order.price_mode || "";
+    const totals = calculateOrderTotals(order.items || [], { priceMode });
+    const title = getOrderDocumentTitle(documentType);
+    const showPrices = documentType !== "deliveryNote";
+    const orderNumber = order.orderId || order.order_number || order.id || "-";
+    const branchName = order.branchName || order.branch_name || "";
+    const customerName = order.companyName || order.customerName || "-";
+    const address = order.deliveryAddress || order.delivery_address || "";
+
+    const rows = totals.invoiceItems
+      .map((item) => {
+        const qty = getOrderItemQty(item);
+        const unitPrice = getOrderItemUnitPrice(item);
+        const netTotal = getOrderItemNetTotal(item);
+        const vatTotal = getOrderItemVatTotal(item);
+        const vatRate = Number(item.vatRate ?? item.vat_percent ?? item.vatPercent ?? 20);
+
+        return `
+          <tr>
+            <td>${escapeDocumentText(item.productCode || item.product_code || "")}</td>
+            <td>${escapeDocumentText(item.name || item.productName || item.product_name || "")}</td>
+            <td class="right">${qty}</td>
+            ${
+              showPrices
+                ? `
+                  <td class="right">${formatCurrency(unitPrice)}</td>
+                  <td class="right">${vatRate.toFixed(2)}</td>
+                  <td class="right">${formatCurrency(netTotal)}</td>
+                  <td class="right">${formatCurrency(vatTotal)}</td>
+                `
+                : ""
+            }
+          </tr>
+        `;
+      })
+      .join("");
+
+    const html = `
+      <html>
+        <head>
+          <title>${escapeDocumentText(title)} ${escapeDocumentText(orderNumber)}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 28px; color: #111827; }
+            h1 { margin: 0 0 8px; text-transform: uppercase; }
+            .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 18px 0; }
+            .box { border: 1px solid #111827; padding: 10px; min-height: 72px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 12px; }
+            th { background: #e5edf8; text-align: left; }
+            th, td { border-bottom: 1px solid #d1d5db; padding: 6px; vertical-align: top; }
+            .right { text-align: right; }
+            .totals { margin-left: auto; margin-top: 18px; width: 280px; border: 1px solid #111827; }
+            .totals div { display: flex; justify-content: space-between; padding: 7px 9px; border-bottom: 1px solid #111827; }
+            .totals div:last-child { border-bottom: 0; font-weight: 800; }
+            .muted { color: #4b5563; font-size: 12px; }
+            @media print { body { padding: 18px; } }
+          </style>
+        </head>
+        <body>
+          <h1>${escapeDocumentText(title)}</h1>
+          <div class="muted">Fair Choice Cash and Carry Ltd</div>
+
+          <div class="meta">
+            <div class="box">
+              <b>${escapeDocumentText(documentType === "deliveryNote" ? "Deliver To" : "Customer")}</b><br />
+              ${escapeDocumentText(customerName)}<br />
+              ${branchName ? `${escapeDocumentText(branchName)}<br />` : ""}
+              ${escapeDocumentText(address)}
+            </div>
+            <div class="box">
+              <b>Order Number:</b> ${escapeDocumentText(orderNumber)}<br />
+              <b>Date:</b> ${escapeDocumentText(formatOrderDocumentDate(order.createdAt || order.created_at))}<br />
+              <b>Price Mode:</b> ${escapeDocumentText(String(priceMode || "-").toUpperCase())}<br />
+              <b>Total Qty:</b> ${totals.totalQty}
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Description</th>
+                <th class="right">Qty</th>
+                ${
+                  showPrices
+                    ? `
+                      <th class="right">Price</th>
+                      <th class="right">VAT %</th>
+                      <th class="right">Net</th>
+                      <th class="right">VAT</th>
+                    `
+                    : ""
+                }
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || `<tr><td colspan="${showPrices ? 7 : 3}">No supplied items.</td></tr>`}
+            </tbody>
+          </table>
+
+          ${
+            showPrices
+              ? `
+                <div class="totals">
+                  <div><span>Total Net</span><strong>${formatCurrency(totals.netTotal)}</strong></div>
+                  <div><span>Total VAT</span><strong>${formatCurrency(totals.vatTotal)}</strong></div>
+                  <div><span>Total</span><strong>${formatCurrency(totals.totalAmount)}</strong></div>
+                </div>
+              `
+              : `
+                <div class="totals">
+                  <div><span>Total Lines</span><strong>${totals.totalLines}</strong></div>
+                  <div><span>Total Qty</span><strong>${totals.totalQty}</strong></div>
+                </div>
+              `
+          }
+
+          <script>window.print();</script>
+        </body>
+      </html>
+    `;
+
+    const win = window.open("", "_blank", "width=900,height=700");
+
+    if (!win) {
+      alert("Popup blocked. Please allow popups to download the document.");
       return;
     }
 
@@ -2378,7 +2689,7 @@ const backOfficeContent = comingSoonTitle ? (
           </div>
           <div className="text-2xl font-bold text-red-600">{formatCurrency(
               customerLedger.length
-                ? customerLedger[customerLedger.length - 1]?.balance || 0
+                ? getLedgerOutstanding(customerLedger)
                 : selectedCustomerAccount?.outstanding_balance || 0
             )}
           </div>
@@ -2388,6 +2699,93 @@ const backOfficeContent = comingSoonTitle ? (
       <h3 className="font-bold text-lg mb-3">
         Statement: {selectedCustomerAccount?.account_name || companyName}
       </h3>
+
+      {selectedCustomerBranches.length > 0 && (
+        <div className="mb-4 space-y-3">
+          <select
+            value={paymentHistoryBranchId}
+            onChange={(e) => setPaymentHistoryBranchId(e.target.value)}
+            className="w-full border rounded-xl p-3 text-sm"
+          >
+            <option value="">All Branches</option>
+            {selectedCustomerBranches.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.branch_name}
+                {branch.postcode ? ` - ${branch.postcode}` : ""}
+              </option>
+            ))}
+          </select>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {branchOutstandingRows.map((branch) => (
+              <div key={branch.id} className="border rounded-xl p-3 bg-slate-50">
+                <div className="text-xs font-bold text-slate-500">
+                  {branch.branchName}
+                </div>
+                <div className="text-lg font-extrabold text-slate-900">
+                  {formatCurrency(branch.outstanding)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {completedCustomerOrders.length > 0 && (
+        <div className="mb-4 border rounded-2xl p-3 bg-slate-50">
+          <h3 className="font-bold text-base mb-3">Delivered Orders</h3>
+
+          <div className="space-y-2">
+            {completedCustomerOrders.map((order) => {
+              const orderTotals = calculateOrderTotals(order.items || [], {
+                priceMode: order.priceMode || order.price_mode,
+              });
+
+              return (
+                <div
+                  key={order.dbId || order.orderId}
+                  className="border rounded-xl bg-white p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+                >
+                  <div>
+                    <div className="font-bold">
+                      {order.orderId || "-"}
+                      {order.branchName ? ` | ${order.branchName}` : ""}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {order.createdAt || "-"} | {String(order.priceMode || "-").toUpperCase()} |{" "}
+                      {formatCurrency(orderTotals.totalAmount)} | Total Qty: {orderTotals.totalQty}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openCustomerOrderDocument(order, "invoice")}
+                      className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                    >
+                      Download Invoice
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openCustomerOrderDocument(order, "orderForm")}
+                      className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                    >
+                      Download Order Form
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openCustomerOrderDocument(order, "deliveryNote")}
+                      className="bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                    >
+                      Download Delivery Note
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="customer-ledger-table-wrap overflow-x-auto border rounded-2xl">
         <table className="customer-ledger-table w-full text-sm">
@@ -2403,7 +2801,7 @@ const backOfficeContent = comingSoonTitle ? (
           </thead>
 
           <tbody>
-            {customerLedger.map((row) => {
+            {filteredCustomerLedger.map((row) => {
               const type = String(
                 row.entry_type || row.transaction_type || ""
               ).toUpperCase();
@@ -2441,6 +2839,12 @@ const backOfficeContent = comingSoonTitle ? (
 
                   <td className="p-3 font-bold">
                     {isInvoice ? "Invoice" : "Payment"}
+
+                    {row.branch_name && (
+                      <div className="text-xs text-slate-500 font-normal mt-1">
+                        Branch: {row.branch_name}
+                      </div>
+                    )}
 
                     {isPayment && (
                       <div className="text-xs text-slate-500 font-normal mt-1">
@@ -2511,6 +2915,7 @@ const backOfficeContent = comingSoonTitle ? (
           setSalesPaymentForm({
             ...salesPaymentForm,
             customerId: e.target.value,
+            branchId: "",
           })
         }
         className="w-full border rounded-xl p-3"
@@ -2526,6 +2931,38 @@ const backOfficeContent = comingSoonTitle ? (
           </option>
         ))}
       </select>
+
+      {(() => {
+        const customer = customerAccounts.find(
+          (account) => String(account.id) === String(salesPaymentForm.customerId)
+        );
+        const branches = (customer?.customer_branches || []).filter(
+          (branch) => branch.active !== false
+        );
+
+        if (!branches.length) return null;
+
+        return (
+          <select
+            value={salesPaymentForm.branchId}
+            onChange={(e) =>
+              setSalesPaymentForm({
+                ...salesPaymentForm,
+                branchId: e.target.value,
+              })
+            }
+            className="w-full border rounded-xl p-3"
+          >
+            <option value="">Select Branch / Shop</option>
+            {branches.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.branch_name}
+                {branch.postcode ? ` - ${branch.postcode}` : ""}
+              </option>
+            ))}
+          </select>
+        );
+      })()}
 
       <input
         type="number"
