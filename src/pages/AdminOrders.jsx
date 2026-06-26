@@ -1,15 +1,6 @@
 import { useState } from "react";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
-<<<<<<< HEAD
-import { formatCurrency } from "../utils/currency";
-=======
-import { formatCurrency } from "../Utils/currency";
-import {
-  calculateOrderTotals,
-  getOrderItemNetTotal,
-} from "../utils/orderTotals";
->>>>>>> test
 
 export default function AdminOrders({
   orders = [],

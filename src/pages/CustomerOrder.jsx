@@ -33,18 +33,7 @@ import {
   getActivePromotionRules,
   PROMOTION_RULE_KINDS,
 } from "../services/promotionRules";
-<<<<<<< HEAD
-import { formatCurrency } from "../utils/currency";
-=======
-import { formatCurrency } from "../Utils/currency";
-import {
-  calculateOrderTotals,
-  getOrderItemNetTotal,
-  getOrderItemQty,
-  getOrderItemUnitPrice,
-  getOrderItemVatTotal,
-} from "../utils/orderTotals";
->>>>>>> test
+
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
 import ProductPromotions from "./AdminSetup/ProductPromotions";
@@ -757,33 +746,6 @@ useEffect(() => {
     return;
   }
 
-<<<<<<< HEAD
-  if (isWarehouse) {
-    setPage("warehouse");
-    fetchOrders();
-    return;
-  }
-
-  if (isDriver) {
-    setPage("driver");
-    fetchOrders();
-    return;
-  }
-
-  if (isSalesRep) {
-    setPage("order");
-    return;
-  }
-
-  if (isCustomer) {
-    setPage("order");
-  }
-=======
-  if (isWarehouse) setPage("warehouse");
-  if (isDriver) setPage("driver");
-  if (isSalesRep) setPage("order");
-  if (isCustomer) setPage("order");
->>>>>>> test
 }, [isAdmin, isWarehouse, isDriver, isSalesRep, isCustomer]);
 
 useEffect(() => {

@@ -3,17 +3,6 @@ import * as XLSX from "xlsx";
 import { supabase } from "../services/supabase";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
-<<<<<<< HEAD
-import { formatCurrency } from "../utils/currency";
-=======
-import { formatCurrency } from "../Utils/currency";
-import {
-  calculateOrderTotals,
-  getOrderItemNetTotal,
-  getOrderItemQty,
-  getOrderItemUnitPrice,
-} from "../utils/orderTotals";
->>>>>>> test
 
 /*
   Warehouse Page
@@ -231,58 +220,6 @@ const fetchDrivers = async () => {
     VAT Total = order VAT if available.
     Grand Total = order total if available, otherwise net + VAT.
   */
-<<<<<<< HEAD
-const getInvoiceTotals = (order) => {
-  const printableItems = getPrintableItems(order);
-
-  const totalLines = printableItems.length;
-
-  const totalQuantity = printableItems.reduce(
-    (sum, item) => sum + getLineQty(item),
-    0
-  );
-
-  const netTotal = printableItems.reduce((sum, item) => {
-    const qty = getLineQty(item);
-    const price = getLinePrice(item);
-    const net = Number(item.net_total ?? item.netTotal ?? qty * price);
-
-    return sum + net;
-  }, 0);
-
-  const vatTotal = printableItems.reduce((sum, item) => {
-    const explicitLineVat =
-      item.vatTotal ?? item.vat_total ?? item.vatAmount ?? item.vat_amount;
-
-    if (explicitLineVat != null) {
-      return sum + Number(explicitLineVat || 0);
-    }
-
-    const qty = getLineQty(item);
-    const price = getLinePrice(item);
-    const net = Number(item.net_total ?? item.netTotal ?? qty * price);
-    const vatPercent = Number(item.vat_percent ?? item.vatPercent ?? 20);
-
-    return sum + (net * vatPercent) / 100;
-  }, 0);
-
-  const grandTotal = netTotal + vatTotal;
-
-  return {
-    totalLines,
-    totalQuantity,
-    netTotal,
-    vatTotal,
-    grandTotal,
-  };
-};
-=======
-  const getInvoiceTotals = (order) =>
-    calculateOrderTotals(order.items || [], {
-      priceMode: order.priceMode || order.price_mode,
-    });
->>>>>>> test
-
   /*
     Decide whether to print invoice or order form.
     EX VAT / Admin Offer => Invoice
