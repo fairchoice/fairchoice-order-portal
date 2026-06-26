@@ -4,6 +4,12 @@ import { supabase } from "../services/supabase";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../Utils/currency";
+import {
+  calculateOrderTotals,
+  getOrderItemNetTotal,
+  getOrderItemQty,
+  getOrderItemUnitPrice,
+} from "../utils/orderTotals";
 
 /*
   Warehouse Page
@@ -186,7 +192,8 @@ const fetchDrivers = async () => {
     It will not appear on invoice/order form/delivery note.
   */
   const getPrintableItems = (order) =>
-    (order.items || []).filter((item) => item.includeInPicking !== false);
+    calculateOrderTotals(order.items || [], { priceMode: order.priceMode || order.price_mode })
+      .invoiceItems;
 
   /*
     Money format helper.
@@ -197,27 +204,20 @@ const fetchDrivers = async () => {
     Product quantity helper.
     Supports different possible field names from your order object.
   */
-  const getLineQty = (item) =>
-    Number(item.pickedQty ?? item.qty ?? item.quantity ?? 0);
+  const getLineQty = getOrderItemQty;
 
   /*
     Product price helper.
     Supports different possible field names from your order object.
   */
-  const getLinePrice = (item) =>
-    Number(item.price ?? item.unitPrice ?? item.selectedPrice ?? 0);
+  const getLinePrice = getOrderItemUnitPrice;
 
   /*
     Product line total helper.
     If lineTotal exists, use it.
     Otherwise calculate qty x price.
   */
-  const getLineTotal = (item) => {
-    const qty = getLineQty(item);
-    const price = getLinePrice(item);
-
-    return Number(item.lineTotal ?? item.line_total ?? qty * price ?? 0);
-  };
+  const getLineTotal = getOrderItemNetTotal;
 
   /*
     Invoice/order totals.
@@ -227,43 +227,10 @@ const fetchDrivers = async () => {
     VAT Total = order VAT if available.
     Grand Total = order total if available, otherwise net + VAT.
   */
-  const getInvoiceTotals = (order) => {
-    const printableItems = getPrintableItems(order);
-
-    const totalLines = printableItems.length;
-
-    const totalQuantity = printableItems.reduce(
-      (sum, item) => sum + getLineQty(item),
-      0
-    );
-
-    const netTotal = printableItems.reduce(
-      (sum, item) => sum + getLineTotal(item),
-      0
-    );
-
-    const lineVatTotal = printableItems.reduce((sum, item) => {
-      const explicitLineVat =
-        item.vatTotal ?? item.vat_total ?? item.vatAmount ?? item.vat_amount;
-
-      if (explicitLineVat != null) {
-        return sum + Number(explicitLineVat || 0);
-      }
-
-      const vatPercent = Number(item.vatPercent ?? item.vat_percent ?? 20);
-      return sum + getLineTotal(item) * (vatPercent / 100);
-    }, 0);
-    const vatTotal = lineVatTotal;
-    const grandTotal = netTotal + vatTotal;
-
-    return {
-      totalLines,
-      totalQuantity,
-      netTotal,
-      vatTotal,
-      grandTotal,
-    };
-  };
+  const getInvoiceTotals = (order) =>
+    calculateOrderTotals(order.items || [], {
+      priceMode: order.priceMode || order.price_mode,
+    });
 
   /*
     Decide whether to print invoice or order form.
@@ -1454,18 +1421,11 @@ const confirmForDriver = async (order) => {
 
   const renderWarehouseCard = (order) => {
     const orderId = getOrderId(order);
-    const pickingQty = getPrintableItems(order).reduce(
-      (sum, item) => sum + getLineQty(item),
-      0
-    );
-    const orderValue = Number(
-      order.finalTotal ||
-        order.final_total ||
-        order.total ||
-        order.orderTotal ||
-        order.order_total ||
-        0
-    );
+    const cardTotals = calculateOrderTotals(order.items || [], {
+      priceMode: order.priceMode || order.price_mode,
+    });
+    const pickingQty = cardTotals.totalQty;
+    const orderValue = cardTotals.totalAmount;
     const isReadyForDriver = order.status === "Ready For Driver";
     const priceMode = order.price_mode || order.priceMode || "";
     const orderDate =

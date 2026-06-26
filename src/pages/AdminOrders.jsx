@@ -2,6 +2,10 @@ import { useState } from "react";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../Utils/currency";
+import {
+  calculateOrderTotals,
+  getOrderItemNetTotal,
+} from "../utils/orderTotals";
 
 export default function AdminOrders({
   orders = [],
@@ -306,25 +310,11 @@ const updatePreparedItem = async (order, item, changes) => {
         )}
 
         {visibleOrders.map((order) => {
-          const printableItems = order.items.filter(
-            (item) => item.includeInPicking !== false
-          );
-          const calculatedItemTotal = order.items.reduce((sum, item) => {
-            const qty = Number(item.pickedQty ?? item.qty ?? item.quantity ?? 0);
-            const price = Number(
-              item.price ?? item.unitPrice ?? item.selectedPrice ?? 0
-            );
-
-            return sum + qty * price;
-          }, 0);
-          const totalQty = order.items.reduce(
-            (sum, item) =>
-              sum + Number(item.pickedQty ?? item.qty ?? item.quantity ?? 0),
-            0
-          );
           const orderDateTime =
             order.created_at || order.createdAt || order.orderDate || "-";
           const priceMode = order.price_mode || order.priceMode || "-";
+          const orderTotals = calculateOrderTotals(order.items || [], { priceMode });
+          const totalQty = orderTotals.totalQty;
           const priceModeKey = String(priceMode || "").toLowerCase();
           const printButtonLabel =
             priceModeKey === "server" ? "Print Order Form" : "Print Invoice";
@@ -333,14 +323,7 @@ const updatePreparedItem = async (order, item, changes) => {
           const customerName =
             order.customer_name || order.customerName || order.companyName || "-";
           const branchName = order.branch_name || order.branchName || "";
-          const orderTotal = Number(
-            order.total_amount ??
-              order.totalAmount ??
-              order.final_total ??
-              order.finalTotal ??
-              order.total ??
-              calculatedItemTotal
-          );
+          const orderTotal = orderTotals.totalAmount;
 
           return (
             <div key={order.orderId} className="received-order-card bg-white border rounded-2xl p-3">
@@ -437,12 +420,7 @@ const updatePreparedItem = async (order, item, changes) => {
     </div>
 
     {sortOrderItems(order.items).map((item) => {
-      const itemPrice = Number(
-        item.price ?? item.unitPrice ?? item.selectedPrice ?? 0
-      );
-
-      const itemQty = Number(item.pickedQty ?? item.qty ?? 0);
-      const lineTotal = itemPrice * itemQty;
+      const lineTotal = getOrderItemNetTotal(item);
 
       return (
         <div
