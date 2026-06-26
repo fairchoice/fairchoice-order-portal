@@ -80,3 +80,34 @@ export const calculateOrderTotals = (items = [], options = {}) => {
     grandTotal: totalAmount,
   };
 };
+
+const getSavedOrderTotalValue = (order = {}) => {
+  const candidates = [
+    order.final_total,
+    order.finalTotal,
+    order.total_amount,
+    order.totalAmount,
+    order.order_total,
+    order.orderTotal,
+    order.total,
+  ];
+
+  for (const value of candidates) {
+    if (value == null || value === "") continue;
+
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) return numericValue;
+  }
+
+  return null;
+};
+
+export const getOrderPayableTotal = (order = {}) => {
+  const savedTotal = getSavedOrderTotalValue(order);
+
+  if (savedTotal != null) return savedTotal;
+
+  return calculateOrderTotals(order.items || order.order_items || [], {
+    priceMode: order.priceMode || order.price_mode,
+  }).totalAmount;
+};
