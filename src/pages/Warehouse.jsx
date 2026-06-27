@@ -10,6 +10,7 @@ import {
   getOrderItemQty,
   getOrderItemUnitPrice,
   getOrderPayableTotal,
+  roundMoney,
 } from "../utils/orderTotals";
 
 /*
@@ -28,6 +29,7 @@ import {
 
 export default function Warehouse({
   orders = [],
+  printPickingList,
   changeOrderStatus,
   updateOrderItem,
   updateOrderExtraFields,
@@ -219,6 +221,88 @@ const fetchDrivers = async () => {
     Otherwise calculate qty x price.
   */
   const getLineTotal = getOrderItemNetTotal;
+
+  const hasSavedOrderTotal = (order = {}) =>
+    [
+      order.final_total,
+      order.finalTotal,
+      order.total_amount,
+      order.totalAmount,
+      order.order_total,
+      order.orderTotal,
+      order.total,
+    ].some((value) => value !== null && value !== undefined && value !== "");
+
+  const getSavedVatTotal = (order = {}) => {
+    const candidates = [
+      order.vat_total,
+      order.vatTotal,
+      order.total_vat,
+      order.totalVat,
+    ];
+
+    for (const value of candidates) {
+      if (value === null || value === undefined || value === "") continue;
+      const numericValue = Number(value);
+      if (Number.isFinite(numericValue) && numericValue > 0) {
+        return roundMoney(numericValue);
+      }
+    }
+
+    return null;
+  };
+
+  const getInvoiceTotals = (order = {}) => {
+  const calculatedTotals = calculateOrderTotals(order.items || [], {
+    priceMode: order.priceMode || order.price_mode,
+  });
+
+  const netTotal = roundMoney(calculatedTotals.netTotal);
+
+  const savedVatTotal = getSavedVatTotal(order);
+
+  const isVatMode = ["vat", "ex. vat", "ex vat"].includes(
+    String(order.priceMode || order.price_mode || "").toLowerCase()
+  );
+
+  // Use saved VAT if available, otherwise calculate from Net
+  const vatTotal = roundMoney(
+    savedVatTotal ?? (isVatMode ? netTotal * 0.2 : 0)
+  );
+
+  // Always calculate Grand Total from Net + VAT
+  const grandTotal = roundMoney(netTotal + vatTotal);
+
+  return {
+    netTotal,
+    vatTotal,
+    grandTotal,
+    totalAmount: grandTotal,
+  };
+};
+
+  const getWarehouseStatus = (item = {}) =>
+    String(item.sourceStatus || item.source_status || item.status || "In Stock");
+
+  const getWarehouseStatusRank = (item = {}) => {
+    const status = getWarehouseStatus(item).trim().toLowerCase();
+
+    if (status === "in stock" || status === "available") return 1;
+    if (status === "need supplier" || status === "pre-order" || status === "pre order") return 2;
+    if (status === "cannot supply" || status === "supply needed") return 3;
+
+    return 4;
+  };
+
+  const getGroupedWarehouseItems = (items = []) =>
+    [...(items || [])].sort((a, b) => {
+      const rankDiff = getWarehouseStatusRank(a) - getWarehouseStatusRank(b);
+      if (rankDiff !== 0) return rankDiff;
+
+      return String(a.name || a.productName || "").localeCompare(
+        String(b.name || b.productName || "")
+      );
+    });
 
   /*
     Invoice/order totals.
@@ -1231,30 +1315,40 @@ const fetchDrivers = async () => {
   };
 
   const exportWarehouseItems = (allowedStatuses, fileName, sheetName) => {
-    const statusSet = new Set(allowedStatuses);
-    const exportRows = warehouseOrders.flatMap((order) =>
-      (order.items || [])
-        .filter((item) => {
-          const sourceStatus = item.status || item.sourceStatus || item.source_status || "";
-          return statusSet.has(sourceStatus);
-        })
-        .map((item) => {
-          const sourceStatus = item.status || item.sourceStatus || item.source_status || "";
+    const normalizedStatuses = new Set(
+      allowedStatuses.map((status) => String(status).trim().toLowerCase())
+    );
+    const groupedItems = {};
 
-          return {
-            "Order Number": getOrderId(order),
-            Customer: order.companyName || order.company_name || "",
-            Branch: order.branchName || order.branch_name || "",
-            Product: item.productName || item.name || "",
-            Qty: getLineQty(item),
-            Status: sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus,
-            "Order Date": getOrderDateValue(order) || "",
+    warehouseOrders.forEach((order) => {
+      (order.items || []).forEach((item) => {
+        const sourceStatus = getWarehouseStatus(item).trim();
+        const normalizedStatus = sourceStatus.toLowerCase();
+
+        if (!normalizedStatuses.has(normalizedStatus)) return;
+
+        const product = item.productName || item.name || "";
+        const key = product.trim().toLowerCase();
+
+        if (!key) return;
+
+        if (!groupedItems[key]) {
+          groupedItems[key] = {
+            Product: product,
+            Qty: 0,
           };
-        })
+        }
+
+        groupedItems[key].Qty += getLineQty(item);
+      });
+    });
+
+    const exportRows = Object.values(groupedItems).sort((a, b) =>
+      String(a.Product).localeCompare(String(b.Product))
     );
 
     if (exportRows.length === 0) {
-      alert("No matching warehouse items to export.");
+      alert("No pre-order items to export.");
       return;
     }
 
@@ -1267,9 +1361,9 @@ const fetchDrivers = async () => {
 
   const exportSupplyNeeded = () => {
     exportWarehouseItems(
-      ["Cannot Supply", "Need Supplier", "Supply Needed"],
-      `fairchoice-supply-needed-${new Date().toISOString().slice(0, 10)}.xlsx`,
-      "Supply Needed"
+      ["Cannot Supply", "Need Supplier", "Pre-Order", "Pre Order", "Supply Needed"],
+      `fairchoice-pre-order-list-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      "Pre-Order List"
     );
   };
 
@@ -1428,7 +1522,7 @@ const confirmForDriver = async (order) => {
       priceMode: order.priceMode || order.price_mode,
     });
     const pickingQty = cardTotals.totalQty;
-    const orderValue = getOrderPayableTotal(order);
+   const orderValue = getInvoiceTotals(order).grandTotal;
     const isReadyForDriver = order.status === "Ready For Driver";
     const priceMode = order.price_mode || order.priceMode || "";
     const orderDate =
@@ -1471,14 +1565,6 @@ const confirmForDriver = async (order) => {
               {expandedOrders[orderId] ? "Hide" : "View Order"}
             </button>
 
-            {hasPermission(loggedInUser, "can_print") && (
-              <button
-                onClick={() => printPickingList(order)}
-                className={`bg-black text-white ${btn}`}
-              >
-                Picking List
-              </button>
-            )}
           </div>
         </div>
         <div
@@ -1506,11 +1592,40 @@ const confirmForDriver = async (order) => {
               <div className="text-right">Action</div>
             </div>
 
-            {order.items.map((item) => {
-              const sourceStatus = item.sourceStatus || "In Stock";
+            {getGroupedWarehouseItems(order.items).map((item) => {
+              const sourceStatus = getWarehouseStatus(item);
               const isInStock = sourceStatus === "In Stock";
               const isCannotSupply = sourceStatus === "Cannot Supply";
               const needsSupplier = !isInStock && !isCannotSupply;
+              const nextWarehouseStatus = isInStock
+                ? {
+                    label: "Cannot Supply",
+                    className: "bg-red-600 text-white",
+                    changes: {
+                      sourceStatus: "Cannot Supply",
+                      includeInPicking: false,
+                      pickedQty: 0,
+                    },
+                  }
+                : isCannotSupply
+                ? {
+                    label: "Pre Order",
+                    className: "bg-amber-600 text-white",
+                    changes: {
+                      sourceStatus: "Need Supplier",
+                      includeInPicking: false,
+                      pickedQty: 0,
+                    },
+                  }
+                : {
+                    label: "Available",
+                    className: "bg-green-600 text-white",
+                    changes: {
+                      sourceStatus: "In Stock",
+                      includeInPicking: true,
+                      pickedQty: getLineQty(item),
+                    },
+                  };
 
               return (
                 <div
@@ -1540,41 +1655,15 @@ const confirmForDriver = async (order) => {
                   <div className="text-right">
                     {!isReadyForDriver &&
                       hasPermission(loggedInUser, "can_move_to_warehouse") && (
-                        <>
-                          {isCannotSupply ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (!window.confirm("Mark this item as Available?")) return;
-
-                                updateWarehouseItem(order, item, {
-                                  sourceStatus: "In Stock",
-                                  includeInPicking: true,
-                                  pickedQty: Number(item.qty || 0),
-                                });
-                              }}
-                              className={`bg-green-600 text-white ${btn}`}
-                            >
-                              Available
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (!window.confirm("Mark this item as Cannot Supply?")) return;
-
-                                updateWarehouseItem(order, item, {
-                                  sourceStatus: "Cannot Supply",
-                                  includeInPicking: false,
-                                  pickedQty: 0,
-                                });
-                              }}
-                              className={`bg-red-600 text-white ${btn}`}
-                            >
-                              Cannot Supply
-                            </button>
-                          )}
-                        </>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateWarehouseItem(order, item, nextWarehouseStatus.changes)
+                          }
+                          className={`${nextWarehouseStatus.className} ${btn}`}
+                        >
+                          {nextWarehouseStatus.label}
+                        </button>
                       )}
                   </div>
                 </div>
@@ -1727,13 +1816,6 @@ const confirmForDriver = async (order) => {
             type="button"
             onClick={exportSupplyNeeded}
             className={`bg-slate-800 text-white ${btn}`}
-          >
-            Export Supply Needed
-          </button>
-          <button
-            type="button"
-            onClick={exportPreOrderList}
-            className={`bg-amber-600 text-white ${btn}`}
           >
             Export Pre-Order List
           </button>

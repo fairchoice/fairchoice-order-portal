@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { roundMoney } from "../utils/orderTotals";
 
 export async function getOrders() {
   const { data, error } = await supabase
@@ -93,6 +94,7 @@ export async function createCustomerOrder({
   credit_limit = 0,
 }) {
   const orderNumber = "ORD-" + Date.now();
+  const savedOrderTotal = roundMoney(total);
 
   const { data: order, error: orderError } = await supabase
     .from("orders")
@@ -111,7 +113,7 @@ export async function createCustomerOrder({
 
   postcode: delivery_postcode || "",
   price_mode: priceMode.toUpperCase(),
-  order_total: total.toFixed(2),
+  order_total: savedOrderTotal.toFixed(2),
   
 
   discount_percent: Number(discount_percent || 0),
@@ -133,7 +135,11 @@ alert(
     throw orderError;
   }
 
-  const orderItems = cart.map((item) => ({
+  const orderItems = cart.map((item) => {
+    const qty = Number(item.qty || 0);
+    const price = roundMoney(item.selectedPrice || 0);
+
+    return ({
     order_id: order.id,
     product_id: item.id,
     product_name: item.name,
@@ -141,15 +147,16 @@ alert(
     series: item.series || "",
     flavour: item.flavour || "",
     carton_size: item.cartonSize,
-    qty: item.qty,
-    price: item.selectedPrice.toFixed(2),
-    line_total: (item.selectedPrice * item.qty).toFixed(2),
+    qty,
+    price: price.toFixed(2),
+    line_total: roundMoney(price * qty).toFixed(2),
     stock_before: item.stock,
-    stock_after: Math.max(0, item.stock - item.qty),
+    stock_after: Math.max(0, item.stock - qty),
     source_status: item.sourceStatus || "In Stock",
-    picked_qty: item.pickedQty ?? item.qty,
+    picked_qty: item.pickedQty ?? qty,
     include_in_picking: item.includeInPicking !== false,
-  }));
+  });
+  });
 
   const { error: itemsError } = await supabase
     .from("order_items")

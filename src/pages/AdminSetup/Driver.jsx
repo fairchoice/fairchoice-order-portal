@@ -12,9 +12,11 @@ export default function Driver({
   const [expandedOrder, setExpandedOrder] = useState(null);
   const [selectedDriver, setSelectedDriver] = useState("All");
   const [cashCollectionOrder, setCashCollectionOrder] = useState(null);
+  const [selectedCreditCustomerId, setSelectedCreditCustomerId] = useState("");
+  const [selectedCreditBranchId, setSelectedCreditBranchId] = useState("");
 
   const [creditCustomers, setCreditCustomers] = useState([]);
-const [selectedCreditCustomerId, setSelectedCreditCustomerId] = useState("");
+
 
 const [savingPayment, setSavingPayment] = useState(false);
 
@@ -56,7 +58,7 @@ useEffect(() => {
 const loadCreditCustomers = async () => {
   const { data, error } = await supabase
     .from("customer_accounts")
-    .select("id, account_name")
+  .select("id, account_name, customer_branches(*)")
     .order("account_name");
 
   if (error) {
@@ -68,80 +70,14 @@ const loadCreditCustomers = async () => {
   setCreditCustomers(data || []);
 };
 
-const savePreviousBalancePayment = async () => {
-  try {
-    const selectedCustomer = creditCustomers.find(
-      (customer) => String(customer.id) === String(selectedCreditCustomerId)
-    );
+const selectedCreditCustomer = creditCustomers.find(
+  (customer) => String(customer.id) === String(selectedCreditCustomerId)
+);
 
-    const paymentAmount = Number(previousBalanceForm.amount || 0);
-
-    if (!selectedCustomer) {
-      alert("Please select customer.");
-      return;
-    }
-
-    if (!paymentAmount || paymentAmount <= 0) {
-      alert("Please enter amount.");
-      return;
-    }
-
-    if (!previousBalanceForm.whoPaid.trim()) {
-      alert("Please enter who paid.");
-      return;
-    }
-
-    const { error } = await supabase
-  .from("customer_ledger")
-  .insert({
-    customer_name: selectedCustomer.account_name,
-
-    entry_type: "PAYMENT",
-    transaction_type: "PAYMENT",
-
-    reference_no: "PREVIOUS_BALANCE",
-
-    debit: 0,
-    credit: paymentAmount,
-
-    payment_type: previousBalanceForm.paymentType,
-    payment_applies_to: "PREVIOUS_BALANCE",
-
-    paid_by: previousBalanceForm.whoPaid || null,
-    who_paid: previousBalanceForm.whoPaid || null,
-
-    received_by: loggedInUser.name || null,
-    received_by_username: loggedInUser.username || null,
-    received_by_role: loggedInUser.role || null,
-    received_by_staff_id: loggedInUser.id || null,
-
-    notes:
-      previousBalanceForm.notes ||
-      `Previous Balance Payment - ${previousBalanceForm.paymentType}`,
-  });
-
-    if (error) throw error;
-
-    alert("Previous Balance Payment saved successfully.");
-
-    setPreviousBalanceForm({
-      amount: "",
-      paymentType: "Cash",
-      whoPaid: "",
-      notes: "",
-    });
-
-    setSelectedCreditCustomerId("");
-    setShowPreviousBalance(false);
-
-  } catch (error) {
-    console.error("Previous balance payment error:", error);
-    alert(
-      "Could not save previous balance payment: " +
-        (error.message || JSON.stringify(error))
-    );
-  }
-};
+const selectedCreditBranches =
+  selectedCreditCustomer?.customer_branches?.filter(
+    (branch) => branch.active !== false
+  ) || [];
 
   const driverNames = [
     "All",
@@ -173,7 +109,7 @@ const savePreviousBalancePayment = async () => {
     selectedDriver === "All" || driverName === selectedDriver;
 
   return (isReadyForDriver || isDeliveredWaitingPayment) && matchesDriver;
-});
+  });
 
         const openCashCollection = (order) => {
           setCashCollectionOrder(order.orderId);
@@ -188,7 +124,74 @@ const savePreviousBalancePayment = async () => {
     });
         };
 
-const confirmDelivery = async (order, confirmedBy) => {
+  const savePreviousBalancePayment = async () => {
+  const paymentAmount = Number(previousBalanceForm.amount || 0);
+
+  if (!selectedCreditCustomer) {
+    alert("Please select customer.");
+    return;
+  }
+
+  if (selectedCreditBranches.length > 0 && !selectedCreditBranch) {
+    alert("Please select branch / shop.");
+    return;
+  }
+
+  if (!paymentAmount || paymentAmount <= 0) {
+    alert("Please enter amount.");
+    return;
+  }
+
+  if (!previousBalanceForm.whoPaid.trim()) {
+    alert("Please enter who paid.");
+    return;
+  }
+
+  const { error } = await supabase.from("customer_ledger").insert({
+    customer_name: selectedCreditCustomer.account_name,
+    entry_type: "PAYMENT",
+    transaction_type: "PAYMENT",
+    reference_no: "PREVIOUS_BALANCE",
+
+    debit: 0,
+    credit: paymentAmount,
+
+    payment_type: previousBalanceForm.paymentType,
+    payment_applies_to: "PREVIOUS_BALANCE",
+    paid_by: previousBalanceForm.whoPaid || null,
+    who_paid: previousBalanceForm.whoPaid || null,
+       collection_source: "DRIVER_PREVIOUS_BALANCE",
+
+    received_by: loggedInUser.name || loggedInUser.username || null,
+    received_by_username: loggedInUser.username || null,
+    received_by_role: loggedInUser.role || null,
+    received_by_staff_id: loggedInUser.id || loggedInUser.staff_id || null,
+
+    notes:
+      previousBalanceForm.notes ||
+      `Driver previous balance collection - ${previousBalanceForm.paymentType}`,
+  });
+
+  if (error) {
+    alert("Could not save previous balance payment: " + error.message);
+    return;
+  }
+
+  alert("Previous Balance Payment saved successfully.");
+
+  setPreviousBalanceForm({
+    amount: "",
+    paymentType: "Cash",
+    whoPaid: "",
+    notes: "",
+  });
+
+  setSelectedCreditCustomerId("");
+  setSelectedCreditBranchId("");
+  setShowPreviousBalance(false);
+};
+
+  const confirmDelivery = async (order, confirmedBy) => {
   try {
     await updateOrderExtraFields(order.orderId, {
       delivered_confirmed_by: confirmedBy,
@@ -198,7 +201,7 @@ const confirmDelivery = async (order, confirmedBy) => {
   if (status === "PAID") return "status-paid";
   if (status === "PART PAID") return "status-part-paid";
   return "status-unpaid";
-};
+  };
 
     await changeOrderStatus(order.orderId, "Delivered");
 
@@ -219,7 +222,6 @@ const { error } = await supabase.from("customer_ledger").insert({
   driver_username: loggedInUser.username || null,
   driver_role: loggedInUser.role || null,
   driver_staff_id: loggedInUser.id || null,
-
   notes: "Delivery confirmed",
   invoice_status: "UNPAID",
 });
@@ -232,6 +234,11 @@ const { error } = await supabase.from("customer_ledger").insert({
     alert("Could not confirm delivery: " + error.message);
   }
 };
+
+const selectedCreditBranch = selectedCreditBranches.find(
+  (branch) => String(branch.id) === String(selectedCreditBranchId)
+);
+
 
 const moveBackToWarehouse = async (order) => {
   if (order.status === "Delivered") return;
@@ -361,7 +368,8 @@ const printDeliveryNote = (order) => {
 
     payment_type: paymentType,
     payment_applies_to: paymentForm.paymentAppliesTo,
-
+   
+    collection_source: "DRIVER_DELIVERY_COLLECTION",
     who_paid: paymentForm.paidBy || null,
     paid_by: paymentForm.paidBy || null,
     received_by: loggedInUser.name || null,
@@ -420,6 +428,23 @@ if (ledgerError) throw ledgerError;
           </option>
         ))}
       </select>
+
+      <select
+  value={selectedCreditBranchId}
+  onChange={(e) => setSelectedCreditBranchId(e.target.value)}
+  className="w-full border rounded-xl p-3 bg-white"
+  disabled={!selectedCreditCustomerId}
+>
+  <option value="">Select Branch / Shop</option>
+
+  {selectedCreditBranches.map((branch) => (
+    <option key={branch.id} value={branch.id}>
+      {branch.branch_name}
+      {branch.postcode ? ` - ${branch.postcode}` : ""}
+    </option>
+  ))}
+  
+</select>
 
     <input
       type="number"

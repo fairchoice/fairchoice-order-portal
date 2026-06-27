@@ -316,9 +316,7 @@ const updatePreparedItem = async (order, item, changes) => {
           const orderTotals = calculateOrderTotals(order.items || [], { priceMode });
           const totalQty = orderTotals.totalQty;
           const priceModeKey = String(priceMode || "").toLowerCase();
-          const printButtonLabel =
-            priceModeKey === "server" ? "Print Order Form" : "Print Invoice";
-          const orderNumber =
+                    const orderNumber =
             order.order_number || order.orderNumber || order.orderId || "-";
           const customerName =
             order.customer_name || order.customerName || order.companyName || "-";
@@ -361,45 +359,7 @@ const updatePreparedItem = async (order, item, changes) => {
                 </div>
               </div>
 
-              {expandedOrders[order.orderId] && (
-                <div className="received-card-actions">
-                  <button
-                    type="button"
-                    className={`bg-slate-700 text-white ${btn}`}
-                    disabled
-                    title="Export handler is not configured on this screen."
-                  >
-                    Export
-                  </button>
-                  <button
-                    type="button"
-                    className={`bg-amber-600 text-white ${btn}`}
-                    disabled
-                    title="Pre-Order handler is not configured on this screen."
-                  >
-                    Pre-Order
-                  </button>
-                  <button
-                    type="button"
-                    className={`bg-slate-500 text-white ${btn}`}
-                    disabled
-                    title="Supply End handler is not configured on this screen."
-                  >
-                    Supply End
-                  </button>
-                  {hasPermission(loggedInUser, "can_print") && (
-                    <button
-                      type="button"
-                      onClick={() => printOrderPickingList(order)}
-                      className={`bg-black text-white ${btn}`}
-                    >
-                      {printButtonLabel}
-                    </button>
-                  )}
-                </div>
-              )}
-
-                    {expandedOrders[order.orderId] && (
+                {expandedOrders[order.orderId] && (
   <div className="mt-3 received-order-card">
     <div
       className="received-item-header"

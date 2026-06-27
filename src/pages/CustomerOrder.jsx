@@ -37,6 +37,7 @@ import {
 } from "../services/promotionRules";
 import {
   calculateOrderTotals,
+  roundMoney,
   getOrderItemNetTotal,
   getOrderItemQty,
   getOrderItemUnitPrice,
@@ -1299,14 +1300,16 @@ const visibleProducts = useMemo(() => {
       ? Math.max(0, subtotal - promotionDiscountAmount)
       : subtotal;
 
-  const vatTotal = isVatPriceMode(priceMode) ? discountedSubtotal * 0.2 : 0;
-  const total = isVatPriceMode(priceMode) ? discountedSubtotal + vatTotal : subtotal;
+  const vatTotal = isVatPriceMode(priceMode) ? roundMoney(discountedSubtotal * 0.2) : 0;
+  const total = roundMoney(isVatPriceMode(priceMode) ? discountedSubtotal + vatTotal : subtotal);
 
- const discountAmount =
-  total * (Number(orderDiscountPercent || 0) / 100);
+ const discountAmount = roundMoney(
+  total * (Number(orderDiscountPercent || 0) / 100)
+);
 
-const finalTotal =
-  Math.max(0, total - discountAmount);
+const finalTotal = roundMoney(
+  Math.max(0, total - discountAmount)
+);
 
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
@@ -1517,7 +1520,7 @@ const submitOrder = async () => {
   const creditLimit = creditSummary.creditLimit;
   const outstandingBalance = creditSummary.outstanding;
 
-  const orderTotal = Number(finalTotal || 0);
+  const orderTotal = roundMoney(finalTotal || 0);
   const projectedBalance = outstandingBalance + orderTotal;
 
   if (accountStatus === "On Hold") {
@@ -1629,8 +1632,8 @@ const recalculateOrder = (order, updatedItems) => {
   });
 
   const discountPercent = Number(order.discount_percent || 0);
-  const discountAmount = totals.totalAmount * (discountPercent / 100);
-  const finalTotal = Math.max(0, totals.totalAmount - discountAmount);
+  const discountAmount = roundMoney(totals.totalAmount * (discountPercent / 100));
+  const finalTotal = roundMoney(Math.max(0, totals.totalAmount - discountAmount));
 
   return {
     ...order,
@@ -1661,28 +1664,48 @@ const updateOrderItem = async (orderId, itemId, updates) => {
     })
   );
 
-  const dbUpdates = {};
+const order = orders.find((o) => o.orderId === orderId);
 
-  if (updates.qty !== undefined) dbUpdates.qty = updates.qty;
-  if (updates.pickedQty !== undefined) dbUpdates.picked_qty = updates.pickedQty;
-  if (updates.sourceStatus !== undefined) dbUpdates.source_status = updates.sourceStatus;
-  if (updates.includeInPicking !== undefined)
-    dbUpdates.include_in_picking = updates.includeInPicking;
+const item = order?.items?.find((i) => {
+  const itemKey = i.dbId || i.id || i.productId || i.product_id;
+  return String(itemKey) === String(itemId);
+});
 
-  const { error } = await supabase
-    .from("order_items")
-    .update(dbUpdates)
-    .eq("id", itemId);
+const dbUpdates = {};
 
- if (error) {
-  console.error("Customer ledger loading error:", error);
+if (updates.qty !== undefined) {
+  const qty = Number(updates.qty || 0);
+  const price = Number(item?.price || item?.selectedPrice || 0);
 
-  alert(
-    `Could not load payment history.\n\n${error.message}\n\n${error.details || ""}`
-  );
+  dbUpdates.qty = qty;
+  dbUpdates.picked_qty = qty;
+  dbUpdates.line_total = qty * price;
+}
 
+if (updates.pickedQty !== undefined) {
+  dbUpdates.picked_qty = Number(updates.pickedQty || 0);
+}
+
+if (updates.sourceStatus !== undefined) {
+  dbUpdates.source_status = updates.sourceStatus;
+}
+
+if (updates.includeInPicking !== undefined) {
+  dbUpdates.include_in_picking = updates.includeInPicking;
+}
+
+const { error } = await supabase
+  .from("order_items")
+  .update(dbUpdates)
+  .eq("id", item?.dbId || itemId);
+
+if (error) {
+  console.error("Order item update error:", error);
+  alert("Could not update order item: " + error.message);
   return;
 }
+
+await fetchOrders();
 
 
 };
@@ -1975,7 +1998,22 @@ const addOrderItem = async (orderId, newItem) => {
 
   const openCustomerOrderDocument = (order, documentType) => {
     const priceMode = order.priceMode || order.price_mode || "";
-    const totals = calculateOrderTotals(order.items || [], { priceMode });
+    const calculatedTotals = calculateOrderTotals(order.items || [], { priceMode });
+    const savedGrandTotal = roundMoney(
+      order.finalTotal ??
+        order.final_total ??
+        order.totalAmount ??
+        order.total_amount ??
+        order.orderTotal ??
+        order.order_total ??
+        order.total ??
+        calculatedTotals.totalAmount
+    );
+    const totals = {
+      ...calculatedTotals,
+      totalAmount: savedGrandTotal,
+      grandTotal: savedGrandTotal,
+    };
     const title = getOrderDocumentTitle(documentType);
     const showPrices = documentType !== "deliveryNote";
     const orderNumber = order.orderId || order.order_number || order.id || "-";
@@ -2722,9 +2760,11 @@ const backOfficeContent = comingSoonTitle ? (
 
           <div className="space-y-2">
             {completedCustomerOrders.map((order) => {
-              const orderTotals = calculateOrderTotals(order.items || [], {
-                priceMode: order.priceMode || order.price_mode,
-              });
+             const orderTotals = calculateOrderTotals(order.items || [], {
+  priceMode: order.priceMode || order.price_mode,
+});
+
+const displayOrderTotal = roundMoney(orderTotals.totalAmount);
 
               return (
                 <div
@@ -2738,7 +2778,7 @@ const backOfficeContent = comingSoonTitle ? (
                     </div>
                     <div className="text-xs text-slate-500">
                       {order.createdAt || "-"} | {String(order.priceMode || "-").toUpperCase()} |{" "}
-                      {formatCurrency(orderTotals.totalAmount)} | Total Qty: {orderTotals.totalQty}
+                      {formatCurrency(displayOrderTotal)} | Total Qty: {orderTotals.totalQty}
                     </div>
                   </div>
 

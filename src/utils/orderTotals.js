@@ -21,6 +21,14 @@ export const isSuppliedOrderItem = (item = {}) => {
   );
 };
 
+export const toPennies = (value) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100);
+
+export const fromPennies = (pennies) =>
+  Number((Number(pennies || 0) / 100).toFixed(2));
+
+export const roundMoney = (value) => fromPennies(toPennies(value));
+
 export const getOrderItemQty = (item = {}) =>
   Number(item.pickedQty ?? item.picked_qty ?? item.quantity ?? item.qty ?? 0);
 
@@ -40,20 +48,20 @@ export const getOrderItemUnitPrice = (item = {}) =>
 export const getOrderItemNetTotal = (item = {}) => {
   const savedLineTotal = Number(item.line_total ?? item.lineTotal ?? 0);
 
-  if (savedLineTotal > 0) return savedLineTotal;
+  if (savedLineTotal > 0) return roundMoney(savedLineTotal);
 
-  return getOrderItemQty(item) * getOrderItemUnitPrice(item);
+  return roundMoney(getOrderItemQty(item) * getOrderItemUnitPrice(item));
 };
 
 export const getOrderItemVatTotal = (item = {}) => {
   const savedVatTotal = item.vat_total ?? item.vatTotal ?? item.vat_amount ?? item.vatAmount;
 
   if (savedVatTotal != null && Number(savedVatTotal) > 0) {
-    return Number(savedVatTotal || 0);
+    return roundMoney(savedVatTotal || 0);
   }
 
   const vatRate = Number(item.vat_percent ?? item.vatPercent ?? item.vatRate ?? 20);
-  return getOrderItemNetTotal(item) * (vatRate / 100);
+  return roundMoney(getOrderItemNetTotal(item) * (vatRate / 100));
 };
 
 export const calculateOrderTotals = (items = [], options = {}) => {
@@ -62,11 +70,13 @@ export const calculateOrderTotals = (items = [], options = {}) => {
   const invoiceItems = (items || []).filter(isSuppliedOrderItem);
   const totalQty = invoiceItems.reduce((sum, item) => sum + getOrderItemQty(item), 0);
   const totalLines = invoiceItems.length;
-  const netTotal = invoiceItems.reduce((sum, item) => sum + getOrderItemNetTotal(item), 0);
+  const netTotal = roundMoney(
+    invoiceItems.reduce((sum, item) => sum + getOrderItemNetTotal(item), 0)
+  );
   const vatTotal = includeVat
-    ? invoiceItems.reduce((sum, item) => sum + getOrderItemVatTotal(item), 0)
+    ? roundMoney(invoiceItems.reduce((sum, item) => sum + getOrderItemVatTotal(item), 0))
     : 0;
-  const totalAmount = includeVat ? netTotal + vatTotal : netTotal;
+  const totalAmount = roundMoney(includeVat ? netTotal + vatTotal : netTotal);
 
   return {
     invoiceItems,
@@ -96,7 +106,7 @@ const getSavedOrderTotalValue = (order = {}) => {
     if (value == null || value === "") continue;
 
     const numericValue = Number(value);
-    if (Number.isFinite(numericValue)) return numericValue;
+    if (Number.isFinite(numericValue)) return roundMoney(numericValue);
   }
 
   return null;
@@ -107,7 +117,9 @@ export const getOrderPayableTotal = (order = {}) => {
 
   if (savedTotal != null) return savedTotal;
 
-  return calculateOrderTotals(order.items || order.order_items || [], {
-    priceMode: order.priceMode || order.price_mode,
-  }).totalAmount;
+  return roundMoney(
+    calculateOrderTotals(order.items || order.order_items || [], {
+      priceMode: order.priceMode || order.price_mode,
+    }).totalAmount
+  );
 };
