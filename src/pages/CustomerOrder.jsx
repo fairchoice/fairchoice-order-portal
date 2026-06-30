@@ -1676,7 +1676,7 @@ if (
 dbUpdates.line_total = calculatedItem.line_total.toFixed(2);
 dbUpdates.net_total = calculatedItem.net_total.toFixed(2);
 dbUpdates.gross_total = calculatedItem.gross_total.toFixed(2);
-dbUpdates.vat_total = calculatedItem.vat_total.toFixed(2);
+dbUpdates.vat_amount = calculatedItem.vat_total.toFixed(2);
 
 const { error } = await supabase
   .from("order_items")
@@ -1769,7 +1769,7 @@ const addOrderItem = async (orderId, newItem) => {
       line_total: calculatedItem.line_total.toFixed(2),
       net_total: calculatedItem.net_total.toFixed(2),
       gross_total: calculatedItem.gross_total.toFixed(2),
-      vat_total: calculatedItem.vat_total.toFixed(2),
+     vat_amount: calculatedItem.vat_total.toFixed(2),
       source_status: "In Stock",
       include_in_picking: true,
     });

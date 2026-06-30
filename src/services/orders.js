@@ -70,8 +70,7 @@ export async function getOrders() {
 
       net_total: item.net_total,
       gross_total: item.gross_total,
-      vat_total: item.vat_total,
-      vat_rate: item.vat_rate,
+      vat_amount: item.vat_total ?? item.vat_amount ?? 0,
       vat_type: item.vat_type,
       
     })),
@@ -200,8 +199,7 @@ const orderItems = calculatedOrderItems.map((item) => ({
   line_total: item.line_total.toFixed(2),
   net_total: item.net_total.toFixed(2),
   gross_total: item.gross_total.toFixed(2),
-  vat_total: item.vat_total.toFixed(2),
-  vat_rate: item.vat_rate,
+  vat_amount: item.vat_total.toFixed(2),
   vat_type: item.vat_type,
   stock_before: item.stock,
   stock_after: Math.max(0, item.stock - item.qty),
