@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase.js";
-import Pricing from "./AdminSetup/Pricing";
+import PricingRule from "./AdminSetup/PricingRule";
 import Suppliers from "./AdminSetup/Suppliers";
 import Staff from "./AdminSetup/Staff";
 import LoginConfig from "./AdminSetup/LoginConfig";
+import PriceManagement from "./AdminSetup/PriceManagement";
 
 import { formatCurrency } from "../utils/currency";
 
@@ -36,13 +37,18 @@ import {
   PROMOTION_RULE_KINDS,
 } from "../services/promotionRules";
 import {
+  calculateCartOrderItems,
+  calculateCartTotals,
   calculateOrderTotals,
   roundMoney,
+<<<<<<< HEAD
   getOrderItemNetTotal,
+=======
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
   getOrderItemQty,
-  getOrderItemUnitPrice,
-  getOrderItemVatTotal,
 } from "../utils/orderTotals";
+import { calculateDocumentTotals } from "../utils/documentTotals";
+import { getProductPriceForMode } from "../utils/pricing";
 import { calculateCustomerCredit } from "../utils/customerCredit";
 
 import AdminProducts from "./AdminProducts";
@@ -106,6 +112,9 @@ const PRODUCT_LABEL_PRIORITY = [
   "topSeller",
 ];
 
+const PRODUCTS_PER_PAGE = 20;
+
+
 const getProductLabelValue = (product) =>
   PRODUCT_LABEL_PRIORITY.find((key) => product?.[key] === true) || "";
 
@@ -126,30 +135,6 @@ const getProductLabelFormFlags = (labelValue) => ({
   recommended: labelValue === "recommended",
   topSeller: labelValue === "topSeller",
 });
-
-const PRODUCT_DISPLAY_LIMIT = 20;
-
-const getStableSampleScore = (product, seed) => {
-  const value = `${product?.id || product?.productCode || product?.name || ""}|${seed}`;
-  let hash = 0;
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-
-  return hash;
-};
-
-const stableSampleProducts = (items, limit, seed) => {
-  if (items.length <= limit) return items;
-
-  return [...items]
-    .sort(
-      (a, b) =>
-        getStableSampleScore(a, seed) - getStableSampleScore(b, seed)
-    )
-    .slice(0, limit);
-};
 
 const getOrderProductAvailabilityRank = (product) => {
   const sourceStatus = String(product?.sourceStatus || "").trim().toLowerCase();
@@ -433,6 +418,7 @@ useEffect(() => {
   const [selectedBrand, setSelectedBrand] = useState("All Brands");
   const [selectedSeries, setSelectedSeries] = useState("All Series");
   const [productView, setProductView] = useState("grid");
+  const [productPage, setProductPage] = useState(1);
 
   const [selectedImage, setSelectedImage] = useState(null);
 
@@ -563,11 +549,16 @@ const normalizePromotionType = (value) =>
 
 const isVatPriceMode = (mode) => {
   const normalizedMode = String(mode || "").trim().toLowerCase();
-  return (
-    normalizedMode === "vat" ||
-    normalizedMode === "ex vat" ||
-    normalizedMode === "ex. vat"
-  );
+  return [
+    "vat",
+    "ex vat",
+    "ex. vat",
+    "super",
+    "admin",
+    "admin offer",
+    "server",
+    "manager",
+  ].includes(normalizedMode);
 };
 
 const getPromotionRuleProductId = (rule) =>
@@ -681,51 +672,15 @@ const getPromotionPrice = (product) => {
   return Number.isFinite(promotionPrice) ? promotionPrice : null;
 };
 
-const getPrice = (product) => {
-  const mode = String(priceMode || "").toLowerCase();
-
-  const exVatPrice = Number(product.vatPrice || 0);
-  const vatRate = getVatRate(product.vatType);
-  const incVatPrice = exVatPrice + exVatPrice * (vatRate / 100);
-
-  if (isVatPriceMode(mode)) {
-    return exVatPrice;
-  }
-
-  if (mode === "server" || mode === "manager") {
-    const country = String(orderCountry || "").toLowerCase();
-    const specialPrice =
-      country === "wales"
-        ? Number(product.walesSpecialPrice || 0)
-        : country === "england"
-        ? Number(product.englandSpecialPrice || 0)
-        : 0;
-
-    if (specialPrice > 0) {
-      return specialPrice;
-    }
-  }
-
-  const discounts = {
-    server: pricingSettings.server_discount_percent,
-    manager: pricingSettings.manager_discount_percent,
-    super: pricingSettings.super_discount_percent,
-  };
-
-  const discount = Number(discounts[mode] || 0);
-  const discountedPrice = incVatPrice * (1 - discount / 100);
-
-  return roundToFairQuarter(discountedPrice);
-};
+const getPrice = (product) =>
+  getProductPriceForMode(product, priceMode, orderCountry, pricingSettings);
 
 const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   const quantity = Math.max(1, Number(nextQty || 1));
   const selectedPrice = Number(getPrice(item) || 0);
-  const exVatPrice = isVatPriceMode(priceMode)
-    ? selectedPrice
-    : Number(item.vatPrice || item.vat_price || selectedPrice || 0);
+  const exVatPrice = selectedPrice;
   const vatRate = getVatRate(item.vatType || item.vat_type);
-  const vatAmount = exVatPrice * (vatRate / 100);
+  const vatAmount = isVatPriceMode(priceMode) ? exVatPrice * (vatRate / 100) : 0;
   const incVatPrice = exVatPrice + vatAmount;
   const lineTotal = quantity * selectedPrice;
 
@@ -947,6 +902,8 @@ const fetchOrders = async () => {
         "",
       deliveryAddress:
         order.delivery_address || order.delivery_postcode || order.postcode || "",
+      customer_country: order.customer_country || order.country || "",
+      country: order.customer_country || order.country || "",
       priceMode: order.price_mode || "vat",
       total: Number(order.order_total || order.total || 0),
       orderTotal: Number(order.order_total || order.total || 0),
@@ -1123,36 +1080,33 @@ const filteredProducts = useMemo(() => {
   );
 }, [
   products,
+  search,
+  orderCountry,
   selectedCategory,
   selectedSubCategory,
   selectedBrand,
   selectedSeries,
-  search,
-  orderCountry,
 ]);
 
-const visibleProducts = useMemo(() => {
-  if (selectedSeries !== "All Series") return filteredProducts;
+const totalProductPages = Math.max(
+  1,
+  Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE)
+);
 
-  const sampleSeed = [
-    selectedCategory,
-    selectedSubCategory,
-    selectedBrand,
-    search.trim().toLowerCase(),
-    orderCountry,
-  ].join("|");
+const visibleProducts = filteredProducts.slice(
+  (productPage - 1) * PRODUCTS_PER_PAGE,
+  productPage * PRODUCTS_PER_PAGE
+);
 
-  return sortOrderProductsByAvailability(
-    stableSampleProducts(filteredProducts, PRODUCT_DISPLAY_LIMIT, sampleSeed)
-  );
+useEffect(() => {
+  setProductPage(1);
 }, [
-  filteredProducts,
+  search,
+  orderCountry,
   selectedCategory,
   selectedSubCategory,
   selectedBrand,
   selectedSeries,
-  search,
-  orderCountry,
 ]);
 
   const addToCart = (product, qty = 1) => {
@@ -1281,6 +1235,7 @@ const visibleProducts = useMemo(() => {
     0
   );
 
+<<<<<<< HEAD
   const subtotal = cart.reduce((sum, item) => {
     if (item.isPromotionFree) return sum;
 
@@ -1310,6 +1265,15 @@ const visibleProducts = useMemo(() => {
 const finalTotal = roundMoney(
   Math.max(0, total - discountAmount)
 );
+=======
+  const cartTotals = calculateCartTotals(cart, {
+    priceMode,
+    discountPercent: orderDiscountPercent,
+    promotionDiscountAmount,
+  });
+  const discountAmount = cartTotals.discountAmount;
+  const finalTotal = cartTotals.totalAmount;
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
@@ -1629,20 +1593,54 @@ Please quote your Order Number if you need assistance.`
 const recalculateOrder = (order, updatedItems) => {
   const totals = calculateOrderTotals(updatedItems, {
     priceMode: order.priceMode || order.price_mode,
+    discountPercent: order.discount_percent,
   });
 
+<<<<<<< HEAD
   const discountPercent = Number(order.discount_percent || 0);
   const discountAmount = roundMoney(totals.totalAmount * (discountPercent / 100));
   const finalTotal = roundMoney(Math.max(0, totals.totalAmount - discountAmount));
 
+=======
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
   return {
     ...order,
     items: updatedItems,
-    total: finalTotal,
-    finalTotal,
-    discount_amount: discountAmount,
+    total: totals.totalAmount,
+    finalTotal: totals.totalAmount,
+    vat_total: totals.vatTotal,
+    discount_amount: totals.discountAmount,
   };
 };
+
+
+const saveOrderTotalsToDatabase = async (orderId, items, order = {}) => {
+  const totals = calculateOrderTotals(items || [], {
+    priceMode: order.priceMode || order.price_mode,
+    discountPercent: order.discount_percent,
+  });
+
+  const { error } = await supabase
+    .from("orders")
+  .update({
+  subtotal: roundMoney(totals.netTotal).toFixed(2),
+  net_total: roundMoney(totals.netTotal).toFixed(2),
+  order_total: roundMoney(totals.grandTotal).toFixed(2),
+  vat_total: roundMoney(totals.vatTotal).toFixed(2),
+  discount_percent: totals.discountPercent,
+  discount_amount: roundMoney(totals.discountAmount).toFixed(2),
+})
+    .eq("order_number", orderId);
+
+  if (error) {
+    console.error("Order total update error:", error);
+  }
+};
+
+const getCalculatedOrderItemForSave = (item, order = {}) =>
+  calculateCartOrderItems([item], {
+    priceMode: order.priceMode || order.price_mode,
+  })[0] || item;
 
 const updateOrderItem = async (orderId, itemId, updates) => {
   setOrders((oldOrders) =>
@@ -1672,6 +1670,7 @@ const item = order?.items?.find((i) => {
 });
 
 const dbUpdates = {};
+<<<<<<< HEAD
 
 if (updates.qty !== undefined) {
   const qty = Number(updates.qty || 0);
@@ -1693,6 +1692,57 @@ if (updates.sourceStatus !== undefined) {
 if (updates.includeInPicking !== undefined) {
   dbUpdates.include_in_picking = updates.includeInPicking;
 }
+=======
+const itemForCalculation = {
+  ...(item || {}),
+  ...updates,
+  qty: updates.qty ?? updates.pickedQty ?? updates.picked_qty ?? item?.qty,
+  pickedQty: updates.pickedQty ?? updates.picked_qty ?? updates.qty ?? item?.pickedQty,
+};
+const calculatedItem = getCalculatedOrderItemForSave(itemForCalculation, order);
+
+if (updates.qty !== undefined) {
+  const qty = Number(updates.qty || 0);
+
+  dbUpdates.qty = qty;
+  dbUpdates.picked_qty = qty;
+}
+
+if (updates.pickedQty !== undefined) {
+  dbUpdates.picked_qty = Number(updates.pickedQty || 0);
+}
+
+if (updates.sourceStatus !== undefined) {
+  dbUpdates.source_status = updates.sourceStatus;
+}
+
+if (updates.includeInPicking !== undefined) {
+  dbUpdates.include_in_picking = updates.includeInPicking;
+}
+
+if (
+  updates.price !== undefined ||
+  updates.selectedPrice !== undefined ||
+  updates.unit_price !== undefined ||
+  updates.unitPrice !== undefined
+) {
+  const nextPrice = roundMoney(
+    updates.price ??
+      updates.selectedPrice ??
+      updates.unit_price ??
+      updates.unitPrice ??
+      item?.price ??
+      0
+  );
+
+  dbUpdates.price = nextPrice.toFixed(2);
+}
+
+dbUpdates.line_total = calculatedItem.line_total.toFixed(2);
+dbUpdates.net_total = calculatedItem.net_total.toFixed(2);
+dbUpdates.gross_total = calculatedItem.gross_total.toFixed(2);
+dbUpdates.vat_total = calculatedItem.vat_total.toFixed(2);
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 const { error } = await supabase
   .from("order_items")
@@ -1705,6 +1755,46 @@ if (error) {
   return;
 }
 
+<<<<<<< HEAD
+=======
+const updatedOrderItems = (order?.items || []).map((currentItem) => {
+  const currentKey = currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
+  if (String(currentKey) !== String(itemId)) return currentItem;
+
+  const mergedItem = { ...currentItem, ...updates };
+  const mergedPrice = roundMoney(
+    mergedItem.price ?? mergedItem.selectedPrice ?? mergedItem.unit_price ?? mergedItem.unitPrice ?? 0
+  );
+  const calculatedMergedItem = getCalculatedOrderItemForSave(
+    {
+      ...mergedItem,
+      price: mergedPrice,
+      selectedPrice: mergedPrice,
+      unit_price: mergedPrice,
+      unitPrice: mergedPrice,
+    },
+    order
+  );
+
+  return {
+    ...mergedItem,
+    price: mergedPrice,
+    selectedPrice: mergedPrice,
+    unit_price: mergedPrice,
+    unitPrice: mergedPrice,
+    lineTotal: calculatedMergedItem.line_total,
+    line_total: calculatedMergedItem.line_total,
+    netTotal: calculatedMergedItem.net_total,
+    net_total: calculatedMergedItem.net_total,
+    grossTotal: calculatedMergedItem.gross_total,
+    gross_total: calculatedMergedItem.gross_total,
+    vatTotal: calculatedMergedItem.vat_total,
+    vat_total: calculatedMergedItem.vat_total,
+  };
+});
+
+await saveOrderTotalsToDatabase(orderId, updatedOrderItems, order);
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 await fetchOrders();
 
 
@@ -1718,7 +1808,19 @@ const addOrderItem = async (orderId, newItem) => {
   }
 
   const qty = Number(newItem.qty || 1);
-  const price = Number(newItem.price || 0);
+  const price = roundMoney(newItem.price || newItem.selectedPrice || 0);
+  const calculatedItem = getCalculatedOrderItemForSave(
+    {
+      ...newItem,
+      qty,
+      pickedQty: qty,
+      price,
+      selectedPrice: price,
+      unit_price: price,
+      unitPrice: price,
+    },
+    order
+  );
 
   const { error } = await supabase
     .from("order_items")
@@ -1732,8 +1834,11 @@ const addOrderItem = async (orderId, newItem) => {
       carton_size: newItem.cartonSize || "",
       qty,
       picked_qty: qty,
-      price,
-      line_total: price * qty,
+      price: calculatedItem.price.toFixed(2),
+      line_total: calculatedItem.line_total.toFixed(2),
+      net_total: calculatedItem.net_total.toFixed(2),
+      gross_total: calculatedItem.gross_total.toFixed(2),
+      vat_total: calculatedItem.vat_total.toFixed(2),
       source_status: "In Stock",
       include_in_picking: true,
     });
@@ -1743,6 +1848,29 @@ const addOrderItem = async (orderId, newItem) => {
     alert(error.message);
     return;
   }
+
+  await saveOrderTotalsToDatabase(
+    orderId,
+    [
+      ...(order.items || []),
+      {
+        ...newItem,
+        qty,
+        pickedQty: qty,
+        price,
+        selectedPrice: price,
+        lineTotal: calculatedItem.line_total,
+        line_total: calculatedItem.line_total,
+        netTotal: calculatedItem.net_total,
+        net_total: calculatedItem.net_total,
+        grossTotal: calculatedItem.gross_total,
+        gross_total: calculatedItem.gross_total,
+        vatTotal: calculatedItem.vat_total,
+        vat_total: calculatedItem.vat_total,
+        },
+    ],
+    order
+  );
 
   await fetchOrders();
 };
@@ -1911,9 +2039,7 @@ const addOrderItem = async (orderId, newItem) => {
   };
 
   const printPickingList = (order) => {
-    const totals = calculateOrderTotals(order.items || [], {
-      priceMode: order.priceMode || order.price_mode,
-    });
+    const totals = calculateDocumentTotals(order.items || [], order);
     const printableItems = totals.invoiceItems;
 
     const rows = printableItems
@@ -1998,6 +2124,7 @@ const addOrderItem = async (orderId, newItem) => {
 
   const openCustomerOrderDocument = (order, documentType) => {
     const priceMode = order.priceMode || order.price_mode || "";
+<<<<<<< HEAD
     const calculatedTotals = calculateOrderTotals(order.items || [], { priceMode });
     const savedGrandTotal = roundMoney(
       order.finalTotal ??
@@ -2014,6 +2141,9 @@ const addOrderItem = async (orderId, newItem) => {
       totalAmount: savedGrandTotal,
       grandTotal: savedGrandTotal,
     };
+=======
+    const totals = calculateDocumentTotals(order.items || [], order);
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
     const title = getOrderDocumentTitle(documentType);
     const showPrices = documentType !== "deliveryNote";
     const orderNumber = order.orderId || order.order_number || order.id || "-";
@@ -2024,9 +2154,9 @@ const addOrderItem = async (orderId, newItem) => {
     const rows = totals.invoiceItems
       .map((item) => {
         const qty = getOrderItemQty(item);
-        const unitPrice = getOrderItemUnitPrice(item);
-        const netTotal = getOrderItemNetTotal(item);
-        const vatTotal = getOrderItemVatTotal(item);
+        const unitPrice = Number(item.price ?? item.unit_price ?? 0);
+        const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
+        const vatTotal = Number(item.vat_total ?? item.vatTotal ?? 0);
         const vatRate = Number(item.vatRate ?? item.vat_percent ?? item.vatPercent ?? 20);
 
         return `
@@ -2117,7 +2247,7 @@ const addOrderItem = async (orderId, newItem) => {
                 <div class="totals">
                   <div><span>Total Net</span><strong>${formatCurrency(totals.netTotal)}</strong></div>
                   <div><span>Total VAT</span><strong>${formatCurrency(totals.vatTotal)}</strong></div>
-                  <div><span>Total</span><strong>${formatCurrency(totals.totalAmount)}</strong></div>
+                  <div><span>Total</span><strong>${formatCurrency(totals.grandTotal)}</strong></div>
                 </div>
               `
               : `
@@ -2161,6 +2291,7 @@ const backOfficeContent = comingSoonTitle ? (
         addOrderItem={addOrderItem}
         changeOrderStatus={changeOrderStatus}
         fetchOrders={fetchOrders}
+        pricingSettings={pricingSettings}
       />
     )}
 
@@ -2194,6 +2325,7 @@ const backOfficeContent = comingSoonTitle ? (
         saveProduct={saveProduct}
         fetchProducts={fetchProducts}
         editProduct={editProduct}
+        pricingSettings={pricingSettings}
       />
     )}
 
@@ -2208,7 +2340,20 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "staff" && <Staff />}
     {page === "loginSetup" && <LoginConfig />}
     {page === "suppliers" && <Suppliers />}
-    {page === "pricing" && <Pricing />}
+    {page === "pricingRule" && (
+  <PricingRule
+    pricingSettings={pricingSettings}
+    fetchPricingSettings={fetchPricingSettings}
+  />
+)}
+  {page === "priceManagement" && (
+  <PriceManagement
+    products={products || []}
+    fetchProducts={fetchProducts}
+    pricingSettings={pricingSettings}
+  />
+)}
+
     {page === "categories" && <Categories />}
     {page === "productImportExport" && (
       <ProductImportExport
@@ -2671,12 +2816,44 @@ const backOfficeContent = comingSoonTitle ? (
                   ))}
                 </div>
               )}
+
+              {filteredProducts.length > 0 && (
+                <div className="mt-4 flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProductPage((pageNumber) => Math.max(1, pageNumber - 1))
+                    }
+                    disabled={productPage <= 1}
+                    className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Previous
+                  </button>
+
+                  <span className="text-sm font-bold text-slate-600">
+                    Page {productPage} of {totalProductPages}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProductPage((pageNumber) =>
+                        Math.min(totalProductPages, pageNumber + 1)
+                      )
+                    }
+                    disabled={productPage >= totalProductPages}
+                    className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
             </div>
 
            <Cart
             cart={cart}
             total={finalTotal}
-            originalTotal={total}
+            originalTotal={cartTotals.subtotal}
             orderDiscountPercent={orderDiscountPercent}
             setOrderDiscountPercent={setOrderDiscountPercent}
             discountAmount={discountAmount}
@@ -2760,11 +2937,15 @@ const backOfficeContent = comingSoonTitle ? (
 
           <div className="space-y-2">
             {completedCustomerOrders.map((order) => {
+<<<<<<< HEAD
              const orderTotals = calculateOrderTotals(order.items || [], {
   priceMode: order.priceMode || order.price_mode,
 });
 
 const displayOrderTotal = roundMoney(orderTotals.totalAmount);
+=======
+              const orderTotals = calculateDocumentTotals(order.items || [], order);
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
               return (
                 <div
@@ -2778,7 +2959,11 @@ const displayOrderTotal = roundMoney(orderTotals.totalAmount);
                     </div>
                     <div className="text-xs text-slate-500">
                       {order.createdAt || "-"} | {String(order.priceMode || "-").toUpperCase()} |{" "}
+<<<<<<< HEAD
                       {formatCurrency(displayOrderTotal)} | Total Qty: {orderTotals.totalQty}
+=======
+                      {formatCurrency(orderTotals.grandTotal)} | Total Qty: {orderTotals.totalQty}
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
                     </div>
                   </div>
 

@@ -2,12 +2,9 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import {
-  calculateOrderTotals,
-  getOrderItemNetTotal,
   getOrderItemQty,
-  getOrderItemUnitPrice,
-  getOrderItemVatTotal,
 } from "../../utils/orderTotals";
+import { calculateDocumentTotals } from "../../utils/documentTotals";
 import { calculateCustomerCredit } from "../../utils/customerCredit";
 
 const DELIVERED_ORDERS_PAGE_SIZE = 3;
@@ -261,7 +258,7 @@ function formatCollectionSource(source) {
 
   const openOrderDocument = (order, documentType) => {
     const priceMode = order.priceMode || order.price_mode || "";
-    const totals = calculateOrderTotals(order.items || [], { priceMode });
+    const totals = calculateDocumentTotals(order.items || [], order);
     const title = getDocumentTitle(documentType);
     const showPrices = documentType !== "deliveryNote";
     const orderNumber = order.orderId || order.order_number || order.id || "-";
@@ -272,9 +269,9 @@ function formatCollectionSource(source) {
     const rows = totals.invoiceItems
       .map((item) => {
         const qty = getOrderItemQty(item);
-        const unitPrice = getOrderItemUnitPrice(item);
-        const netTotal = getOrderItemNetTotal(item);
-        const vatTotal = getOrderItemVatTotal(item);
+        const unitPrice = Number(item.price ?? item.unit_price ?? 0);
+        const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
+        const vatTotal = Number(item.vat_total ?? item.vatTotal ?? 0);
         const vatRate = Number(item.vatRate ?? item.vat_percent ?? item.vatPercent ?? 20);
 
         return `
@@ -365,7 +362,7 @@ function formatCollectionSource(source) {
                 <div class="totals">
                   <div><span>Total Net</span><strong>${formatCurrency(totals.netTotal)}</strong></div>
                   <div><span>Total VAT</span><strong>${formatCurrency(totals.vatTotal)}</strong></div>
-                  <div><span>Total</span><strong>${formatCurrency(totals.totalAmount)}</strong></div>
+                  <div><span>Total</span><strong>${formatCurrency(totals.grandTotal)}</strong></div>
                 </div>
               `
               : `
@@ -619,9 +616,7 @@ function formatCollectionSource(source) {
               {showDeliveredOrders && (
                 <div className="space-y-2">
                 {paginatedDeliveredOrders.map((order) => {
-                  const orderTotals = calculateOrderTotals(order.items || [], {
-                    priceMode: order.priceMode || order.price_mode,
-                  });
+                  const orderTotals = calculateDocumentTotals(order.items || [], order);
 
                   return (
                     <div
@@ -636,7 +631,7 @@ function formatCollectionSource(source) {
                         <div className="text-xs text-slate-500">
                           {formatDocumentDate(order.createdAt || order.created_at)} |{" "}
                           {String(order.priceMode || "-").toUpperCase()} |{" "}
-                          {formatCurrency(orderTotals.totalAmount)} | Total Qty:{" "}
+                          {formatCurrency(orderTotals.grandTotal)} | Total Qty:{" "}
                           {orderTotals.totalQty}
                         </div>
                       </div>

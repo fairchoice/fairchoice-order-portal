@@ -6,6 +6,7 @@ import { formatCurrency } from "../utils/currency";
 
 
 
+
 export default function AdminProducts({
   products,
   productForm,
@@ -14,6 +15,7 @@ export default function AdminProducts({
   saveProduct,
   fetchProducts,
   editProduct,
+  pricingSettings = {},
 }) {
 
 const [imageFile, setImageFile] = useState(null);
@@ -266,8 +268,14 @@ const [productSearch, setProductSearch] = useState("");
 const [statusFilter, setStatusFilter] = useState("active");
 const [stockFilter, setStockFilter] = useState("all");
 const [selectedProductIds, setSelectedProductIds] = useState([]);
-const [pageSize, setPageSize] = useState(10);
+const [pageSize, setPageSize] = useState(20);
 const [currentPage, setCurrentPage] = useState(1);
+const [priceBrand, setPriceBrand] = useState("");
+const [priceSeries, setPriceSeries] = useState("");
+const [priceSearch, setPriceSearch] = useState("");
+const [pricePage, setPricePage] = useState(1);
+const [priceDrafts, setPriceDrafts] = useState({});
+const [bulkNewVatPrice, setBulkNewVatPrice] = useState("");
 
 const [visibleColumns, setVisibleColumns] = useState({
   code: true,
@@ -316,6 +324,10 @@ useEffect(() => {
   setCurrentPage(1);
   setSelectedProductIds([]);
 }, [productSearch, statusFilter, stockFilter, pageSize, products]);
+
+useEffect(() => {
+  setPricePage(1);
+}, [priceBrand, priceSeries, priceSearch, products]);
 
 const totalPages = Math.max(1, Math.ceil(filteredAdminProducts.length / pageSize));
 const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -381,6 +393,138 @@ const grossProfit = vatSellingPrice - costPrice;
 const marginPercent =
   vatSellingPrice > 0 ? (grossProfit / vatSellingPrice) * 100 : 0;
 const markupPercent = costPrice > 0 ? (grossProfit / costPrice) * 100 : 0;
+
+const PRICE_PAGE_SIZE = 20;
+
+const getProductVatValue = (product = {}) =>
+  Number(product.vatPrice ?? product.vat_price ?? product.price ?? 0);
+
+const getProductCostValue = (product = {}) =>
+  Number(product.costPrice ?? product.cost_price ?? 0);
+
+const getDraftVatPrice = (product = {}) => {
+  const draft = priceDrafts[product.id];
+  return draft === undefined ? getProductVatValue(product) : Number(draft || 0);
+};
+
+const getMarginPercent = (sellPrice, costValue) => {
+  const selling = Number(sellPrice || 0);
+  const cost = Number(costValue || 0);
+  return selling > 0 ? ((selling - cost) / selling) * 100 : 0;
+};
+
+const getServerPreview = (product = {}, vatPriceOverride) =>
+  getProductPriceForMode(
+    {
+      ...product,
+      vatPrice: vatPriceOverride,
+      vat_price: vatPriceOverride,
+    },
+    "server",
+    "",
+    pricingSettings
+  );
+
+const priceManagementProducts = (products || []).filter((product) => {
+  const search = priceSearch.trim().toLowerCase();
+  const matchesBrand = !priceBrand || String(product.brand || "") === priceBrand;
+  const matchesSeries = !priceSeries || String(product.series || "") === priceSeries;
+  const matchesSearch =
+    !search ||
+    String(product.productCode || product.product_code || "").toLowerCase().includes(search) ||
+    String(product.name || product.productName || product.product_name || "").toLowerCase().includes(search) ||
+    String(product.flavour || "").toLowerCase().includes(search);
+
+  return matchesBrand && matchesSeries && matchesSearch;
+});
+
+const priceTotalPages = Math.max(1, Math.ceil(priceManagementProducts.length / PRICE_PAGE_SIZE));
+const safePricePage = Math.min(pricePage, priceTotalPages);
+const pagedPriceProducts = priceManagementProducts.slice(
+  (safePricePage - 1) * PRICE_PAGE_SIZE,
+  safePricePage * PRICE_PAGE_SIZE
+);
+
+const updateProductVatPrice = async (product, nextVatPrice) => {
+  const cleanPrice = roundMoney(nextVatPrice);
+
+  if (!product?.id || cleanPrice <= 0) {
+    alert("Enter a valid new VAT price.");
+    return;
+  }
+
+  if (
+    !window.confirm(
+      `Update ${product.name || product.productName || product.product_name} VAT price from ${formatCurrency(getProductVatValue(product))} to ${formatCurrency(cleanPrice)}?`
+    )
+  ) {
+    return;
+  }
+
+  const { error } = await supabase
+    .from("products")
+    .update({ vat_price: cleanPrice.toFixed(2) })
+    .eq("id", product.id);
+
+  if (error) {
+    alert("Price update failed: " + error.message);
+    return;
+  }
+
+  setPriceDrafts((old) => {
+    const next = { ...old };
+    delete next[product.id];
+    return next;
+  });
+
+  await fetchProducts();
+};
+
+const bulkUpdateBrandSeriesVatPrice = async () => {
+  const cleanPrice = roundMoney(bulkNewVatPrice);
+
+  if (!priceBrand || !priceSeries) {
+    alert("Select both Brand and Series for bulk price update.");
+    return;
+  }
+
+  if (cleanPrice <= 0) {
+    alert("Enter a valid new VAT price.");
+    return;
+  }
+
+  const affectedProducts = priceManagementProducts.filter(
+    (product) => String(product.brand || "") === priceBrand && String(product.series || "") === priceSeries
+  );
+
+  if (affectedProducts.length === 0) {
+    alert("No products found for this Brand and Series.");
+    return;
+  }
+
+  if (
+    !window.confirm(
+      `Bulk update ${affectedProducts.length} product(s) for ${priceBrand} / ${priceSeries} to VAT price ${formatCurrency(cleanPrice)}?`
+    )
+  ) {
+    return;
+  }
+
+  const { error } = await supabase
+    .from("products")
+    .update({ vat_price: cleanPrice.toFixed(2) })
+    .eq("brand", priceBrand)
+    .eq("series", priceSeries);
+
+  if (error) {
+    alert("Bulk price update failed: " + error.message);
+    return;
+  }
+
+  setBulkNewVatPrice("");
+  setPriceDrafts({});
+  await fetchProducts();
+};
 const productLabelOptions = [
   { value: "", label: "No Label" },
   { value: "isNew", label: "New" },
@@ -429,10 +573,10 @@ const updateProductLabel = (labelValue) => {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-5">
-        {[
-          ["add", "Add Product"],
-          ["edit", "Product List"],
-        ].map(([tab, label]) => (
+            {[
+        ["add", "Add Product"],
+        ["edit", "Product List"],
+      ].map(([tab, label]) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -860,6 +1004,7 @@ const updateProductLabel = (labelValue) => {
         </div>
       )}
 
+
       {activeTab === "edit" && (
   <div className="bg-white rounded-2xl shadow-sm p-5 overflow-auto">
     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
@@ -908,9 +1053,9 @@ const updateProductLabel = (labelValue) => {
         value={pageSize}
         onChange={(e) => setPageSize(Number(e.target.value))}
       >
-        <option value={10}>10 per page</option>
-        <option value={25}>25 per page</option>
+        <option value={20}>20 per page</option>
         <option value={50}>50 per page</option>
+        <option value={100}>100 per page</option>
       </select>
     </div>
 

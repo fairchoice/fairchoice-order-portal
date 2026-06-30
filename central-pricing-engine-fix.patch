@@ -1,0 +1,1344 @@
+diff --git a/src/components/Cart.jsx b/src/components/Cart.jsx
+index a46122a..9be2d33 100644
+--- a/src/components/Cart.jsx
++++ b/src/components/Cart.jsx
+@@ -1,27 +1,13 @@
+ import { useState } from "react";
+ import { formatCurrency } from "../utils/currency";
+-
+-function getVatRate(vatType) {
+-  const cleaned = String(vatType || "20")
+-    .replace("%", "")
+-    .trim();
+-
+-  const rate = Number(cleaned);
+-
+-  if (rate === 20) return 20;
+-  if (rate === 5) return 5;
+-  if (rate === 0) return 0;
+-
+-  return 20;
+-}
++import { calculateCartTotals } from "../utils/orderTotals";
++import { isVatPriceMode } from "../utils/pricing";
+ 
+ export default function Cart({
+   cart,
+   total,
+-  originalTotal,
+   orderDiscountPercent,
+   setOrderDiscountPercent,
+-  discountAmount,
+   promotionDiscountAmount = 0,
+   canDiscount,
+   priceMode,
+@@ -32,33 +18,19 @@ export default function Cart({
+   onRemove,
+   onChangeQty,
+ }) {
+-
+   const [editing, setEditing] = useState(false);
+ 
+   const paidCart = cart.filter((item) => !item.isPromotionFree);
+   const promotionLines = cart.filter((item) => item.isPromotionFree);
+ 
+-  const itemCount = paidCart.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+-
+-  const netTotal = paidCart.reduce((sum, item) => {
+-    const qty = Number(item.qty || 0);
+-    const exVatPrice = Number(
+-      item.selectedPrice ?? item.exVatPrice ?? item.vatPrice ?? 0
+-    );
++  const totals = calculateCartTotals(cart, {
++    priceMode,
++    discountPercent: orderDiscountPercent,
++    promotionDiscountAmount,
++  });
+ 
+-    return sum + exVatPrice * qty;
+-  }, 0);
+-
+-  const promotionNetDiscount = promotionLines.length
+-    ? promotionLines.reduce(
+-        (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
+-        0
+-      )
+-    : Number(promotionDiscountAmount || 0);
+-  const discountedSubtotal = Math.max(0, netTotal - promotionNetDiscount);
+-  const vatTotal = priceMode === "vat" ? discountedSubtotal * 0.2 : 0;
+-
+-  const grandTotal = priceMode === "vat" ? discountedSubtotal + vatTotal : total;
++  const itemCount = paidCart.reduce((sum, item) => sum + Number(item.qty || 0), 0);
++  const vatMode = isVatPriceMode(priceMode);
+ 
+   return (
+     <div className="cart-panel bg-slate-50 border rounded-3xl p-3 md:p-4 sticky bottom-3 md:top-4 z-40 shadow-lg">
+@@ -81,9 +53,7 @@ export default function Cart({
+             <div key={item.id} className="bg-white border rounded-2xl p-3">
+               <div className="flex justify-between gap-2">
+                 <div className="flex-1">
+-                  <p className="font-bold text-sm leading-tight">
+-                    {item.name}
+-                  </p>
++                  <p className="font-bold text-sm leading-tight">{item.name}</p>
+                   <p className="text-xs text-slate-500">
+                     {item.qty} x {formatCurrency(item.selectedPrice)}
+                   </p>
+@@ -95,12 +65,7 @@ export default function Cart({
+               </div>
+ 
+               <div className="flex items-center gap-2 mt-3">
+-                <button
+-                  onClick={() => onDecrease(item.id)}
+-                  className="w-8 h-8 bg-slate-100 rounded-lg font-bold"
+-                >
+-                  -
+-                </button>
++                <button onClick={() => onDecrease(item.id)} className="w-8 h-8 bg-slate-100 rounded-lg font-bold">-</button>
+ 
+                 <input
+                   type="number"
+@@ -110,19 +75,9 @@ export default function Cart({
+                   className="w-16 border rounded-lg p-1 text-center font-bold"
+                 />
+ 
+-                <button
+-                  onClick={() => onIncrease(item.id)}
+-                  className="btn-primary w-8 h-8 bg-blue-600 text-white rounded-lg font-bold"
+-                >
+-                  +
+-                </button>
+-
+-                <button
+-                  onClick={() => onRemove(item.id)}
+-                  className="ml-auto text-red-600 text-sm font-bold"
+-                >
+-                  Remove
+-                </button>
++                <button onClick={() => onIncrease(item.id)} className="btn-primary w-8 h-8 bg-blue-600 text-white rounded-lg font-bold">+</button>
++
++                <button onClick={() => onRemove(item.id)} className="ml-auto text-red-600 text-sm font-bold">Remove</button>
+               </div>
+             </div>
+           ))}
+@@ -135,101 +90,72 @@ export default function Cart({
+           <span>{itemCount}</span>
+         </div>
+ 
+-          {priceMode === "vat" ? (
+-          <>
+-            <div className="flex justify-between text-sm text-slate-600 mb-2">
+-              <span>Subtotal</span>
+-              <span>{formatCurrency(netTotal)}</span>
+-            </div>
+-
+-            {promotionLines.map((line) => (
+-              <div
+-                key={line.id || line.promotionRuleId}
+-                className="flex justify-between text-sm font-bold text-blue-700 mb-2"
+-              >
+-                <span>
+-                  {String(line.promotionDisplayLabel || line.promotionName || "")
+-                    .trim()
+-                    .toLowerCase()
+-                    .startsWith("promotion")
+-                    ? line.promotionDisplayLabel || line.promotionName
+-                    : `Promotion ${line.promotionDisplayLabel || line.promotionName || "Free Item"}`}
+-                </span>
+-                <span>-{formatCurrency(line.promotionDiscountAmount)}</span>
+-              </div>
+-            ))}
++        <div className="flex justify-between text-sm text-slate-600 mb-2">
++          <span>Subtotal</span>
++          <span>{formatCurrency(totals.subtotal)}</span>
++        </div>
+ 
+-            <div className="flex justify-between text-sm text-slate-600 mb-2">
+-              <span>VAT Total</span>
+-              <span>{formatCurrency(vatTotal)}</span>
+-            </div>
++        {promotionLines.map((line) => (
++          <div key={line.id || line.promotionRuleId} className="flex justify-between text-sm font-bold text-blue-700 mb-2">
++            <span>
++              {String(line.promotionDisplayLabel || line.promotionName || "")
++                .trim()
++                .toLowerCase()
++                .startsWith("promotion")
++                ? line.promotionDisplayLabel || line.promotionName
++                : `Promotion ${line.promotionDisplayLabel || line.promotionName || "Free Item"}`}
++            </span>
++            <span>-{formatCurrency(line.promotionDiscountAmount)}</span>
++          </div>
++        ))}
+ 
+-            <div className="flex justify-between font-bold text-2xl border-t pt-2 mt-2">
+-              <span>Total</span>
+-              <span>{formatCurrency(grandTotal)}</span>
+-            </div>
++        {Number(orderDiscountPercent || 0) > 0 && (
++          <div className="flex justify-between text-sm text-red-600 mb-2">
++            <span>Discount</span>
++            <span>-{formatCurrency(totals.discountAmount)}</span>
++          </div>
++        )}
+ 
+-            {canDiscount && (
+-  <div className="border-t mt-3 pt-3">
+-    <div className="flex justify-between items-center mb-2">
+-      <span className="font-medium">Discount %</span>
+-
+-      <input
+-        type="number"
+-        min="0"
+-        max="100"
+-        step="0.1"
+-        value={orderDiscountPercent}
+-        onChange={(e) => setOrderDiscountPercent(e.target.value)}
+-        className="w-20 border rounded-lg px-2 py-1 text-right"
+-      />
+-    </div>
++        {vatMode && (
++          <div className="flex justify-between text-sm text-slate-600 mb-2">
++            <span>VAT Total</span>
++            <span>{formatCurrency(totals.vatTotal)}</span>
++          </div>
++        )}
+ 
+-    {Number(orderDiscountPercent || 0) > 0 && (
+-      <>
+-        <div className="flex justify-between text-sm text-red-600">
+-          <span>Discount</span>
+-          <span>-{formatCurrency(discountAmount)}</span>
++        <div className="flex justify-between font-bold text-2xl border-t pt-2 mt-2">
++          <span>Total</span>
++          <span>{formatCurrency(totals.totalAmount || total)}</span>
+         </div>
+ 
+-        <div className="flex justify-between font-bold text-green-700 mt-1">
+-          <span>Final Total</span>
+-          <span>{formatCurrency(originalTotal)}</span>
+-        </div>
+-        <button
+-        onClick={() => {
+-          if (window.confirm("Clear all cart items?")) {
+-            localStorage.removeItem("fairchoice_cart");
+-            setCart([]);
+-          }
+-        }}
+-        className="text-xs text-red-600 underline"
+-      >
+-        Clear Cart
+-      </button>
+-      </>
+-    )}
+-  </div>
+-)}
+-          </>
+-        ) : (
+-          <div className="flex justify-between font-bold text-2xl">
+-            <span>Total</span>
+-            <span>{formatCurrency(total)}</span>
++        {canDiscount && (
++          <div className="border-t mt-3 pt-3">
++            <div className="flex justify-between items-center mb-2">
++              <span className="font-medium">Discount %</span>
++              <input
++                type="number"
++                min="0"
++                max="100"
++                step="0.1"
++                value={orderDiscountPercent}
++                onChange={(e) => setOrderDiscountPercent(e.target.value)}
++                className="w-20 border rounded-lg px-2 py-1 text-right"
++              />
++            </div>
+           </div>
+         )}
+ 
+-<button
+-  onClick={() => {
+-    if (window.confirm("Submit this order?")) {
+-      onSubmit();
+-    }
+-  }}
+-  disabled={paidCart.length === 0 || isSubmitting}
+-  className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
+->
+-  {isSubmitting ? "Submitting..." : "Submit Order"}
+-</button>
++        <button
++          onClick={() => {
++            if (window.confirm("Submit this order?")) {
++              onSubmit();
++            }
++          }}
++          disabled={paidCart.length === 0 || isSubmitting}
++          className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
++        >
++          {isSubmitting ? "Submitting..." : "Submit Order"}
++        </button>
+       </div>
+     </div>
+   );
+diff --git a/src/pages/AdminOrders.jsx b/src/pages/AdminOrders.jsx
+index be98998..2d840d7 100644
+--- a/src/pages/AdminOrders.jsx
++++ b/src/pages/AdminOrders.jsx
+@@ -6,6 +6,7 @@ import {
+   calculateOrderTotals,
+   getOrderItemNetTotal,
+ } from "../utils/orderTotals";
++import { getProductPriceForMode } from "../utils/pricing";
+ 
+ export default function AdminOrders({
+   orders = [],
+@@ -17,6 +18,7 @@ export default function AdminOrders({
+   addOrderItem = () => {},
+   changeOrderStatus = () => {},
+   fetchOrders = async () => {},
++  pricingSettings = {},
+ } = {}) {
+   const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
+   
+@@ -208,19 +210,21 @@ const confirmAddItem = async () => {
+   if (!requirePermission(loggedInUser, "can_add_product_to_order", "You cannot add products to orders.")) return;
+   if (!selectedOrder || !selectedProduct) return;
+ 
++  const priceMode = selectedOrder.priceMode || selectedOrder.price_mode || "vat";
++  const country = selectedOrder.customer_country || selectedOrder.country || "";
++  const price = getProductPriceForMode(selectedProduct, priceMode, country, pricingSettings);
++
+   const newItem = {
+     id: crypto.randomUUID(),
+     productId: selectedProduct.id,
+-    productCode: selectedProduct.productCode || "",
+-    name: selectedProduct.name || selectedProduct.productName,
++    productCode: selectedProduct.productCode || selectedProduct.product_code || "",
++    name: selectedProduct.name || selectedProduct.productName || selectedProduct.product_name,
+     qty: Number(addQty || 1),
+     pickedQty: Number(addQty || 1),
+-    price: Number(
+-      selectedProduct.selectedPrice ??
+-      selectedProduct.vatPrice ??
+-      selectedProduct.cashPrice ??
+-      0
+-    ),
++    price,
++    selectedPrice: price,
++    unit_price: price,
++    vatRate: selectedProduct.vatRate || selectedProduct.vat_type || selectedProduct.vatType || 20,
+     sourceStatus: "In Stock",
+     includeInPicking: true,
+   };
+@@ -316,9 +320,7 @@ const updatePreparedItem = async (order, item, changes) => {
+           const orderTotals = calculateOrderTotals(order.items || [], { priceMode });
+           const totalQty = orderTotals.totalQty;
+           const priceModeKey = String(priceMode || "").toLowerCase();
+-          const printButtonLabel =
+-            priceModeKey === "server" ? "Print Order Form" : "Print Invoice";
+-          const orderNumber =
++                    const orderNumber =
+             order.order_number || order.orderNumber || order.orderId || "-";
+           const customerName =
+             order.customer_name || order.customerName || order.companyName || "-";
+@@ -361,45 +363,7 @@ const updatePreparedItem = async (order, item, changes) => {
+                 </div>
+               </div>
+ 
+-              {expandedOrders[order.orderId] && (
+-                <div className="received-card-actions">
+-                  <button
+-                    type="button"
+-                    className={`bg-slate-700 text-white ${btn}`}
+-                    disabled
+-                    title="Export handler is not configured on this screen."
+-                  >
+-                    Export
+-                  </button>
+-                  <button
+-                    type="button"
+-                    className={`bg-amber-600 text-white ${btn}`}
+-                    disabled
+-                    title="Pre-Order handler is not configured on this screen."
+-                  >
+-                    Pre-Order
+-                  </button>
+-                  <button
+-                    type="button"
+-                    className={`bg-slate-500 text-white ${btn}`}
+-                    disabled
+-                    title="Supply End handler is not configured on this screen."
+-                  >
+-                    Supply End
+-                  </button>
+-                  {hasPermission(loggedInUser, "can_print") && (
+-                    <button
+-                      type="button"
+-                      onClick={() => printOrderPickingList(order)}
+-                      className={`bg-black text-white ${btn}`}
+-                    >
+-                      {printButtonLabel}
+-                    </button>
+-                  )}
+-                </div>
+-              )}
+-
+-                    {expandedOrders[order.orderId] && (
++                {expandedOrders[order.orderId] && (
+   <div className="mt-3 received-order-card">
+     <div
+       className="received-item-header"
+diff --git a/src/pages/CustomerOrder.jsx b/src/pages/CustomerOrder.jsx
+index 60ab8df..e22f65c 100644
+--- a/src/pages/CustomerOrder.jsx
++++ b/src/pages/CustomerOrder.jsx
+@@ -37,11 +37,13 @@ import {
+ } from "../services/promotionRules";
+ import {
+   calculateOrderTotals,
++  roundMoney,
+   getOrderItemNetTotal,
+   getOrderItemQty,
+   getOrderItemUnitPrice,
+   getOrderItemVatTotal,
+ } from "../utils/orderTotals";
++import { getProductPriceForMode } from "../utils/pricing";
+ import { calculateCustomerCredit } from "../utils/customerCredit";
+ 
+ import AdminProducts from "./AdminProducts";
+@@ -562,11 +564,16 @@ const normalizePromotionType = (value) =>
+ 
+ const isVatPriceMode = (mode) => {
+   const normalizedMode = String(mode || "").trim().toLowerCase();
+-  return (
+-    normalizedMode === "vat" ||
+-    normalizedMode === "ex vat" ||
+-    normalizedMode === "ex. vat"
+-  );
++  return [
++    "vat",
++    "ex vat",
++    "ex. vat",
++    "super",
++    "admin",
++    "admin offer",
++    "server",
++    "manager",
++  ].includes(normalizedMode);
+ };
+ 
+ const getPromotionRuleProductId = (rule) =>
+@@ -680,51 +687,15 @@ const getPromotionPrice = (product) => {
+   return Number.isFinite(promotionPrice) ? promotionPrice : null;
+ };
+ 
+-const getPrice = (product) => {
+-  const mode = String(priceMode || "").toLowerCase();
+-
+-  const exVatPrice = Number(product.vatPrice || 0);
+-  const vatRate = getVatRate(product.vatType);
+-  const incVatPrice = exVatPrice + exVatPrice * (vatRate / 100);
+-
+-  if (isVatPriceMode(mode)) {
+-    return exVatPrice;
+-  }
+-
+-  if (mode === "server" || mode === "manager") {
+-    const country = String(orderCountry || "").toLowerCase();
+-    const specialPrice =
+-      country === "wales"
+-        ? Number(product.walesSpecialPrice || 0)
+-        : country === "england"
+-        ? Number(product.englandSpecialPrice || 0)
+-        : 0;
+-
+-    if (specialPrice > 0) {
+-      return specialPrice;
+-    }
+-  }
+-
+-  const discounts = {
+-    server: pricingSettings.server_discount_percent,
+-    manager: pricingSettings.manager_discount_percent,
+-    super: pricingSettings.super_discount_percent,
+-  };
+-
+-  const discount = Number(discounts[mode] || 0);
+-  const discountedPrice = incVatPrice * (1 - discount / 100);
+-
+-  return roundToFairQuarter(discountedPrice);
+-};
++const getPrice = (product) =>
++  getProductPriceForMode(product, priceMode, orderCountry, pricingSettings);
+ 
+ const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
+   const quantity = Math.max(1, Number(nextQty || 1));
+   const selectedPrice = Number(getPrice(item) || 0);
+-  const exVatPrice = isVatPriceMode(priceMode)
+-    ? selectedPrice
+-    : Number(item.vatPrice || item.vat_price || selectedPrice || 0);
++  const exVatPrice = selectedPrice;
+   const vatRate = getVatRate(item.vatType || item.vat_type);
+-  const vatAmount = exVatPrice * (vatRate / 100);
++  const vatAmount = isVatPriceMode(priceMode) ? exVatPrice * (vatRate / 100) : 0;
+   const incVatPrice = exVatPrice + vatAmount;
+   const lineTotal = quantity * selectedPrice;
+ 
+@@ -1294,19 +1265,14 @@ const visibleProducts = useMemo(() => {
+     return sum + Number(item.selectedPrice || 0) * qty;
+   }, 0);
+ 
+-  const discountedSubtotal =
+-    isVatPriceMode(priceMode)
+-      ? Math.max(0, subtotal - promotionDiscountAmount)
+-      : subtotal;
+-
+-  const vatTotal = isVatPriceMode(priceMode) ? discountedSubtotal * 0.2 : 0;
+-  const total = isVatPriceMode(priceMode) ? discountedSubtotal + vatTotal : subtotal;
+-
+- const discountAmount =
+-  total * (Number(orderDiscountPercent || 0) / 100);
+-
+-const finalTotal =
+-  Math.max(0, total - discountAmount);
++  const discountedSubtotal = Math.max(0, subtotal - promotionDiscountAmount);
++  const discountAmount = roundMoney(
++    discountedSubtotal * (Number(orderDiscountPercent || 0) / 100)
++  );
++  const netAfterDiscount = roundMoney(Math.max(0, discountedSubtotal - discountAmount));
++  const vatTotal = isVatPriceMode(priceMode) ? roundMoney(netAfterDiscount * 0.2) : 0;
++  const total = roundMoney(netAfterDiscount + vatTotal);
++  const finalTotal = total;
+ 
+ const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
+   (branch) => branch.active !== false
+@@ -1517,7 +1483,7 @@ const submitOrder = async () => {
+   const creditLimit = creditSummary.creditLimit;
+   const outstandingBalance = creditSummary.outstanding;
+ 
+-  const orderTotal = Number(finalTotal || 0);
++  const orderTotal = roundMoney(finalTotal || 0);
+   const projectedBalance = outstandingBalance + orderTotal;
+ 
+   if (accountStatus === "On Hold") {
+@@ -1629,8 +1595,8 @@ const recalculateOrder = (order, updatedItems) => {
+   });
+ 
+   const discountPercent = Number(order.discount_percent || 0);
+-  const discountAmount = totals.totalAmount * (discountPercent / 100);
+-  const finalTotal = Math.max(0, totals.totalAmount - discountAmount);
++  const discountAmount = roundMoney(totals.totalAmount * (discountPercent / 100));
++  const finalTotal = roundMoney(Math.max(0, totals.totalAmount - discountAmount));
+ 
+   return {
+     ...order,
+@@ -1641,6 +1607,27 @@ const recalculateOrder = (order, updatedItems) => {
+   };
+ };
+ 
++
++const saveOrderTotalsToDatabase = async (orderId, items, order = {}) => {
++  const totals = calculateOrderTotals(items || [], {
++    priceMode: order.priceMode || order.price_mode,
++    discountPercent: order.discount_percent,
++  });
++
++  const { error } = await supabase
++    .from("orders")
++    .update({
++      order_total: roundMoney(totals.totalAmount).toFixed(2),
++      total_amount: roundMoney(totals.totalAmount).toFixed(2),
++      vat_total: roundMoney(totals.vatTotal).toFixed(2),
++    })
++    .eq("order_number", orderId);
++
++  if (error) {
++    console.error("Order total update error:", error);
++  }
++};
++
+ const updateOrderItem = async (orderId, itemId, updates) => {
+   setOrders((oldOrders) =>
+     oldOrders.map((order) => {
+@@ -1661,29 +1648,57 @@ const updateOrderItem = async (orderId, itemId, updates) => {
+     })
+   );
+ 
+-  const dbUpdates = {};
++const order = orders.find((o) => o.orderId === orderId);
+ 
+-  if (updates.qty !== undefined) dbUpdates.qty = updates.qty;
+-  if (updates.pickedQty !== undefined) dbUpdates.picked_qty = updates.pickedQty;
+-  if (updates.sourceStatus !== undefined) dbUpdates.source_status = updates.sourceStatus;
+-  if (updates.includeInPicking !== undefined)
+-    dbUpdates.include_in_picking = updates.includeInPicking;
++const item = order?.items?.find((i) => {
++  const itemKey = i.dbId || i.id || i.productId || i.product_id;
++  return String(itemKey) === String(itemId);
++});
+ 
+-  const { error } = await supabase
+-    .from("order_items")
+-    .update(dbUpdates)
+-    .eq("id", itemId);
++const dbUpdates = {};
+ 
+- if (error) {
+-  console.error("Customer ledger loading error:", error);
++if (updates.qty !== undefined) {
++  const qty = Number(updates.qty || 0);
++  const price = Number(item?.price || item?.selectedPrice || 0);
+ 
+-  alert(
+-    `Could not load payment history.\n\n${error.message}\n\n${error.details || ""}`
+-  );
++  dbUpdates.qty = qty;
++  dbUpdates.picked_qty = qty;
++  dbUpdates.line_total = roundMoney(qty * price);
++}
++
++if (updates.pickedQty !== undefined) {
++  dbUpdates.picked_qty = Number(updates.pickedQty || 0);
++}
++
++if (updates.sourceStatus !== undefined) {
++  dbUpdates.source_status = updates.sourceStatus;
++}
++
++if (updates.includeInPicking !== undefined) {
++  dbUpdates.include_in_picking = updates.includeInPicking;
++}
+ 
++const { error } = await supabase
++  .from("order_items")
++  .update(dbUpdates)
++  .eq("id", item?.dbId || itemId);
++
++if (error) {
++  console.error("Order item update error:", error);
++  alert("Could not update order item: " + error.message);
+   return;
+ }
+ 
++const updatedOrderItems = (order?.items || []).map((currentItem) => {
++  const currentKey = currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
++  return String(currentKey) === String(itemId)
++    ? { ...currentItem, ...updates }
++    : currentItem;
++});
++
++await saveOrderTotalsToDatabase(orderId, updatedOrderItems, order);
++await fetchOrders();
++
+ 
+ };
+ const addOrderItem = async (orderId, newItem) => {
+@@ -1695,7 +1710,10 @@ const addOrderItem = async (orderId, newItem) => {
+   }
+ 
+   const qty = Number(newItem.qty || 1);
+-  const price = Number(newItem.price || 0);
++  const price = roundMoney(newItem.price || newItem.selectedPrice || 0);
++  const vatRate = Number(newItem.vatRate || newItem.vat_percent || 20);
++  const lineTotal = roundMoney(price * qty);
++  const vatTotal = roundMoney(lineTotal * (vatRate / 100));
+ 
+   const { error } = await supabase
+     .from("order_items")
+@@ -1710,7 +1728,10 @@ const addOrderItem = async (orderId, newItem) => {
+       qty,
+       picked_qty: qty,
+       price,
+-      line_total: price * qty,
++      line_total: lineTotal,
++      vat_percent: vatRate,
++      vat_total: vatTotal,
++      vat_amount: vatTotal,
+       source_status: "In Stock",
+       include_in_picking: true,
+     });
+@@ -1721,6 +1742,26 @@ const addOrderItem = async (orderId, newItem) => {
+     return;
+   }
+ 
++  await saveOrderTotalsToDatabase(
++    orderId,
++    [
++      ...(order.items || []),
++      {
++        ...newItem,
++        qty,
++        pickedQty: qty,
++        price,
++        selectedPrice: price,
++        lineTotal,
++        line_total: lineTotal,
++        vatRate,
++        vatTotal,
++        vat_total: vatTotal,
++      },
++    ],
++    order
++  );
++
+   await fetchOrders();
+ };
+ 
+@@ -1975,7 +2016,10 @@ const addOrderItem = async (orderId, newItem) => {
+ 
+   const openCustomerOrderDocument = (order, documentType) => {
+     const priceMode = order.priceMode || order.price_mode || "";
+-    const totals = calculateOrderTotals(order.items || [], { priceMode });
++    const totals = calculateOrderTotals(order.items || [], {
++      priceMode,
++      discountPercent: order.discount_percent,
++    });
+     const title = getOrderDocumentTitle(documentType);
+     const showPrices = documentType !== "deliveryNote";
+     const orderNumber = order.orderId || order.order_number || order.id || "-";
+@@ -2123,6 +2167,7 @@ const backOfficeContent = comingSoonTitle ? (
+         addOrderItem={addOrderItem}
+         changeOrderStatus={changeOrderStatus}
+         fetchOrders={fetchOrders}
++        pricingSettings={pricingSettings}
+       />
+     )}
+ 
+diff --git a/src/pages/Warehouse.jsx b/src/pages/Warehouse.jsx
+index 160e753..be93c18 100644
+--- a/src/pages/Warehouse.jsx
++++ b/src/pages/Warehouse.jsx
+@@ -10,6 +10,7 @@ import {
+   getOrderItemQty,
+   getOrderItemUnitPrice,
+   getOrderPayableTotal,
++  roundMoney,
+ } from "../utils/orderTotals";
+ 
+ /*
+@@ -28,6 +29,7 @@ import {
+ 
+ export default function Warehouse({
+   orders = [],
++  printPickingList,
+   changeOrderStatus,
+   updateOrderItem,
+   updateOrderExtraFields,
+@@ -220,6 +222,35 @@ const fetchDrivers = async () => {
+   */
+   const getLineTotal = getOrderItemNetTotal;
+ 
++  const getInvoiceTotals = (order = {}) =>
++    calculateOrderTotals(order.items || [], {
++      priceMode: order.priceMode || order.price_mode,
++      discountPercent: order.discount_percent,
++    });
++
++  const getWarehouseStatus = (item = {}) =>
++    String(item.sourceStatus || item.source_status || item.status || "In Stock");
++
++  const getWarehouseStatusRank = (item = {}) => {
++    const status = getWarehouseStatus(item).trim().toLowerCase();
++
++    if (status === "in stock" || status === "available") return 1;
++    if (status === "need supplier" || status === "pre-order" || status === "pre order") return 2;
++    if (status === "cannot supply" || status === "supply needed") return 3;
++
++    return 4;
++  };
++
++  const getGroupedWarehouseItems = (items = []) =>
++    [...(items || [])].sort((a, b) => {
++      const rankDiff = getWarehouseStatusRank(a) - getWarehouseStatusRank(b);
++      if (rankDiff !== 0) return rankDiff;
++
++      return String(a.name || a.productName || "").localeCompare(
++        String(b.name || b.productName || "")
++      );
++    });
++
+   /*
+     Invoice/order totals.
+     Total Lines = number of printable product lines.
+@@ -1231,30 +1262,40 @@ const fetchDrivers = async () => {
+   };
+ 
+   const exportWarehouseItems = (allowedStatuses, fileName, sheetName) => {
+-    const statusSet = new Set(allowedStatuses);
+-    const exportRows = warehouseOrders.flatMap((order) =>
+-      (order.items || [])
+-        .filter((item) => {
+-          const sourceStatus = item.status || item.sourceStatus || item.source_status || "";
+-          return statusSet.has(sourceStatus);
+-        })
+-        .map((item) => {
+-          const sourceStatus = item.status || item.sourceStatus || item.source_status || "";
+-
+-          return {
+-            "Order Number": getOrderId(order),
+-            Customer: order.companyName || order.company_name || "",
+-            Branch: order.branchName || order.branch_name || "",
+-            Product: item.productName || item.name || "",
+-            Qty: getLineQty(item),
+-            Status: sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus,
+-            "Order Date": getOrderDateValue(order) || "",
++    const normalizedStatuses = new Set(
++      allowedStatuses.map((status) => String(status).trim().toLowerCase())
++    );
++    const groupedItems = {};
++
++    warehouseOrders.forEach((order) => {
++      (order.items || []).forEach((item) => {
++        const sourceStatus = getWarehouseStatus(item).trim();
++        const normalizedStatus = sourceStatus.toLowerCase();
++
++        if (!normalizedStatuses.has(normalizedStatus)) return;
++
++        const product = item.productName || item.name || "";
++        const key = product.trim().toLowerCase();
++
++        if (!key) return;
++
++        if (!groupedItems[key]) {
++          groupedItems[key] = {
++            Product: product,
++            Qty: 0,
+           };
+-        })
++        }
++
++        groupedItems[key].Qty += getLineQty(item);
++      });
++    });
++
++    const exportRows = Object.values(groupedItems).sort((a, b) =>
++      String(a.Product).localeCompare(String(b.Product))
+     );
+ 
+     if (exportRows.length === 0) {
+-      alert("No matching warehouse items to export.");
++      alert("No pre-order items to export.");
+       return;
+     }
+ 
+@@ -1267,9 +1308,9 @@ const fetchDrivers = async () => {
+ 
+   const exportSupplyNeeded = () => {
+     exportWarehouseItems(
+-      ["Cannot Supply", "Need Supplier", "Supply Needed"],
+-      `fairchoice-supply-needed-${new Date().toISOString().slice(0, 10)}.xlsx`,
+-      "Supply Needed"
++      ["Cannot Supply", "Need Supplier", "Pre-Order", "Pre Order", "Supply Needed"],
++      `fairchoice-pre-order-list-${new Date().toISOString().slice(0, 10)}.xlsx`,
++      "Pre-Order List"
+     );
+   };
+ 
+@@ -1428,7 +1469,7 @@ const confirmForDriver = async (order) => {
+       priceMode: order.priceMode || order.price_mode,
+     });
+     const pickingQty = cardTotals.totalQty;
+-    const orderValue = getOrderPayableTotal(order);
++    const orderValue = cardTotals.totalAmount;
+     const isReadyForDriver = order.status === "Ready For Driver";
+     const priceMode = order.price_mode || order.priceMode || "";
+     const orderDate =
+@@ -1471,14 +1512,6 @@ const confirmForDriver = async (order) => {
+               {expandedOrders[orderId] ? "Hide" : "View Order"}
+             </button>
+ 
+-            {hasPermission(loggedInUser, "can_print") && (
+-              <button
+-                onClick={() => printPickingList(order)}
+-                className={`bg-black text-white ${btn}`}
+-              >
+-                Picking List
+-              </button>
+-            )}
+           </div>
+         </div>
+         <div
+@@ -1506,11 +1539,40 @@ const confirmForDriver = async (order) => {
+               <div className="text-right">Action</div>
+             </div>
+ 
+-            {order.items.map((item) => {
+-              const sourceStatus = item.sourceStatus || "In Stock";
++            {getGroupedWarehouseItems(order.items).map((item) => {
++              const sourceStatus = getWarehouseStatus(item);
+               const isInStock = sourceStatus === "In Stock";
+               const isCannotSupply = sourceStatus === "Cannot Supply";
+               const needsSupplier = !isInStock && !isCannotSupply;
++              const nextWarehouseStatus = isInStock
++                ? {
++                    label: "Cannot Supply",
++                    className: "bg-red-600 text-white",
++                    changes: {
++                      sourceStatus: "Cannot Supply",
++                      includeInPicking: false,
++                      pickedQty: 0,
++                    },
++                  }
++                : isCannotSupply
++                ? {
++                    label: "Pre Order",
++                    className: "bg-amber-600 text-white",
++                    changes: {
++                      sourceStatus: "Need Supplier",
++                      includeInPicking: false,
++                      pickedQty: 0,
++                    },
++                  }
++                : {
++                    label: "Available",
++                    className: "bg-green-600 text-white",
++                    changes: {
++                      sourceStatus: "In Stock",
++                      includeInPicking: true,
++                      pickedQty: getLineQty(item),
++                    },
++                  };
+ 
+               return (
+                 <div
+@@ -1540,41 +1602,15 @@ const confirmForDriver = async (order) => {
+                   <div className="text-right">
+                     {!isReadyForDriver &&
+                       hasPermission(loggedInUser, "can_move_to_warehouse") && (
+-                        <>
+-                          {isCannotSupply ? (
+-                            <button
+-                              type="button"
+-                              onClick={() => {
+-                                if (!window.confirm("Mark this item as Available?")) return;
+-
+-                                updateWarehouseItem(order, item, {
+-                                  sourceStatus: "In Stock",
+-                                  includeInPicking: true,
+-                                  pickedQty: Number(item.qty || 0),
+-                                });
+-                              }}
+-                              className={`bg-green-600 text-white ${btn}`}
+-                            >
+-                              Available
+-                            </button>
+-                          ) : (
+-                            <button
+-                              type="button"
+-                              onClick={() => {
+-                                if (!window.confirm("Mark this item as Cannot Supply?")) return;
+-
+-                                updateWarehouseItem(order, item, {
+-                                  sourceStatus: "Cannot Supply",
+-                                  includeInPicking: false,
+-                                  pickedQty: 0,
+-                                });
+-                              }}
+-                              className={`bg-red-600 text-white ${btn}`}
+-                            >
+-                              Cannot Supply
+-                            </button>
+-                          )}
+-                        </>
++                        <button
++                          type="button"
++                          onClick={() =>
++                            updateWarehouseItem(order, item, nextWarehouseStatus.changes)
++                          }
++                          className={`${nextWarehouseStatus.className} ${btn}`}
++                        >
++                          {nextWarehouseStatus.label}
++                        </button>
+                       )}
+                   </div>
+                 </div>
+@@ -1727,13 +1763,6 @@ const confirmForDriver = async (order) => {
+             type="button"
+             onClick={exportSupplyNeeded}
+             className={`bg-slate-800 text-white ${btn}`}
+-          >
+-            Export Supply Needed
+-          </button>
+-          <button
+-            type="button"
+-            onClick={exportPreOrderList}
+-            className={`bg-amber-600 text-white ${btn}`}
+           >
+             Export Pre-Order List
+           </button>
+diff --git a/src/services/orders.js b/src/services/orders.js
+index e70a1c5..c238785 100644
+--- a/src/services/orders.js
++++ b/src/services/orders.js
+@@ -1,4 +1,5 @@
+ import { supabase } from "./supabase";
++import { calculateOrderTotals, roundMoney } from "../utils/orderTotals";
+ 
+ export async function getOrders() {
+   const { data, error } = await supabase
+@@ -93,6 +94,11 @@ export async function createCustomerOrder({
+   credit_limit = 0,
+ }) {
+   const orderNumber = "ORD-" + Date.now();
++  const calculatedTotals = calculateOrderTotals(cart || [], {
++    priceMode,
++    discountPercent: discount_percent,
++  });
++  const savedOrderTotal = roundMoney(calculatedTotals.totalAmount);
+ 
+   const { data: order, error: orderError } = await supabase
+     .from("orders")
+@@ -111,7 +117,9 @@ export async function createCustomerOrder({
+ 
+   postcode: delivery_postcode || "",
+   price_mode: priceMode.toUpperCase(),
+-  order_total: total.toFixed(2),
++  order_total: savedOrderTotal.toFixed(2),
++  total_amount: savedOrderTotal.toFixed(2),
++  vat_total: roundMoney(calculatedTotals.vatTotal).toFixed(2),
+   
+ 
+   discount_percent: Number(discount_percent || 0),
+@@ -133,7 +141,14 @@ alert(
+     throw orderError;
+   }
+ 
+-  const orderItems = cart.map((item) => ({
++  const orderItems = cart.map((item) => {
++    const qty = Number(item.qty || 0);
++    const price = roundMoney(item.selectedPrice || item.price || 0);
++    const vatRate = Number(item.vatRate || item.vat_percent || 20);
++    const lineTotal = roundMoney(price * qty);
++    const vatTotal = roundMoney(lineTotal * (vatRate / 100));
++
++    return ({
+     order_id: order.id,
+     product_id: item.id,
+     product_name: item.name,
+@@ -141,15 +156,19 @@ alert(
+     series: item.series || "",
+     flavour: item.flavour || "",
+     carton_size: item.cartonSize,
+-    qty: item.qty,
+-    price: item.selectedPrice.toFixed(2),
+-    line_total: (item.selectedPrice * item.qty).toFixed(2),
++    qty,
++    price: price.toFixed(2),
++    line_total: lineTotal.toFixed(2),
++    vat_percent: vatRate,
++    vat_total: vatTotal.toFixed(2),
++    vat_amount: vatTotal.toFixed(2),
+     stock_before: item.stock,
+-    stock_after: Math.max(0, item.stock - item.qty),
++    stock_after: Math.max(0, item.stock - qty),
+     source_status: item.sourceStatus || "In Stock",
+-    picked_qty: item.pickedQty ?? item.qty,
++    picked_qty: item.pickedQty ?? qty,
+     include_in_picking: item.includeInPicking !== false,
+-  }));
++  });
++  });
+ 
+   const { error: itemsError } = await supabase
+     .from("order_items")
+diff --git a/src/utils/orderTotals.js b/src/utils/orderTotals.js
+index ff7896c..7560dff 100644
+--- a/src/utils/orderTotals.js
++++ b/src/utils/orderTotals.js
+@@ -1,3 +1,7 @@
++import { getVatRate, isVatPriceMode, roundMoney, toPennies, fromPennies } from "./pricing";
++
++export { toPennies, fromPennies, roundMoney, isVatPriceMode, getVatRate };
++
+ export const normalizeOrderItemStatus = (item = {}) =>
+   String(item.status || item.sourceStatus || item.source_status || "")
+     .trim()
+@@ -9,7 +13,6 @@ export const isSuppliedOrderItem = (item = {}) => {
+   }
+ 
+   const status = normalizeOrderItemStatus(item);
+-
+   if (!status) return true;
+ 
+   return (
+@@ -25,7 +28,7 @@ export const getOrderItemQty = (item = {}) =>
+   Number(item.pickedQty ?? item.picked_qty ?? item.quantity ?? item.qty ?? 0);
+ 
+ export const getOrderItemUnitPrice = (item = {}) =>
+-  Number(
++  roundMoney(
+     item.unit_price ??
+       item.unitPrice ??
+       item.price ??
+@@ -38,35 +41,48 @@ export const getOrderItemUnitPrice = (item = {}) =>
+   );
+ 
+ export const getOrderItemNetTotal = (item = {}) => {
+-  const savedLineTotal = Number(item.line_total ?? item.lineTotal ?? 0);
+-
+-  if (savedLineTotal > 0) return savedLineTotal;
+-
+-  return getOrderItemQty(item) * getOrderItemUnitPrice(item);
++  const qty = getOrderItemQty(item);
++  const unitPrice = getOrderItemUnitPrice(item);
++  return roundMoney(qty * unitPrice);
+ };
+ 
+-export const getOrderItemVatTotal = (item = {}) => {
+-  const savedVatTotal = item.vat_total ?? item.vatTotal ?? item.vat_amount ?? item.vatAmount;
++export const getOrderItemVatRate = (item = {}) =>
++  getVatRate(item.vat_percent ?? item.vatPercent ?? item.vatRate ?? item.vat_type ?? item.vatType);
+ 
+-  if (savedVatTotal != null && Number(savedVatTotal) > 0) {
+-    return Number(savedVatTotal || 0);
+-  }
++export const getOrderItemVatTotal = (item = {}, options = {}) => {
++  if (!isVatPriceMode(options.priceMode ?? options.price_mode)) return 0;
+ 
+-  const vatRate = Number(item.vat_percent ?? item.vatPercent ?? item.vatRate ?? 20);
+-  return getOrderItemNetTotal(item) * (vatRate / 100);
++  const vatRate = getOrderItemVatRate(item);
++  return roundMoney(getOrderItemNetTotal(item) * (vatRate / 100));
+ };
+ 
+ export const calculateOrderTotals = (items = [], options = {}) => {
+-  const mode = String(options.priceMode || options.price_mode || "").toLowerCase();
+-  const includeVat = mode === "vat" || mode === "ex. vat" || mode === "ex vat";
++  const priceMode = options.priceMode || options.price_mode || "vat";
+   const invoiceItems = (items || []).filter(isSuppliedOrderItem);
+   const totalQty = invoiceItems.reduce((sum, item) => sum + getOrderItemQty(item), 0);
+   const totalLines = invoiceItems.length;
+-  const netTotal = invoiceItems.reduce((sum, item) => sum + getOrderItemNetTotal(item), 0);
+-  const vatTotal = includeVat
+-    ? invoiceItems.reduce((sum, item) => sum + getOrderItemVatTotal(item), 0)
++
++  const grossNetPennies = invoiceItems.reduce(
++    (sum, item) => sum + toPennies(getOrderItemNetTotal(item)),
++    0
++  );
++
++  const promotionDiscountPennies = toPennies(options.promotionDiscountAmount || 0);
++  const discountPercent = Number(options.discountPercent ?? options.discount_percent ?? 0);
++
++  const netBeforeOrderDiscount = fromPennies(
++    Math.max(0, grossNetPennies - promotionDiscountPennies)
++  );
++
++  // Order discount is always applied before VAT.
++  const orderDiscountAmount = roundMoney(netBeforeOrderDiscount * (discountPercent / 100));
++  const netTotal = roundMoney(Math.max(0, netBeforeOrderDiscount - orderDiscountAmount));
++
++  const vatTotal = isVatPriceMode(priceMode)
++    ? roundMoney(netTotal * 0.2)
+     : 0;
+-  const totalAmount = includeVat ? netTotal + vatTotal : netTotal;
++
++  const totalAmount = roundMoney(netTotal + vatTotal);
+ 
+   return {
+     invoiceItems,
+@@ -74,6 +90,10 @@ export const calculateOrderTotals = (items = [], options = {}) => {
+     totalQty,
+     totalQuantity: totalQty,
+     totalLines,
++    subtotal: fromPennies(grossNetPennies),
++    promotionDiscountAmount: fromPennies(promotionDiscountPennies),
++    discountPercent,
++    discountAmount: orderDiscountAmount,
+     netTotal,
+     vatTotal,
+     totalAmount,
+@@ -81,33 +101,22 @@ export const calculateOrderTotals = (items = [], options = {}) => {
+   };
+ };
+ 
+-const getSavedOrderTotalValue = (order = {}) => {
+-  const candidates = [
+-    order.final_total,
+-    order.finalTotal,
+-    order.total_amount,
+-    order.totalAmount,
+-    order.order_total,
+-    order.orderTotal,
+-    order.total,
+-  ];
+-
+-  for (const value of candidates) {
+-    if (value == null || value === "") continue;
+-
+-    const numericValue = Number(value);
+-    if (Number.isFinite(numericValue)) return numericValue;
+-  }
++export const calculateCartTotals = (cart = [], options = {}) => {
++  const paidItems = (cart || []).filter((item) => !item.isPromotionFree);
++  const promotionDiscountAmount = (cart || []).reduce(
++    (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
++    Number(options.promotionDiscountAmount || 0)
++  );
+ 
+-  return null;
++  return calculateOrderTotals(paidItems, {
++    priceMode: options.priceMode || options.price_mode,
++    discountPercent: options.discountPercent ?? options.discount_percent,
++    promotionDiscountAmount,
++  });
+ };
+ 
+-export const getOrderPayableTotal = (order = {}) => {
+-  const savedTotal = getSavedOrderTotalValue(order);
+-
+-  if (savedTotal != null) return savedTotal;
+-
+-  return calculateOrderTotals(order.items || order.order_items || [], {
++export const getOrderPayableTotal = (order = {}) =>
++  calculateOrderTotals(order.items || order.order_items || [], {
+     priceMode: order.priceMode || order.price_mode,
++    discountPercent: order.discount_percent,
+   }).totalAmount;
+-};
+diff --git a/src/utils/pricing.js b/src/utils/pricing.js
+index 47a1f74..6eb8be8 100644
+--- a/src/utils/pricing.js
++++ b/src/utils/pricing.js
+@@ -1,3 +1,11 @@
++export const toPennies = (value) =>
++  Math.round((Number(value || 0) + Number.EPSILON) * 100);
++
++export const fromPennies = (pennies) =>
++  Number((Number(pennies || 0) / 100).toFixed(2));
++
++export const roundMoney = (value) => fromPennies(toPennies(value));
++
+ export const roundToFairQuarter = (price) => {
+   const value = Number(price || 0);
+   const pounds = Math.floor(value);
+@@ -11,6 +19,13 @@ export const roundToFairQuarter = (price) => {
+   return pounds + 1;
+ };
+ 
++export const normalizePriceMode = (priceMode) =>
++  String(priceMode || "")
++    .trim()
++    .toLowerCase()
++    .replace(/[._-]+/g, " ")
++    .replace(/\s+/g, " ");
++
+ export const getVatRate = (vatType) => {
+   const rate = Number(String(vatType || "20").replace("%", "").trim());
+   if (rate === 5) return 5;
+@@ -18,35 +33,91 @@ export const getVatRate = (vatType) => {
+   return 20;
+ };
+ 
+-export const getOrderItemPrice = (
+-  product,
+-  priceMode = "vat",
+-  pricingSettings = {}
+-) => {
+-  const mode = String(priceMode || "").toLowerCase();
++export const isVatPriceMode = (priceMode) => {
++  const mode = normalizePriceMode(priceMode);
++  return [
++    "vat",
++    "ex vat",
++    "super",
++    "admin",
++    "admin offer",
++    "server",
++    "manager",
++  ].includes(mode);
++};
+ 
+-  const cashPrice = Number(product.cashPrice || product.cash_price || 0);
++export const getPricingDiscountPercent = (priceMode, pricingSettings = {}) => {
++  const mode = normalizePriceMode(priceMode);
+ 
+-  if ((mode === "server" || mode === "manager") && cashPrice > 0) {
+-    return cashPrice;
++  if (mode === "server") {
++    return Number(pricingSettings.server_discount_percent || 0);
+   }
+ 
+-  const exVatPrice = Number(product.vatPrice || product.vat_price || 0);
+-  const vatRate = getVatRate(product.vatType || product.vat_type);
+-  const incVatPrice = exVatPrice + exVatPrice * (vatRate / 100);
++  if (mode === "manager") {
++    return Number(pricingSettings.manager_discount_percent || 0);
++  }
+ 
+-  if (mode === "vat") {
+-    return exVatPrice;
++  if (mode === "super" || mode === "admin" || mode === "admin offer") {
++    return Number(pricingSettings.super_discount_percent || 0);
+   }
+ 
+-  const discounts = {
+-    server: pricingSettings.server_discount_percent,
+-    manager: pricingSettings.manager_discount_percent,
+-    super: pricingSettings.super_discount_percent,
+-  };
++  return 0;
++};
++
++export const getProductBaseNetPrice = (product = {}, country = "") => {
++  const modeCountry = String(country || "").trim().toLowerCase();
+ 
+-  const discount = Number(discounts[mode] || 0);
+-  const discountedPrice = incVatPrice * (1 - discount / 100);
++  const specialPrice =
++    modeCountry === "wales"
++      ? Number(product.walesSpecialPrice ?? product.wales_special_price ?? 0)
++      : modeCountry === "england"
++        ? Number(product.englandSpecialPrice ?? product.england_special_price ?? 0)
++        : 0;
++
++  if (specialPrice > 0) return roundMoney(specialPrice);
++
++  return roundMoney(product.vatPrice ?? product.vat_price ?? product.price ?? 0);
++};
++
++// Returns the unit NET price to save on order_items.price.
++// VAT is then calculated once by calculateOrderTotals().
++export const getProductPriceForMode = (
++  product = {},
++  priceMode = "vat",
++  country = "",
++  pricingSettings = {}
++) => {
++  const mode = normalizePriceMode(priceMode);
++  const baseNetPrice = getProductBaseNetPrice(product, country);
++  const vatRate = getVatRate(product.vatType ?? product.vat_type);
++  const discountPercent = getPricingDiscountPercent(mode, pricingSettings);
++  const discountMultiplier = 1 - discountPercent / 100;
++
++  if (mode === "server" || mode === "manager") {
++    // Server/Manager discount is applied after VAT, then converted back to NET
++    // so every screen can use the same normal VAT calculation.
++    const grossAfterDiscount = roundMoney(
++      baseNetPrice * (1 + vatRate / 100) * discountMultiplier
++    );
++    return roundMoney(grossAfterDiscount / (1 + vatRate / 100));
++  }
++
++  // VAT and Super/Admin discount are applied before VAT.
++  return roundMoney(baseNetPrice * discountMultiplier);
++};
++
++export const getProductGrossPriceForMode = (
++  product = {},
++  priceMode = "vat",
++  country = "",
++  pricingSettings = {}
++) => {
++  const netPrice = getProductPriceForMode(product, priceMode, country, pricingSettings);
++  const vatRate = getVatRate(product.vatType ?? product.vat_type);
++  return isVatPriceMode(priceMode)
++    ? roundMoney(netPrice * (1 + vatRate / 100))
++    : netPrice;
++};
+ 
+-  return roundToFairQuarter(discountedPrice);
+-};
+\ No newline at end of file
++// Backwards-compatible name used by older files.
++export const getOrderItemPrice = getProductPriceForMode;

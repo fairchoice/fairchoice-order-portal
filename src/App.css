@@ -704,9 +704,9 @@
   border-bottom: 4px solid var(--fc-orange) !important;
 }
 
-.portal-header h1,
-.customer-header h1,
-.portal-title {
+.portal-header p,
+.customer-header p,
+.portal-subtitle {
   color: var(--fc-white) !important;
 }
 
@@ -714,6 +714,28 @@
 .customer-header p,
 .portal-subtitle {
   color: var(--fc-white) !important;
+}
+
+.bo-header-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.bo-header-text h1 {
+  margin: 0;
+  color: #102033 !important;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.bo-header-text p {
+  margin: 6px 0 0;
+  color: #64748b !important;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .portal-logo {

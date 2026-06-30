@@ -2,10 +2,10 @@ import { useState } from "react";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../utils/currency";
-import {
-  calculateOrderTotals,
-  getOrderItemNetTotal,
-} from "../utils/orderTotals";
+import { getProductPriceForMode } from "../utils/pricing";
+
+import { calculateDocumentTotals } from "../utils/documentTotals";
+
 
 export default function AdminOrders({
   orders = [],
@@ -17,6 +17,7 @@ export default function AdminOrders({
   addOrderItem = () => {},
   changeOrderStatus = () => {},
   fetchOrders = async () => {},
+  pricingSettings = {},
 } = {}) {
   const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
   
@@ -33,6 +34,7 @@ export default function AdminOrders({
   const [editedQty, setEditedQty] = useState({});
 
   const [editedStatus, setEditedStatus] = useState({});
+  const [refreshFilters, setRefreshFilters] = useState({});
 
   const receivedOrders = orders.filter(
     (order) => order.status === "Received" || order.status === "In Progress"
@@ -198,9 +200,10 @@ const filteredProducts = products.filter((p) => {
   const search = productSearch.toLowerCase();
 
   return (
-    p.name?.toLowerCase().includes(search) ||
-    p.productName?.toLowerCase().includes(search) ||
-    p.productCode?.toLowerCase().includes(search)
+    String(p.name || p.productName || p.product_name || "").toLowerCase().includes(search) ||
+    String(p.productCode || p.product_code || "").toLowerCase().includes(search) ||
+    String(p.brand || "").toLowerCase().includes(search) ||
+    String(p.series || "").toLowerCase().includes(search)
   );
 });
 
@@ -208,19 +211,31 @@ const confirmAddItem = async () => {
   if (!requirePermission(loggedInUser, "can_add_product_to_order", "You cannot add products to orders.")) return;
   if (!selectedOrder || !selectedProduct) return;
 
+
+  const priceMode = selectedOrder.priceMode || selectedOrder.price_mode || "vat";
+  const country = selectedOrder.customer_country || selectedOrder.country || "";
+  const price = getProductPriceForMode(
+  selectedProduct,
+  priceMode,
+  country,
+  pricingSettings
+);
+
   const newItem = {
     id: crypto.randomUUID(),
     productId: selectedProduct.id,
-    productCode: selectedProduct.productCode || "",
-    name: selectedProduct.name || selectedProduct.productName,
+    productCode: selectedProduct.productCode || selectedProduct.product_code || "",
+    name: selectedProduct.name || selectedProduct.productName || selectedProduct.product_name,
+    brand: selectedProduct.brand || "",
+    series: selectedProduct.series || "",
+    flavour: selectedProduct.flavour || "",
+    cartonSize: selectedProduct.cartonSize || selectedProduct.carton_size || "",
     qty: Number(addQty || 1),
     pickedQty: Number(addQty || 1),
-    price: Number(
-      selectedProduct.selectedPrice ??
-      selectedProduct.vatPrice ??
-      selectedProduct.cashPrice ??
-      0
-    ),
+    price,
+    selectedPrice: price,
+    unit_price: price,
+    vatRate: selectedProduct.vatRate || selectedProduct.vat_type || selectedProduct.vatType || 20,
     sourceStatus: "In Stock",
     includeInPicking: true,
   };
@@ -268,6 +283,179 @@ const updatePreparedItem = async (order, item, changes) => {
   });
 };
 
+const getOrderCountry = (order = {}) =>
+  order.customer_country || order.customerCountry || order.country || "";
+
+const normalizeText = (value) => String(value || "").trim().toLowerCase();
+
+const getProductDisplayName = (product = {}) =>
+  product.name || product.productName || product.product_name || "";
+
+const getProductDisplayCode = (product = {}) =>
+  product.productCode || product.product_code || product.code || "";
+
+const getItemDisplayName = (item = {}) =>
+  item.productName || item.product_name || item.name || "";
+
+const getItemDisplayCode = (item = {}) =>
+  item.productCode || item.product_code || item.code || "";
+
+const getLatestProductForItem = (item = {}) => {
+  const itemProductId = item.productId || item.product_id || item.id;
+  const itemCode = normalizeText(getItemDisplayCode(item));
+  const itemName = normalizeText(getItemDisplayName(item));
+
+  return (products || []).find((product) => {
+    const productId = product.id;
+    const productCode = normalizeText(getProductDisplayCode(product));
+    const productName = normalizeText(getProductDisplayName(product));
+
+    return (
+      String(productId) === String(itemProductId) ||
+      (itemCode && productCode === itemCode) ||
+      (itemName && productName === itemName)
+    );
+  });
+};
+
+const getCatalogBrandForItem = (item = {}) => {
+  const latestProduct = getLatestProductForItem(item);
+  return latestProduct?.brand || item.brand || "";
+};
+
+const getCatalogSeriesForItem = (item = {}) => {
+  const latestProduct = getLatestProductForItem(item);
+  return latestProduct?.series || item.series || "";
+};
+
+const getSelectableProductBrands = () =>
+  [
+    ...new Set(
+      (products || [])
+        .map((product) => product.brand)
+        .filter((brand) => String(brand || "").trim() !== "")
+    ),
+  ].sort((a, b) => String(a).localeCompare(String(b)));
+
+const getSelectableProductSeries = () =>
+  [
+    ...new Set(
+      (products || [])
+        .map((product) => product.series)
+        .filter((series) => String(series || "").trim() !== "")
+    ),
+  ].sort((a, b) => String(a).localeCompare(String(b)));
+
+const buildPriceRefreshPayload = (order, item) => {
+  const latestProduct = getLatestProductForItem(item);
+
+  if (!latestProduct) {
+    return { error: "Product not found in current product database." };
+  }
+
+  const priceMode = order.priceMode || order.price_mode || "vat";
+  const country = getOrderCountry(order);
+  const price = getProductPriceForMode(latestProduct, priceMode, country, pricingSettings);
+
+  return {
+    latestProduct,
+    updates: {
+      price,
+      selectedPrice: price,
+      unit_price: price,
+      unitPrice: price,
+    },
+  };
+};
+
+const refreshOrderItemPrice = async (order, item) => {
+  if (!requirePermission(loggedInUser, "can_receive_order", "You cannot update received order prices.")) return;
+
+  const result = buildPriceRefreshPayload(order, item);
+
+  if (result.error) {
+    alert(result.error);
+    return;
+  }
+
+  const oldPrice = Number(item.price || item.selectedPrice || item.unit_price || 0);
+  const newPrice = Number(result.updates.price || 0);
+
+  if (!window.confirm(`Update this line price from ${formatCurrency(oldPrice)} to ${formatCurrency(newPrice)}?`)) return;
+
+  await updateOrderItem(order.orderId, item.dbId, result.updates);
+  await logAction({
+    user: loggedInUser,
+    action_type: "Received order line price refreshed",
+    page_module: "Received Orders",
+    order_id: order.orderId,
+    product_id: item.productId || item.id,
+    old_value: oldPrice,
+    new_value: newPrice,
+  });
+};
+
+const setOrderRefreshFilter = (orderId, field, value) => {
+  setRefreshFilters((old) => ({
+    ...old,
+    [orderId]: {
+      ...(old[orderId] || {}),
+      [field]: value,
+    },
+  }));
+};
+
+const bulkRefreshOrderPrices = async (order) => {
+  if (!requirePermission(loggedInUser, "can_receive_order", "You cannot update received order prices.")) return;
+
+  const filter = refreshFilters[order.orderId] || {};
+  const brand = normalizeText(filter.brand);
+  const series = normalizeText(filter.series);
+
+  if (!brand && !series) {
+    alert("Select a brand or series before bulk refreshing prices.");
+    return;
+  }
+
+  const matchingItems = (order.items || []).filter((item) => {
+    const catalogBrand = normalizeText(getCatalogBrandForItem(item));
+    const catalogSeries = normalizeText(getCatalogSeriesForItem(item));
+    const itemBrand = normalizeText(item.brand);
+    const itemSeries = normalizeText(item.series);
+    const itemName = normalizeText(getItemDisplayName(item));
+
+    const brandMatches =
+      !brand ||
+      catalogBrand === brand ||
+      itemBrand === brand ||
+      itemName.includes(brand);
+
+    const seriesMatches =
+      !series ||
+      catalogSeries === series ||
+      itemSeries === series ||
+      itemName.includes(series);
+
+    return brandMatches && seriesMatches;
+  });
+
+  if (matchingItems.length === 0) {
+    alert("No matching order items found.");
+    return;
+  }
+
+  if (!window.confirm(`Refresh prices for ${matchingItems.length} matching item(s) in this order?`)) return;
+
+  for (const item of matchingItems) {
+    const result = buildPriceRefreshPayload(order, item);
+    if (!result.error) {
+      await updateOrderItem(order.orderId, item.dbId, result.updates);
+    }
+  }
+
+  await fetchOrders();
+};
+
   return (
     <div className="admin-orders-page p-5">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
@@ -313,15 +501,33 @@ const updatePreparedItem = async (order, item, changes) => {
           const orderDateTime =
             order.created_at || order.createdAt || order.orderDate || "-";
           const priceMode = order.price_mode || order.priceMode || "-";
-          const orderTotals = calculateOrderTotals(order.items || [], { priceMode });
+          const orderTotals = calculateDocumentTotals(order.items || [], order);
           const totalQty = orderTotals.totalQty;
           const priceModeKey = String(priceMode || "").toLowerCase();
                     const orderNumber =
             order.order_number || order.orderNumber || order.orderId || "-";
+            const printButtonLabel =
+           priceModeKey === "server" ? "Print Order Form" : "Print Invoice";
           const customerName =
             order.customer_name || order.customerName || order.companyName || "-";
           const branchName = order.branch_name || order.branchName || "";
-          const orderTotal = orderTotals.totalAmount;
+          const orderTotal = orderTotals.grandTotal;
+          const refreshFilter = refreshFilters[order.orderId] || {};
+          const orderItemBrands = [
+            ...new Set([
+              ...getSelectableProductBrands(),
+              ...(order.items || []).map((item) => getCatalogBrandForItem(item)),
+              ...(order.items || []).map((item) => item.brand),
+            ].filter((brand) => String(brand || "").trim() !== "")),
+          ].sort((a, b) => String(a).localeCompare(String(b)));
+
+          const orderItemSeries = [
+            ...new Set([
+              ...getSelectableProductSeries(),
+              ...(order.items || []).map((item) => getCatalogSeriesForItem(item)),
+              ...(order.items || []).map((item) => item.series),
+            ].filter((series) => String(series || "").trim() !== "")),
+          ].sort((a, b) => String(a).localeCompare(String(b)));
 
           return (
             <div key={order.orderId} className="received-order-card bg-white border rounded-2xl p-3">
@@ -361,11 +567,43 @@ const updatePreparedItem = async (order, item, changes) => {
 
                 {expandedOrders[order.orderId] && (
   <div className="mt-3 received-order-card">
+    <div className="mb-3 grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 rounded-xl border bg-slate-50 p-3">
+      <select
+        className="border rounded-lg px-3 py-2 text-sm"
+        value={refreshFilter.brand || ""}
+        onChange={(e) => setOrderRefreshFilter(order.orderId, "brand", e.target.value)}
+      >
+        <option value="">All brands</option>
+        {orderItemBrands.map((brand) => (
+          <option key={brand} value={brand}>{brand}</option>
+        ))}
+      </select>
+
+      <select
+        className="border rounded-lg px-3 py-2 text-sm"
+        value={refreshFilter.series || ""}
+        onChange={(e) => setOrderRefreshFilter(order.orderId, "series", e.target.value)}
+      >
+        <option value="">All series</option>
+        {orderItemSeries.map((series) => (
+          <option key={series} value={series}>{series}</option>
+        ))}
+      </select>
+
+      <button
+        type="button"
+        onClick={() => bulkRefreshOrderPrices(order)}
+        className={`bg-indigo-600 text-white ${btn}`}
+      >
+        Refresh Current Prices
+      </button>
+    </div>
+
     <div
       className="received-item-header"
       style={{
         display: "grid",
-        gridTemplateColumns: "55px 45px minmax(360px, 1fr) 130px 85px 75px",
+        gridTemplateColumns: "55px 45px minmax(360px, 1fr) 130px 95px 75px",
         columnGap: "8px",
         alignItems: "center",
         width: "100%",
@@ -380,7 +618,19 @@ const updatePreparedItem = async (order, item, changes) => {
     </div>
 
     {sortOrderItems(order.items).map((item) => {
-      const lineTotal = getOrderItemNetTotal(item);
+      const savedLineTotal = Number(
+  item.net_total ??
+    item.netTotal ??
+    item.line_total ??
+    item.lineTotal ??
+    0
+);
+
+const fallbackLineTotal =
+  Number(item.qty ?? item.quantity ?? 0) *
+  Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
+
+const lineTotal = savedLineTotal > 0 ? savedLineTotal : fallbackLineTotal;
 
       return (
         <div
@@ -390,7 +640,7 @@ const updatePreparedItem = async (order, item, changes) => {
           }`}
           style={{
             display: "grid",
-            gridTemplateColumns: "55px 45px minmax(360px, 1fr) 130px 85px 75px",
+            gridTemplateColumns: "55px 45px minmax(360px, 1fr) 130px 95px 75px",
             columnGap: "8px",
             alignItems: "center",
             width: "100%",

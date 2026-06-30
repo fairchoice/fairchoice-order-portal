@@ -1,7 +1,12 @@
 import { supabase } from "./supabase";
+<<<<<<< HEAD
 import { roundMoney } from "../utils/orderTotals";
+=======
+import { calculateCartTotals, calculateCartOrderItems } from "../utils/orderTotals";
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 export async function getOrders() {
+
   const { data, error } = await supabase
     .from("orders")
     .select(`
@@ -68,8 +73,11 @@ export async function getOrders() {
       includeInPicking: item.include_in_picking !== false,
 
       net_total: item.net_total,
-      vat_percent: item.vat_percent,
-      vat_amount: item.vat_amount,
+      gross_total: item.gross_total,
+      vat_total: item.vat_total,
+      vat_rate: item.vat_rate,
+      vat_type: item.vat_type,
+      
     })),
   }));
 }
@@ -78,10 +86,8 @@ export async function createCustomerOrder({
   companyName,
   priceMode,
   cart,
-  total,
 
   discount_percent = 0,
-  discount_amount = 0,
   discount_applied_by = null,
   discount_applied_by_name = "",
 
@@ -91,14 +97,22 @@ export async function createCustomerOrder({
   delivery_address = "",
   delivery_postcode = "",
   customer_country = "",
-  credit_limit = 0,
 }) {
   const orderNumber = "ORD-" + Date.now();
+<<<<<<< HEAD
   const savedOrderTotal = roundMoney(total);
+=======
+ const calculatedTotals = calculateCartTotals(cart || [], {
+  priceMode,
+  discountPercent: discount_percent,
+});
+const calculatedOrderItems = calculateCartOrderItems(cart || [], {
+  priceMode,
+  discountPercent: discount_percent,
+});
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
-  const { data: order, error: orderError } = await supabase
-    .from("orders")
-   .insert({
+const orderPayload = {
   order_number: orderNumber,
   customer_id: null,
   customer_account_id: customer_account_id || null,
@@ -113,18 +127,68 @@ export async function createCustomerOrder({
 
   postcode: delivery_postcode || "",
   price_mode: priceMode.toUpperCase(),
+<<<<<<< HEAD
   order_total: savedOrderTotal.toFixed(2),
+=======
+  subtotal: calculatedTotals.netTotal.toFixed(2),
+  net_total: calculatedTotals.netTotal.toFixed(2),
+  vat_total: calculatedTotals.vatTotal.toFixed(2),
+  order_total: calculatedTotals.grandTotal.toFixed(2),
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
   
 
-  discount_percent: Number(discount_percent || 0),
-  discount_amount: Number(discount_amount || 0),
+  discount_percent: calculatedTotals.discountPercent,
+  discount_amount: calculatedTotals.discountAmount.toFixed(2),
   discount_applied_by: discount_applied_by || null,
   discount_applied_by_name: discount_applied_by_name || "",
 
   status: "Received",
-})
+};
+
+  let { data: order, error: orderError } = await supabase
+    .from("orders")
+   .insert(orderPayload)
     .select()
     .single();
+
+  if (
+    orderError &&
+    String(orderError.message || orderError.details || "")
+      .toLowerCase()
+      .includes("net_total")
+  ) {
+    const fallbackOrderPayload = { ...orderPayload };
+    delete fallbackOrderPayload.net_total;
+
+    const retry = await supabase
+      .from("orders")
+      .insert(fallbackOrderPayload)
+      .select()
+      .single();
+
+    order = retry.data;
+    orderError = retry.error;
+  }
+
+  if (
+    orderError &&
+    String(orderError.message || orderError.details || "")
+      .toLowerCase()
+      .includes("subtotal")
+  ) {
+    const fallbackOrderPayload = { ...orderPayload };
+    delete fallbackOrderPayload.net_total;
+    delete fallbackOrderPayload.subtotal;
+
+    const retry = await supabase
+      .from("orders")
+      .insert(fallbackOrderPayload)
+      .select()
+      .single();
+
+    order = retry.data;
+    orderError = retry.error;
+  }
 
   if (orderError) {
     console.error("ORDER ERROR FULL:", JSON.stringify(orderError, null, 2));
@@ -135,6 +199,7 @@ alert(
     throw orderError;
   }
 
+<<<<<<< HEAD
   const orderItems = cart.map((item) => {
     const qty = Number(item.qty || 0);
     const price = roundMoney(item.selectedPrice || 0);
@@ -157,10 +222,89 @@ alert(
     include_in_picking: item.includeInPicking !== false,
   });
   });
+=======
+const orderItems = calculatedOrderItems.map((item) => ({
+  order_id: order.id,
+  product_id: item.id,
+  product_name: item.name,
+  brand: item.brand || "",
+  series: item.series || "",
+  flavour: item.flavour || "",
+  carton_size: item.cartonSize,
+  qty: item.qty,
+  price: item.price.toFixed(2),
+  line_total: item.line_total.toFixed(2),
+  net_total: item.net_total.toFixed(2),
+  gross_total: item.gross_total.toFixed(2),
+  vat_total: item.vat_total.toFixed(2),
+  vat_rate: item.vat_rate,
+  vat_type: item.vat_type,
+  stock_before: item.stock,
+  stock_after: Math.max(0, item.stock - item.qty),
+  source_status: item.sourceStatus || "In Stock",
+  picked_qty: item.pickedQty ?? item.qty,
+  include_in_picking: item.includeInPicking !== false,
+}));
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
-  const { error: itemsError } = await supabase
+  let orderItemsForInsert = orderItems;
+  let { error: itemsError } = await supabase
     .from("order_items")
-    .insert(orderItems);
+    .insert(orderItemsForInsert);
+
+  if (
+    itemsError &&
+    String(itemsError.message || itemsError.details || "")
+      .toLowerCase()
+      .includes("vat_rate")
+  ) {
+    orderItemsForInsert = orderItemsForInsert.map((item) => {
+      const nextItem = { ...item };
+      delete nextItem.vat_rate;
+      return nextItem;
+    });
+    const retry = await supabase
+      .from("order_items")
+      .insert(orderItemsForInsert);
+
+    itemsError = retry.error;
+  }
+
+  if (
+    itemsError &&
+    String(itemsError.message || itemsError.details || "")
+      .toLowerCase()
+      .includes("vat_type")
+  ) {
+    orderItemsForInsert = orderItemsForInsert.map((item) => {
+      const nextItem = { ...item };
+      delete nextItem.vat_type;
+      return nextItem;
+    });
+    const retry = await supabase
+      .from("order_items")
+      .insert(orderItemsForInsert);
+
+    itemsError = retry.error;
+  }
+
+  if (
+    itemsError &&
+    String(itemsError.message || itemsError.details || "")
+      .toLowerCase()
+      .includes("vat_total")
+  ) {
+    orderItemsForInsert = orderItemsForInsert.map((item) => {
+      const nextItem = { ...item };
+      delete nextItem.vat_total;
+      return nextItem;
+    });
+    const retry = await supabase
+      .from("order_items")
+      .insert(orderItemsForInsert);
+
+    itemsError = retry.error;
+  }
 
   if (itemsError) {
     console.error("ITEMS ERROR:", itemsError);

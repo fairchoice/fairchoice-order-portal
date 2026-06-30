@@ -60,7 +60,8 @@ const navSections = [
           { label: "Categories", page: "categories", permission: "access_product_setup" },
           { label: "Products", page: "products", permission: "access_product_setup" },
           { label: "Product Import / Export", page: "productImportExport", permission: "access_product_setup" },
-          { label: "Pricing", page: "pricing", permission: "can_edit_pricing" },
+          { label: "Pricing Rules", page: "pricingRule", permission: "can_edit_pricing" },
+          { label: "Price Management", page: "priceManagement", permission: "can_edit_pricing" },
           { label: "Promotions", page: "promotions", permission: "access_product_setup" },
         ],
       },
@@ -108,7 +109,8 @@ const pagePermissions = {
   products: "access_product_setup",
   productImportExport: "access_product_setup",
   promotions: "access_product_setup",
-  pricing: "can_edit_pricing",
+ pricingRule: "can_edit_pricing",
+  priceManagement: "can_edit_pricing",
   credit: "access_accounts",
   weeklyAccount: "access_accounts",
   profitPortal: "access_reports",
@@ -123,6 +125,7 @@ const pagePermissions = {
   auditLog: "can_edit_security",
   importExport: "can_edit_security",
   backupTools: "can_edit_security",
+  priceManagement: "can_edit_pricing",
 };
 
 function canSeeItem(user, item) {
@@ -390,7 +393,7 @@ export default function BackOfficeLayout({
           >
             Menu
           </button>
-          <div>
+          <div className="bo-header-text">
             <h1>FairChoice Order Portal</h1>
             <p>Back Office</p>
           </div>

@@ -4,7 +4,10 @@ import { supabase } from "../services/supabase";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../utils/currency";
+import { getOrderItemQty } from "../utils/orderTotals";
+
 import {
+<<<<<<< HEAD
   calculateOrderTotals,
   getOrderItemNetTotal,
   getOrderItemQty,
@@ -12,6 +15,11 @@ import {
   getOrderPayableTotal,
   roundMoney,
 } from "../utils/orderTotals";
+=======
+  calculateDocumentTotals,
+  getCustomerDocumentType,
+} from "../utils/documentTotals";
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 /*
   Warehouse Page
@@ -194,9 +202,8 @@ const fetchDrivers = async () => {
     includeInPicking === false means the item was removed/cannot supply.
     It will not appear on invoice/order form/delivery note.
   */
-  const getPrintableItems = (order) =>
-    calculateOrderTotals(order.items || [], { priceMode: order.priceMode || order.price_mode })
-      .invoiceItems;
+ const getPrintableItems = (order) =>
+  calculateDocumentTotals(order.items || [], order).invoiceItems;
 
   /*
     Money format helper.
@@ -209,18 +216,57 @@ const fetchDrivers = async () => {
   */
   const getLineQty = getOrderItemQty;
 
-  /*
-    Product price helper.
-    Supports different possible field names from your order object.
-  */
-  const getLinePrice = getOrderItemUnitPrice;
+ const getSavedLinePrice = (item = {}) =>
+  Number(item.price ?? item.unit_price ?? 0);
 
-  /*
-    Product line total helper.
-    If lineTotal exists, use it.
-    Otherwise calculate qty x price.
-  */
-  const getLineTotal = getOrderItemNetTotal;
+ const getSavedLineNetTotal = (item = {}) =>
+  Number(item.net_total ?? item.netTotal ?? 0);
+
+  const getInvoiceTotals = (order = {}) =>
+  calculateDocumentTotals(order.items || [], order);
+
+  const getWarehouseStatus = (item = {}) =>
+    String(item.sourceStatus || item.source_status || item.status || "In Stock");
+
+  const getWarehouseStatusRank = (item = {}) => {
+    const status = getWarehouseStatus(item).trim().toLowerCase();
+
+    if (status === "in stock" || status === "available") return 1;
+    if (status === "need supplier" || status === "pre-order" || status === "pre order") return 2;
+    if (status === "cannot supply" || status === "supply needed") return 3;
+
+    return 4;
+  };
+
+const getProductSortValue = (item = {}, field) =>
+  String(
+    item[field] ||
+      item.product?.[field] ||
+      item[`product_${field}`] ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+const getGroupedWarehouseItems = (items = []) =>
+  [...(items || [])].sort((a, b) => {
+    const rankDiff = getWarehouseStatusRank(a) - getWarehouseStatusRank(b);
+    if (rankDiff !== 0) return rankDiff;
+
+    const categoryDiff = getProductSortValue(a, "category").localeCompare(
+      getProductSortValue(b, "category")
+    );
+    if (categoryDiff !== 0) return categoryDiff;
+
+    const seriesDiff = getProductSortValue(a, "series").localeCompare(
+      getProductSortValue(b, "series")
+    );
+    if (seriesDiff !== 0) return seriesDiff;
+
+    return String(a.name || a.productName || "").localeCompare(
+      String(b.name || b.productName || "")
+    );
+  });
 
   const hasSavedOrderTotal = (order = {}) =>
     [
@@ -366,8 +412,8 @@ const fetchDrivers = async () => {
   const rows = printableItems
     .map((item) => {
       const qty = getLineQty(item);
-      const price = getLinePrice(item);
-      const net = getLineTotal(item);
+      const price = getSavedLinePrice(item);
+      const net = getSavedLineNetTotal(item);
       const vatPercent = Number(item.vatPercent ?? item.vat_percent ?? 20);
 
       return `
@@ -805,7 +851,7 @@ const fetchDrivers = async () => {
   */
 
     const printOrderForm = (order) => {
-  const printableItems = getPrintableItems(order);
+    const printableItems = getPrintableItems(order);
 
 
   const totals = getInvoiceTotals(order);
@@ -817,9 +863,8 @@ const fetchDrivers = async () => {
   const rows = printableItems
     .map((item) => {
       const qty = getLineQty(item);
-      const price = getLinePrice(item);
-      const net = getLineTotal(item);
-      const vatPercent = Number(item.vatPercent || item.vat_percent || 0);
+      const price = getSavedLinePrice(item);
+      const net = getSavedLineNetTotal(item);
 
      return `
           <tr>
@@ -1136,13 +1181,7 @@ const fetchDrivers = async () => {
   */
   const printDeliveryNote = (order) => {
   const items = getPrintableItems(order);
-
-  const totalLines = items.length;
-
-  const totalQty = items.reduce(
-    (sum, item) => sum + Number(getLineQty(item) || 0),
-    0
-  );
+  const totals = getInvoiceTotals(order);
 
   const rows = items
     .map(
@@ -1241,8 +1280,8 @@ const fetchDrivers = async () => {
         </table>
 
         <div class="totals">
-          <div>Total Lines: ${totalLines}</div>
-          <div>Total Quantity: ${totalQty}</div>
+          <div>Total Lines: ${totals.totalLines}</div>
+          <div>Total Quantity: ${totals.totalQty}</div>
         </div>
 
         <div class="signatures">
@@ -1518,11 +1557,17 @@ const confirmForDriver = async (order) => {
 
   const renderWarehouseCard = (order) => {
     const orderId = getOrderId(order);
+<<<<<<< HEAD
     const cardTotals = calculateOrderTotals(order.items || [], {
       priceMode: order.priceMode || order.price_mode,
     });
     const pickingQty = cardTotals.totalQty;
    const orderValue = getInvoiceTotals(order).grandTotal;
+=======
+   const cardTotals = getInvoiceTotals(order);
+const pickingQty = cardTotals.totalQty;
+const orderValue = cardTotals.grandTotal;
+>>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
     const isReadyForDriver = order.status === "Ready For Driver";
     const priceMode = order.price_mode || order.priceMode || "";
     const orderDate =
@@ -1531,13 +1576,15 @@ const confirmForDriver = async (order) => {
       order.received_at ||
       order.receivedAt ||
       "-";
-    const isServerPriceMode = String(priceMode).toLowerCase() === "server";
-    const customerPrintLabel = isServerPriceMode
-      ? "Print Order Form"
-      : "Print Invoice";
-    const printCustomerDocumentForMode = isServerPriceMode
-      ? printProtectedOrderForm
-      : printProtectedInvoice;
+   const documentType = getCustomerDocumentType(priceMode);
+
+const customerPrintLabel =
+  documentType === "order_form" ? "Print Order Form" : "Print Invoice";
+
+const printCustomerDocumentForMode =
+  documentType === "order_form"
+    ? printProtectedOrderForm
+    : printProtectedInvoice;
     const branchName =
       order.branchName ||
       order.branch_name ||
@@ -1850,4 +1897,3 @@ const confirmForDriver = async (order) => {
     </div>
   );
 }
-

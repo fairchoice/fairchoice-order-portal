@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import CustomerOrder from "./pages/CustomerOrder";
 import LoginPage from "./pages/AdminSetup/LoginPage";
 
+import PriceManagement from "./pages/AdminSetup/PriceManagement";
+import PricingRule from "./pages/AdminSetup/PricingRule";
+
 const SESSION_KEY = "fairchoice_user";
 const LAST_ACTIVE_KEY = "fairchoice_last_active";
 const SESSION_TIMEOUT = 10 * 60 * 1000; // 10 minutes

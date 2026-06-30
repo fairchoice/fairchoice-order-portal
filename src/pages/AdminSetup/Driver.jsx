@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
-import { getOrderPayableTotal } from "../../utils/orderTotals";
+import { calculateDocumentTotals } from "../../utils/documentTotals";
 
 export default function Driver({
   orders = [],
@@ -24,10 +24,10 @@ const loggedInUser = JSON.parse(
   localStorage.getItem("loggedInUser") || "{}"
 );
 
-  const getDriverItems = (order) =>
-  (order.items || []).filter(
-    (item) => item.includeInPicking !== false
-  );
+  const getDriverTotals = (order) =>
+    calculateDocumentTotals(order.items || [], order);
+
+  const getDriverItems = (order) => getDriverTotals(order).invoiceItems;
 
   const [showPreviousBalance, setShowPreviousBalance] = useState(false);
 
@@ -205,7 +205,7 @@ const selectedCreditBranches =
 
     await changeOrderStatus(order.orderId, "Delivered");
 
-    const orderTotal = getOrderPayableTotal(order);
+    const orderTotal = getDriverTotals(order).grandTotal;
 
 const { error } = await supabase.from("customer_ledger").insert({
   customer_name: order.companyName || "Unknown Customer",
@@ -544,7 +544,7 @@ if (ledgerError) throw ledgerError;
                 </h3>
 
                 <div className="text-base font-extrabold text-red-600">
-                  Order Value: {formatCurrency(getOrderPayableTotal(order))}
+                  Order Value: {formatCurrency(getDriverTotals(order).grandTotal)}
                 <p className="text-xs text-slate-500">
                   {order.createdAt || order.created_at || "-"} | Total Items: {getDriverItems(order).length}
                 </p>
