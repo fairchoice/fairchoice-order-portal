@@ -60,23 +60,6 @@ export const getPricingDiscountPercent = (priceMode, pricingSettings = {}) => {
   return 0;
 };
 
-export const getProductBaseNetPrice = (product = {}, country = "") => {
-  const modeCountry = String(country || "").trim().toLowerCase();
-
-  const specialPrice =
-    modeCountry === "wales"
-      ? Number(product.walesSpecialPrice ?? product.wales_special_price ?? 0)
-      : modeCountry === "england"
-        ? Number(product.englandSpecialPrice ?? product.england_special_price ?? 0)
-        : 0;
-
-  if (specialPrice > 0) return roundMoney(specialPrice);
-
-return roundMoney(
-    Number(product.vat_price || 0)
-);
-};
-
 // Single FairChoice price source of truth.
 // Returns the final unit price that every page should save/display.
 export const getProductPriceForMode = (
@@ -86,19 +69,28 @@ export const getProductPriceForMode = (
   pricingSettings = {}
 ) => {
   const mode = normalizePriceMode(priceMode);
-  const baseNetPrice = getProductBaseNetPrice(product, country);
-  const vatRate = getVatRate(product.vatType ?? product.vat_type);
-  const discountPercent = getPricingDiscountPercent(mode, pricingSettings);
-  const discountMultiplier = 1 - discountPercent / 100;
+  const modeCountry = String(country || "").trim().toLowerCase();
+
+  const vatPrice = roundMoney(Number(product.vatPrice ?? product.vat_price ?? 0));
+
+  const specialPrice =
+    modeCountry === "wales"
+      ? Number(product.walesSpecialPrice ?? product.wales_special_price ?? 0)
+      : modeCountry === "england"
+        ? Number(product.englandSpecialPrice ?? product.england_special_price ?? 0)
+        : 0;
 
   if (mode === "server" || mode === "manager") {
-    const grossPrice = baseNetPrice * (1 + vatRate / 100);
-    return roundMoney(roundToFairQuarter(grossPrice * discountMultiplier));
+    if (specialPrice > 0) return roundMoney(specialPrice);
+
+    const vatRate = getVatRate(product.vatType ?? product.vat_type);
+    const discountPercent = getPricingDiscountPercent(mode, pricingSettings);
+    const grossPrice = vatPrice * (1 + vatRate / 100);
+
+    return roundMoney(grossPrice * (1 - discountPercent / 100));
   }
 
-  // VAT / Ex VAT / Super/Admin Offer: apply configured discount before VAT.
-  // VAT itself is added only by calculateOrderTotals when the mode requires it.
-  return roundMoney(baseNetPrice * discountMultiplier);
+  return vatPrice;
 };
 
 export const getProductPricePreview = (
