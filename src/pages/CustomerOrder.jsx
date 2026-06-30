@@ -41,10 +41,7 @@ import {
   calculateCartTotals,
   calculateOrderTotals,
   roundMoney,
-<<<<<<< HEAD
-  getOrderItemNetTotal,
-=======
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
+
   getOrderItemQty,
 } from "../utils/orderTotals";
 import { calculateDocumentTotals } from "../utils/documentTotals";
@@ -1235,37 +1232,6 @@ useEffect(() => {
     0
   );
 
-<<<<<<< HEAD
-  const subtotal = cart.reduce((sum, item) => {
-    if (item.isPromotionFree) return sum;
-
-    const qty = Number(item.qty || 0);
-
-    if (isVatPriceMode(priceMode)) {
-      return sum + Number(
-        item.selectedPrice ?? item.exVatPrice ?? item.vatPrice ?? 0
-      ) * qty;
-    }
-
-    return sum + Number(item.selectedPrice || 0) * qty;
-  }, 0);
-
-  const discountedSubtotal =
-    isVatPriceMode(priceMode)
-      ? Math.max(0, subtotal - promotionDiscountAmount)
-      : subtotal;
-
-  const vatTotal = isVatPriceMode(priceMode) ? roundMoney(discountedSubtotal * 0.2) : 0;
-  const total = roundMoney(isVatPriceMode(priceMode) ? discountedSubtotal + vatTotal : subtotal);
-
- const discountAmount = roundMoney(
-  total * (Number(orderDiscountPercent || 0) / 100)
-);
-
-const finalTotal = roundMoney(
-  Math.max(0, total - discountAmount)
-);
-=======
   const cartTotals = calculateCartTotals(cart, {
     priceMode,
     discountPercent: orderDiscountPercent,
@@ -1273,7 +1239,6 @@ const finalTotal = roundMoney(
   });
   const discountAmount = cartTotals.discountAmount;
   const finalTotal = cartTotals.totalAmount;
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
@@ -1596,13 +1561,6 @@ const recalculateOrder = (order, updatedItems) => {
     discountPercent: order.discount_percent,
   });
 
-<<<<<<< HEAD
-  const discountPercent = Number(order.discount_percent || 0);
-  const discountAmount = roundMoney(totals.totalAmount * (discountPercent / 100));
-  const finalTotal = roundMoney(Math.max(0, totals.totalAmount - discountAmount));
-
-=======
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
   return {
     ...order,
     items: updatedItems,
@@ -1670,29 +1628,6 @@ const item = order?.items?.find((i) => {
 });
 
 const dbUpdates = {};
-<<<<<<< HEAD
-
-if (updates.qty !== undefined) {
-  const qty = Number(updates.qty || 0);
-  const price = Number(item?.price || item?.selectedPrice || 0);
-
-  dbUpdates.qty = qty;
-  dbUpdates.picked_qty = qty;
-  dbUpdates.line_total = qty * price;
-}
-
-if (updates.pickedQty !== undefined) {
-  dbUpdates.picked_qty = Number(updates.pickedQty || 0);
-}
-
-if (updates.sourceStatus !== undefined) {
-  dbUpdates.source_status = updates.sourceStatus;
-}
-
-if (updates.includeInPicking !== undefined) {
-  dbUpdates.include_in_picking = updates.includeInPicking;
-}
-=======
 const itemForCalculation = {
   ...(item || {}),
   ...updates,
@@ -1742,7 +1677,6 @@ dbUpdates.line_total = calculatedItem.line_total.toFixed(2);
 dbUpdates.net_total = calculatedItem.net_total.toFixed(2);
 dbUpdates.gross_total = calculatedItem.gross_total.toFixed(2);
 dbUpdates.vat_total = calculatedItem.vat_total.toFixed(2);
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 const { error } = await supabase
   .from("order_items")
@@ -1755,8 +1689,6 @@ if (error) {
   return;
 }
 
-<<<<<<< HEAD
-=======
 const updatedOrderItems = (order?.items || []).map((currentItem) => {
   const currentKey = currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
   if (String(currentKey) !== String(itemId)) return currentItem;
@@ -1794,7 +1726,6 @@ const updatedOrderItems = (order?.items || []).map((currentItem) => {
 });
 
 await saveOrderTotalsToDatabase(orderId, updatedOrderItems, order);
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 await fetchOrders();
 
 
@@ -2124,26 +2055,7 @@ const addOrderItem = async (orderId, newItem) => {
 
   const openCustomerOrderDocument = (order, documentType) => {
     const priceMode = order.priceMode || order.price_mode || "";
-<<<<<<< HEAD
-    const calculatedTotals = calculateOrderTotals(order.items || [], { priceMode });
-    const savedGrandTotal = roundMoney(
-      order.finalTotal ??
-        order.final_total ??
-        order.totalAmount ??
-        order.total_amount ??
-        order.orderTotal ??
-        order.order_total ??
-        order.total ??
-        calculatedTotals.totalAmount
-    );
-    const totals = {
-      ...calculatedTotals,
-      totalAmount: savedGrandTotal,
-      grandTotal: savedGrandTotal,
-    };
-=======
     const totals = calculateDocumentTotals(order.items || [], order);
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
     const title = getOrderDocumentTitle(documentType);
     const showPrices = documentType !== "deliveryNote";
     const orderNumber = order.orderId || order.order_number || order.id || "-";
@@ -2937,15 +2849,7 @@ const backOfficeContent = comingSoonTitle ? (
 
           <div className="space-y-2">
             {completedCustomerOrders.map((order) => {
-<<<<<<< HEAD
-             const orderTotals = calculateOrderTotals(order.items || [], {
-  priceMode: order.priceMode || order.price_mode,
-});
-
-const displayOrderTotal = roundMoney(orderTotals.totalAmount);
-=======
               const orderTotals = calculateDocumentTotals(order.items || [], order);
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
               return (
                 <div
@@ -2959,11 +2863,7 @@ const displayOrderTotal = roundMoney(orderTotals.totalAmount);
                     </div>
                     <div className="text-xs text-slate-500">
                       {order.createdAt || "-"} | {String(order.priceMode || "-").toUpperCase()} |{" "}
-<<<<<<< HEAD
-                      {formatCurrency(displayOrderTotal)} | Total Qty: {orderTotals.totalQty}
-=======
                       {formatCurrency(orderTotals.grandTotal)} | Total Qty: {orderTotals.totalQty}
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
                     </div>
                   </div>
 

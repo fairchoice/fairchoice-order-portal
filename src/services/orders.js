@@ -1,9 +1,5 @@
 import { supabase } from "./supabase";
-<<<<<<< HEAD
-import { roundMoney } from "../utils/orderTotals";
-=======
 import { calculateCartTotals, calculateCartOrderItems } from "../utils/orderTotals";
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 export async function getOrders() {
 
@@ -99,9 +95,6 @@ export async function createCustomerOrder({
   customer_country = "",
 }) {
   const orderNumber = "ORD-" + Date.now();
-<<<<<<< HEAD
-  const savedOrderTotal = roundMoney(total);
-=======
  const calculatedTotals = calculateCartTotals(cart || [], {
   priceMode,
   discountPercent: discount_percent,
@@ -110,7 +103,6 @@ const calculatedOrderItems = calculateCartOrderItems(cart || [], {
   priceMode,
   discountPercent: discount_percent,
 });
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 const orderPayload = {
   order_number: orderNumber,
@@ -127,14 +119,10 @@ const orderPayload = {
 
   postcode: delivery_postcode || "",
   price_mode: priceMode.toUpperCase(),
-<<<<<<< HEAD
-  order_total: savedOrderTotal.toFixed(2),
-=======
   subtotal: calculatedTotals.netTotal.toFixed(2),
   net_total: calculatedTotals.netTotal.toFixed(2),
   vat_total: calculatedTotals.vatTotal.toFixed(2),
   order_total: calculatedTotals.grandTotal.toFixed(2),
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
   
 
   discount_percent: calculatedTotals.discountPercent,
@@ -199,30 +187,6 @@ alert(
     throw orderError;
   }
 
-<<<<<<< HEAD
-  const orderItems = cart.map((item) => {
-    const qty = Number(item.qty || 0);
-    const price = roundMoney(item.selectedPrice || 0);
-
-    return ({
-    order_id: order.id,
-    product_id: item.id,
-    product_name: item.name,
-    brand: item.brand || "",
-    series: item.series || "",
-    flavour: item.flavour || "",
-    carton_size: item.cartonSize,
-    qty,
-    price: price.toFixed(2),
-    line_total: roundMoney(price * qty).toFixed(2),
-    stock_before: item.stock,
-    stock_after: Math.max(0, item.stock - qty),
-    source_status: item.sourceStatus || "In Stock",
-    picked_qty: item.pickedQty ?? qty,
-    include_in_picking: item.includeInPicking !== false,
-  });
-  });
-=======
 const orderItems = calculatedOrderItems.map((item) => ({
   order_id: order.id,
   product_id: item.id,
@@ -245,7 +209,6 @@ const orderItems = calculatedOrderItems.map((item) => ({
   picked_qty: item.pickedQty ?? item.qty,
   include_in_picking: item.includeInPicking !== false,
 }));
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
   let orderItemsForInsert = orderItems;
   let { error: itemsError } = await supabase

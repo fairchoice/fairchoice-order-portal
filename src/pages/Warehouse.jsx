@@ -7,19 +7,9 @@ import { formatCurrency } from "../utils/currency";
 import { getOrderItemQty } from "../utils/orderTotals";
 
 import {
-<<<<<<< HEAD
-  calculateOrderTotals,
-  getOrderItemNetTotal,
-  getOrderItemQty,
-  getOrderItemUnitPrice,
-  getOrderPayableTotal,
-  roundMoney,
-} from "../utils/orderTotals";
-=======
   calculateDocumentTotals,
   getCustomerDocumentType,
 } from "../utils/documentTotals";
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
 
 /*
   Warehouse Page
@@ -267,88 +257,6 @@ const getGroupedWarehouseItems = (items = []) =>
       String(b.name || b.productName || "")
     );
   });
-
-  const hasSavedOrderTotal = (order = {}) =>
-    [
-      order.final_total,
-      order.finalTotal,
-      order.total_amount,
-      order.totalAmount,
-      order.order_total,
-      order.orderTotal,
-      order.total,
-    ].some((value) => value !== null && value !== undefined && value !== "");
-
-  const getSavedVatTotal = (order = {}) => {
-    const candidates = [
-      order.vat_total,
-      order.vatTotal,
-      order.total_vat,
-      order.totalVat,
-    ];
-
-    for (const value of candidates) {
-      if (value === null || value === undefined || value === "") continue;
-      const numericValue = Number(value);
-      if (Number.isFinite(numericValue) && numericValue > 0) {
-        return roundMoney(numericValue);
-      }
-    }
-
-    return null;
-  };
-
-  const getInvoiceTotals = (order = {}) => {
-  const calculatedTotals = calculateOrderTotals(order.items || [], {
-    priceMode: order.priceMode || order.price_mode,
-  });
-
-  const netTotal = roundMoney(calculatedTotals.netTotal);
-
-  const savedVatTotal = getSavedVatTotal(order);
-
-  const isVatMode = ["vat", "ex. vat", "ex vat"].includes(
-    String(order.priceMode || order.price_mode || "").toLowerCase()
-  );
-
-  // Use saved VAT if available, otherwise calculate from Net
-  const vatTotal = roundMoney(
-    savedVatTotal ?? (isVatMode ? netTotal * 0.2 : 0)
-  );
-
-  // Always calculate Grand Total from Net + VAT
-  const grandTotal = roundMoney(netTotal + vatTotal);
-
-  return {
-    netTotal,
-    vatTotal,
-    grandTotal,
-    totalAmount: grandTotal,
-  };
-};
-
-  const getWarehouseStatus = (item = {}) =>
-    String(item.sourceStatus || item.source_status || item.status || "In Stock");
-
-  const getWarehouseStatusRank = (item = {}) => {
-    const status = getWarehouseStatus(item).trim().toLowerCase();
-
-    if (status === "in stock" || status === "available") return 1;
-    if (status === "need supplier" || status === "pre-order" || status === "pre order") return 2;
-    if (status === "cannot supply" || status === "supply needed") return 3;
-
-    return 4;
-  };
-
-  const getGroupedWarehouseItems = (items = []) =>
-    [...(items || [])].sort((a, b) => {
-      const rankDiff = getWarehouseStatusRank(a) - getWarehouseStatusRank(b);
-      if (rankDiff !== 0) return rankDiff;
-
-      return String(a.name || a.productName || "").localeCompare(
-        String(b.name || b.productName || "")
-      );
-    });
 
   /*
     Invoice/order totals.
@@ -1557,17 +1465,9 @@ const confirmForDriver = async (order) => {
 
   const renderWarehouseCard = (order) => {
     const orderId = getOrderId(order);
-<<<<<<< HEAD
-    const cardTotals = calculateOrderTotals(order.items || [], {
-      priceMode: order.priceMode || order.price_mode,
-    });
-    const pickingQty = cardTotals.totalQty;
-   const orderValue = getInvoiceTotals(order).grandTotal;
-=======
    const cardTotals = getInvoiceTotals(order);
 const pickingQty = cardTotals.totalQty;
 const orderValue = cardTotals.grandTotal;
->>>>>>> 1e39b21 (Prepare FairChoice stable version for live)
     const isReadyForDriver = order.status === "Ready For Driver";
     const priceMode = order.price_mode || order.priceMode || "";
     const orderDate =
