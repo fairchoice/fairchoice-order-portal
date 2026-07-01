@@ -128,46 +128,46 @@ const fetchDrivers = async () => {
     const search = searchTerm.trim().toLowerCase();
 
     return orders
-      .filter((order) =>
-        ["Warehouse Packing", "Ready For Driver"].includes(order.status)
-      )
-      .filter((order) =>
-        statusFilter === "All" ? true : order.status === statusFilter
-      )
-      .filter((order) => {
-        if (!search) return true;
+  .filter((order) => order.status === "Warehouse Packing")
+  .filter((order) => {
+    const keyword = String(searchTerm || "").toLowerCase().trim();
 
-        return (
-          String(order.orderId || order.order_number || "")
-            .toLowerCase()
-            .includes(search) ||
-          String(order.companyName || order.company_name || "")
-            .toLowerCase()
-            .includes(search)
-        );
-      })
-      .filter((order) => {
-        if (!fromDate && !toDate) return true;
+    if (!keyword) return true;
 
-        const orderTime = getOrderTimestamp(order);
-        if (!orderTime) return false;
+    return (
+      String(order.orderId || order.order_number || "")
+        .toLowerCase()
+        .includes(keyword) ||
+      String(order.companyName || order.company_name || "")
+        .toLowerCase()
+        .includes(keyword)
+    );
+  })
+  .filter((order) => {
+    if (!fromDate && !toDate) return true;
 
-        const fromTime = fromDate
-          ? new Date(`${fromDate}T00:00:00`).getTime()
-          : null;
-        const toTime = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null;
+    const orderTime = getOrderTimestamp(order);
+    if (!orderTime) return false;
 
-        if (fromTime && orderTime < fromTime) return false;
-        if (toTime && orderTime > toTime) return false;
+    const fromTime = fromDate
+      ? new Date(`${fromDate}T00:00:00`).getTime()
+      : null;
 
-        return true;
-      })
-      .sort((a, b) => {
-        const aDate = getOrderTimestamp(a);
-        const bDate = getOrderTimestamp(b);
-        return bDate - aDate;
-      });
-  }, [orders, searchTerm, statusFilter, fromDate, toDate]);
+    const toTime = toDate
+      ? new Date(`${toDate}T23:59:59`).getTime()
+      : null;
+
+    if (fromTime && orderTime < fromTime) return false;
+    if (toTime && orderTime > toTime) return false;
+
+    return true;
+  })
+  .sort((a, b) => {
+    const aDate = getOrderTimestamp(a) || 0;
+    const bDate = getOrderTimestamp(b) || 0;
+    return bDate - aDate;
+  });
+}, [orders, searchTerm, fromDate, toDate]);
 
   const warehousePackingCount = orders.filter(
     (order) => order.status === "Warehouse Packing"
