@@ -21,11 +21,14 @@ import StockReceipts from "./AdminSetup/StockReceipts";
 import StockHistory from "./AdminSetup/StockHistory";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
+import InvoicesPortal from "./AdminSetup/InvoicesPortal";
+import ReturnsPortal from "./AdminSetup/ReturnsPortal";
 import Customers from "./AdminSetup/Customers";
 
 import ProductCard, { ProductListRow } from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
 import Cart from "../components/Cart.jsx";
+import ReturnRequestModal from "../components/ReturnRequestModal";
 
 import { getProducts } from "../services/products";
 import { getHomepageItems } from "../services/homepageItems";
@@ -243,15 +246,28 @@ const loggedInUser =
 
 
   const activeUser = userProfile || loggedInUser || {};
-const role = activeUser?.role || "Customer";
-  const normalizedRole = (role || "").replace(/\s+/g, "").toLowerCase();
+  const role = activeUser?.role || activeUser?.access_level || "Customer";
+  const normalizedRole = String(role || "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toLowerCase();
+  const permissions = activeUser?.permissions || {};
 
   const isAdmin =
-    normalizedRole === "admin" || normalizedRole === "superadmin";
-  const isSalesRep = normalizedRole === "salesrep";
-  const isWarehouse = normalizedRole === "warehouse";
-  const isDriver = normalizedRole === "driver";
-  const isCustomer = normalizedRole === "customer";
+    normalizedRole === "admin" ||
+    normalizedRole === "superadmin" ||
+    activeUser?.access_level === "Admin" ||
+    activeUser?.access_level === "Super Admin";
+  const isSalesRep =
+    normalizedRole === "salesrep" ||
+    normalizedRole === "salesrepresentative" ||
+    normalizedRole === "sales" ||
+    permissions.access_sales_rep === true;
+  const isWarehouse =
+    normalizedRole === "warehouse" || permissions.access_warehouse === true;
+  const isDriver = normalizedRole === "driver" || permissions.access_driver === true;
+  const isCustomer =
+    normalizedRole === "customer" ||
+    (permissions.access_customer_portal === true && !isAdmin && !isSalesRep && !isWarehouse && !isDriver);
 
   
 
@@ -417,6 +433,7 @@ useEffect(() => {
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [orders, setOrders] = useState([]);
   const [expandedOrders, setExpandedOrders] = useState({});
+  const [returnOrder, setReturnOrder] = useState(null);
 
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All Products");
@@ -2379,6 +2396,8 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {page === "credit" && <CustomerCredit />}
+    {page === "invoicesPortal" && <InvoicesPortal />}
+    {page === "returnsPortal" && <ReturnsPortal />}
     {page === "weeklyAccount" && <WeeklyAccount />}
     {page === "stockhistory" && <StockHistory />}
 
@@ -2744,28 +2763,35 @@ const backOfficeContent = comingSoonTitle ? (
   selectedSeries={selectedSeries}
   subCategories={subCategories}
   selectedSubCategory={selectedSubCategory}
+
   setSelectedCategory={(value) => {
     setSelectedCategory(value);
     setSelectedSubCategory("All Sub Categories");
     setSelectedBrand("All Brands");
     setSelectedSeries("All Series");
   }}
+
   setSelectedSubCategory={(value) => {
     setSelectedSubCategory(value);
     setSelectedBrand("All Brands");
     setSelectedSeries("All Series");
   }}
+
   setSelectedBrand={(value) => {
     setSelectedBrand(value);
     setSelectedSeries("All Series");
   }}
+
   setSelectedSeries={setSelectedSeries}
+
   showHomeLink={!showHomepage}
   onHomeClick={showHome}
- showCategoryFilter={false}
-showSubCategoryFilter={!showHomepage}
+
+  showCategoryFilter={false}
+  showSubCategoryFilter={!showHomepage}
   showBrandFilter={!showHomepage}
   showSeriesFilter={!showHomepage}
+  showSearch={!showHomepage}
 />
 
 {!showHomepage && (
@@ -3090,6 +3116,16 @@ showSubCategoryFilter={!showHomepage}
                     >
                       Download Delivery Note
                     </button>
+
+                    {(isSalesRep || isCustomer) && (
+                      <button
+                        type="button"
+                        onClick={() => setReturnOrder(order)}
+                        className="bg-purple-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                      >
+                        Return
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -3435,6 +3471,19 @@ showSubCategoryFilter={!showHomepage}
 </button>
 
       </div>
+
+      {returnOrder && (
+        <ReturnRequestModal
+          order={returnOrder}
+          source={isSalesRep ? "SALES_REP_PORTAL" : "CUSTOMER_PAYMENT_HISTORY"}
+          currentUser={activeUser}
+          onClose={() => setReturnOrder(null)}
+          onSaved={async () => {
+            await fetchOrders();
+            await fetchCustomerLedger();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -73,24 +73,29 @@ export const getProductPriceForMode = (
 
   const vatPrice = roundMoney(Number(product.vatPrice ?? product.vat_price ?? 0));
 
-  const specialPrice =
-    modeCountry === "wales"
-      ? Number(product.walesSpecialPrice ?? product.wales_special_price ?? 0)
-      : modeCountry === "england"
-        ? Number(product.englandSpecialPrice ?? product.england_special_price ?? 0)
-        : 0;
+  const specialPrice = modeCountry === "wales"
+    ? Number(product.walesSpecialPrice ?? product.wales_special_price ?? 0)
+    : modeCountry === "england"
+      ? Number(product.englandSpecialPrice ?? product.england_special_price ?? 0)
+      : 0;
+
+  let finalPrice;
 
   if (mode === "server" || mode === "manager") {
-    if (specialPrice > 0) return roundMoney(specialPrice);
-
-    const vatRate = getVatRate(product.vatType ?? product.vat_type);
-    const discountPercent = getPricingDiscountPercent(mode, pricingSettings);
-    const grossPrice = vatPrice * (1 + vatRate / 100);
-
-    return roundMoney(grossPrice * (1 - discountPercent / 100));
+    if (specialPrice > 0) {
+      finalPrice = roundMoney(specialPrice);
+    } else {
+      const vatRate = getVatRate(product.vatType ?? product.vat_type);
+      const discountPercent = getPricingDiscountPercent(mode, pricingSettings);
+      const grossPrice = vatPrice * (1 + vatRate / 100);
+      finalPrice = roundMoney(grossPrice * (1 - discountPercent / 100));
+    }
+  } else {
+    finalPrice = vatPrice;
   }
 
-  return vatPrice;
+  // Apply the fair quarter rounding before returning the final price
+  return roundToFairQuarter(finalPrice);
 };
 
 export const getHomepagePriceForMode = (

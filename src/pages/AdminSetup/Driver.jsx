@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { calculateDocumentTotals } from "../../utils/documentTotals";
+import { createOrUpdateInvoiceForDeliveredOrder } from "../../services/centralInvoiceEngine";
+import ReturnRequestModal from "../../components/ReturnRequestModal";
 
 export default function Driver({
   orders = [],
@@ -12,6 +14,7 @@ export default function Driver({
   const [expandedOrder, setExpandedOrder] = useState(null);
   const [selectedDriver, setSelectedDriver] = useState("All");
   const [cashCollectionOrder, setCashCollectionOrder] = useState(null);
+  const [returnOrder, setReturnOrder] = useState(null);
   const [selectedCreditCustomerId, setSelectedCreditCustomerId] = useState("");
   const [selectedCreditBranchId, setSelectedCreditBranchId] = useState("");
 
@@ -205,28 +208,11 @@ const selectedCreditBranches =
 
     await changeOrderStatus(order.orderId, "Delivered");
 
-    const orderTotal = getDriverTotals(order).grandTotal;
-
-const { error } = await supabase.from("customer_ledger").insert({
-  customer_name: order.companyName || "Unknown Customer",
-
-  entry_type: "INVOICE",
-  reference_no: order.orderId,
-
-  debit: orderTotal,
-  credit: 0,
-
-  confirmed_by: confirmedBy,
-
-  driver_name: loggedInUser.name || null,
-  driver_username: loggedInUser.username || null,
-  driver_role: loggedInUser.role || null,
-  driver_staff_id: loggedInUser.id || null,
-  notes: "Delivery confirmed",
-  invoice_status: "UNPAID",
-});
-
-    if (error) throw error;
+    await createOrUpdateInvoiceForDeliveredOrder({
+      order,
+      confirmedBy,
+      currentUser: loggedInUser,
+    });
 
     openCashCollection(order);
   } catch (error) {
@@ -618,6 +604,15 @@ if (ledgerError) throw ledgerError;
                     Cash Collection
                   </button>
                 )}
+
+                {order.status === "Delivered" && (
+                  <button
+                    onClick={() => setReturnOrder(order)}
+                    className="bg-purple-700 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"
+                  >
+                    Return
+                  </button>
+                )}
               </div>
             </div>
 
@@ -739,6 +734,16 @@ if (ledgerError) throw ledgerError;
           </div>
         ))}
       </div>
+
+      {returnOrder && (
+        <ReturnRequestModal
+          order={returnOrder}
+          source="DELIVERY_PORTAL"
+          currentUser={loggedInUser}
+          onClose={() => setReturnOrder(null)}
+          onSaved={refreshOrders}
+        />
+      )}
     </div>
   );
 }

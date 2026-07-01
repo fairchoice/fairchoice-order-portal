@@ -15,6 +15,7 @@ export default function ProductFilters({
   setSelectedSeries,
   showHomeLink = false,
   onHomeClick,
+  showSearch = true,
   showCategoryFilter = true,
   showSubCategoryFilter = true,
   showBrandFilter = true,
@@ -22,7 +23,11 @@ export default function ProductFilters({
 }) {
   return (
     <div className="mt-3 bg-white rounded-2xl p-3">
-      <h3 className="font-bold text-lg mb-2">Find Products</h3>
+      {showSearch && (
+          <h3 className="font-bold text-lg mb-2">
+  {showSearch ? "Find Products" : "Browse Categories"}
+</h3>
+        )}
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
         {showHomeLink && (
@@ -95,12 +100,14 @@ export default function ProductFilters({
           </select>
         )}
 
-        <input
-          className="border rounded-lg p-2 text-sm w-full"
-          placeholder="Search..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        {showSearch && (
+          <input
+            className="border rounded-lg p-2 text-sm w-full md:col-span-1"
+            placeholder="Search products..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        )}
       </div>
     </div>
   );
