@@ -36,13 +36,67 @@ export default function AdminOrders({
   const [editedStatus, setEditedStatus] = useState({});
   const [refreshFilters, setRefreshFilters] = useState({});
 
+  const [customerFilter, setCustomerFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
   const receivedOrders = orders.filter(
     (order) => order.status === "Received" || order.status === "In Progress"
   );
 
+  const parseOrderDate = (value) => {
+  if (!value) return null;
+
+  const text = String(value).split(",")[0].trim();
+  const [day, month, year] = text.split("/");
+
+  if (!day || !month || !year) {
+    const fallback = new Date(value);
+    return Number.isNaN(fallback.getTime()) ? null : fallback;
+  }
+
+  return new Date(Number(year), Number(month) - 1, Number(day));
+};
+
   const archiveOrders = orders.filter((order) => order.status === "Archived");
 
   let visibleOrders = showArchive ? archiveOrders : receivedOrders;
+
+visibleOrders = visibleOrders.filter((order) => {
+  const customerName = String(
+    order.customer_name ||
+    order.customerName ||
+    order.companyName ||
+    ""
+  ).toLowerCase();
+
+  const rawDate =
+    order.created_at ||
+    order.createdAt ||
+    order.orderDate ||
+    "";
+
+  const orderDate = parseOrderDate(rawDate);
+
+  if (
+    customerFilter &&
+    !customerName.includes(customerFilter.toLowerCase())
+  ) {
+    return false;
+  }
+
+  if (dateFrom && orderDate) {
+    const from = new Date(dateFrom + "T00:00:00");
+    if (orderDate < from) return false;
+  }
+
+  if (dateTo && orderDate) {
+    const to = new Date(dateTo + "T23:59:59");
+    if (orderDate > to) return false;
+  }
+
+  return true;
+});
 
   if (!showArchive && statusFilter !== "All") {
     visibleOrders = visibleOrders.filter(
@@ -489,6 +543,43 @@ const bulkRefreshOrderPrices = async (order) => {
           </button>
         </div>
       </div>
+
+      <div className="bg-white border rounded-2xl p-4 mb-4">
+  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+    <input
+      className="border rounded-lg p-2"
+      placeholder="Customer name..."
+      value={customerFilter}
+      onChange={(e) => setCustomerFilter(e.target.value)}
+    />
+
+    <input
+      type="date"
+      className="border rounded-lg p-2"
+      value={dateFrom}
+      onChange={(e) => setDateFrom(e.target.value)}
+    />
+
+    <input
+      type="date"
+      className="border rounded-lg p-2"
+      value={dateTo}
+      onChange={(e) => setDateTo(e.target.value)}
+    />
+
+    <button
+      type="button"
+      onClick={() => {
+        setCustomerFilter("");
+        setDateFrom("");
+        setDateTo("");
+      }}
+      className="bg-slate-800 text-white rounded-lg font-bold"
+    >
+      Clear
+    </button>
+  </div>
+</div>
 
       <div className="space-y-3">
         {visibleOrders.length === 0 && (
