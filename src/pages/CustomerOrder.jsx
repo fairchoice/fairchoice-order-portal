@@ -8,6 +8,7 @@ import PriceManagement from "./AdminSetup/PriceManagement";
 
 import { formatCurrency } from "../utils/currency";
 
+
 import BackOfficeLayout, {
   ComingSoonPlaceholder,
   getComingSoonTitle,
@@ -27,6 +28,7 @@ import ProductFilters from "../components/ProductFilters";
 import Cart from "../components/Cart.jsx";
 
 import { getProducts } from "../services/products";
+import { getHomepageItems } from "../services/homepageItems";
 import {
   applyLocationStockToProducts,
   saveProductLocationStock,
@@ -45,7 +47,10 @@ import {
   getOrderItemQty,
 } from "../utils/orderTotals";
 import { calculateDocumentTotals } from "../utils/documentTotals";
-import { getProductPriceForMode } from "../utils/pricing";
+import {
+  getProductPriceForMode,
+  getHomepagePriceForMode,
+} from "../utils/pricing";
 import { calculateCustomerCredit } from "../utils/customerCredit";
 
 import AdminProducts from "./AdminProducts";
@@ -310,6 +315,11 @@ const [savingSalesPayment, setSavingSalesPayment] = useState(false);
   const [products, setProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [productError, setProductError] = useState("");
+  const [homepageItems, setHomepageItems] = useState([]);
+  const [homepageLoading, setHomepageLoading] = useState(false);
+  const [showHomepage, setShowHomepage] = useState(true);
+  const [homepageSelectionType, setHomepageSelectionType] = useState("");
+  const [homepagePromotionTarget, setHomepagePromotionTarget] = useState("");
   const [promotionRules, setPromotionRules] = useState([]);
 
   const CART_KEY = "fairchoice_cart";
@@ -672,6 +682,93 @@ const getPromotionPrice = (product) => {
 const getPrice = (product) =>
   getProductPriceForMode(product, priceMode, orderCountry, pricingSettings);
 
+const normalizeHomepageCategoryType = (value) =>
+  String(value || "main_category").trim().toLowerCase();
+
+const normalizeHomepagePromotionTarget = (value) =>
+  String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+
+const productMatchesHomepagePromotion = (product, targetValue) => {
+  const target = normalizeHomepagePromotionTarget(targetValue);
+
+  if (target === "promotion" || target === "is_promotion") {
+    return product.isPromotion === true;
+  }
+
+  if (target === "new" || target === "is_new") return product.isNew === true;
+  if (target === "reduced" || target === "is_reduced") {
+    return product.isReduced === true;
+  }
+  if (target === "recommended") return product.recommended === true;
+  if (target === "top_seller" || target === "top seller") {
+    return product.topSeller === true;
+  }
+
+  return false;
+};
+
+const findHomepagePriceProduct = (item) => {
+  const categoryType = normalizeHomepageCategoryType(item.categoryType);
+
+  return products.find((product) => {
+    if (!product.active) return false;
+    if (orderCountry === "England" && !product.availableInEngland) return false;
+    if (orderCountry === "Wales" && !product.availableInWales) return false;
+
+    if (categoryType === "sub_category") {
+      return product.subCategory === item.targetValue;
+    }
+
+    if (categoryType === "promotion") {
+      return productMatchesHomepagePromotion(product, item.targetValue);
+    }
+
+    return product.category === item.targetValue;
+  });
+};
+
+const getHomepageDisplayPrice = (item) => {
+  return getHomepagePriceForMode(item.price, priceMode, pricingSettings);
+};
+
+const showHome = () => {
+  setShowHomepage(true);
+  setHomepageSelectionType("");
+  setHomepagePromotionTarget("");
+  setSelectedCategory("All Products");
+  setSelectedSubCategory("All Sub Categories");
+  setSelectedBrand("All Brands");
+  setSelectedSeries("All Series");
+  setSearch("");
+};
+
+const openHomepageItem = (item) => {
+  const categoryType = normalizeHomepageCategoryType(item.categoryType);
+
+  setShowHomepage(false);
+  setHomepageSelectionType(categoryType);
+  setHomepagePromotionTarget("");
+  setSearch("");
+  setSelectedBrand("All Brands");
+  setSelectedSeries("All Series");
+
+  if (categoryType === "sub_category") {
+    setSelectedCategory("All Products");
+    setSelectedSubCategory(item.targetValue || "All Sub Categories");
+    return;
+  }
+
+  if (categoryType === "promotion") {
+    setSelectedCategory("All Products");
+    setSelectedSubCategory("All Sub Categories");
+    setHomepagePromotionTarget(item.targetValue || "");
+    return;
+  }
+
+  setSelectedCategory(item.targetValue || "All Products");
+  setSelectedSubCategory("All Sub Categories");
+};
+
 const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   const quantity = Math.max(1, Number(nextQty || 1));
   const selectedPrice = Number(getPrice(item) || 0);
@@ -853,9 +950,24 @@ useEffect(() => {
     setProductsLoading(false);
   };
 
+  const fetchHomepageCards = async () => {
+    setHomepageLoading(true);
+
+    try {
+      const rows = await getHomepageItems();
+      setHomepageItems(rows || []);
+    } catch (error) {
+      console.error("Homepage loading error:", error);
+      setHomepageItems([]);
+    }
+
+    setHomepageLoading(false);
+  };
+
   useEffect(() => {
     if (!supabase) return;
     fetchProducts();
+    fetchHomepageCards();
   }, [orderCountry]);
 
   const fetchPricingSettings = async () => {
@@ -1058,6 +1170,8 @@ const filteredProducts = useMemo(() => {
 
       return (
         product.active &&
+        (!homepagePromotionTarget ||
+          productMatchesHomepagePromotion(product, homepagePromotionTarget)) &&
         (selectedCategory === "All Products" ||
           productCategory === selectedCategory) &&
         (selectedSubCategory === "All Sub Categories" ||
@@ -1083,6 +1197,7 @@ const filteredProducts = useMemo(() => {
   selectedSubCategory,
   selectedBrand,
   selectedSeries,
+  homepagePromotionTarget,
 ]);
 
 const totalProductPages = Math.max(
@@ -1105,6 +1220,28 @@ useEffect(() => {
   selectedBrand,
   selectedSeries,
 ]);
+
+const getHomepageSubtitle = (item) => {
+  switch (String(item.description || "").trim().toLowerCase()) {
+    case "big puff pre-filled kits-vape":
+      return "Premium Disposable Vape Kits";
+
+    case "pre-filled pod kits - refill":
+      return "Replacement Pod Systems";
+
+    case "smoking accessories":
+      return "Smoking & Rolling Accessories";
+
+    case "candy with fun toys assorted":
+      return "Kids Candy & Novelty Toys";
+
+    case "household items - cleaning, shoe accessories, house essentials":
+      return "Cleaning & Home Essentials";
+
+    default:
+      return "Browse our latest products";
+  }
+};
 
   const addToCart = (product, qty = 1) => {
   const quantity = Math.max(1, Number(qty || 1));
@@ -2623,8 +2760,15 @@ const backOfficeContent = comingSoonTitle ? (
     setSelectedSeries("All Series");
   }}
   setSelectedSeries={setSelectedSeries}
+  showHomeLink={!showHomepage}
+  onHomeClick={showHome}
+ showCategoryFilter={false}
+showSubCategoryFilter={!showHomepage}
+  showBrandFilter={!showHomepage}
+  showSeriesFilter={!showHomepage}
 />
 
+{!showHomepage && (
   <div className="mt-3 flex justify-end gap-2">
     {["grid", "list"].map((view) => (
       <button
@@ -2641,10 +2785,65 @@ const backOfficeContent = comingSoonTitle ? (
       </button>
     ))}
   </div>
+)}
 
 </div>
 
             <div className="lg:col-span-3">
+              {showHomepage ? (
+                <div>
+                  {homepageLoading && (
+                    <div className="bg-slate-50 border rounded-3xl p-5 mb-4">
+                      Loading homepage...
+                    </div>
+                  )}
+
+                  {!homepageLoading && homepageItems.length === 0 && (
+                    <div className="bg-slate-50 border rounded-3xl p-5 mb-4">
+                      No homepage items found.
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-5">
+                  {homepageItems
+                    .filter((item) => {
+                      const keyword = search.trim().toLowerCase();
+                      if (!keyword) return true;
+                      return String(item.description || "").toLowerCase().includes(keyword);
+                    })
+                    .map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => openHomepageItem(item)}
+                        className="bg-white border rounded-xl shadow-sm hover:shadow-lg cursor-pointer overflow-hidden transition"
+                      >
+                        <div className="h-40 flex items-center justify-center p-2 bg-white border-b">
+                          <img
+                            src={item.image}
+                            alt={item.description}
+                            className="w-full h-full object-contain"
+                          />
+                        </div>
+
+                      <div className="p-3">
+  <h3 className="font-bold text-lg leading-6 text-slate-900">
+    {item.description}
+  </h3>
+
+ <p className="text-sm text-slate-500 mt-1">
+ {item.subDescription}
+</p>
+
+  <div className="mt-3 text-blue-700 font-semibold text-sm">
+    Click to browse →
+  </div>
+</div>
+                      </div>
+                    ))}
+                </div>
+                </div>
+              ) : (
+                <>
               {productsLoading && products.length === 0 && (
                 <div className="bg-slate-50 border rounded-3xl p-5 mb-4">
                   Loading products from Supabase...
@@ -2759,6 +2958,8 @@ const backOfficeContent = comingSoonTitle ? (
                     Next
                   </button>
                 </div>
+              )}
+                </>
               )}
             </div>
 

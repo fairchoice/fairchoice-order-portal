@@ -93,6 +93,32 @@ export const getProductPriceForMode = (
   return vatPrice;
 };
 
+export const getHomepagePriceForMode = (
+  homePrice = 0,
+  priceMode = "vat",
+  pricingSettings = {}
+) => {
+  const mode = normalizePriceMode(priceMode);
+  const basePrice = roundMoney(Number(homePrice || 0));
+
+  if (mode === "server") {
+    const discount = Number(pricingSettings.server_discount_percent || 0);
+    return roundMoney(basePrice * 1.2 * (1 - discount / 100));
+  }
+
+  if (mode === "manager") {
+    const discount = Number(pricingSettings.manager_discount_percent || 0);
+    return roundMoney(basePrice * 1.2 * (1 - discount / 100));
+  }
+
+  if (mode === "super" || mode === "admin" || mode === "admin offer") {
+    const discount = Number(pricingSettings.super_discount_percent || 0);
+    return roundMoney(basePrice * (1 - discount / 100) * 1.2);
+  }
+
+  return basePrice;
+};
+
 export const getProductPricePreview = (
     product = {},
     country = "",
@@ -146,6 +172,7 @@ export const getProductPricePreview = (
         adminMargin: calcMargin(admin),
     };
 };
+
 
 // Backwards-compatible name used by older files.
 export const getOrderItemPrice = getProductPriceForMode;

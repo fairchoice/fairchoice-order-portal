@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 
 import { supabase } from "../services/supabase";
 import { getActiveStockLocations } from "../services/locationStock";
+import {
+  deleteHomepageItem,
+  getAllHomepageItems,
+  saveHomepageItem,
+} from "../services/homepageItems";
 import { formatCurrency } from "../utils/currency";
+import { getHomepagePriceForMode } from "../utils/pricing";
+
 
 
 
@@ -20,6 +27,19 @@ export default function AdminProducts({
 
 const [imageFile, setImageFile] = useState(null);
 const [uploadingImage, setUploadingImage] = useState(false);
+const [homepageItems, setHomepageItems] = useState([]);
+const [homepageImageFile, setHomepageImageFile] = useState(null);
+const [uploadingHomepageImage, setUploadingHomepageImage] = useState(false);
+const [homepageForm, setHomepageForm] = useState({
+  id: null,
+  description: "",
+  subDescription: "",
+  image: "",
+  categoryType: "main_category",
+  targetValue: "",
+  sortOrder: 0,
+  active: true,
+});
 
 const handleImageUpload = async () => {
   if (!imageFile) {
@@ -61,6 +81,76 @@ const handleImageUpload = async () => {
   setUploadingImage(false);
 };
 
+const fetchHomepageItems = async () => {
+  try {
+    const rows = await getAllHomepageItems();
+    setHomepageItems(rows || []);
+  } catch (error) {
+    console.error("Homepage items loading error:", error);
+  }
+};
+
+const updateHomepageField = (field, value) => {
+  setHomepageForm((old) => ({
+    ...old,
+    [field]: value,
+  }));
+};
+
+const resetHomepageForm = () => {
+  setHomepageForm({
+    id: null,
+    description: "",
+    image: "",
+    subDescription: "",
+    categoryType: "main_category",
+    targetValue: "",
+    sortOrder: 0,
+    active: true,
+  });
+  setHomepageImageFile(null);
+};
+
+const handleHomepageImageUpload = async () => {
+  if (!homepageImageFile) {
+    alert("Please choose an image first");
+    return;
+  }
+
+  setUploadingHomepageImage(true);
+
+  try {
+    const fileExt = homepageImageFile.name.split(".").pop();
+    const safeName =
+      homepageForm.description
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "homepage-item";
+    const fileName = `homepage-${safeName}-${Date.now()}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("product-images")
+      .upload(fileName, homepageImageFile, {
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage
+      .from("product-images")
+      .getPublicUrl(fileName);
+
+    updateHomepageField("image", data.publicUrl);
+    alert("Image uploaded successfully");
+  } catch (err) {
+    alert("Image upload failed: " + err.message);
+  }
+
+  setUploadingHomepageImage(false);
+};
+
 
   const [activeTab, setActiveTab] = useState("edit");
   
@@ -84,6 +174,7 @@ const handleImageUpload = async () => {
     fetchSuppliers();
     fetchAccountCodes();
     fetchStockLocations();
+    fetchHomepageItems();
       }, []);
 
   const updateField = (field, value) => {
@@ -249,6 +340,67 @@ const brands = productOptions.filter(
 const seriesList = productOptions.filter(
   (o) => o.option_type === "series"
 );
+
+const homepageTargetOptions =
+  homepageForm.categoryType === "sub_category"
+    ? subCategories
+    : homepageForm.categoryType === "promotion"
+      ? [
+          { id: "is_promotion", option_name: "Promotion" },
+          { id: "is_new", option_name: "New" },
+          { id: "is_reduced", option_name: "Reduced" },
+          { id: "recommended", option_name: "Recommended" },
+          { id: "top_seller", option_name: "Top Seller" },
+        ]
+      : mainCategories;
+
+const saveHomepageCard = async () => {
+  if (!homepageForm.description.trim()) {
+    alert("Please enter a homepage description.");
+    return;
+  }
+
+  if (!homepageForm.targetValue.trim()) {
+    alert("Please select a homepage link target.");
+    return;
+  }
+
+  try {
+    await saveHomepageItem(homepageForm);
+    resetHomepageForm();
+    await fetchHomepageItems();
+    alert("Homepage item saved.");
+  } catch (error) {
+    console.error("Homepage item save error:", error);
+    alert("Homepage item save failed.");
+  }
+};
+
+const editHomepageCard = (item) => {
+  setHomepageForm({
+    id: item.id,
+    description: item.description || "",
+    image: item.image || "",
+    subDescription: item.subDescription || "",
+    categoryType: item.categoryType || "main_category",
+    targetValue: item.targetValue || "",
+    sortOrder: item.sortOrder || 0,
+    active: item.active !== false,
+  });
+  setActiveTab("homepage");
+};
+
+const removeHomepageCard = async (item) => {
+  if (!window.confirm(`Delete homepage item "${item.description}"?`)) return;
+
+  try {
+    await deleteHomepageItem(item.id);
+    await fetchHomepageItems();
+  } catch (error) {
+    console.error("Homepage item delete error:", error);
+    alert("Homepage item delete failed.");
+  }
+};
 
 const selectedCategoryKey = String(productForm.category || "").trim().toLowerCase();
 
@@ -576,6 +728,7 @@ const updateProductLabel = (labelValue) => {
             {[
         ["add", "Add Product"],
         ["edit", "Product List"],
+        ["homepage", "Homepage"],
       ].map(([tab, label]) => (
           <button
             key={tab}
@@ -590,6 +743,192 @@ const updateProductLabel = (labelValue) => {
           </button>
         ))}
       </div>
+
+      {activeTab === "homepage" && (
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <section className="bg-white rounded-2xl shadow-sm p-5 xl:col-span-1">
+            <h3 className="text-xl font-bold mb-4">
+              {homepageForm.id ? "Edit Homepage Item" : "Add Homepage Item"}
+            </h3>
+
+            <div className="space-y-3">
+              <textarea
+                className="input-box min-h-24"
+                placeholder="Description / Product Description"
+                value={homepageForm.description}
+                onChange={(e) =>
+                  updateHomepageField("description", e.target.value)
+                }
+              />
+
+              <textarea
+                  className="input-box min-h-20"
+                  placeholder="Sub Description"
+                  value={homepageForm.subDescription}
+                  onChange={(e) => updateHomepageField("subDescription", e.target.value)}
+                />
+
+              <div className="border rounded-xl p-3 bg-slate-50">
+                {homepageForm.image ? (
+                  <img
+                    src={homepageForm.image}
+                    alt=""
+                    className="w-full max-h-48 object-contain rounded-xl border bg-white"
+                  />
+                ) : (
+                  <div className="h-40 rounded-xl border bg-white flex items-center justify-center text-sm text-slate-500">
+                    Image Preview
+                  </div>
+                )}
+              </div>
+
+              <input
+                className="input-box"
+                placeholder="Image URL"
+                value={homepageForm.image}
+                onChange={(e) => updateHomepageField("image", e.target.value)}
+              />
+
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setHomepageImageFile(e.target.files[0])}
+                className="w-full text-sm"
+              />
+
+              <button
+                type="button"
+                onClick={handleHomepageImageUpload}
+                disabled={uploadingHomepageImage}
+                className="bg-slate-800 text-white px-4 py-2 rounded-xl font-bold disabled:bg-slate-400"
+              >
+                {uploadingHomepageImage ? "Uploading..." : "Upload Image"}
+              </button>
+
+               <select
+                className="input-box"
+                value={homepageForm.categoryType}
+                onChange={(e) => {
+                  updateHomepageField("categoryType", e.target.value);
+                  updateHomepageField("targetValue", "");
+                }}
+              >
+                <option value="main_category">Main Category</option>
+                <option value="sub_category">Subcategory</option>
+                <option value="promotion">Promotion</option>
+              </select>
+
+              <select
+                className="input-box"
+                value={homepageForm.targetValue}
+                onChange={(e) =>
+                  updateHomepageField("targetValue", e.target.value)
+                }
+              >
+                <option value="">Destination</option>
+                {homepageTargetOptions.map((item) => (
+                  <option key={item.id} value={item.option_name}>
+                    {item.option_name}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                className="input-box"
+                type="number"
+                placeholder="Sort Order"
+                value={homepageForm.sortOrder}
+                onChange={(e) =>
+                  updateHomepageField("sortOrder", e.target.value)
+                }
+              />
+
+              <label className="checkbox-box">
+                <input
+                  type="checkbox"
+                  checked={homepageForm.active === true}
+                  onChange={(e) =>
+                    updateHomepageField("active", e.target.checked)
+                  }
+                />
+                Active
+              </label>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={saveHomepageCard}
+                  className="bg-green-600 text-white px-4 py-2 rounded-xl font-bold"
+                >
+                  Save Homepage Item
+                </button>
+                <button
+                  type="button"
+                  onClick={resetHomepageForm}
+                  className="bg-white border px-4 py-2 rounded-xl font-bold"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="bg-white rounded-2xl shadow-sm p-5 xl:col-span-2">
+            <h3 className="text-xl font-bold mb-4">Homepage Items</h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {homepageItems.map((item) => (
+                <div key={item.id} className="border rounded-2xl p-3">
+                  <div className="flex gap-3">
+                    {item.image ? (
+                      <img
+                        src={item.image}
+                        alt=""
+                        className="h-24 w-24 object-contain rounded-xl border bg-slate-50"
+                      />
+                    ) : (
+                      <div className="h-24 w-24 rounded-xl border bg-slate-50" />
+                    )}
+
+                    <div className="flex-1">
+                      <div className="font-bold">{item.description}</div>
+                      <div className="text-sm text-slate-500">
+                        {item.categoryType} | {item.targetValue}
+                      </div>
+                     <div className="text-sm text-slate-500 mt-1">
+                      {item.subDescription}
+                    </div>
+                                        </div>
+                  </div>
+
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => editHomepageCard(item)}
+                      className="bg-blue-600 text-white px-3 py-2 rounded-xl text-sm font-bold"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeHomepageCard(item)}
+                      className="bg-red-600 text-white px-3 py-2 rounded-xl text-sm font-bold"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              {homepageItems.length === 0 && (
+                <div className="border rounded-2xl p-6 text-center text-slate-500">
+                  No homepage items yet.
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
 
       {activeTab === "add" && (
         <div className="bg-white rounded-2xl shadow-sm p-5">
