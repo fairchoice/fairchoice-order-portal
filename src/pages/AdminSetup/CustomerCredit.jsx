@@ -10,7 +10,10 @@ import {
   getLedgerCredit,
   getLedgerDebit,
 } from "../../utils/customerCredit";
-import { applyInvoicePaymentAllocations } from "../../services/centralInvoiceEngine";
+import {
+  allocateCustomerPaymentToInvoices,
+  applyInvoicePaymentAllocations,
+} from "../../services/centralInvoiceEngine";
 
 const DELIVERED_ORDERS_PAGE_SIZE = 3;
 const HISTORY_PAGE_SIZE = 5;
@@ -29,6 +32,15 @@ export default function CustomerCredit() {
 
   const [editOpeningBalance, setEditOpeningBalance] = useState(false);
   const [openingBalanceInput, setOpeningBalanceInput] = useState("");
+  const [editingPayment, setEditingPayment] = useState(null);
+  const [paymentEditForm, setPaymentEditForm] = useState({
+    amount: "",
+    paymentType: "Cash",
+    paymentDate: "",
+    branchId: "",
+    whoPaid: "",
+    notes: "",
+  });
 
   const isAdmin = true;
 
@@ -240,6 +252,104 @@ function formatCollectionSource(source) {
   setStatementRows(
     mergeDeliveredOrderInvoicesIntoStatement(data || [], deliveredOrderRows)
   );
+};
+
+const toDateInputValue = (value) => {
+  if (!value) return new Date().toISOString().split("T")[0];
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? new Date().toISOString().split("T")[0]
+    : date.toISOString().split("T")[0];
+};
+
+const startEditPayment = (row) => {
+  setEditingPayment(row);
+  setPaymentEditForm({
+    amount: String(row.credit || row.amount || row.payment_amount || ""),
+    paymentType: row.payment_type || "Cash",
+    paymentDate: toDateInputValue(row.created_at),
+    branchId: String(row.branch_id || row.customer_branch_id || ""),
+    whoPaid: row.paid_by || row.who_paid || "",
+    notes: row.notes || "",
+  });
+};
+
+const recalculateSelectedCustomerLedger = async () => {
+  const customer = customers.find(
+    (account) => account.account_name === selectedCustomer
+  );
+
+  await allocateCustomerPaymentToInvoices({
+    customerAccountId: customer?.id,
+    customerName: selectedCustomer,
+  });
+  await loadStatement(selectedCustomer);
+};
+
+const saveEditedPayment = async () => {
+  if (!editingPayment?.id) return;
+
+  const amount = Number(paymentEditForm.amount || 0);
+  if (!amount || amount <= 0) {
+    alert("Please enter payment amount.");
+    return;
+  }
+
+  const branch = customerBranches.find(
+    (item) => String(item.id) === String(paymentEditForm.branchId)
+  );
+  const paymentDate = paymentEditForm.paymentDate
+    ? `${paymentEditForm.paymentDate}T12:00:00`
+    : editingPayment.created_at;
+
+  const payload = {
+    created_at: paymentDate,
+    credit: amount,
+    amount,
+    payment_amount: amount,
+    payment_type: paymentEditForm.paymentType,
+    branch_id: branch?.id || null,
+    customer_branch_id: branch?.id || null,
+    branch_name: branch?.branch_name || null,
+    paid_by: paymentEditForm.whoPaid || null,
+    who_paid: paymentEditForm.whoPaid || null,
+    notes: paymentEditForm.notes || null,
+  };
+
+  const { error } = await supabase
+    .from("customer_ledger")
+    .update(payload)
+    .eq("id", editingPayment.id);
+
+  if (error) {
+    alert("Could not update payment: " + error.message);
+    return;
+  }
+
+  setEditingPayment(null);
+  await recalculateSelectedCustomerLedger();
+};
+
+const removePayment = async (row) => {
+  if (
+    !window.confirm(
+      "Are you sure you want to remove this payment? This will update customer credit and invoice balances."
+    )
+  ) {
+    return;
+  }
+
+  const { error } = await supabase
+    .from("customer_ledger")
+    .delete()
+    .eq("id", row.id);
+
+  if (error) {
+    alert("Could not remove payment: " + error.message);
+    return;
+  }
+
+  await recalculateSelectedCustomerLedger();
 };
        
   const saveOpeningBalance = async () => {
@@ -950,6 +1060,118 @@ function formatCollectionSource(source) {
       )}
 
       {activeTab === "transactions" && (
+        <div className="space-y-3">
+        {editingPayment && (
+          <div className="border rounded-2xl bg-white p-4 space-y-3">
+            <h3 className="font-bold text-lg">Edit Payment</h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <input
+                type="number"
+                step="0.01"
+                value={paymentEditForm.amount}
+                onChange={(e) =>
+                  setPaymentEditForm({
+                    ...paymentEditForm,
+                    amount: e.target.value,
+                  })
+                }
+                className="border rounded-xl p-3"
+                placeholder="Payment Amount"
+              />
+
+              <select
+                value={paymentEditForm.paymentType}
+                onChange={(e) =>
+                  setPaymentEditForm({
+                    ...paymentEditForm,
+                    paymentType: e.target.value,
+                  })
+                }
+                className="border rounded-xl p-3 bg-white"
+              >
+                <option value="Cash">Cash</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+                <option value="Card">Card</option>
+                <option value="Cheque">Cheque</option>
+                <option value="Account">Account</option>
+              </select>
+
+              <input
+                type="date"
+                value={paymentEditForm.paymentDate}
+                onChange={(e) =>
+                  setPaymentEditForm({
+                    ...paymentEditForm,
+                    paymentDate: e.target.value,
+                  })
+                }
+                className="border rounded-xl p-3"
+              />
+
+              <select
+                value={paymentEditForm.branchId}
+                onChange={(e) =>
+                  setPaymentEditForm({
+                    ...paymentEditForm,
+                    branchId: e.target.value,
+                  })
+                }
+                className="border rounded-xl p-3 bg-white"
+              >
+                <option value="">No Branch</option>
+                {customerBranches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.branch_name}
+                    {branch.postcode ? ` - ${branch.postcode}` : ""}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                value={paymentEditForm.whoPaid}
+                onChange={(e) =>
+                  setPaymentEditForm({
+                    ...paymentEditForm,
+                    whoPaid: e.target.value,
+                  })
+                }
+                className="border rounded-xl p-3"
+                placeholder="Who Paid"
+              />
+
+              <input
+                value={paymentEditForm.notes}
+                onChange={(e) =>
+                  setPaymentEditForm({
+                    ...paymentEditForm,
+                    notes: e.target.value,
+                  })
+                }
+                className="border rounded-xl p-3"
+                placeholder="Notes"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={saveEditedPayment}
+                className="bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-bold"
+              >
+                Save Payment
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditingPayment(null)}
+                className="bg-white border px-4 py-2 rounded-xl text-sm font-bold"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="overflow-auto border rounded-2xl bg-white">
           <table className="w-full text-sm">
             <thead className="bg-slate-100">
@@ -959,6 +1181,7 @@ function formatCollectionSource(source) {
                 <th className="p-3 text-left">Reference</th>
                 <th className="p-3 text-right">Amount</th>
                 <th className="p-3 text-left">Entered By</th>
+                {isAdmin && <th className="p-3 text-right">Actions</th>}
               </tr>
             </thead>
 
@@ -968,6 +1191,7 @@ function formatCollectionSource(source) {
                   .trim()
                   .toUpperCase();
                 const isInvoice = type === "INVOICE";
+                const isPayment = type === "PAYMENT";
                 const amount = isInvoice
                   ? Number(row.debit || row.amount || row.invoice_amount || 0)
                   : Number(row.credit || row.amount || row.payment_amount || 0);
@@ -998,19 +1222,44 @@ function formatCollectionSource(source) {
                         row.confirmed_by ||
                         "-"}
                     </td>
+                    {isAdmin && (
+                      <td className="p-3 text-right">
+                        {isPayment && row.id && !String(row.id).startsWith("delivered-invoice-") ? (
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => startEditPayment(row)}
+                              className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removePayment(row)}
+                              className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
 
               {transactionRows.length === 0 && (
                 <tr>
-                  <td colSpan="5" className="p-5 text-center text-slate-500">
+                  <td colSpan={isAdmin ? 6 : 5} className="p-5 text-center text-slate-500">
                     No transactions found for this customer.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+        </div>
         </div>
       )}
     </div>
