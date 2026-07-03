@@ -5,7 +5,12 @@ import {
   getOrderItemQty,
 } from "../../utils/orderTotals";
 import { calculateDocumentTotals } from "../../utils/documentTotals";
-import { calculateCustomerCredit } from "../../utils/customerCredit";
+import {
+  calculateCustomerCredit,
+  getLedgerCredit,
+  getLedgerDebit,
+} from "../../utils/customerCredit";
+import { applyInvoicePaymentAllocations } from "../../services/centralInvoiceEngine";
 
 const DELIVERED_ORDERS_PAGE_SIZE = 3;
 const HISTORY_PAGE_SIZE = 5;
@@ -58,7 +63,7 @@ function formatCollectionSource(source) {
       const loadCustomers = async () => {
         const { data, error } = await supabase
           .from("customer_accounts")
-          .select("*")
+          .select("*, customer_branches(*)")
           .order("account_name");
 
         if (error) {
@@ -74,13 +79,15 @@ function formatCollectionSource(source) {
       };
 
       const isDeliveredOrderStatus = (status) =>
-        ["delivered", "delivery confirmed", "completed"].includes(
+        ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
           String(status || "").trim().toLowerCase()
         );
 
       const mapDeliveredOrder = (order) => ({
         dbId: order.id,
         orderId: order.order_number,
+        customerBranchId: order.customer_branch_id || order.branch_id || "",
+        customer_branch_id: order.customer_branch_id || order.branch_id || "",
         customerName: order.company_name,
         companyName: order.company_name,
         branchName:
@@ -94,6 +101,7 @@ function formatCollectionSource(source) {
           order.delivery_address || order.delivery_postcode || order.postcode || "",
         priceMode: order.price_mode || "vat",
         createdAt: order.created_at,
+        deliveredAt: order.delivered_at || order.updated_at || order.created_at,
         status: order.status,
         items: (order.order_items || []).map((item) => ({
           dbId: item.id,
@@ -109,8 +117,10 @@ function formatCollectionSource(source) {
           unit_price: Number(item.unit_price || item.price || 0),
           lineTotal: Number(item.line_total || item.lineTotal || 0),
           line_total: Number(item.line_total || item.lineTotal || 0),
-          vatRate: Number(item.vat_percent || item.vatPercent || 20),
-          vat_percent: Number(item.vat_percent || item.vatPercent || 20),
+          net_total: Number(item.net_total || item.netTotal || 0),
+          gross_total: Number(item.gross_total || item.grossTotal || 0),
+          vatRate: Number(item.vat_percent || item.vatPercent || item.vat_rate || 20),
+          vat_percent: Number(item.vat_percent || item.vatPercent || item.vat_rate || 20),
           vatTotal: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
           vat_total: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
           sourceStatus: item.source_status || item.status || "In Stock",
@@ -124,7 +134,7 @@ function formatCollectionSource(source) {
       const loadDeliveredOrders = async (customer) => {
         if (!customer?.account_name) {
           setDeliveredOrders([]);
-          return;
+          return [];
         }
 
         const { data, error } = await supabase
@@ -139,14 +149,67 @@ function formatCollectionSource(source) {
         if (error) {
           console.error("Could not load delivered customer orders:", error);
           setDeliveredOrders([]);
-          return;
+          return [];
         }
 
-        setDeliveredOrders(
-          (data || [])
-            .filter((order) => isDeliveredOrderStatus(order.status))
-            .map(mapDeliveredOrder)
+        const mappedDeliveredOrders = (data || [])
+          .filter((order) => isDeliveredOrderStatus(order.status))
+          .map(mapDeliveredOrder);
+
+        setDeliveredOrders(mappedDeliveredOrders);
+        return mappedDeliveredOrders;
+      };
+
+      const mergeDeliveredOrderInvoicesIntoStatement = (
+        ledgerRows = [],
+        deliveredOrderRows = []
+      ) => {
+        const invoiceReferences = new Set(
+          (ledgerRows || [])
+            .filter(
+              (row) =>
+                String(row.entry_type || row.transaction_type || "")
+                  .trim()
+                  .toUpperCase() === "INVOICE"
+            )
+            .map((row) => String(row.reference_no || row.order_number || "").trim())
+            .filter(Boolean)
         );
+
+        const fallbackInvoiceRows = deliveredOrderRows
+          .filter((order) => {
+            const referenceNo = String(order.orderId || "").trim();
+            return referenceNo && !invoiceReferences.has(referenceNo);
+          })
+          .map((order) => {
+            const totals = calculateDocumentTotals(order.items || [], order);
+
+            return {
+              id: `delivered-invoice-${order.orderId}`,
+              created_at:
+                order.deliveredAt || order.createdAt || new Date().toISOString(),
+              entry_type: "INVOICE",
+              transaction_type: "INVOICE",
+              reference_no: order.orderId,
+              order_number: order.orderId,
+              description: "Invoice",
+              debit: totals.grandTotal,
+              credit: 0,
+              amount: totals.grandTotal,
+              invoice_amount: totals.grandTotal,
+              invoice_status: "UNPAID",
+              customer_name: order.companyName || order.customerName || "",
+              branch_name: order.branchName || null,
+              price_mode: order.priceMode || null,
+              order_price_mode: order.priceMode || null,
+            };
+          });
+
+        return [...ledgerRows, ...fallbackInvoiceRows].sort((a, b) => {
+          const aTime = new Date(a.created_at || 0).getTime();
+          const bTime = new Date(b.created_at || 0).getTime();
+          return aTime - bTime;
+        });
       };
      
       const loadStatement = async (customerName) => {
@@ -173,8 +236,10 @@ function formatCollectionSource(source) {
     return;
   }
 
-  setStatementRows(data || []);
-  await loadDeliveredOrders(customer);
+  const deliveredOrderRows = await loadDeliveredOrders(customer);
+  setStatementRows(
+    mergeDeliveredOrderInvoicesIntoStatement(data || [], deliveredOrderRows)
+  );
 };
        
   const saveOpeningBalance = async () => {
@@ -401,19 +466,53 @@ function formatCollectionSource(source) {
 
   let runningBalance = Number(openingBalance || 0);
 
+  const selectedCustomerAccount = customers.find(
+    (customer) => customer.account_name === selectedCustomer
+  );
+  const customerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
+    (branch) => branch.active !== false
+  );
+  const ledgerBranchNames = statementRows.map((row) => row.branch_name).filter(Boolean);
   const branches = [
-    ...new Set(statementRows.map((row) => row.branch_name).filter(Boolean)),
+    ...new Map(
+      [
+        ...customerBranches.map((branch) => [
+          branch.branch_name,
+          {
+            id: branch.id,
+            name: branch.branch_name,
+            label: `${branch.branch_name}${branch.postcode ? ` - ${branch.postcode}` : ""}`,
+          },
+        ]),
+        ...ledgerBranchNames.map((branchName) => [
+          branchName,
+          { id: branchName, name: branchName, label: branchName },
+        ]),
+      ].filter(([name]) => Boolean(name))
+    ).values(),
   ];
 
   const filteredRows =
     selectedBranch === "All Branches"
       ? statementRows
-      : statementRows.filter((row) => row.branch_name === selectedBranch);
+      : statementRows.filter(
+          (row) =>
+            String(row.branch_id || row.customer_branch_id || "") ===
+              String(selectedBranch) ||
+            String(row.branch_name || "") === String(selectedBranch)
+        );
+  const allocatedFilteredRows = applyInvoicePaymentAllocations(filteredRows);
+  const allocatedAllRows = applyInvoicePaymentAllocations(statementRows);
 
   const filteredDeliveredOrders =
     selectedBranch === "All Branches"
       ? deliveredOrders
-      : deliveredOrders.filter((order) => order.branchName === selectedBranch);
+      : deliveredOrders.filter(
+          (order) =>
+            String(order.customerBranchId || order.customer_branch_id || "") ===
+              String(selectedBranch) ||
+            String(order.branchName || "") === String(selectedBranch)
+        );
 
   const deliveredOrdersPageCount = Math.max(
     1,
@@ -428,10 +527,12 @@ function formatCollectionSource(source) {
     currentDeliveredOrdersPage * DELIVERED_ORDERS_PAGE_SIZE
   );
 
-  let calculatedHistoryBalance = Number(openingBalance || 0);
-  const historyRowsWithBalance = filteredRows.map((row) => {
-    const debit = Number(row.debit || 0);
-    const credit = Number(row.credit || 0);
+  const filteredOpeningBalance =
+    selectedBranch === "All Branches" ? Number(openingBalance || 0) : 0;
+  let calculatedHistoryBalance = filteredOpeningBalance;
+  const historyRowsWithBalance = allocatedFilteredRows.map((row) => {
+    const debit = getLedgerDebit(row);
+    const credit = getLedgerCredit(row);
     calculatedHistoryBalance += debit - credit;
 
     return {
@@ -451,18 +552,56 @@ function formatCollectionSource(source) {
     currentHistoryPage * HISTORY_PAGE_SIZE
   );
 
-  const selectedCustomerAccount = customers.find(
-    (customer) => customer.account_name === selectedCustomer
-  );
   const creditSummary = calculateCustomerCredit(
     selectedCustomerAccount,
-    statementRows,
+    allocatedAllRows,
     openingBalance
   );
   const totalOutstanding = creditSummary.outstanding;
   const creditLimit = creditSummary.creditLimit;
   const availableCredit = creditSummary.availableCredit;
-  const transactionRows = filteredRows.filter((row) => row.entry_type === "PAYMENT");
+  const totalInvoiceAmount = allocatedAllRows.reduce(
+    (sum, row) =>
+      String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE"
+        ? sum + getLedgerDebit(row)
+        : sum,
+    0
+  );
+  const totalPayments = allocatedAllRows.reduce(
+    (sum, row) =>
+      String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT"
+        ? sum + getLedgerCredit(row)
+        : sum,
+    0
+  );
+  const branchSummaryRows = branches.map((branch) => {
+    const rows = allocatedAllRows.filter(
+      (row) =>
+        String(row.branch_id || row.customer_branch_id || "") === String(branch.id) ||
+        String(row.branch_name || "") === String(branch.name)
+    );
+
+    return {
+      ...branch,
+      outstanding: rows.reduce(
+        (total, row) => total + getLedgerDebit(row) - getLedgerCredit(row),
+        0
+      ),
+    };
+  });
+  const transactionRows = allocatedFilteredRows;
+  const getInvoiceLedgerRowForDeliveredOrder = (order = {}) => {
+    const orderReference = String(order.orderId || order.order_number || "").trim();
+    if (!orderReference) return null;
+
+    return allocatedFilteredRows.find((row) => {
+      const type = String(row.entry_type || row.transaction_type || "")
+        .trim()
+        .toUpperCase();
+      const reference = String(row.reference_no || row.order_number || "").trim();
+      return type === "INVOICE" && reference === orderReference;
+    });
+  };
 
   return (
     <div className="p-4 space-y-4">
@@ -485,6 +624,7 @@ function formatCollectionSource(source) {
             value={selectedCustomer}
             onChange={(e) => {
               setSelectedCustomer(e.target.value);
+              setSelectedBranch("All Branches");
               setEditOpeningBalance(false);
             }}
             className="border rounded-xl p-3 flex-1"
@@ -510,7 +650,7 @@ function formatCollectionSource(source) {
           )}
         </div>
 
-        {branches.length > 1 && (
+        {branches.length > 0 && (
           <select
             value={selectedBranch}
             onChange={(e) => setSelectedBranch(e.target.value)}
@@ -518,8 +658,8 @@ function formatCollectionSource(source) {
           >
             <option value="All Branches">All Branches</option>
             {branches.map((branch) => (
-              <option key={branch} value={branch}>
-                {branch}
+              <option key={branch.id || branch.name} value={branch.id || branch.name}>
+                {branch.label}
               </option>
             ))}
           </select>
@@ -575,142 +715,65 @@ function formatCollectionSource(source) {
       </div>
 
       {activeTab === "summary" && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="bg-white border rounded-2xl p-4">
-            <div className="text-sm font-bold text-slate-500">Outstanding Balance</div>
-            <div className="text-2xl font-bold text-red-600">
-              {formatCurrency(totalOutstanding)}
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+            <div className="bg-white border rounded-2xl p-4">
+              <div className="text-sm font-bold text-slate-500">Total Outstanding</div>
+              <div className="text-2xl font-bold text-red-600">
+                {formatCurrency(totalOutstanding)}
+              </div>
+            </div>
+
+            <div className="bg-white border rounded-2xl p-4">
+              <div className="text-sm font-bold text-slate-500">Opening Balance</div>
+              <div className="text-2xl font-bold">{formatCurrency(openingBalance)}</div>
+            </div>
+
+            <div className="bg-white border rounded-2xl p-4">
+              <div className="text-sm font-bold text-slate-500">Total Invoice Amount</div>
+              <div className="text-2xl font-bold">{formatCurrency(totalInvoiceAmount)}</div>
+            </div>
+
+            <div className="bg-white border rounded-2xl p-4">
+              <div className="text-sm font-bold text-slate-500">Total Payments</div>
+              <div className="text-2xl font-bold text-green-700">
+                {formatCurrency(totalPayments)}
+              </div>
+            </div>
+
+            <div className="bg-white border rounded-2xl p-4">
+              <div className="text-sm font-bold text-slate-500">Available Credit</div>
+              <div className="text-2xl font-bold text-green-700">
+                {formatCurrency(availableCredit)}
+              </div>
             </div>
           </div>
 
-          <div className="bg-white border rounded-2xl p-4">
-            <div className="text-sm font-bold text-slate-500">Credit Limit</div>
-            <div className="text-2xl font-bold">{formatCurrency(creditLimit)}</div>
-          </div>
-
-          <div className="bg-white border rounded-2xl p-4">
-            <div className="text-sm font-bold text-slate-500">Available Credit</div>
-            <div className="text-2xl font-bold text-green-700">
-              {formatCurrency(availableCredit)}
+          {branchSummaryRows.length > 0 && (
+            <div className="bg-white border rounded-2xl p-4">
+              <h3 className="font-bold text-lg mb-3">Branch Summary</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {branchSummaryRows.map((branch) => (
+                  <div
+                    key={branch.id || branch.name}
+                    className="border rounded-xl p-3 bg-slate-50"
+                  >
+                    <div className="text-sm font-bold text-slate-600">
+                      {branch.label}
+                    </div>
+                    <div className="text-xl font-extrabold">
+                      {formatCurrency(branch.outstanding)}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
       {activeTab === "history" && (
         <div className="space-y-4">
-          {filteredDeliveredOrders.length > 0 && (
-            <div className="border rounded-2xl bg-white p-4">
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <h3 className="font-bold text-lg">Delivered Orders</h3>
-
-                <button
-                  type="button"
-                  onClick={() => setShowDeliveredOrders((value) => !value)}
-                  className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                >
-                  {showDeliveredOrders ? "Hide" : "View"}
-                </button>
-              </div>
-
-              {showDeliveredOrders && (
-                <div className="space-y-2">
-                {paginatedDeliveredOrders.map((order) => {
-                  const orderTotals = calculateDocumentTotals(order.items || [], order);
-
-                  return (
-                    <div
-                      key={order.dbId || order.orderId}
-                      className="border rounded-xl p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3"
-                    >
-                      <div>
-                        <div className="font-bold">
-                          {order.orderId || "-"}
-                          {order.branchName ? ` | ${order.branchName}` : ""}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {formatDocumentDate(order.createdAt || order.created_at)} |{" "}
-                          {String(order.priceMode || "-").toUpperCase()} |{" "}
-                          {formatCurrency(orderTotals.grandTotal)} | Total Qty:{" "}
-                          {orderTotals.totalQty}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openOrderDocument(order, "invoice")}
-                          className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                        >
-                          Download Invoice
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openOrderDocument(order, "orderForm")}
-                          className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                        >
-                          Download Order Form
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openOrderDocument(order, "deliveryNote")}
-                          className="bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                        >
-                          Download Delivery Note
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-                </div>
-              )}
-
-              {showDeliveredOrders && deliveredOrdersPageCount > 1 && (
-                <div className="flex items-center justify-end gap-2 mt-3 text-sm">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setDeliveredOrdersPage((page) => Math.max(1, page - 1))
-                    }
-                    disabled={currentDeliveredOrdersPage === 1}
-                    className="px-3 py-1 rounded-lg border font-bold disabled:opacity-40"
-                  >
-                    Previous
-                  </button>
-                  <span className="font-bold">
-                    Page {currentDeliveredOrdersPage} / {deliveredOrdersPageCount}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setDeliveredOrdersPage((page) =>
-                        Math.min(deliveredOrdersPageCount, page + 1)
-                      )
-                    }
-                    disabled={currentDeliveredOrdersPage === deliveredOrdersPageCount}
-                    className="px-3 py-1 rounded-lg border font-bold disabled:opacity-40"
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === "deliveredOrders" && (
-  <div className="space-y-4">
-    {filteredDeliveredOrders.length > 0 ? (
-      <div className="border rounded-2xl bg-white p-4">
-        {/* paste existing Delivered Orders block content here */}
-      </div>
-    ) : (
-      <div className="border rounded-2xl bg-white p-5 text-center text-slate-500">
-        No delivered orders found for this customer.
-      </div>
-    )}
-  </div>
-)}
-
           <div id="statement-print" className="overflow-auto border rounded-2xl bg-white">
             <table className="w-full text-sm">
               <thead className="bg-slate-100">
@@ -725,7 +788,7 @@ function formatCollectionSource(source) {
               </thead>
 
               <tbody>
-                {currentHistoryPage === 1 && (
+                {currentHistoryPage === 1 && selectedBranch === "All Branches" && (
                   <tr className="border-t bg-blue-50">
                     <td className="p-3">-</td>
                     <td className="p-3">Opening Balance</td>
@@ -797,6 +860,95 @@ function formatCollectionSource(source) {
         </div>
       )}
 
+      {activeTab === "deliveredOrders" && (
+        <div className="space-y-4">
+          {filteredDeliveredOrders.length > 0 ? (
+            <div className="border rounded-2xl bg-white p-4">
+              <div className="space-y-2">
+                {paginatedDeliveredOrders.map((order) => {
+                  const orderTotals = calculateDocumentTotals(order.items || [], order);
+                  const invoiceLedgerRow =
+                    getInvoiceLedgerRowForDeliveredOrder(order);
+                  const invoiceStatus = String(
+                    invoiceLedgerRow?.invoice_status || "UNPAID"
+                  ).toUpperCase();
+
+                  return (
+                    <div
+                      key={order.dbId || order.orderId}
+                      className="border rounded-xl p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3"
+                    >
+                      <div>
+                        <div className="font-bold">
+                          {order.orderId || "-"}
+                          {order.branchName ? ` | ${order.branchName}` : ""}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {formatDocumentDate(order.createdAt || order.created_at)} |{" "}
+                          {String(order.priceMode || "-").toUpperCase()} |{" "}
+                          {formatCurrency(orderTotals.grandTotal)} | Total Qty:{" "}
+                          {orderTotals.totalQty}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {invoiceStatus === "PAID" ? (
+                          <button
+                            type="button"
+                            onClick={() => openOrderDocument(order, "invoice")}
+                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                          >
+                            Download Invoice
+                          </button>
+                        ) : (
+                          <span className="bg-slate-200 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold">
+                            Unpaid Invoice
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {deliveredOrdersPageCount > 1 && (
+                <div className="flex items-center justify-end gap-2 mt-3 text-sm">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDeliveredOrdersPage((page) => Math.max(1, page - 1))
+                    }
+                    disabled={currentDeliveredOrdersPage === 1}
+                    className="px-3 py-1 rounded-lg border font-bold disabled:opacity-40"
+                  >
+                    Previous
+                  </button>
+                  <span className="font-bold">
+                    Page {currentDeliveredOrdersPage} / {deliveredOrdersPageCount}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDeliveredOrdersPage((page) =>
+                        Math.min(deliveredOrdersPageCount, page + 1)
+                      )
+                    }
+                    disabled={currentDeliveredOrdersPage === deliveredOrdersPageCount}
+                    className="px-3 py-1 rounded-lg border font-bold disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="border rounded-2xl bg-white p-5 text-center text-slate-500">
+              No delivered orders found for this customer.
+            </div>
+          )}
+        </div>
+      )}
+
       {activeTab === "transactions" && (
         <div className="overflow-auto border rounded-2xl bg-white">
           <table className="w-full text-sm">
@@ -811,17 +963,44 @@ function formatCollectionSource(source) {
             </thead>
 
             <tbody>
-              {transactionRows.map((row) => (
-                <tr key={row.id} className="border-t">
-                  <td className="p-3">{new Date(row.created_at).toLocaleDateString()}</td>
-                  <td className="p-3">{formatCollectionSource(row.collection_source) || row.payment_type || "Payment"}</td>
-                  <td className="p-3">{row.reference_no || "-"}</td>
-                  <td className="p-3 text-right font-bold text-green-700">
-                    {formatCurrency(row.credit)}
-                  </td>
-                  <td className="p-3">{row.received_by || row.collected_by_name || row.paid_by || "-"}</td>
-                </tr>
-              ))}
+              {transactionRows.map((row) => {
+                const type = String(row.entry_type || row.transaction_type || "")
+                  .trim()
+                  .toUpperCase();
+                const isInvoice = type === "INVOICE";
+                const amount = isInvoice
+                  ? Number(row.debit || row.amount || row.invoice_amount || 0)
+                  : Number(row.credit || row.amount || row.payment_amount || 0);
+
+                return (
+                  <tr key={row.id} className="border-t">
+                    <td className="p-3">{new Date(row.created_at).toLocaleDateString()}</td>
+                    <td className="p-3">
+                      {isInvoice
+                        ? "Invoice"
+                        : formatCollectionSource(row.collection_source) ||
+                          row.payment_type ||
+                          "Payment"}
+                    </td>
+                    <td className="p-3">{row.reference_no || "-"}</td>
+                    <td
+                      className={`p-3 text-right font-bold ${
+                        isInvoice ? "text-red-700" : "text-green-700"
+                      }`}
+                    >
+                      {isInvoice ? "" : "-"}
+                      {formatCurrency(amount)}
+                    </td>
+                    <td className="p-3">
+                      {row.received_by ||
+                        row.collected_by_name ||
+                        row.paid_by ||
+                        row.confirmed_by ||
+                        "-"}
+                    </td>
+                  </tr>
+                );
+              })}
 
               {transactionRows.length === 0 && (
                 <tr>

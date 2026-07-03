@@ -54,7 +54,11 @@ import {
   getProductPriceForMode,
   getHomepagePriceForMode,
 } from "../utils/pricing";
-import { calculateCustomerCredit } from "../utils/customerCredit";
+import {
+  calculateCustomerCredit,
+  getLedgerCredit,
+  getLedgerDebit,
+} from "../utils/customerCredit";
 
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
@@ -70,6 +74,12 @@ import {
   updateOrderStatus,
   updateOrderFields,
 } from "../services/orders";
+import {
+  allocateCustomerPaymentToInvoices,
+  applyInvoicePaymentAllocations,
+  createOrUpdateInvoiceForDeliveredOrder,
+  loadCustomerOutstandingSnapshot,
+} from "../services/centralInvoiceEngine";
 
 function normalizeProduct(raw) {
   return {
@@ -191,6 +201,72 @@ const getCustomerAddress = (customer, branch) =>
 const getCreditBalance = (customer, ledger = [], openingBalance = 0) =>
   calculateCustomerCredit(customer, ledger, openingBalance).outstanding;
 
+const mapDeliveredOrderForCustomerLedger = (order = {}) => ({
+  dbId: order.id,
+  orderId: order.order_number,
+  customerAccountId: order.customer_account_id || "",
+  customer_account_id: order.customer_account_id || "",
+  customerBranchId: order.customer_branch_id || order.branch_id || "",
+  customer_branch_id: order.customer_branch_id || order.branch_id || "",
+  customerName: order.company_name,
+  companyName: order.company_name,
+  branchName:
+    order.delivery_branch_name ||
+    order.branch_name ||
+    order.branchName ||
+    order.shop_name ||
+    order.shopName ||
+    "",
+  deliveryAddress:
+    order.delivery_address || order.delivery_postcode || order.postcode || "",
+  priceMode: order.price_mode || "vat",
+  total: Number(order.order_total || order.total || 0),
+  orderTotal: Number(order.order_total || order.total || 0),
+  finalTotal: Number(
+    order.final_total ||
+      order.finalTotal ||
+      order.total_amount ||
+      order.order_total ||
+      order.total ||
+      0
+  ),
+  vatTotal: Number(order.vat_total || order.total_vat || order.vat || 0),
+  createdAt: order.created_at,
+  deliveredAt: order.delivered_at || order.updated_at || order.created_at,
+  status: order.status,
+  items: (order.order_items || []).map((item) => ({
+    dbId: item.id,
+    id: item.product_id,
+    productCode: item.product_code || item.code || "",
+    product_code: item.product_code || item.code || "",
+    name: item.product_name,
+    productName: item.product_name,
+    qty: Number(item.qty || item.quantity || 0),
+    quantity: Number(item.quantity || item.qty || 0),
+    selectedPrice: Number(item.price || item.unit_price || 0),
+    price: Number(item.price || item.unit_price || 0),
+    unit_price: Number(item.unit_price || item.price || 0),
+    lineTotal: Number(item.line_total || item.lineTotal || 0),
+    line_total: Number(item.line_total || item.lineTotal || 0),
+    net_total: Number(item.net_total || item.netTotal || 0),
+    gross_total: Number(item.gross_total || item.grossTotal || 0),
+    vatRate: Number(item.vat_percent || item.vatPercent || item.vat_rate || 20),
+    vat_percent: Number(item.vat_percent || item.vatPercent || item.vat_rate || 20),
+    vatTotal: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
+    vat_total: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
+    sourceStatus: item.source_status || item.status || "In Stock",
+    source_status: item.source_status || item.status || "In Stock",
+    pickedQty: Number(item.picked_qty || item.qty || item.quantity || 0),
+    includeInPicking: item.include_in_picking !== false,
+    include_in_picking: item.include_in_picking !== false,
+  })),
+});
+
+const isDeliveredInvoiceStatus = (status) =>
+  ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
+    String(status || "").trim().toLowerCase()
+  );
+
 const normalizeCountry = (value) => String(value || "").trim().toLowerCase();
 
 const getCustomerBranches = (customer) =>
@@ -307,10 +383,54 @@ const loggedInUser =
   collectionDate: new Date().toISOString().split("T")[0],
   notes: "",
 });
+const [salesOutstandingSnapshot, setSalesOutstandingSnapshot] = useState({
+  totalOutstanding: 0,
+  branchOutstanding: {},
+});
 
 
 
 const [savingSalesPayment, setSavingSalesPayment] = useState(false);
+
+const selectedSalesPaymentCustomer = customerAccounts.find(
+  (customer) => String(customer.id) === String(salesPaymentForm.customerId)
+);
+const selectedSalesPaymentBranches = (
+  selectedSalesPaymentCustomer?.customer_branches || []
+).filter((branch) => branch.active !== false);
+const selectedSalesPaymentBranch =
+  selectedSalesPaymentBranches.find(
+    (branch) => String(branch.id) === String(salesPaymentForm.branchId)
+  ) || null;
+
+useEffect(() => {
+  let active = true;
+
+  const loadSalesOutstanding = async () => {
+    if (!selectedSalesPaymentCustomer) {
+      setSalesOutstandingSnapshot({ totalOutstanding: 0, branchOutstanding: {} });
+      return;
+    }
+
+    try {
+      const snapshot = await loadCustomerOutstandingSnapshot({
+        customerAccountId: selectedSalesPaymentCustomer.id,
+        customerName: selectedSalesPaymentCustomer.account_name,
+      });
+
+      if (active) setSalesOutstandingSnapshot(snapshot);
+    } catch (error) {
+      console.error("Sales outstanding load error:", error);
+      if (active) setSalesOutstandingSnapshot({ totalOutstanding: 0, branchOutstanding: {} });
+    }
+  };
+
+  loadSalesOutstanding();
+
+  return () => {
+    active = false;
+  };
+}, [selectedSalesPaymentCustomer?.id]);
 
   const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
  
@@ -380,6 +500,111 @@ useEffect(() => {
   });
 }, [promotionRules, products]);
 
+const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) => {
+  if (!customerName && !customerId) return [];
+
+  let query = supabase
+    .from("orders")
+    .select("*, order_items(*)")
+    .order("created_at", { ascending: true })
+    .limit(250);
+
+  if (customerId) {
+    query = query.eq("customer_account_id", customerId);
+  } else {
+    query = query.eq("company_name", customerName);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error("Delivered order invoice fallback loading error:", error);
+    return [];
+  }
+
+  return (data || [])
+    .filter((order) => isDeliveredInvoiceStatus(order.status))
+    .map(mapDeliveredOrderForCustomerLedger);
+};
+
+const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders = []) => {
+  const deliveredOrdersByReference = new Map(
+    deliveredOrders
+      .map((order) => [String(order.orderId || "").trim(), order])
+      .filter(([referenceNo]) => Boolean(referenceNo))
+  );
+  const ledgerRowsWithOrders = (ledgerRows || []).map((row) => {
+    const type = String(row.entry_type || row.transaction_type || "")
+      .trim()
+      .toUpperCase();
+    const referenceNo = String(row.reference_no || row.order_number || "").trim();
+
+    if (type === "INVOICE" && deliveredOrdersByReference.has(referenceNo)) {
+      return {
+        ...row,
+        __order: deliveredOrdersByReference.get(referenceNo),
+      };
+    }
+
+    return row;
+  });
+  const invoiceReferences = new Set(
+    ledgerRowsWithOrders
+      .filter(
+        (row) =>
+          String(row.entry_type || row.transaction_type || "")
+            .trim()
+            .toUpperCase() === "INVOICE"
+      )
+      .map((row) => String(row.reference_no || row.order_number || "").trim())
+      .filter(Boolean)
+  );
+
+  const fallbackInvoiceRows = deliveredOrders
+    .filter((order) => {
+      const referenceNo = String(order.orderId || "").trim();
+      return referenceNo && !invoiceReferences.has(referenceNo);
+    })
+    .map((order) => {
+      const totals = calculateDocumentTotals(order.items || [], order);
+      const createdAt = order.deliveredAt || order.createdAt || new Date().toISOString();
+
+      return {
+        id: `delivered-invoice-${order.orderId}`,
+        created_at: createdAt,
+        entry_type: "INVOICE",
+        transaction_type: "INVOICE",
+        reference_no: order.orderId,
+        order_number: order.orderId,
+        description: "Invoice",
+        debit: totals.grandTotal,
+        credit: 0,
+        amount: totals.grandTotal,
+        invoice_amount: totals.grandTotal,
+        invoice_status: "UNPAID",
+        customer_name: order.companyName || order.customerName || "",
+        customer_account_id: order.customerAccountId || order.customer_account_id || null,
+        customer_branch_id: order.customerBranchId || order.customer_branch_id || null,
+        branch_id: order.customerBranchId || order.customer_branch_id || null,
+        branch_name: order.branchName || null,
+        price_mode: order.priceMode || null,
+        order_price_mode: order.priceMode || null,
+        __order: order,
+      };
+    });
+
+  return [...ledgerRowsWithOrders, ...fallbackInvoiceRows].sort((a, b) => {
+    const aTime = new Date(a.created_at || 0).getTime();
+    const bTime = new Date(b.created_at || 0).getTime();
+    if (aTime !== bTime) return aTime - bTime;
+
+    const aType = String(a.entry_type || a.transaction_type || "").toUpperCase();
+    const bType = String(b.entry_type || b.transaction_type || "").toUpperCase();
+    if (aType === "INVOICE" && bType !== "INVOICE") return -1;
+    if (aType !== "INVOICE" && bType === "INVOICE") return 1;
+    return 0;
+  });
+};
 
 const loadCustomerCreditSnapshot = async (customer = selectedCustomerAccount) => {
   const customerName = customer?.account_name || companyName;
@@ -413,7 +638,14 @@ const loadCustomerCreditSnapshot = async (customer = selectedCustomerAccount) =>
     return { ledgerRows: [], openingBalance: 0 };
   }
 
-  const ledgerRows = ledgerData || [];
+  const deliveredOrders = await loadDeliveredOrdersForCustomerLedger(
+    customerName,
+    customer?.id
+  );
+  const ledgerRows = mergeDeliveredOrderInvoicesIntoLedger(
+    ledgerData || [],
+    deliveredOrders
+  );
   const openingBalance = Number(balanceRow?.opening_balance || 0);
 
   setCustomerLedger(ledgerRows);
@@ -1091,13 +1323,46 @@ const fetchOrders = async () => {
 
   const changeOrderStatus = async (orderNumber, status) => {
     try {
-      await updateOrderStatus(orderNumber, status);
+      const existingOrder = orders.find(
+        (order) => String(order.orderId) === String(orderNumber)
+      );
+      const updatedOrder = await updateOrderStatus(orderNumber, status);
+
+      if (shouldCreateInvoiceForStatus(status)) {
+        await createOrUpdateInvoiceForDeliveredOrder({
+          order: {
+            ...(existingOrder || {}),
+            ...(updatedOrder || {}),
+            orderId: existingOrder?.orderId || updatedOrder?.order_number || orderNumber,
+            items: existingOrder?.items || [],
+            deliveredAt:
+              updatedOrder?.delivered_at ||
+              existingOrder?.deliveredAt ||
+              new Date().toISOString(),
+          },
+          confirmedBy:
+            updatedOrder?.delivered_confirmed_by ||
+            existingOrder?.delivered_confirmed_by ||
+            null,
+          currentUser: loggedInUser,
+        });
+      }
 
       setOrders((oldOrders) =>
         oldOrders.map((order) =>
-          order.orderId === orderNumber ? { ...order, status } : order
+          order.orderId === orderNumber
+            ? {
+                ...order,
+                status,
+                deliveredAt: updatedOrder?.delivered_at || order.deliveredAt,
+              }
+            : order
         )
       );
+
+      if (shouldCreateInvoiceForStatus(status) && page === "paymentHistory") {
+        await fetchCustomerLedger();
+      }
     } catch (error) {
       console.error("Status update error:", error);
       alert("Could not update order status.");
@@ -1410,8 +1675,45 @@ const filteredCustomerLedger = paymentHistoryBranchId
           )
     )
   : customerLedger;
+const allocatedAllCustomerLedger = applyInvoicePaymentAllocations(customerLedger);
+const allocatedCustomerLedger = applyInvoicePaymentAllocations(filteredCustomerLedger);
+const filteredOpeningBalance = paymentHistoryBranchId
+  ? 0
+  : Number(customerOpeningBalance || 0);
+let customerLedgerRunningBalance = filteredOpeningBalance;
+const customerLedgerRowsWithBalance = allocatedCustomerLedger.map((row) => {
+  const debit = getLedgerDebit(row);
+  const credit = getLedgerCredit(row);
+  customerLedgerRunningBalance += debit - credit;
+
+  return {
+    row,
+    debit,
+    credit,
+    balance: customerLedgerRunningBalance,
+  };
+});
+const customerInvoiceTotal = allocatedAllCustomerLedger.reduce(
+  (sum, row) =>
+    String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE"
+      ? sum + getLedgerDebit(row)
+      : sum,
+  0
+);
+const customerPaymentTotal = allocatedAllCustomerLedger.reduce(
+  (sum, row) =>
+    String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT"
+      ? sum + getLedgerCredit(row)
+      : sum,
+  0
+);
+const customerCreditSummary = calculateCustomerCredit(
+  selectedCustomerAccount,
+  allocatedAllCustomerLedger,
+  customerOpeningBalance
+);
 const branchOutstandingRows = selectedCustomerBranches.map((branch) => {
-  const rows = customerLedger.filter(
+  const rows = allocatedAllCustomerLedger.filter(
     (row) =>
       String(row.branch_id || row.customer_branch_id || "") === String(branch.id) ||
       String(row.branch_name || "") === String(branch.branch_name)
@@ -1420,12 +1722,20 @@ const branchOutstandingRows = selectedCustomerBranches.map((branch) => {
   return {
     id: branch.id,
     branchName: branch.branch_name,
-    outstanding: calculateCustomerCredit(selectedCustomerAccount, rows, 0).outstanding,
+    outstanding: rows.reduce(
+      (total, row) => total + getLedgerDebit(row) - getLedgerCredit(row),
+      0
+    ),
   };
 });
 
 const isFinalOrderStatus = (status) =>
-  ["delivered", "delivery confirmed", "completed"].includes(
+  ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
+    String(status || "").trim().toLowerCase()
+  );
+
+const shouldCreateInvoiceForStatus = (status) =>
+  ["delivered", "confirmed", "delivery confirmed"].includes(
     String(status || "").trim().toLowerCase()
   );
 
@@ -1434,7 +1744,7 @@ const selectedCustomerName = String(
   selectedCustomerAccount?.account_name || companyName || ""
 ).trim().toLowerCase();
 
-const completedCustomerOrders = orders.filter((order) => {
+const completedCustomerOrdersFromOrders = orders.filter((order) => {
   if (!isFinalOrderStatus(order.status)) return false;
 
   const orderCustomerAccountId = String(
@@ -1452,6 +1762,44 @@ const completedCustomerOrders = orders.filter((order) => {
   return Boolean(selectedCustomerName && orderCustomerName === selectedCustomerName);
 });
 
+const completedCustomerOrders = [
+  ...completedCustomerOrdersFromOrders,
+  ...customerLedger
+    .map((row) => row.__order)
+    .filter(Boolean)
+    .filter(
+      (order) =>
+        !completedCustomerOrdersFromOrders.some(
+          (existingOrder) =>
+            String(existingOrder.orderId || "") === String(order.orderId || "")
+        )
+    ),
+];
+
+const getInvoiceOrderForLedgerRow = (row = {}) => {
+  if (row.__order) return row.__order;
+
+  const referenceNo = String(row.reference_no || row.order_number || "").trim();
+  if (!referenceNo) return null;
+
+  return completedCustomerOrders.find(
+    (order) => String(order.orderId || "").trim() === referenceNo
+  );
+};
+
+const getInvoiceLedgerRowForOrder = (order = {}) => {
+  const orderReference = String(order.orderId || order.order_number || "").trim();
+  if (!orderReference) return null;
+
+  return allocatedCustomerLedger.find((row) => {
+    const type = String(row.entry_type || row.transaction_type || "")
+      .trim()
+      .toUpperCase();
+    const reference = String(row.reference_no || row.order_number || "").trim();
+    return type === "INVOICE" && reference === orderReference;
+  });
+};
+
   const toggleOrderExpanded = (orderId) => {
     setExpandedOrders((old) => ({
       ...old,
@@ -1462,29 +1810,45 @@ const completedCustomerOrders = orders.filter((order) => {
   const saveSalesRepCollection = async () => {
   if (savingSalesPayment) return;
 
-  const customer = customerAccounts.find(
-    (c) => String(c.id) === String(salesPaymentForm.customerId)
-  );
-  const salesCustomerBranches = (customer?.customer_branches || []).filter(
-    (branch) => branch.active !== false
-  );
-  const selectedSalesBranch =
-    salesCustomerBranches.find(
-      (branch) => String(branch.id) === String(salesPaymentForm.branchId)
-    ) || null;
+  const customer = selectedSalesPaymentCustomer;
+  const salesCustomerBranches = selectedSalesPaymentBranches;
+  const selectedSalesBranch = selectedSalesPaymentBranch;
+  const paymentAmount = Number(salesPaymentForm.amount || 0);
+  const selectedBranchOutstanding = selectedSalesBranch
+    ? Number(
+        salesOutstandingSnapshot.branchOutstanding[selectedSalesBranch.id] ??
+          salesOutstandingSnapshot.branchOutstanding[selectedSalesBranch.branch_name] ??
+          0
+      )
+    : Number(salesOutstandingSnapshot.totalOutstanding || 0);
 
   if (!customer) {
     alert("Please select customer.");
     return;
   }
 
-  if (!Number(salesPaymentForm.amount || 0)) {
+  if (salesCustomerBranches.length > 0 && !selectedSalesBranch) {
+    alert("Please select branch / shop.");
+    return;
+  }
+
+  if (!paymentAmount) {
     alert("Please enter amount.");
     return;
   }
 
   if (!salesPaymentForm.whoPaid.trim()) {
     alert("Please enter who paid.");
+    return;
+  }
+
+  if (
+    selectedBranchOutstanding > 0 &&
+    paymentAmount > selectedBranchOutstanding &&
+    !window.confirm(
+      "Payment is higher than selected branch outstanding. Continue?"
+    )
+  ) {
     return;
   }
 
@@ -1502,14 +1866,24 @@ const completedCustomerOrders = orders.filter((order) => {
    const { error } = await supabase
   .from("customer_ledger")
   .insert({
+    customer_account_id: customer.id,
+    customer_branch_id: selectedSalesBranch?.id || null,
+    branch_id: selectedSalesBranch?.id || null,
+    branch_name: selectedSalesBranch?.branch_name || null,
     customer_name: customer.account_name,
     entry_type: "PAYMENT",
     transaction_type: "PAYMENT",
+    description: "Payment",
+    created_at: salesPaymentForm.collectionDate
+      ? `${salesPaymentForm.collectionDate}T12:00:00`
+      : new Date().toISOString(),
 
     reference_no: "SALES_REP_COLLECTION",
 
     debit: 0,
-    credit: Number(salesPaymentForm.amount),
+    credit: paymentAmount,
+    amount: paymentAmount,
+    payment_amount: paymentAmount,
 
     payment_type: salesPaymentForm.paymentType,
     payment_applies_to: "SALES_REP_COLLECTION",
@@ -1540,6 +1914,11 @@ const completedCustomerOrders = orders.filter((order) => {
   });
 
     if (error) throw error;
+
+    await allocateCustomerPaymentToInvoices({
+      customerAccountId: customer.id,
+      customerName: customer.account_name,
+    });
 
     alert("Collection saved successfully.");
 
@@ -3021,16 +3400,42 @@ const backOfficeContent = comingSoonTitle ? (
         </h2>
 
         <div className="payment-history-outstanding border rounded-xl px-4 py-2 text-right">
-          <div className="text-xs text-slate-500 font-bold">
-            Total Outstanding
+          <div className="text-xs text-slate-500 font-bold">Total Outstanding</div>
+          <div className="text-2xl font-bold text-red-600">
+            {formatCurrency(customerCreditSummary.outstanding)}
           </div>
-          <div className="text-2xl font-bold text-red-600">{formatCurrency(
-              calculateCustomerCredit(
-                selectedCustomerAccount,
-                customerLedger,
-                customerOpeningBalance
-              ).outstanding
-            )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+        <div className="border rounded-xl p-3 bg-slate-50">
+          <div className="text-xs font-bold text-slate-500">Opening Balance</div>
+          <div className="text-lg font-extrabold">
+            {formatCurrency(customerOpeningBalance)}
+          </div>
+        </div>
+        <div className="border rounded-xl p-3 bg-slate-50">
+          <div className="text-xs font-bold text-slate-500">Total Invoices</div>
+          <div className="text-lg font-extrabold">
+            {formatCurrency(customerInvoiceTotal)}
+          </div>
+        </div>
+        <div className="border rounded-xl p-3 bg-slate-50">
+          <div className="text-xs font-bold text-slate-500">Total Payments</div>
+          <div className="text-lg font-extrabold text-green-700">
+            {formatCurrency(customerPaymentTotal)}
+          </div>
+        </div>
+        <div className="border rounded-xl p-3 bg-slate-50">
+          <div className="text-xs font-bold text-slate-500">Available Credit</div>
+          <div className="text-lg font-extrabold">
+            {formatCurrency(customerCreditSummary.availableCredit)}
+          </div>
+        </div>
+        <div className="border rounded-xl p-3 bg-slate-50">
+          <div className="text-xs font-bold text-slate-500">Credit Limit</div>
+          <div className="text-lg font-extrabold">
+            {formatCurrency(customerCreditSummary.creditLimit)}
           </div>
         </div>
       </div>
@@ -3077,6 +3482,10 @@ const backOfficeContent = comingSoonTitle ? (
           <div className="space-y-2">
             {completedCustomerOrders.map((order) => {
               const orderTotals = calculateDocumentTotals(order.items || [], order);
+              const invoiceLedgerRow = getInvoiceLedgerRowForOrder(order);
+              const invoiceStatus = String(
+                invoiceLedgerRow?.invoice_status || "UNPAID"
+              ).toUpperCase();
 
               return (
                 <div
@@ -3095,37 +3504,20 @@ const backOfficeContent = comingSoonTitle ? (
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openCustomerOrderDocument(order, "invoice")}
-                      className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                    >
-                      Download Invoice
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openCustomerOrderDocument(order, "orderForm")}
-                      className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                    >
-                      Download Order Form
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openCustomerOrderDocument(order, "deliveryNote")}
-                      className="bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                    >
-                      Download Delivery Note
-                    </button>
-
-                    {(isSalesRep || isCustomer) && (
+                    {invoiceStatus === "PAID" ? (
                       <button
                         type="button"
-                        onClick={() => setReturnOrder(order)}
-                        className="bg-purple-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                        onClick={() => openCustomerOrderDocument(order, "invoice")}
+                        className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
                       >
-                        Return
+                        Download Invoice
                       </button>
+                    ) : (
+                      <span className="bg-slate-200 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold">
+                        Unpaid Invoice
+                      </span>
                     )}
+
                   </div>
                 </div>
               );
@@ -3148,7 +3540,21 @@ const backOfficeContent = comingSoonTitle ? (
           </thead>
 
           <tbody>
-            {filteredCustomerLedger.map((row) => {
+            {!paymentHistoryBranchId && (
+              <tr className="border-b bg-blue-50">
+                <td className="p-3">-</td>
+                <td className="p-3 font-bold">Opening Balance</td>
+                <td className="p-3">Opening Balance</td>
+                <td className="p-3 text-right font-bold text-red-600">
+                  {formatCurrency(customerOpeningBalance)}
+                </td>
+                <td className="p-3 text-right font-bold">
+                  {formatCurrency(customerOpeningBalance)}
+                </td>
+                <td className="p-3 text-center">-</td>
+              </tr>
+            )}
+            {customerLedgerRowsWithBalance.map(({ row, debit, credit, balance }) => {
               const type = String(
                 row.entry_type || row.transaction_type || ""
               ).toUpperCase();
@@ -3156,27 +3562,14 @@ const backOfficeContent = comingSoonTitle ? (
               const isInvoice = type === "INVOICE";
               const isPayment = type === "PAYMENT";
 
-              const amount = Number(
-                row.amount ||
-                row.invoice_amount ||
-                row.payment_amount ||
-                row.debit ||
-                row.credit ||
-                0
-              );
-
               const status = String(
                 row.invoice_status || row.status || ""
               ).toUpperCase();
-
-              const priceMode = String(
-                row.price_mode || row.order_price_mode || ""
-              ).toLowerCase();
-
-              const canDownloadInvoice =
-                isInvoice &&
-                priceMode === "vat" &&
-                ["UNPAID", "PART PAID", "PART_PAID", "FULL PAID", "FULL_PAID"].includes(status);
+              const invoiceOrder = isInvoice ? getInvoiceOrderForLedgerRow(row) : null;
+              const invoicePaid = status === "PAID";
+              const displayBalance = isInvoice
+                ? Number(row.remaining_amount ?? row.remainingAmount ?? balance)
+                : balance;
 
               return (
                 <tr key={row.id} className="border-b">
@@ -3219,22 +3612,26 @@ const backOfficeContent = comingSoonTitle ? (
                       isPayment ? "text-green-600" : "text-red-600"
                     }`}
                   >
-                    {isPayment ? "-" : ""}{formatCurrency(amount)}
+                    {isPayment ? "-" : ""}
+                    {formatCurrency(isPayment ? credit : debit)}
                   </td>
 
-                  <td className="p-3 text-right font-bold">{formatCurrency(row.balance)}
+                  <td className="p-3 text-right font-bold">{formatCurrency(displayBalance)}
                   </td>
 
                   <td className="p-3 text-center">
-                    {canDownloadInvoice ? (
+                    {isInvoice && invoiceOrder && invoicePaid ? (
                       <button
-                        onClick={() => {
-                          alert("Connect this to existing CustomerCredit Download Invoice function.");
-                        }}
+                        type="button"
+                        onClick={() => openCustomerOrderDocument(invoiceOrder, "invoice")}
                         className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
                       >
                         Download Invoice
                       </button>
+                    ) : isInvoice ? (
+                      <span className="text-xs font-bold text-slate-500">
+                        Unpaid Invoice
+                      </span>
                     ) : (
                       "-"
                     )}
@@ -3280,14 +3677,7 @@ const backOfficeContent = comingSoonTitle ? (
       </select>
 
       {(() => {
-        const customer = customerAccounts.find(
-          (account) => String(account.id) === String(salesPaymentForm.customerId)
-        );
-        const branches = (customer?.customer_branches || []).filter(
-          (branch) => branch.active !== false
-        );
-
-        if (!branches.length) return null;
+        if (!selectedSalesPaymentBranches.length) return null;
 
         return (
           <select
@@ -3301,7 +3691,7 @@ const backOfficeContent = comingSoonTitle ? (
             className="w-full border rounded-xl p-3"
           >
             <option value="">Select Branch / Shop</option>
-            {branches.map((branch) => (
+            {selectedSalesPaymentBranches.map((branch) => (
               <option key={branch.id} value={branch.id}>
                 {branch.branch_name}
                 {branch.postcode ? ` - ${branch.postcode}` : ""}
@@ -3310,6 +3700,38 @@ const backOfficeContent = comingSoonTitle ? (
           </select>
         );
       })()}
+
+      {selectedSalesPaymentCustomer && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div className="border rounded-xl p-3 bg-slate-50">
+            <div className="text-xs font-bold text-slate-500">
+              Customer outstanding
+            </div>
+            <div className="text-xl font-extrabold text-red-700">
+              {formatCurrency(salesOutstandingSnapshot.totalOutstanding || 0)}
+            </div>
+          </div>
+
+          {selectedSalesPaymentBranch && (
+            <div className="border rounded-xl p-3 bg-slate-50">
+              <div className="text-xs font-bold text-slate-500">
+                Selected branch outstanding
+              </div>
+              <div className="text-xl font-extrabold text-red-700">
+                {formatCurrency(
+                  salesOutstandingSnapshot.branchOutstanding[
+                    selectedSalesPaymentBranch.id
+                  ] ??
+                    salesOutstandingSnapshot.branchOutstanding[
+                      selectedSalesPaymentBranch.branch_name
+                    ] ??
+                    0
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <input
         type="number"

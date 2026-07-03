@@ -297,12 +297,32 @@ const orderItems = calculatedOrderItems.map((item) => ({
 }
 
 export async function updateOrderStatus(orderNumber, status) {
-  const { data, error } = await supabase
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  const isDeliveredStatus = ["delivered", "confirmed", "delivery confirmed"].includes(
+    normalizedStatus
+  );
+  const payload = isDeliveredStatus
+    ? { status, delivered_at: new Date().toISOString() }
+    : { status };
+
+  let { data, error } = await supabase
     .from("orders")
-    .update({ status })
+    .update(payload)
     .eq("order_number", orderNumber)
     .select()
     .single();
+
+  if (error && isDeliveredStatus) {
+    const retry = await supabase
+      .from("orders")
+      .update({ status })
+      .eq("order_number", orderNumber)
+      .select()
+      .single();
+
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) throw error;
 

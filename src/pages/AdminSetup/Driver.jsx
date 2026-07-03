@@ -2,7 +2,11 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { calculateDocumentTotals } from "../../utils/documentTotals";
-import { createOrUpdateInvoiceForDeliveredOrder } from "../../services/centralInvoiceEngine";
+import {
+  allocateCustomerPaymentToInvoices,
+  createOrUpdateInvoiceForDeliveredOrder,
+  loadCustomerOutstandingSnapshot,
+} from "../../services/centralInvoiceEngine";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
 
 export default function Driver({
@@ -22,6 +26,14 @@ export default function Driver({
 
 
 const [savingPayment, setSavingPayment] = useState(false);
+const [previousBalanceOutstanding, setPreviousBalanceOutstanding] = useState({
+  totalOutstanding: 0,
+  branchOutstanding: {},
+});
+const [cashCollectionOutstanding, setCashCollectionOutstanding] = useState({
+  totalOutstanding: 0,
+  branchOutstanding: {},
+});
 
 const loggedInUser = JSON.parse(
   localStorage.getItem("loggedInUser") || "{}"
@@ -82,6 +94,41 @@ const selectedCreditBranches =
     (branch) => branch.active !== false
   ) || [];
 
+const selectedCreditBranch = selectedCreditBranches.find(
+  (branch) => String(branch.id) === String(selectedCreditBranchId)
+);
+
+useEffect(() => {
+  let active = true;
+
+  const loadOutstanding = async () => {
+    if (!selectedCreditCustomer) {
+      setPreviousBalanceOutstanding({ totalOutstanding: 0, branchOutstanding: {} });
+      return;
+    }
+
+    try {
+      const snapshot = await loadCustomerOutstandingSnapshot({
+        customerAccountId: selectedCreditCustomer.id,
+        customerName: selectedCreditCustomer.account_name,
+      });
+
+      if (active) setPreviousBalanceOutstanding(snapshot);
+    } catch (error) {
+      console.error("Driver outstanding load error:", error);
+      if (active) {
+        setPreviousBalanceOutstanding({ totalOutstanding: 0, branchOutstanding: {} });
+      }
+    }
+  };
+
+  loadOutstanding();
+
+  return () => {
+    active = false;
+  };
+}, [selectedCreditCustomer?.id]);
+
   const driverNames = [
     "All",
     ...new Set(
@@ -114,8 +161,9 @@ const selectedCreditBranches =
   return (isReadyForDriver || isDeliveredWaitingPayment) && matchesDriver;
   });
 
-        const openCashCollection = (order) => {
+        const openCashCollection = async (order) => {
           setCashCollectionOrder(order.orderId);
+          setCashCollectionOutstanding({ totalOutstanding: 0, branchOutstanding: {} });
 
           setPaymentForm({
       paymentType: order.paymentType || "Cash",
@@ -125,6 +173,16 @@ const selectedCreditBranches =
       receivedBy: order.receivedBy || "",
       paymentAppliesTo: order.paymentAppliesTo || "Today Invoice",
     });
+
+    try {
+      const snapshot = await loadCustomerOutstandingSnapshot({
+        customerAccountId: order.customerAccountId || order.customer_account_id,
+        customerName: order.companyName || order.company_name,
+      });
+      setCashCollectionOutstanding(snapshot);
+    } catch (error) {
+      console.error("Cash collection outstanding load error:", error);
+    }
         };
 
   const savePreviousBalancePayment = async () => {
@@ -150,14 +208,41 @@ const selectedCreditBranches =
     return;
   }
 
+  const selectedOutstanding = selectedCreditBranch
+    ? Number(
+        previousBalanceOutstanding.branchOutstanding[selectedCreditBranch.id] ??
+          previousBalanceOutstanding.branchOutstanding[
+            selectedCreditBranch.branch_name
+          ] ??
+          0
+      )
+    : Number(previousBalanceOutstanding.totalOutstanding || 0);
+
+  if (
+    selectedOutstanding > 0 &&
+    paymentAmount > selectedOutstanding &&
+    !window.confirm(
+      "Payment is higher than selected branch outstanding. Continue?"
+    )
+  ) {
+    return;
+  }
+
   const { error } = await supabase.from("customer_ledger").insert({
+    customer_account_id: selectedCreditCustomer.id,
+    customer_branch_id: selectedCreditBranch?.id || null,
+    branch_id: selectedCreditBranch?.id || null,
+    branch_name: selectedCreditBranch?.branch_name || null,
     customer_name: selectedCreditCustomer.account_name,
     entry_type: "PAYMENT",
     transaction_type: "PAYMENT",
+    description: "Payment",
     reference_no: "PREVIOUS_BALANCE",
 
     debit: 0,
     credit: paymentAmount,
+    amount: paymentAmount,
+    payment_amount: paymentAmount,
 
     payment_type: previousBalanceForm.paymentType,
     payment_applies_to: "PREVIOUS_BALANCE",
@@ -179,6 +264,11 @@ const selectedCreditBranches =
     alert("Could not save previous balance payment: " + error.message);
     return;
   }
+
+  await allocateCustomerPaymentToInvoices({
+    customerAccountId: selectedCreditCustomer.id,
+    customerName: selectedCreditCustomer.account_name,
+  });
 
   alert("Previous Balance Payment saved successfully.");
 
@@ -220,11 +310,6 @@ const selectedCreditBranches =
     alert("Could not confirm delivery: " + error.message);
   }
 };
-
-const selectedCreditBranch = selectedCreditBranches.find(
-  (branch) => String(branch.id) === String(selectedCreditBranchId)
-);
-
 
 const moveBackToWarehouse = async (order) => {
   if (order.status === "Delivered") return;
@@ -313,6 +398,30 @@ const printDeliveryNote = (order) => {
       }
     }
 
+    const orderBranchKey =
+      order.customerBranchId || order.customer_branch_id || order.branchName || order.branch_name;
+    const orderBranchOutstanding = orderBranchKey
+      ? Number(
+          cashCollectionOutstanding.branchOutstanding[orderBranchKey] ??
+            cashCollectionOutstanding.branchOutstanding[
+              order.branchName || order.branch_name
+            ] ??
+            0
+        )
+      : Number(cashCollectionOutstanding.totalOutstanding || 0);
+
+    if (
+      paymentCollected === "Yes" &&
+      paymentAmount > 0 &&
+      orderBranchOutstanding > 0 &&
+      paymentAmount > orderBranchOutstanding &&
+      !window.confirm(
+        "Payment is higher than selected branch outstanding. Continue?"
+      )
+    ) {
+      return;
+    }
+
       await updateOrderExtraFields(order.orderId, {
   payment_type: paymentType,
 
@@ -342,15 +451,23 @@ const printDeliveryNote = (order) => {
   const { error: ledgerError } = await supabase
   .from("customer_ledger")
   .insert({
+    customer_account_id: order.customerAccountId || order.customer_account_id || null,
+    customer_branch_id: order.customerBranchId || order.customer_branch_id || null,
+    branch_id: order.customerBranchId || order.customer_branch_id || null,
+    branch_name: order.branchName || order.branch_name || null,
     customer_name: order.companyName || "Unknown Customer",
 
     entry_type: "PAYMENT",
     transaction_type: "PAYMENT",
+    description: "Payment",
+    created_at: new Date().toISOString(),
 
     reference_no: order.orderId,
 
     debit: 0,
     credit: paymentAmount,
+    amount: paymentAmount,
+    payment_amount: paymentAmount,
 
     payment_type: paymentType,
     payment_applies_to: paymentForm.paymentAppliesTo,
@@ -362,12 +479,21 @@ const printDeliveryNote = (order) => {
     received_by_username: loggedInUser.username || null,
     received_by_role: loggedInUser.role || null,
     received_by_staff_id: loggedInUser.id || null,
+    collected_by: loggedInUser.id || loggedInUser.staff_id || null,
+    collected_by_name: loggedInUser.name || loggedInUser.username || null,
+    collected_by_username: loggedInUser.username || null,
+    collected_by_role: loggedInUser.role || null,
 
     notes: `Driver cash collection - ${paymentType}`,
   });
 
 
 if (ledgerError) throw ledgerError;
+
+await allocateCustomerPaymentToInvoices({
+  customerAccountId: order.customerAccountId || order.customer_account_id,
+  customerName: order.companyName || order.company_name || "Unknown Customer",
+});
     }
 
         alert("Cash collection saved.");
@@ -431,6 +557,34 @@ if (ledgerError) throw ledgerError;
   ))}
   
 </select>
+
+{selectedCreditCustomer && (
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+    <div className="border rounded-xl p-3 bg-white">
+      <div className="text-xs font-bold text-slate-500">Customer outstanding</div>
+      <div className="text-xl font-extrabold text-red-700">
+        {formatCurrency(previousBalanceOutstanding.totalOutstanding || 0)}
+      </div>
+    </div>
+
+    {selectedCreditBranch && (
+      <div className="border rounded-xl p-3 bg-white">
+        <div className="text-xs font-bold text-slate-500">
+          Selected branch outstanding
+        </div>
+        <div className="text-xl font-extrabold text-red-700">
+          {formatCurrency(
+            previousBalanceOutstanding.branchOutstanding[selectedCreditBranch.id] ??
+              previousBalanceOutstanding.branchOutstanding[
+                selectedCreditBranch.branch_name
+              ] ??
+              0
+          )}
+        </div>
+      </div>
+    )}
+  </div>
+)}
 
     <input
       type="number"
@@ -634,6 +788,39 @@ if (ledgerError) throw ledgerError;
             {cashCollectionOrder === order.orderId && (
               <div className="mt-4 border rounded-2xl p-3 bg-slate-50 space-y-3">
                 <h4 className="font-bold text-center">Cash Collection</h4>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div className="border rounded-xl p-3 bg-white">
+                    <div className="text-xs font-bold text-slate-500">
+                      Customer outstanding
+                    </div>
+                    <div className="text-xl font-extrabold text-red-700">
+                      {formatCurrency(cashCollectionOutstanding.totalOutstanding || 0)}
+                    </div>
+                  </div>
+
+                  {(order.customerBranchId ||
+                    order.customer_branch_id ||
+                    order.branchName ||
+                    order.branch_name) && (
+                    <div className="border rounded-xl p-3 bg-white">
+                      <div className="text-xs font-bold text-slate-500">
+                        Selected branch outstanding
+                      </div>
+                      <div className="text-xl font-extrabold text-red-700">
+                        {formatCurrency(
+                          cashCollectionOutstanding.branchOutstanding[
+                            order.customerBranchId || order.customer_branch_id
+                          ] ??
+                            cashCollectionOutstanding.branchOutstanding[
+                              order.branchName || order.branch_name
+                            ] ??
+                            0
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 <select
                   value={paymentForm.paymentType}
