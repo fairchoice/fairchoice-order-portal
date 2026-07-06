@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { logAction } from "../../utils/auditLog";
 
-const ACCESS_LEVELS = ["Super Admin", "Admin", "Staff"];
+const ACCESS_LEVELS = [
+  "Super Admin",
+  "Admin",
+  "Warehouse",
+  "Driver",
+  "Sales Rep",
+  "Staff",
+  "Picker",
+  "Packer",
+];
 const TABS = [
   "Search Staff",
   "Existing Login",
@@ -86,6 +95,13 @@ const DEFAULT_PERMISSIONS = {
   Driver: {
     access_driver: true,
   },
+  Staff: {},
+  Picker: {
+    access_warehouse: true,
+  },
+  Packer: {
+    access_warehouse: true,
+  },
   Customer: CUSTOMER_PORTAL_PERMISSIONS,
 };
 
@@ -122,12 +138,12 @@ function getDefaultPermissions(role) {
 
   return {
     ...EMPTY_PERMISSIONS,
-    ...DEFAULT_PERMISSIONS.Warehouse,
+    ...(DEFAULT_PERMISSIONS[role] || {}),
   };
 }
 
 function normalizeAccessLevel(role) {
-  if (["Super Admin", "Admin", "Customer", "Staff"].includes(role)) return role;
+  if ([...ACCESS_LEVELS, "Customer"].includes(role)) return role;
   return "Staff";
 }
 
@@ -197,7 +213,7 @@ export default function LoginConfig() {
   const [currentPage, setCurrentPage] = useState(1);
 
   const isSuperAdmin = loginForm.role === "Super Admin";
-  const isStaff = loginForm.role === "Staff";
+  const isStaff = loginForm.role !== "Customer";
   const isCustomer = loginForm.role === "Customer";
   const permissionsLocked = isSuperAdmin || isCustomer;
 
@@ -325,10 +341,7 @@ export default function LoginConfig() {
           next.customer_account_id = "";
         }
 
-        if (value === "Super Admin" || value === "Admin") {
-          next.staff_id = "";
-          next.customer_account_id = "";
-        }
+        next.customer_account_id = value === "Customer" ? next.customer_account_id : "";
       }
 
       return next;
@@ -339,7 +352,6 @@ export default function LoginConfig() {
     setLoginForm((old) => ({
       ...old,
       staff_id: staffId,
-      role: "Staff",
       customer_account_id: "",
     }));
   }
@@ -365,9 +377,9 @@ export default function LoginConfig() {
 
     setLoginForm((old) => ({
       ...old,
-      role: roleName === "Admin" || roleName === "Super Admin" ? roleName : "Staff",
+      role: roleName,
       customer_account_id: "",
-      staff_id: roleName === "Admin" || roleName === "Super Admin" ? "" : old.staff_id,
+      staff_id: old.staff_id,
       permissions: normalizePermissions(roleName, DEFAULT_PERMISSIONS[roleName] || {}),
     }));
     setActiveTab("Login Setup");
@@ -430,7 +442,7 @@ export default function LoginConfig() {
       return null;
     }
 
-    if (isStaff) {
+    if (isStaff && loginForm.role !== "Super Admin") {
       if (!loginForm.staff_id) {
         alert("Staff login must be linked to an active staff record.");
         return null;
@@ -448,7 +460,7 @@ export default function LoginConfig() {
       username,
       password,
       role: loginForm.role,
-      staff_id: isStaff ? loginForm.staff_id : null,
+      staff_id: isCustomer ? null : loginForm.staff_id || null,
       customer_account_id: isCustomer ? loginForm.customer_account_id : null,
       active: loginForm.active,
       permissions: normalizePermissions(loginForm.role, loginForm.permissions),
@@ -812,9 +824,7 @@ export default function LoginConfig() {
                       <option value="">
                         {isCustomer
                           ? "Select Customer Account"
-                          : isStaff
-                            ? "Select Active Staff"
-                            : "Not required for this access level"}
+                            : "Select Active Staff"}
                       </option>
                       {isStaff &&
                         filteredStaffUsers.map((staff) => (
@@ -878,7 +888,7 @@ export default function LoginConfig() {
                   <div className="border rounded-xl p-3 bg-slate-50">
                     <div className="font-bold text-sm mb-2">Staff Access Defaults</div>
                     <div className="flex flex-wrap gap-2">
-                      {["Warehouse", "Sales Rep", "Driver"].map((roleName) => (
+                      {["Warehouse", "Sales Rep", "Driver", "Picker", "Packer"].map((roleName) => (
                         <button
                           key={roleName}
                           type="button"
@@ -937,7 +947,7 @@ export default function LoginConfig() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {["Super Admin", "Admin", "Warehouse", "Sales Rep", "Driver", "Customer"].map((roleName) => (
+                  {["Super Admin", "Admin", "Warehouse", "Sales Rep", "Driver", "Staff", "Picker", "Packer", "Customer"].map((roleName) => (
                     <div key={roleName} className="border rounded-xl p-3 bg-slate-50">
                       <div className="flex items-center justify-between gap-3 mb-2">
                         <h4 className="font-bold">{roleName}</h4>

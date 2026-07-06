@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { allocateCustomerPaymentToInvoices } from "./centralInvoiceEngine";
 
 export const RETURN_TYPES = [
   "Damaged",
@@ -126,7 +127,7 @@ export async function confirmReturnCredit({ returnRequest, currentUser } = {}) {
   const amount = Number(returnRequest.return_total || returnRequest.grandTotal || 0);
   if (!amount || amount <= 0) throw new Error("Return credit amount is required");
 
-  const { data, error } = await supabase.from("customer_ledger").insert({
+  const payload = {
     customer_account_id: returnRequest.customer_account_id || null,
     customer_branch_id: returnRequest.customer_branch_id || returnRequest.branch_id || null,
     branch_id: returnRequest.branch_id || returnRequest.customer_branch_id || null,
@@ -143,15 +144,57 @@ export async function confirmReturnCredit({ returnRequest, currentUser } = {}) {
     collection_source: "WAREHOUSE_RETURN_CONFIRMATION",
     received_by: currentUser?.name || currentUser?.username || null,
     received_by_role: currentUser?.role || null,
+    confirmed_by: currentUser?.name || currentUser?.username || null,
     notes: `Return confirmed - ${returnRequest.return_type || "Return"}`,
-  }).select().single();
+  };
+
+  const existing = await supabase
+    .from("customer_ledger")
+    .select("*")
+    .eq("reference_no", returnRequest.return_number)
+    .order("created_at", { ascending: true })
+    .limit(25);
+
+  if (existing.error) throw existing.error;
+
+  const existingRows = Array.isArray(existing.data) ? existing.data : [];
+  const existingCredit = existingRows.find((row) => {
+    const transactionType = String(row.transaction_type || "").toUpperCase();
+    const paymentType = String(row.payment_type || "").toUpperCase();
+    const paymentAppliesTo = String(row.payment_applies_to || "").toUpperCase();
+
+    return (
+      transactionType === "RETURN_CREDIT" ||
+      paymentType === "RETURN CREDIT" ||
+      paymentAppliesTo === "RETURN"
+    );
+  });
+
+  const query = existingCredit?.id
+    ? supabase.from("customer_ledger").update(payload).eq("id", existingCredit.id)
+    : supabase.from("customer_ledger").insert(payload);
+
+  const { data, error } = await query.select().single();
 
   if (error) throw error;
 
-  await supabase
+  const { error: returnUpdateError } = await supabase
     .from("customer_returns")
-    .update({ status: "Confirmed", confirmed_by_name: currentUser?.name || currentUser?.username || null })
+    .update({
+      status: "Confirmed",
+      confirmed_by: currentUser?.id || currentUser?.staff_id || null,
+      confirmed_by_name: currentUser?.name || currentUser?.username || null,
+      confirmed_by_role: currentUser?.role || null,
+      confirmed_at: new Date().toISOString(),
+    })
     .eq("id", returnRequest.id);
+
+  if (returnUpdateError) throw returnUpdateError;
+
+  await allocateCustomerPaymentToInvoices({
+    customerAccountId: returnRequest.customer_account_id,
+    customerName: returnRequest.customer_name,
+  });
 
   return data;
 }

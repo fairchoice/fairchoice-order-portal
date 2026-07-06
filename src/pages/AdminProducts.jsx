@@ -8,7 +8,7 @@ import {
   saveHomepageItem,
 } from "../services/homepageItems";
 import { formatCurrency } from "../utils/currency";
-import { getHomepagePriceForMode } from "../utils/pricing";
+import { getHomepagePriceForMode, getProductPriceForMode } from "../utils/pricing";
 
 
 

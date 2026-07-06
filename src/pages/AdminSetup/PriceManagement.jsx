@@ -272,11 +272,26 @@ export default function PriceManagement({
     return Number(item.picked_qty ?? item.qty ?? item.quantity ?? 0);
   }
 
-  function buildOrderItemPricingUpdate(product, order, item) {
+  async function loadFreshPricingSettings() {
+    const { data, error } = await supabase
+      .from("pricing_settings")
+      .select("*")
+      .eq("id", 1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Could not load latest pricing settings for order price refresh:", error.message);
+      return pricingSettings;
+    }
+
+    return data || pricingSettings;
+  }
+
+  function buildOrderItemPricingUpdate(product, order, item, activePricingSettings = pricingSettings) {
     const priceMode = order?.price_mode || order?.priceMode || "vat";
     const country = order?.customer_country || order?.country || "";
     const qty = getOrderItemQty(item);
-    const newPrice = getProductPriceForMode(product, priceMode, country, pricingSettings);
+    const newPrice = getProductPriceForMode(product, priceMode, country, activePricingSettings);
     const lineTotal = roundMoney(qty * newPrice);
     const vatRate = getVatRate(product?.vat_type ?? product?.vatType);
     const grossTotal = isVatPriceMode(priceMode)
@@ -301,6 +316,7 @@ export default function PriceManagement({
     const productMap = new Map(
       safeProducts.map((product) => [String(getProductId(product)), product])
     );
+    const activePricingSettings = await loadFreshPricingSettings();
 
     const { data, error } = await supabase
       .from("orders")
@@ -327,7 +343,12 @@ export default function PriceManagement({
           return;
         }
 
-        const update = buildOrderItemPricingUpdate(product, order, item);
+        const update = buildOrderItemPricingUpdate(
+          product,
+          order,
+          item,
+          activePricingSettings
+        );
 
         rows.push({
           itemId: item.id,
@@ -351,6 +372,16 @@ export default function PriceManagement({
   }
 
   async function updateReceivedOrderRows(rows) {
+    const changedRows = (rows || []).filter(
+      (row) => Number(row.oldPrice || 0) !== Number(row.newPrice || 0)
+    );
+    const confirmed = window.confirm(
+      `Refresh ${rows.length} received order line(s) from the current product database?\n\n` +
+        `This will overwrite saved order item prices for ${changedRows.length} changed line(s).`
+    );
+
+    if (!confirmed) return false;
+
     for (const row of rows) {
       const { error } = await supabase
         .from("order_items")
@@ -362,6 +393,8 @@ export default function PriceManagement({
         throw error;
       }
     }
+
+    return true;
   }
 
   async function handleBulkOrderPreview() {
@@ -393,7 +426,8 @@ export default function PriceManagement({
 
     setBulkOrderLoading(true);
     try {
-      await updateReceivedOrderRows(bulkOrderPreviewRows);
+      const updated = await updateReceivedOrderRows(bulkOrderPreviewRows);
+      if (!updated) return;
       alert(`${bulkOrderPreviewRows.length} received order item(s) updated.`);
       setBulkOrderPreviewRows([]);
       setOrderSelectedIds([]);
@@ -433,7 +467,8 @@ export default function PriceManagement({
 
     setSingleOrderLoading(true);
     try {
-      await updateReceivedOrderRows(singleOrderPreviewRows);
+      const updated = await updateReceivedOrderRows(singleOrderPreviewRows);
+      if (!updated) return;
       alert(`${singleOrderPreviewRows.length} received order item(s) updated.`);
       setSingleOrderPreviewRows([]);
     } catch (error) {

@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
+import {
+  loadProcessingQueueOrders,
+  mergeDeliveredOrderInvoicesIntoLedgerRows,
+} from "../../services/centralInvoiceEngine";
 import { formatCurrency } from "../../utils/currency";
 
  import { saveHandover, getHandoverHistory } from "../../services/handovers";
@@ -135,7 +139,20 @@ const salesRepLedgerPayments = (ledgerPaymentData || []).map((p) => ({
   created_at: p.created_at,
 }));
 
-setUnpaidInvoices(unpaidData || []);
+const processingQueueOrders = (await loadProcessingQueueOrders()).filter((order) => {
+  const invoiceDate = new Date(order.deliveredAt || order.createdAt || order.created_at || 0);
+  return !Number.isNaN(invoiceDate.getTime()) && invoiceDate >= startOfWeek;
+});
+const unpaidWithQueuedOrders = mergeDeliveredOrderInvoicesIntoLedgerRows(
+  unpaidData || [],
+  processingQueueOrders
+).filter(
+  (row) =>
+    String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE" &&
+    String(row.invoice_status || "UNPAID").toUpperCase() === "UNPAID"
+);
+
+setUnpaidInvoices(unpaidWithQueuedOrders);
 setPayments([...orderPayments, ...salesRepLedgerPayments]);
     
  

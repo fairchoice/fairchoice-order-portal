@@ -13,6 +13,10 @@ import {
 import {
   allocateCustomerPaymentToInvoices,
   applyInvoicePaymentAllocations,
+  loadProcessingQueueOrders,
+  mergeOperationalOrders,
+  mergeDeliveredOrderInvoicesIntoLedgerRows,
+  printInvoice as printCentralInvoice,
 } from "../../services/centralInvoiceEngine";
 
 const DELIVERED_ORDERS_PAGE_SIZE = 3;
@@ -42,7 +46,26 @@ export default function CustomerCredit() {
     notes: "",
   });
 
-  const isAdmin = true;
+  const loggedInUser = JSON.parse(
+    localStorage.getItem("loggedInUser") ||
+      localStorage.getItem("fairchoice_user") ||
+      "null"
+  );
+  const userRole = String(loggedInUser?.role || loggedInUser?.access_level || "").toLowerCase();
+  const isSuperAdmin = userRole.includes("super admin");
+  const isAdmin =
+    isSuperAdmin ||
+    userRole === "admin" ||
+    loggedInUser?.permissions?.access_accounts === true;
+  const canEditPaymentTransactions =
+    userRole === "admin" ||
+    isSuperAdmin ||
+    loggedInUser?.permissions?.can_edit_payment_transactions === true ||
+    loggedInUser?.permissions?.can_edit_transactions === true;
+  const canRemovePaymentTransactions =
+    isSuperAdmin ||
+    loggedInUser?.permissions?.can_remove_payment_transactions === true ||
+    loggedInUser?.permissions?.can_delete_transactions === true;
 
 function formatCollectionSource(source) {
   if (!source) return "";
@@ -118,8 +141,28 @@ function formatCollectionSource(source) {
         items: (order.order_items || []).map((item) => ({
           dbId: item.id,
           id: item.product_id,
-          productCode: item.product_code || item.code || "",
-          product_code: item.product_code || item.code || "",
+          productCode:
+            item.product_code ||
+            item.productCode ||
+            item.sku ||
+            item.code ||
+            item.products?.product_code ||
+            item.products?.code ||
+            item.product?.product_code ||
+            item.product?.code ||
+            "",
+          product_code:
+            item.product_code ||
+            item.productCode ||
+            item.sku ||
+            item.code ||
+            item.products?.product_code ||
+            item.products?.code ||
+            item.product?.product_code ||
+            item.product?.code ||
+            "",
+          products: item.products || null,
+          product: item.product || item.products || null,
           name: item.product_name,
           productName: item.product_name,
           qty: Number(item.qty || item.quantity || 0),
@@ -167,9 +210,17 @@ function formatCollectionSource(source) {
         const mappedDeliveredOrders = (data || [])
           .filter((order) => isDeliveredOrderStatus(order.status))
           .map(mapDeliveredOrder);
+        const processingQueueOrders = await loadProcessingQueueOrders({
+          customerAccountId: customer?.id,
+          customerName: customer?.account_name,
+        });
+        const operationalOrders = mergeOperationalOrders(
+          mappedDeliveredOrders,
+          processingQueueOrders
+        );
 
-        setDeliveredOrders(mappedDeliveredOrders);
-        return mappedDeliveredOrders;
+        setDeliveredOrders(operationalOrders);
+        return operationalOrders;
       };
 
       const mergeDeliveredOrderInvoicesIntoStatement = (
@@ -237,11 +288,23 @@ function formatCollectionSource(source) {
 
   setOpeningBalance(Number(balanceRow?.opening_balance || 0));
 
-  const { data, error } = await supabase
-    .from("customer_ledger")
-    .select("*")
-    .eq("customer_name", customerName)
-    .order("created_at", { ascending: true });
+  let ledgerResult = customer?.id
+    ? await supabase
+        .from("customer_ledger")
+        .select("*")
+        .eq("customer_account_id", customer.id)
+        .order("created_at", { ascending: true })
+    : { data: [], error: null };
+
+  if (!customer?.id || (!ledgerResult.error && !ledgerResult.data?.length)) {
+    ledgerResult = await supabase
+      .from("customer_ledger")
+      .select("*")
+      .eq("customer_name", customerName)
+      .order("created_at", { ascending: true });
+  }
+
+  const { data, error } = ledgerResult;
 
   if (error) {
     alert("Could not load customer statement.");
@@ -250,7 +313,7 @@ function formatCollectionSource(source) {
 
   const deliveredOrderRows = await loadDeliveredOrders(customer);
   setStatementRows(
-    mergeDeliveredOrderInvoicesIntoStatement(data || [], deliveredOrderRows)
+    mergeDeliveredOrderInvoicesIntoLedgerRows(data || [], deliveredOrderRows)
   );
 };
 
@@ -412,166 +475,14 @@ const removePayment = async (row) => {
     return "";
   };
 
-  const escapeDocumentText = (value) =>
-    String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-
   const formatDocumentDate = (value) => {
     if (!value) return "-";
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-GB");
   };
 
-  const getDocumentTitle = (documentType) => {
-    if (documentType === "deliveryNote") return "Delivery Note";
-    if (documentType === "orderForm") return "Order Form";
-    return "Sales Invoice";
-  };
-
-  const openOrderDocument = (order, documentType) => {
-    const priceMode = order.priceMode || order.price_mode || "";
-    const totals = calculateDocumentTotals(order.items || [], order);
-    const title = getDocumentTitle(documentType);
-    const showPrices = documentType !== "deliveryNote";
-    const orderNumber = order.orderId || order.order_number || order.id || "-";
-    const customerName = order.companyName || order.customerName || selectedCustomer || "-";
-    const branchName = order.branchName || order.branch_name || "";
-    const address = order.deliveryAddress || order.delivery_address || "";
-
-    const rows = totals.invoiceItems
-      .map((item) => {
-        const qty = getOrderItemQty(item);
-        const unitPrice = Number(item.price ?? item.unit_price ?? 0);
-        const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
-        const vatTotal = Number(item.vat_total ?? item.vatTotal ?? 0);
-        const vatRate = Number(item.vatRate ?? item.vat_percent ?? item.vatPercent ?? 20);
-
-        return `
-          <tr>
-            <td>${escapeDocumentText(item.productCode || item.product_code || "")}</td>
-            <td>${escapeDocumentText(item.name || item.productName || item.product_name || "")}</td>
-            <td class="right">${qty}</td>
-            ${
-              showPrices
-                ? `
-                  <td class="right">${formatCurrency(unitPrice)}</td>
-                  <td class="right">${vatRate.toFixed(2)}</td>
-                  <td class="right">${formatCurrency(netTotal)}</td>
-                  <td class="right">${formatCurrency(vatTotal)}</td>
-                `
-                : ""
-            }
-          </tr>
-        `;
-      })
-      .join("");
-
-    const html = `
-      <html>
-        <head>
-          <title>${escapeDocumentText(title)} ${escapeDocumentText(orderNumber)}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 28px; color: #111827; }
-            h1 { margin: 0 0 8px; text-transform: uppercase; }
-            .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 18px 0; }
-            .box { border: 1px solid #111827; padding: 10px; min-height: 72px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 12px; }
-            th { background: #e5edf8; text-align: left; }
-            th, td { border-bottom: 1px solid #d1d5db; padding: 6px; vertical-align: top; }
-            .right { text-align: right; }
-            .totals { margin-left: auto; margin-top: 18px; width: 280px; border: 1px solid #111827; }
-            .totals div { display: flex; justify-content: space-between; padding: 7px 9px; border-bottom: 1px solid #111827; }
-            .totals div:last-child { border-bottom: 0; font-weight: 800; }
-            .muted { color: #4b5563; font-size: 12px; }
-            @media print { body { padding: 18px; } }
-          </style>
-        </head>
-        <body>
-          <h1>${escapeDocumentText(title)}</h1>
-          <div class="muted">Fair Choice Cash and Carry Ltd</div>
-
-          <div class="meta">
-            <div class="box">
-              <b>${escapeDocumentText(documentType === "deliveryNote" ? "Deliver To" : "Customer")}</b><br />
-              ${escapeDocumentText(customerName)}<br />
-              ${branchName ? `${escapeDocumentText(branchName)}<br />` : ""}
-              ${escapeDocumentText(address)}
-            </div>
-            <div class="box">
-              <b>Order Number:</b> ${escapeDocumentText(orderNumber)}<br />
-              <b>Date:</b> ${escapeDocumentText(formatDocumentDate(order.createdAt || order.created_at))}<br />
-              <b>Price Mode:</b> ${escapeDocumentText(String(priceMode || "-").toUpperCase())}<br />
-              <b>Total Qty:</b> ${totals.totalQty}
-            </div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Description</th>
-                <th class="right">Qty</th>
-                ${
-                  showPrices
-                    ? `
-                      <th class="right">Price</th>
-                      <th class="right">VAT %</th>
-                      <th class="right">Net</th>
-                      <th class="right">VAT</th>
-                    `
-                    : ""
-                }
-              </tr>
-            </thead>
-            <tbody>
-              ${rows || `<tr><td colspan="${showPrices ? 7 : 3}">No supplied items.</td></tr>`}
-            </tbody>
-          </table>
-
-          ${
-            showPrices
-              ? `
-                <div class="totals">
-                  <div><span>Total Net</span><strong>${formatCurrency(totals.netTotal)}</strong></div>
-                  <div><span>Total VAT</span><strong>${formatCurrency(totals.vatTotal)}</strong></div>
-                  <div><span>Total</span><strong>${formatCurrency(totals.grandTotal)}</strong></div>
-                </div>
-              `
-              : `
-                <div class="totals">
-                  <div><span>Total Lines</span><strong>${totals.totalLines}</strong></div>
-                  <div><span>Total Qty</span><strong>${totals.totalQty}</strong></div>
-                </div>
-              `
-          }
-
-          <script>window.print();</script>
-        </body>
-      </html>
-    `;
-
-    const win = window.open("", "_blank", "width=900,height=700");
-
-    if (!win) {
-      alert("Popup blocked. Please allow popups to download the document.");
-      return;
-    }
-
-    win.document.write(html);
-    win.document.close();
-  };
-
-  const downloadInvoice = async (referenceNo) => {
-    const order = deliveredOrders.find((item) => item.orderId === referenceNo);
-    if (order) {
-      openOrderDocument(order, "invoice");
-      return;
-    }
-
-    alert("Delivered order document not found for this invoice.");
+  const openInvoiceDocument = (order) => {
+    printCentralInvoice(order);
   };
 
   let runningBalance = Number(openingBalance || 0);
@@ -1005,7 +916,7 @@ const removePayment = async (row) => {
                         {invoiceStatus === "PAID" ? (
                           <button
                             type="button"
-                            onClick={() => openOrderDocument(order, "invoice")}
+                            onClick={() => openInvoiceDocument(order)}
                             className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
                           >
                             Download Invoice
@@ -1181,7 +1092,9 @@ const removePayment = async (row) => {
                 <th className="p-3 text-left">Reference</th>
                 <th className="p-3 text-right">Amount</th>
                 <th className="p-3 text-left">Entered By</th>
-                {isAdmin && <th className="p-3 text-right">Actions</th>}
+                {(canEditPaymentTransactions || canRemovePaymentTransactions) && (
+                  <th className="p-3 text-right">Actions</th>
+                )}
               </tr>
             </thead>
 
@@ -1222,24 +1135,28 @@ const removePayment = async (row) => {
                         row.confirmed_by ||
                         "-"}
                     </td>
-                    {isAdmin && (
+                    {(canEditPaymentTransactions || canRemovePaymentTransactions) && (
                       <td className="p-3 text-right">
                         {isPayment && row.id && !String(row.id).startsWith("delivered-invoice-") ? (
                           <div className="flex justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => startEditPayment(row)}
-                              className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removePayment(row)}
-                              className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold"
-                            >
-                              Remove
-                            </button>
+                            {canEditPaymentTransactions && (
+                              <button
+                                type="button"
+                                onClick={() => startEditPayment(row)}
+                                className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold"
+                              >
+                                Edit
+                              </button>
+                            )}
+                            {canRemovePaymentTransactions && (
+                              <button
+                                type="button"
+                                onClick={() => removePayment(row)}
+                                className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold"
+                              >
+                                Remove
+                              </button>
+                            )}
                           </div>
                         ) : (
                           "-"
@@ -1252,7 +1169,12 @@ const removePayment = async (row) => {
 
               {transactionRows.length === 0 && (
                 <tr>
-                  <td colSpan={isAdmin ? 6 : 5} className="p-5 text-center text-slate-500">
+                  <td
+                    colSpan={
+                      canEditPaymentTransactions || canRemovePaymentTransactions ? 6 : 5
+                    }
+                    className="p-5 text-center text-slate-500"
+                  >
                     No transactions found for this customer.
                   </td>
                 </tr>

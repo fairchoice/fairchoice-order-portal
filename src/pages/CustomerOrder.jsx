@@ -16,12 +16,14 @@ import BackOfficeLayout, {
 
 import Categories from "./AdminSetup/Categories";
 import Warehouse from "./Warehouse";
+import PreOrderSupply from "./PreOrderSupply";
 import Driver from "./AdminSetup/Driver";
 import StockReceipts from "./AdminSetup/StockReceipts";
 import StockHistory from "./AdminSetup/StockHistory";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
 import InvoicesPortal from "./AdminSetup/InvoicesPortal";
+import OrderSalesInvoices from "./AdminSetup/OrderSalesInvoices";
 import ReturnsPortal from "./AdminSetup/ReturnsPortal";
 import Customers from "./AdminSetup/Customers";
 
@@ -52,7 +54,10 @@ import {
 import { calculateDocumentTotals } from "../utils/documentTotals";
 import {
   getProductPriceForMode,
+  getProductPriceDetailsForMode,
   getHomepagePriceForMode,
+  getVatRate,
+  isVatPriceMode,
 } from "../utils/pricing";
 import {
   calculateCustomerCredit,
@@ -79,6 +84,9 @@ import {
   applyInvoicePaymentAllocations,
   createOrUpdateInvoiceForDeliveredOrder,
   loadCustomerOutstandingSnapshot,
+  loadProcessingQueueOrders,
+  mergeOperationalOrders,
+  printInvoice as printCentralInvoice,
 } from "../services/centralInvoiceEngine";
 
 function normalizeProduct(raw) {
@@ -237,8 +245,28 @@ const mapDeliveredOrderForCustomerLedger = (order = {}) => ({
   items: (order.order_items || []).map((item) => ({
     dbId: item.id,
     id: item.product_id,
-    productCode: item.product_code || item.code || "",
-    product_code: item.product_code || item.code || "",
+    productCode:
+      item.product_code ||
+      item.productCode ||
+      item.sku ||
+      item.code ||
+      item.products?.product_code ||
+      item.products?.code ||
+      item.product?.product_code ||
+      item.product?.code ||
+      "",
+    product_code:
+      item.product_code ||
+      item.productCode ||
+      item.sku ||
+      item.code ||
+      item.products?.product_code ||
+      item.products?.code ||
+      item.product?.product_code ||
+      item.product?.code ||
+      "",
+    products: item.products || null,
+    product: item.product || item.products || null,
     name: item.product_name,
     productName: item.product_name,
     qty: Number(item.qty || item.quantity || 0),
@@ -344,6 +372,17 @@ const loggedInUser =
   const isCustomer =
     normalizedRole === "customer" ||
     (permissions.access_customer_portal === true && !isAdmin && !isSalesRep && !isWarehouse && !isDriver);
+  const activeUsername = String(
+    activeUser?.username ||
+      activeUser?.staff_username ||
+      activeUser?.email ||
+      activeUser?.name ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+  const isNisstajAdmin = activeUsername === "nisstaj_admin";
+  const canManualCheckoutDiscount = isAdmin || isNisstajAdmin;
 
   
 
@@ -443,6 +482,7 @@ useEffect(() => {
   const [pricingSettings, setPricingSettings] = useState({
     server_discount_percent: 2,
     manager_discount_percent: 2.5,
+    admin_offer_discount_percent: 3.5,
     super_discount_percent: 3.5,
     show_manager_offer: true,
     show_super_offer: true,
@@ -473,6 +513,12 @@ const [cart, setCart] = useState(() => {
 useEffect(() => {
   localStorage.setItem(CART_KEY, JSON.stringify(cart));
 }, [cart]);
+
+useEffect(() => {
+  if (!canManualCheckoutDiscount && Number(orderDiscountPercent || 0) > 0) {
+    setOrderDiscountPercent(0);
+  }
+}, [canManualCheckoutDiscount, orderDiscountPercent]);
 
 const applyCartPromotions = (cartLines) =>
   applyPromotionRulesToCart(cartLines, promotionRules, { products, priceMode });
@@ -522,9 +568,15 @@ const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) =>
     return [];
   }
 
-  return (data || [])
+  const deliveredOrders = (data || [])
     .filter((order) => isDeliveredInvoiceStatus(order.status))
     .map(mapDeliveredOrderForCustomerLedger);
+  const processingQueueOrders = await loadProcessingQueueOrders({
+    customerAccountId: customerId,
+    customerName,
+  });
+
+  return mergeOperationalOrders(deliveredOrders, processingQueueOrders);
 };
 
 const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders = []) => {
@@ -581,6 +633,9 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
         credit: 0,
         amount: totals.grandTotal,
         invoice_amount: totals.grandTotal,
+        invoice_total: totals.grandTotal,
+        paid_amount: 0,
+        remaining_amount: totals.grandTotal,
         invoice_status: "UNPAID",
         customer_name: order.companyName || order.customerName || "",
         customer_account_id: order.customerAccountId || order.customer_account_id || null,
@@ -615,12 +670,26 @@ const loadCustomerCreditSnapshot = async (customer = selectedCustomerAccount) =>
     return { ledgerRows: [], openingBalance: 0 };
   }
 
+  const ledgerPromise = (async () => {
+    if (customer?.id) {
+      const byId = await supabase
+        .from("customer_ledger")
+        .select("*")
+        .eq("customer_account_id", customer.id)
+        .order("created_at", { ascending: true });
+
+      if (byId.error || byId.data?.length) return byId;
+    }
+
+    return supabase
+      .from("customer_ledger")
+      .select("*")
+      .eq("customer_name", customerName)
+      .order("created_at", { ascending: true });
+  })();
+
   const [{ data: ledgerData, error: ledgerError }, { data: balanceRow }] = await Promise.all([
-    supabase
-    .from("customer_ledger")
-    .select("*")
-    .eq("customer_name", customerName)
-      .order("created_at", { ascending: true }),
+    ledgerPromise,
     supabase
       .from("customer_opening_balances")
       .select("*")
@@ -777,45 +846,11 @@ useEffect(() => {
     [selectedCustomerAccount, orderCountry, isSalesRep]
   );
 
-  const roundToFairQuarter = (price) => {
-  const value = Number(price || 0);
-  const pounds = Math.floor(value);
-  const cents = Math.round((value - pounds) * 100);
-
-  if (cents <= 15) return pounds;
-  if (cents <= 35) return pounds + 0.25;
-  if (cents <= 65) return pounds + 0.5;
-  if (cents <= 85) return pounds + 0.75;
-
-  return pounds + 1;
-};
-
-const getVatRate = (vatType) => {
-  const rate = Number(String(vatType || "20").replace("%", "").trim());
-  if (rate === 5) return 5;
-  if (rate === 0) return 0;
-  return 20;
-};
-
 const normalizePromotionType = (value) =>
   String(value || "")
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
-
-const isVatPriceMode = (mode) => {
-  const normalizedMode = String(mode || "").trim().toLowerCase();
-  return [
-    "vat",
-    "ex vat",
-    "ex. vat",
-    "super",
-    "admin",
-    "admin offer",
-    "server",
-    "manager",
-  ].includes(normalizedMode);
-};
 
 const getPromotionRuleProductId = (rule) =>
   rule?.product_id ??
@@ -928,6 +963,9 @@ const getPromotionPrice = (product) => {
   return Number.isFinite(promotionPrice) ? promotionPrice : null;
 };
 
+const getPriceDetails = (product) =>
+  getProductPriceDetailsForMode(product, priceMode, orderCountry, pricingSettings);
+
 const getPrice = (product) =>
   getProductPriceForMode(product, priceMode, orderCountry, pricingSettings);
 
@@ -1020,7 +1058,8 @@ const openHomepageItem = (item) => {
 
 const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   const quantity = Math.max(1, Number(nextQty || 1));
-  const selectedPrice = Number(getPrice(item) || 0);
+  const priceDetails = getPriceDetails(item);
+  const selectedPrice = Number(priceDetails.price || 0);
   const exVatPrice = selectedPrice;
   const vatRate = getVatRate(item.vatType || item.vat_type);
   const vatAmount = isVatPriceMode(priceMode) ? exVatPrice * (vatRate / 100) : 0;
@@ -1045,6 +1084,12 @@ const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
     vatRate,
     vatAmount,
     incVatPrice,
+    specialPriceApplied: Boolean(priceDetails.usesSpecialPrice),
+    special_price_applied: Boolean(priceDetails.usesSpecialPrice),
+    specialPrice: Number(priceDetails.specialPrice || 0),
+    special_price: Number(priceDetails.specialPrice || 0),
+    specialPriceSource: priceDetails.specialPriceSource || "",
+    special_price_source: priceDetails.specialPriceSource || "",
   };
 };
 
@@ -1315,7 +1360,14 @@ const fetchOrders = async () => {
       })),
     }));
 
-    setOrders(mappedOrders);
+    const processingQueueOrders = (await loadProcessingQueueOrders()).map((order) => ({
+      ...order,
+      createdAt: order.createdAt
+        ? new Date(order.createdAt).toLocaleString()
+        : order.created_at,
+    }));
+
+    setOrders(mergeOperationalOrders(mappedOrders, processingQueueOrders));
   } catch (error) {
     console.error("Orders loading error:", error);
   }
@@ -1371,6 +1423,7 @@ const fetchOrders = async () => {
 
   const updateOrderExtraFields = async (orderNumber, updates) => {
     try {
+      console.log("[CustomerOrder] updateOrderExtraFields", { orderNumber, updates });
       await updateOrderFields(orderNumber, updates);
       await fetchOrders();
     } catch (error) {
@@ -1650,10 +1703,13 @@ const getHomepageSubtitle = (item) => {
     (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
     0
   );
+  const effectiveOrderDiscountPercent = canManualCheckoutDiscount
+    ? Number(orderDiscountPercent || 0)
+    : 0;
 
   const cartTotals = calculateCartTotals(cart, {
     priceMode,
-    discountPercent: orderDiscountPercent,
+    discountPercent: effectiveOrderDiscountPercent,
     promotionDiscountAmount,
   });
   const discountAmount = cartTotals.discountAmount;
@@ -1966,6 +2022,38 @@ const submitOrder = async () => {
     return;
   }
 
+  const belowCostSpecialLines = paidCartForOrder.filter((item) => {
+    if (!item.specialPriceApplied && !item.special_price_applied) return false;
+    const unitPrice = Number(
+      item.selectedPrice ?? item.price ?? item.unit_price ?? item.unitPrice ?? 0
+    );
+    const costPrice = Number(item.costPrice ?? item.cost_price ?? 0);
+    return costPrice > 0 && unitPrice > 0 && unitPrice < costPrice;
+  });
+
+  if (belowCostSpecialLines.length > 0) {
+    const message =
+      "Special price is below cost price for:\n\n" +
+      belowCostSpecialLines
+        .map((item) => {
+          const unitPrice = Number(
+            item.selectedPrice ?? item.price ?? item.unit_price ?? item.unitPrice ?? 0
+          );
+          const costPrice = Number(item.costPrice ?? item.cost_price ?? 0);
+          return `${item.name || item.productName || item.product_name || "Product"}: ${formatCurrency(unitPrice)} vs cost ${formatCurrency(costPrice)}`;
+        })
+        .join("\n");
+
+    if (!isNisstajAdmin) {
+      alert(`${message}\n\nOnly nisstaj_admin can approve below-cost special pricing.`);
+      return;
+    }
+
+    if (!window.confirm(`${message}\n\nApprove below-cost special pricing?`)) {
+      return;
+    }
+  }
+
   const accountStatus =
     selectedCustomerAccount?.account_status ||
     selectedCustomerAccount?.status ||
@@ -2016,12 +2104,12 @@ const submitOrder = async () => {
   cart: paidCartForOrder,
   total: finalTotal,
 
-discount_percent: Number(orderDiscountPercent || 0),
-discount_amount: Number(discountAmount || 0),
+discount_percent: effectiveOrderDiscountPercent,
+discount_amount: canManualCheckoutDiscount ? Number(discountAmount || 0) : 0,
 
-discount_applied_by: userProfile?.id || "",
+discount_applied_by: canManualCheckoutDiscount ? userProfile?.id || "" : "",
 discount_applied_by_name:
-  userProfile?.full_name || userProfile?.name || "",
+  canManualCheckoutDiscount ? userProfile?.full_name || userProfile?.name || "" : "",
 
   customer_account_id: selectedCustomerAccount.id,
   customer_branch_id: selectedBranch?.id || null,
@@ -2042,10 +2130,10 @@ const newOrder = {
    deliveryAddress: selectedBranch?.delivery_address || "",
    priceMode,
    total: finalTotal,
-   discount_percent: Number(orderDiscountPercent || 0),
-    discount_amount: Number(discountAmount || 0),
+   discount_percent: effectiveOrderDiscountPercent,
+    discount_amount: canManualCheckoutDiscount ? Number(discountAmount || 0) : 0,
    discount_applied_by_name:
-    userProfile?.full_name || userProfile?.name || "",
+    canManualCheckoutDiscount ? userProfile?.full_name || userProfile?.name || "" : "",
    createdAt: new Date().toLocaleString(),
    status: "Received",
    items: paidCartForOrder,
@@ -2286,7 +2374,7 @@ const addOrderItem = async (orderId, newItem) => {
     order
   );
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("order_items")
     .insert({
       order_id: order.dbId,
@@ -2305,7 +2393,9 @@ const addOrderItem = async (orderId, newItem) => {
      vat_amount: calculatedItem.vat_total.toFixed(2),
       source_status: "In Stock",
       include_in_picking: true,
-    });
+    })
+    .select("id")
+    .single();
 
   if (error) {
     console.error("Add item error:", error);
@@ -2337,6 +2427,145 @@ const addOrderItem = async (orderId, newItem) => {
   );
 
   await fetchOrders();
+  return data;
+};
+
+const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) => {
+  const order = orders.find((o) => o.orderId === orderId);
+  const item = order?.items?.find((currentItem) => {
+    const currentKey =
+      currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
+    return String(currentKey) === String(itemId);
+  });
+
+  if (!order?.dbId || !item) {
+    alert("Order item not found for pre-order split.");
+    return null;
+  }
+
+  const price = roundMoney(item.price || item.selectedPrice || item.unit_price || item.unitPrice || 0);
+  const availableItem = getCalculatedOrderItemForSave(
+    {
+      ...item,
+      qty: allocatedQty,
+      pickedQty: allocatedQty,
+      price,
+      selectedPrice: price,
+      unit_price: price,
+      unitPrice: price,
+      sourceStatus: "In Stock",
+      includeInPicking: true,
+    },
+    order
+  );
+
+  const remainingItem = getCalculatedOrderItemForSave(
+    {
+      ...item,
+      qty: remainingQty,
+      pickedQty: 0,
+      price,
+      selectedPrice: price,
+      unit_price: price,
+      unitPrice: price,
+      sourceStatus: "Need Supplier",
+      includeInPicking: false,
+    },
+    order
+  );
+
+  const { error: updateError } = await supabase
+    .from("order_items")
+    .update({
+      qty: remainingQty,
+      picked_qty: 0,
+      source_status: "Need Supplier",
+      include_in_picking: false,
+      line_total: remainingItem.line_total.toFixed(2),
+      net_total: remainingItem.net_total.toFixed(2),
+      gross_total: remainingItem.gross_total.toFixed(2),
+      vat_amount: remainingItem.vat_total.toFixed(2),
+    })
+    .eq("id", item.dbId || itemId);
+
+  if (updateError) {
+    console.error("Pre-order split update error:", updateError);
+    alert(updateError.message);
+    return null;
+  }
+
+  const { data, error: insertError } = await supabase
+    .from("order_items")
+    .insert({
+      order_id: order.dbId,
+      product_id: item.productId || item.product_id || item.id,
+      product_name: item.name || item.productName || item.product_name,
+      brand: item.brand || "",
+      series: item.series || "",
+      flavour: item.flavour || "",
+      carton_size: item.cartonSize || item.carton_size || "",
+      qty: allocatedQty,
+      picked_qty: allocatedQty,
+      price: availableItem.price.toFixed(2),
+      line_total: availableItem.line_total.toFixed(2),
+      net_total: availableItem.net_total.toFixed(2),
+      gross_total: availableItem.gross_total.toFixed(2),
+      vat_amount: availableItem.vat_total.toFixed(2),
+      source_status: "In Stock",
+      include_in_picking: true,
+    })
+    .select("id")
+    .single();
+
+  if (insertError) {
+    console.error("Pre-order split insert error:", insertError);
+    alert(insertError.message);
+    return null;
+  }
+
+  const updatedItems = (order.items || []).map((currentItem) => {
+    const currentKey =
+      currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
+    if (String(currentKey) !== String(itemId)) return currentItem;
+
+    return {
+      ...currentItem,
+      qty: remainingQty,
+      pickedQty: 0,
+      sourceStatus: "Need Supplier",
+      includeInPicking: false,
+      lineTotal: remainingItem.line_total,
+      line_total: remainingItem.line_total,
+      netTotal: remainingItem.net_total,
+      net_total: remainingItem.net_total,
+      grossTotal: remainingItem.gross_total,
+      gross_total: remainingItem.gross_total,
+      vatTotal: remainingItem.vat_total,
+      vat_total: remainingItem.vat_total,
+    };
+  });
+
+  updatedItems.push({
+    ...item,
+    dbId: data?.id,
+    id: data?.id,
+    qty: allocatedQty,
+    pickedQty: allocatedQty,
+    sourceStatus: "In Stock",
+    includeInPicking: true,
+    lineTotal: availableItem.line_total,
+    line_total: availableItem.line_total,
+    netTotal: availableItem.net_total,
+    net_total: availableItem.net_total,
+    grossTotal: availableItem.gross_total,
+    gross_total: availableItem.gross_total,
+    vatTotal: availableItem.vat_total,
+    vat_total: availableItem.vat_total,
+  });
+
+  await saveOrderTotalsToDatabase(orderId, updatedItems, order);
+  await fetchOrders();
+  return data;
 };
 
   const saveProduct = async () => {
@@ -2567,156 +2796,8 @@ const addOrderItem = async (orderId, newItem) => {
     win.document.close();
   };
 
-  const escapeDocumentText = (value) =>
-    String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-
-  const formatOrderDocumentDate = (value) => {
-    if (!value) return "-";
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-GB");
-  };
-
-  const getOrderDocumentTitle = (documentType) => {
-    if (documentType === "deliveryNote") return "Delivery Note";
-    if (documentType === "orderForm") return "Order Form";
-    return "Sales Invoice";
-  };
-
-  const openCustomerOrderDocument = (order, documentType) => {
-    const priceMode = order.priceMode || order.price_mode || "";
-    const totals = calculateDocumentTotals(order.items || [], order);
-    const title = getOrderDocumentTitle(documentType);
-    const showPrices = documentType !== "deliveryNote";
-    const orderNumber = order.orderId || order.order_number || order.id || "-";
-    const branchName = order.branchName || order.branch_name || "";
-    const customerName = order.companyName || order.customerName || "-";
-    const address = order.deliveryAddress || order.delivery_address || "";
-
-    const rows = totals.invoiceItems
-      .map((item) => {
-        const qty = getOrderItemQty(item);
-        const unitPrice = Number(item.price ?? item.unit_price ?? 0);
-        const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
-        const vatTotal = Number(item.vat_total ?? item.vatTotal ?? 0);
-        const vatRate = Number(item.vatRate ?? item.vat_percent ?? item.vatPercent ?? 20);
-
-        return `
-          <tr>
-            <td>${escapeDocumentText(item.productCode || item.product_code || "")}</td>
-            <td>${escapeDocumentText(item.name || item.productName || item.product_name || "")}</td>
-            <td class="right">${qty}</td>
-            ${
-              showPrices
-                ? `
-                  <td class="right">${formatCurrency(unitPrice)}</td>
-                  <td class="right">${vatRate.toFixed(2)}</td>
-                  <td class="right">${formatCurrency(netTotal)}</td>
-                  <td class="right">${formatCurrency(vatTotal)}</td>
-                `
-                : ""
-            }
-          </tr>
-        `;
-      })
-      .join("");
-
-    const html = `
-      <html>
-        <head>
-          <title>${escapeDocumentText(title)} ${escapeDocumentText(orderNumber)}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 28px; color: #111827; }
-            h1 { margin: 0 0 8px; text-transform: uppercase; }
-            .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 18px 0; }
-            .box { border: 1px solid #111827; padding: 10px; min-height: 72px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 12px; }
-            th { background: #e5edf8; text-align: left; }
-            th, td { border-bottom: 1px solid #d1d5db; padding: 6px; vertical-align: top; }
-            .right { text-align: right; }
-            .totals { margin-left: auto; margin-top: 18px; width: 280px; border: 1px solid #111827; }
-            .totals div { display: flex; justify-content: space-between; padding: 7px 9px; border-bottom: 1px solid #111827; }
-            .totals div:last-child { border-bottom: 0; font-weight: 800; }
-            .muted { color: #4b5563; font-size: 12px; }
-            @media print { body { padding: 18px; } }
-          </style>
-        </head>
-        <body>
-          <h1>${escapeDocumentText(title)}</h1>
-          <div class="muted">Fair Choice Cash and Carry Ltd</div>
-
-          <div class="meta">
-            <div class="box">
-              <b>${escapeDocumentText(documentType === "deliveryNote" ? "Deliver To" : "Customer")}</b><br />
-              ${escapeDocumentText(customerName)}<br />
-              ${branchName ? `${escapeDocumentText(branchName)}<br />` : ""}
-              ${escapeDocumentText(address)}
-            </div>
-            <div class="box">
-              <b>Order Number:</b> ${escapeDocumentText(orderNumber)}<br />
-              <b>Date:</b> ${escapeDocumentText(formatOrderDocumentDate(order.createdAt || order.created_at))}<br />
-              <b>Price Mode:</b> ${escapeDocumentText(String(priceMode || "-").toUpperCase())}<br />
-              <b>Total Qty:</b> ${totals.totalQty}
-            </div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Description</th>
-                <th class="right">Qty</th>
-                ${
-                  showPrices
-                    ? `
-                      <th class="right">Price</th>
-                      <th class="right">VAT %</th>
-                      <th class="right">Net</th>
-                      <th class="right">VAT</th>
-                    `
-                    : ""
-                }
-              </tr>
-            </thead>
-            <tbody>
-              ${rows || `<tr><td colspan="${showPrices ? 7 : 3}">No supplied items.</td></tr>`}
-            </tbody>
-          </table>
-
-          ${
-            showPrices
-              ? `
-                <div class="totals">
-                  <div><span>Total Net</span><strong>${formatCurrency(totals.netTotal)}</strong></div>
-                  <div><span>Total VAT</span><strong>${formatCurrency(totals.vatTotal)}</strong></div>
-                  <div><span>Total</span><strong>${formatCurrency(totals.grandTotal)}</strong></div>
-                </div>
-              `
-              : `
-                <div class="totals">
-                  <div><span>Total Lines</span><strong>${totals.totalLines}</strong></div>
-                  <div><span>Total Qty</span><strong>${totals.totalQty}</strong></div>
-                </div>
-              `
-          }
-
-          <script>window.print();</script>
-        </body>
-      </html>
-    `;
-
-    const win = window.open("", "_blank", "width=900,height=700");
-
-    if (!win) {
-      alert("Popup blocked. Please allow popups to download the document.");
-      return;
-    }
-
-    win.document.write(html);
-    win.document.close();
+  const openCustomerInvoiceDocument = (order) => {
+    printCentralInvoice(order);
   };
 
   const comingSoonTitle = getComingSoonTitle(page);
@@ -2750,6 +2831,17 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+    {page === "preOrderSupply" && (
+      <PreOrderSupply
+        orders={orders}
+        products={products}
+        updateOrderItem={updateOrderItem}
+        addOrderItem={addOrderItem}
+        splitPreOrderItem={splitPreOrderItem}
+        refreshOrders={fetchOrders}
+      />
+    )}
+
     {page === "driver" && (
       <Driver
         orders={orders}
@@ -2775,6 +2867,7 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {page === "credit" && <CustomerCredit />}
+    {page === "orderSalesInvoices" && <OrderSalesInvoices />}
     {page === "invoicesPortal" && <InvoicesPortal />}
     {page === "returnsPortal" && <ReturnsPortal />}
     {page === "weeklyAccount" && <WeeklyAccount />}
@@ -3372,11 +3465,11 @@ const backOfficeContent = comingSoonTitle ? (
             cart={cart}
             total={finalTotal}
             originalTotal={cartTotals.subtotal}
-            orderDiscountPercent={orderDiscountPercent}
+            orderDiscountPercent={effectiveOrderDiscountPercent}
             setOrderDiscountPercent={setOrderDiscountPercent}
             discountAmount={discountAmount}
             promotionDiscountAmount={promotionDiscountAmount}
-            canDiscount={isAdmin || isSalesRep}
+            canDiscount={canManualCheckoutDiscount}
             priceMode={priceMode}
             onSubmit={submitOrder}
             isSubmitting={isSubmittingOrder}
@@ -3507,7 +3600,7 @@ const backOfficeContent = comingSoonTitle ? (
                     {invoiceStatus === "PAID" ? (
                       <button
                         type="button"
-                        onClick={() => openCustomerOrderDocument(order, "invoice")}
+                        onClick={() => openCustomerInvoiceDocument(order)}
                         className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
                       >
                         Download Invoice
@@ -3623,7 +3716,7 @@ const backOfficeContent = comingSoonTitle ? (
                     {isInvoice && invoiceOrder && invoicePaid ? (
                       <button
                         type="button"
-                        onClick={() => openCustomerOrderDocument(invoiceOrder, "invoice")}
+                        onClick={() => openCustomerInvoiceDocument(invoiceOrder)}
                         className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
                       >
                         Download Invoice
