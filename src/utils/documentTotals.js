@@ -1,3 +1,5 @@
+import { isVatPriceMode } from "./pricing";
+
 const money2 = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
@@ -25,11 +27,20 @@ const getSavedVatRate = (item = {}) => {
   return rate;
 };
 
-const getDocumentItemTotals = (item = {}) => {
+const getDocumentItemTotals = (item = {}, { includeVat = true } = {}) => {
   const savedNet = item.net_total ?? item.netTotal;
   const savedPrice = item.price ?? item.unit_price ?? item.unitPrice;
-  const vatRate = getSavedVatRate(item);
+  const vatRate = includeVat ? getSavedVatRate(item) : 0;
   const qty = getQuantity(item);
+
+  if (!includeVat && hasMoneyValue(savedPrice) && qty > 0) {
+    const netTotal = money2(Number(savedPrice) * qty);
+    return {
+      netTotal,
+      grossTotal: netTotal,
+      vatRate: 0,
+    };
+  }
 
   if (
     hasMoneyValue(savedNet) &&
@@ -70,11 +81,11 @@ const getDocumentItemTotals = (item = {}) => {
   };
 };
 
-const buildVatGroups = (items = []) => {
+const buildVatGroups = (items = [], includeVat = true) => {
   const groupsByRate = new Map();
 
   (items || []).forEach((item) => {
-    const vatRate = Number(item.vat_rate ?? item.vatRate ?? 0);
+    const vatRate = includeVat ? Number(item.vat_rate ?? item.vatRate ?? 0) : 0;
     const key = String(vatRate);
     const currentGroup = groupsByRate.get(key) || {
       vatRate,
@@ -94,7 +105,7 @@ const buildVatGroups = (items = []) => {
 
   return [...groupsByRate.values()]
     .map((group) => {
-      const vatTotal = money2(group.netTotal * (group.vatRate / 100));
+      const vatTotal = includeVat ? money2(group.netTotal * (group.vatRate / 100)) : 0;
 
       return {
         ...group,
@@ -118,10 +129,11 @@ export const getCustomerDocumentType = (priceMode = "") => {
 };
 
 export function calculateDocumentTotals(items = [], order = {}) {
+  const includeVat = isVatPriceMode(order.priceMode || order.price_mode);
   const printableItems = (items || [])
     .filter((item) => item.includeInPicking !== false)
     .map((item) => {
-      const itemTotals = getDocumentItemTotals(item);
+      const itemTotals = getDocumentItemTotals(item, { includeVat });
 
       return {
         ...item,
@@ -148,7 +160,7 @@ export function calculateDocumentTotals(items = [], order = {}) {
     printableItems.reduce((sum, item) => sum + Number(item.net_total || 0), 0)
   );
 
-  const vatGroups = buildVatGroups(printableItems);
+  const vatGroups = buildVatGroups(printableItems, includeVat);
   const itemVatTotal = money2(
     vatGroups.reduce((sum, group) => sum + Number(group.vat_total || 0), 0)
   );
@@ -158,8 +170,9 @@ export function calculateDocumentTotals(items = [], order = {}) {
     order.order_total ?? order.orderTotal ?? order.totalAmount ?? order.total ?? grossTotal
   );
   const savedOrderVat = order.vat_total ?? order.vatTotal;
-  const savedVatTotal = hasMoneyValue(savedOrderVat) ? money2(savedOrderVat) : 0;
+  const savedVatTotal = includeVat && hasMoneyValue(savedOrderVat) ? money2(savedOrderVat) : 0;
   const savedVatReconciles =
+    includeVat &&
     savedVatTotal > 0 &&
     (!itemVatTotal || Math.abs(savedVatTotal - itemVatTotal) <= 0.05);
   const vatTotal = savedVatReconciles ? savedVatTotal : itemVatTotal;

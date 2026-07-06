@@ -57,6 +57,11 @@ export default function Cart({
                   <p className="text-xs text-slate-500">
                     {item.qty} x {formatCurrency(item.selectedPrice)}
                   </p>
+                  {(item.specialPriceApplied || item.special_price_applied) && (
+                    <p className="text-[11px] font-bold text-emerald-700">
+                      Special price applied
+                    </p>
+                  )}
                 </div>
 
                 <p className="font-bold text-base whitespace-nowrap">
@@ -131,7 +136,7 @@ export default function Cart({
         {canDiscount && (
           <div className="border-t mt-3 pt-3">
             <div className="flex justify-between items-center mb-2">
-              <span className="font-medium">Discount %</span>
+              <span className="font-medium">Manual admin discount %</span>
               <input
                 type="number"
                 min="0"

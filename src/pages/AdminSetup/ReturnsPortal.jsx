@@ -11,6 +11,13 @@ export default function ReturnsPortal() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const currentUser = JSON.parse(
+    localStorage.getItem("loggedInUser") ||
+      localStorage.getItem("fairchoice_user") ||
+      "null"
+  );
+  const role = String(currentUser?.role || currentUser?.access_level || "").toLowerCase();
+  const isAdminUser = role.includes("admin");
 
   const loadReturns = async () => {
     setLoading(true);
@@ -26,8 +33,13 @@ export default function ReturnsPortal() {
       setReturns(data || []);
     } catch (err) {
       console.error("Returns portal loading error:", err);
+      const message = String(err.message || "").toLowerCase();
       setError(
-        `${err.message || "Could not load returns."} Run the returns SQL file in Supabase if the return tables are not created yet.`
+        message.includes("customer_returns") || message.includes("schema cache")
+          ? isAdminUser
+            ? "Return invoice setup is required. Run supabase/migrations/20260704_financial_documents_setup.sql in Supabase, then refresh this page."
+            : "Returns are not available yet. Please contact an admin."
+          : err.message || "Could not load returns."
       );
       setReturns([]);
     } finally {

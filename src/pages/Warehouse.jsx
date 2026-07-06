@@ -10,6 +10,12 @@ import {
   calculateDocumentTotals,
   getCustomerDocumentType,
 } from "../utils/documentTotals";
+import {
+  printDeliveryNote as printCentralDeliveryNote,
+  printInvoice as printCentralInvoice,
+  printOrderForm as printCentralOrderForm,
+  printThermalReceipt,
+} from "../services/centralInvoiceEngine";
 
 /*
   Warehouse Page
@@ -17,9 +23,7 @@ import {
   Purpose:
   - Show orders currently in "Warehouse Packing"
   - Allow warehouse to remove unavailable items from print/picking
-  - Print customer document:
-      EX VAT / Admin Offer      => SALES INVOICE with NOT PAID stamp
-      Server / Manager Offer    => ORDER FORM - NOT AN INVOICE
+  - Print customer documents through the central invoice engine
   - Print delivery note
   - Assign driver
   - Confirm order ready for driver
@@ -39,6 +43,7 @@ export default function Warehouse({
   const [searchTerm, setSearchTerm] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [countryFilter, setCountryFilter] = useState("All");
 
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
@@ -104,8 +109,7 @@ export default function Warehouse({
 const fetchDrivers = async () => {
   const { data, error } = await supabase
     .from("login_users")
-    .select("id, username, role, active")
-    .eq("role", "Driver")
+    .select("id, username, role, permissions, active")
     .eq("active", true)
     .order("username");
 
@@ -114,7 +118,12 @@ const fetchDrivers = async () => {
     return;
   }
 
-  setDrivers(data || []);
+  setDrivers(
+    (data || []).filter((user) => {
+      const role = String(user.role || "").toLowerCase();
+      return role === "driver" || user.permissions?.access_driver === true;
+    })
+  );
 };
 
   useEffect(() => {
@@ -128,7 +137,7 @@ const fetchDrivers = async () => {
     const search = searchTerm.trim().toLowerCase();
 
     return orders
-  .filter((order) => order.status === "Warehouse Packing")
+  .filter((order) => ["Warehouse Packing", "Ready For Driver"].includes(order.status))
   .filter((order) => {
     const keyword = String(searchTerm || "").toLowerCase().trim();
 
@@ -142,6 +151,19 @@ const fetchDrivers = async () => {
         .toLowerCase()
         .includes(keyword)
     );
+  })
+  .filter((order) => {
+    if (countryFilter === "All") return true;
+    const country = String(
+      order.customer_country ||
+        order.customerCountry ||
+        order.branch_country ||
+        order.branchCountry ||
+        order.delivery_country ||
+        order.country ||
+        ""
+    ).toLowerCase();
+    return country.includes(countryFilter.toLowerCase());
   })
   .filter((order) => {
     if (!fromDate && !toDate) return true;
@@ -167,7 +189,7 @@ const fetchDrivers = async () => {
     const bDate = getOrderTimestamp(b) || 0;
     return bDate - aDate;
   });
-}, [orders, searchTerm, fromDate, toDate]);
+}, [orders, searchTerm, fromDate, toDate, countryFilter]);
 
   const warehousePackingCount = orders.filter(
     (order) => order.status === "Warehouse Packing"
@@ -274,7 +296,7 @@ const getGroupedWarehouseItems = (items = []) =>
   const printCustomerDocument = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  printOrderForm(order);
+  printOrderFormDocument(order);
   await logAction({
     user: loggedInUser,
     action_type: "Printed picking list",
@@ -284,467 +306,6 @@ const getGroupedWarehouseItems = (items = []) =>
     new_value: "Customer Document",
   });
 };
-
-  /*
-    SALES INVOICE
-    --------------------------------------------------
-    Used for EX VAT and Admin Offer.
-    Includes:
-    - Company header
-    - Logo
-    - VAT column
-    - Total Net / VAT / Total
-    - NOT PAID watermark and text
-    - Company footer
-  */
-  const printInvoice = (order) => {
-  const printableItems = getPrintableItems(order);
-  const totals = getInvoiceTotals(order);
-
-  const invoiceNumber = order.invoiceNumber || order.orderId || "-";
-  const dueDate = order.dueDate || "-";
-
-  const rawInvoiceDate =
-    order.createdAt ||
-    order.created_at ||
-    order.invoiceDate ||
-    order.invoice_date ||
-    order.orderDate ||
-    order.order_date;
-
-  const invoiceDate =
-    rawInvoiceDate && !isNaN(new Date(rawInvoiceDate).getTime())
-      ? new Date(rawInvoiceDate).toLocaleDateString("en-GB")
-      : new Date().toLocaleDateString("en-GB");
-
-  const rows = printableItems
-    .map((item) => {
-      const qty = getLineQty(item);
-      const price = getSavedLinePrice(item);
-      const net = getSavedLineNetTotal(item);
-      const vatPercent = Number(item.vatPercent ?? item.vat_percent ?? 20);
-
-      return `
-        <tr>
-          <td class="product-code">
-            ${item.productCode || item.product_code || ""}
-          </td>
-
-          <td class="desc-col">
-            ${item.name || item.productName || ""}
-          </td>
-
-          <td class="qty-col">${qty.toFixed(2)}</td>
-          <td class="price-col">${price.toFixed(2)}</td>
-          <td class="vat-col">${vatPercent.toFixed(2)}</td>
-          <td class="net-col">${net.toFixed(2)}</td>
-        </tr>
-      `;
-    })
-    .join("");
-
-    const html = `
-      <html>
-        <head>
-          <title>Invoice - ${invoiceNumber}</title>
-
-          <style>
-            @page { size: A4; margin: 10mm; }
-
-            body {
-              font-family: Arial, sans-serif;
-              font-size: 11px;
-              color: #000;
-              margin: 0;
-            }
-
-            .page {
-              position: relative;
-              min-height: 277mm;
-            }
-
-            .unpaid-stamp {
-              position: fixed;
-              top: 43%;
-              left: 50%;
-              transform: translate(-50%, -50%) rotate(-25deg);
-              font-size: 72px;
-              font-weight: 900;
-              color: rgba(220, 38, 38, 0.16);
-              border: 6px solid rgba(220, 38, 38, 0.22);
-              padding: 16px 36px;
-              z-index: 0;
-            }
-
-            .content {
-              position: relative;
-              z-index: 1;
-            }
-
-            .top {
-              display: flex;
-              justify-content: space-between;
-              align-items: flex-start;
-              border-bottom: 1px solid #000;
-              padding-bottom: 8px;
-            }
-
-            .company {
-              line-height: 1.35;
-            }
-
-            .logo {
-              height: 82px;
-              max-width: 190px;
-              object-fit: contain;
-            }
-
-            .section {
-              margin-top: 16px;
-            }
-
-            .invoice-grid {
-              display: grid;
-              grid-template-columns: 1fr 210px;
-              gap: 20px;
-              align-items: start;
-            }
-
-            .title {
-              font-size: 22px;
-              font-weight: 800;
-              text-align: center;
-              margin-bottom: 12px;
-            }
-
-            .box-title {
-              font-weight: 700;
-              margin-bottom: 5px;
-            }
-
-            .details-row {
-              display: grid;
-              grid-template-columns: 95px 1fr;
-              margin-bottom: 4px;
-            }
-
-            table {
-              width: 100%;
-              border-collapse: collapse;
-            }
-
-            th {
-              background: #e5e7eb;
-              font-weight: 700;
-            }
-
-            @media print {
-              * {
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-            }
-
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              margin-top: 18px;
-              table-layout: fixed;
-              font-size: 11px;
-            }
-
-            th {
-              background-color: #d9e2f3 !important;
-              color: #000 !important;
-              font-size: 11.5px;
-              font-weight: 700;
-              padding: 5px;
-              -webkit-print-color-adjust: exact !important;
-              print-color-adjust: exact !important;
-            }
-
-            thead,
-            thead tr {
-              background-color: #d9e2f3 !important;
-            }
-
-            td {
-              border: none;
-              padding: 4px 5px;
-              font-size: 11px;
-            }
-
-           .product-code {
-            text-align: left;
-            font-size: 11px;
-            font-weight: 400;
-             width: 60px;
-          }
-
-          .desc-col {
-             text-align: left !important;
-            font-size: 11px;
-            font-weight: 400;
-            padding-left: 0;
-            width: 320px;
-          }
-
-          .qty-col {
-            text-align: center;
-            font-size: 11px;
-             width: 55px;
-          }
-
-          .price-col,
-          .vat-col,
-          .net-col {
-            text-align: right;
-            font-size: 11px;
-             width: 70px;
-          }
-
-          
-
-          
-
-            .center { text-align: center; }
-            .right { text-align: right; }
-
-            .summary-area {
-              margin-top: 16px;
-              display: grid;
-              grid-template-columns: 1fr 260px;
-              gap: 20px;
-              align-items: start;
-            }
-
-            .qty-box {
-              margin-top: 46px;
-              font-size: 13px;
-              font-weight: 700;
-              line-height: 1.8;
-            }
-
-            .summary-box {
-              border: 1px solid #000;
-            }
-
-            .summary-row {
-              display: grid;
-              grid-template-columns: 1fr 100px;
-              border-bottom: 1px solid #000;
-            }
-
-            .summary-row:last-child {
-              border-bottom: none;
-            }
-
-            .summary-label,
-            .summary-value {
-              padding: 6px;
-            }
-
-            .summary-label {
-              font-weight: 700;
-            }
-
-            .summary-value {
-              text-align: right;
-            }
-
-            .grand {
-              font-size: 14px;
-              font-weight: 900;
-            }
-
-            .payment-status {
-              margin-top: 18px;
-              font-size: 28px;
-              font-weight: 900;
-              text-align: center;
-              color: #b91c1c;
-            }
-
-            .deliver {
-              margin-top: 22px;
-              line-height: 1.45;
-            }
-
-            .footer {
-              position: absolute;
-              bottom: 0;
-              left: 0;
-              right: 0;
-              border-top: 1px solid #000;
-              padding-top: 8px;
-              font-size: 10px;
-              line-height: 1.35;
-            }
-
-            .page-no {
-              text-align: right;
-              margin-top: 6px;
-            }
-          </style>
-        </head>
-
-        <body>
-          <div class="page">
-            <div class="unpaid-stamp">NOT PAID</div>
-
-            <div class="content">
-              <div class="top">
-                <div class="company">
-                  <strong>${COMPANY.name}</strong><br />
-                  ${COMPANY.address1}<br />
-                  ${COMPANY.address2}<br />
-                  ${COMPANY.country}<br />
-                  Telephone: ${COMPANY.telephone}<br />
-                  Email ${COMPANY.email}
-                </div>
-
-                <img src="${COMPANY.logo}" class="logo" />
-              </div>
-
-              <div class="section invoice-grid">
-                <div>
-                  <div class="box-title">Invoice To:</div>
-                 <div>${order.companyName || order.company_name || "-"}</div>
-                  <div>${order.branchName || order.branch_name || order.shopName || order.shop_name || ""}</div>
-                  <div>${order.deliveryAddress || order.delivery_address || order.address || ""}</div>
-                  <div>${order.postcode || order.post_code || order.branchPostcode || order.branch_postcode || ""}</div>
-                </div>
-
-                <div>
-                  <div class="title">SALES INVOICE</div>
-
-                  <div class="details-row">
-                    <strong>Invoice Date</strong>
-                    <span>${invoiceDate}</span>
-                  </div>
-
-                  <div class="details-row">
-                    <strong>Due Date</strong>
-                    <span>${dueDate}</span>
-                  </div>
-
-                  <div class="details-row">
-                    <strong>Customer Code</strong>
-                    <span>${order.customerCode || order.companyName || "-"}</span>
-                  </div>
-
-                  <div class="details-row">
-                    <strong>Invoice Number</strong>
-                    <span>${invoiceNumber}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="section">
-                <table>
-                  <thead>
-                    <th class="th-product" style="width:90px;">
-                        Code
-                      </th>
-
-                      <th class="th-product">
-                        Description
-                      </th>
-
-                      <th style="width:55px;">
-                        Qty
-                      </th>
-
-                      <th style="width:70px;">
-                        Price
-                      </th>
-
-                      <th style="width:55px;">
-                        VAT %
-                      </th>
-
-                      <th style="width:75px;">
-                        Net
-                      </th>
-                  </thead>
-
-                  <tbody>
-                    ${rows}
-                  </tbody>
-                </table>
-              </div>
-
-              <div class="summary-area">
-                <div class="qty-box">
-                  <div>Total Quantity&nbsp;&nbsp;&nbsp; ${totals.totalQuantity}</div>
-                  <div>Total Lines&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${totals.totalLines}</div>
-                </div>
-
-                <div class="summary-box">
-                  <div class="summary-row">
-                    <div class="summary-label">Total Net</div>
-                    <div class="summary-value">${money(totals.netTotal)}</div>
-                  </div>
-
-                  <div class="summary-row">
-                    <div class="summary-label">Total VAT</div>
-                    <div class="summary-value">${money(totals.vatTotal)}</div>
-                  </div>
-
-                  <div class="summary-row grand">
-                    <div class="summary-label">TOTAL</div>
-                    <div class="summary-value">${money(totals.grandTotal)}</div>
-                  </div>
-
-                  <div class="summary-row">
-                    <div class="summary-label">Amount Paid</div>
-                    <div class="summary-value">${money(0)}</div>
-                  </div>
-
-                  <div class="summary-row">
-                    <div class="summary-label">Amount Due</div>
-                    <div class="summary-value">${money(totals.grandTotal)}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="payment-status">NOT PAID</div>
-
-              <div class="deliver">
-                <div class="box-title">Deliver To:</div>
-               <div>${order.companyName || order.company_name || "-"}</div>
-              <div>${order.branchName || order.branch_name || order.shopName || order.shop_name || ""}</div>
-              <div>${order.deliveryAddress || order.delivery_address || order.address || ""}</div>
-              <div>${order.postcode || order.post_code || order.branchPostcode || order.branch_postcode || ""}</div>
-                            </div>
-            </div>
-
-            <div class="footer">
-              ${COMPANY.registration} , VAT Registration Number ${COMPANY.vatNumber}<br />
-              Registered Address ${COMPANY.registeredAddress}
-              <div class="page-no">Page 1 of 1</div>
-            </div>
-          </div>
-
-          <script>
-            window.print();
-          </script>
-        </body>
-      </html>
-    `;
-
-    const w = window.open("", "_blank");
-
-    if (!w) {
-      alert("Popup blocked. Please allow popups to print invoice.");
-      return;
-    }
-
-    w.document.write(html);
-    w.document.close();
-  };
-
-  
 
   /*
     ORDER FORM - NOT AN INVOICE
@@ -758,7 +319,10 @@ const getGroupedWarehouseItems = (items = []) =>
     - No NOT PAID stamp
   */
 
-    const printOrderForm = (order) => {
+    const printOrderFormDocument = (order) => {
+    printCentralOrderForm(order);
+    return;
+
     const printableItems = getPrintableItems(order);
 
 
@@ -1087,7 +651,7 @@ const getGroupedWarehouseItems = (items = []) =>
     Used by driver/customer delivery confirmation.
     No prices shown here.
   */
-  const printDeliveryNote = (order) => {
+  const printDeliveryNoteDocument = (order) => {
   const items = getPrintableItems(order);
   const totals = getInvoiceTotals(order);
 
@@ -1364,7 +928,7 @@ const updateWarehouseItem = async (order, item, changes) => {
 const printProtectedOrderForm = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  printOrderForm(order);
+  printCentralOrderForm(order);
   await logAction({
     user: loggedInUser,
     action_type: "Printed picking list",
@@ -1378,7 +942,7 @@ const printProtectedOrderForm = async (order) => {
 const printProtectedInvoice = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  printInvoice(order);
+  printCentralInvoice(order);
   await logAction({
     user: loggedInUser,
     action_type: "Printed picking list",
@@ -1392,7 +956,7 @@ const printProtectedInvoice = async (order) => {
 const printProtectedDeliveryNote = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print delivery notes.")) return;
 
-  printDeliveryNote(order);
+  printCentralDeliveryNote(order);
   await logAction({
     user: loggedInUser,
     action_type: "Printed delivery note",
@@ -1636,6 +1200,15 @@ const printCustomerDocumentForMode =
                 </button>
               )}
 
+              {hasPermission(loggedInUser, "can_print") && (
+                <button
+                  onClick={() => printThermalReceipt(order)}
+                  className={`bg-zinc-700 text-white ${btn}`}
+                >
+                  Thermal Print
+                </button>
+              )}
+
               <select
                 value={assignedDrivers[orderId] ?? getDriverName(order) ?? ""}
                 onChange={(e) => assignDriver(order, e.target.value)}
@@ -1721,7 +1294,7 @@ const printCustomerDocumentForMode =
       </div>
 
       <div className="bg-white border rounded-2xl p-3 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_150px_auto] gap-3 items-end">
           <label className="block">
             <span className="block text-xs font-bold text-slate-500 mb-1">
               From date
@@ -1732,6 +1305,21 @@ const printCustomerDocumentForMode =
               onChange={(e) => setFromDate(e.target.value)}
               className="w-full border rounded-xl px-3 py-2 text-sm"
             />
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-bold text-slate-500 mb-1">
+              Country
+            </span>
+            <select
+              value={countryFilter}
+              onChange={(e) => setCountryFilter(e.target.value)}
+              className="w-full border rounded-xl px-3 py-2 text-sm bg-white"
+            >
+              <option value="All">All</option>
+              <option value="Wales">Wales</option>
+              <option value="England">England</option>
+            </select>
           </label>
 
           <label className="block">
@@ -1751,6 +1339,7 @@ const printCustomerDocumentForMode =
             onClick={() => {
               setFromDate("");
               setToDate("");
+              setCountryFilter("All");
             }}
             className="border rounded-xl px-3 py-2 text-sm font-bold text-slate-700"
           >

@@ -6,7 +6,9 @@ import {
   allocateCustomerPaymentToInvoices,
   createOrUpdateInvoiceForDeliveredOrder,
   loadCustomerOutstandingSnapshot,
+  printThermalReceipt,
 } from "../../services/centralInvoiceEngine";
+import { saveConfirmedServerManagerOrderToProcessingQueue } from "../../services/orders";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
 
 export default function Driver({
@@ -38,6 +40,18 @@ const [cashCollectionOutstanding, setCashCollectionOutstanding] = useState({
 const loggedInUser = JSON.parse(
   localStorage.getItem("loggedInUser") || "{}"
 );
+
+const legacyTestTextValues = new Set(["nisstaj", "test", "test user", "test receiver"]);
+const isLegacyTestText = (value) =>
+  legacyTestTextValues.has(String(value || "").trim().toLowerCase());
+const isLegacyTestAmount = (value) => Number(value || 0) === 500;
+const cleanLegacyTestText = (value) => (isLegacyTestText(value) ? "" : value || "");
+const cleanLegacyTestAmount = (value, order = {}) => {
+  const hasLegacyName =
+    isLegacyTestText(order.paidBy || order.paid_by) ||
+    isLegacyTestText(order.receivedBy || order.received_by);
+  return isLegacyTestAmount(value) && hasLegacyName ? "" : value || "";
+};
 
   const getDriverTotals = (order) =>
     calculateDocumentTotals(order.items || [], order);
@@ -167,10 +181,10 @@ useEffect(() => {
 
           setPaymentForm({
       paymentType: order.paymentType || "Cash",
-      paymentAmount: order.paymentAmount || "",
+      paymentAmount: cleanLegacyTestAmount(order.paymentAmount || order.payment_amount, order),
       paymentCollected: order.paymentCollected || "Yes",
-      paidBy: order.paidBy || "",
-      receivedBy: order.receivedBy || "",
+      paidBy: cleanLegacyTestText(order.paidBy || order.paid_by),
+      receivedBy: cleanLegacyTestText(order.receivedBy || order.received_by),
       paymentAppliesTo: order.paymentAppliesTo || "Today Invoice",
     });
 
@@ -205,6 +219,11 @@ useEffect(() => {
 
   if (!previousBalanceForm.whoPaid.trim()) {
     alert("Please enter who paid.");
+    return;
+  }
+
+  if (isLegacyTestText(previousBalanceForm.whoPaid)) {
+    alert("Please replace the test payer name before saving.");
     return;
   }
 
@@ -319,17 +338,7 @@ const moveBackToWarehouse = async (order) => {
   await refreshOrders();
 };
 
-const moveBackToReceivedOrders = async (order) => {
-  if (order.status === "Delivered") return;
-  if (!window.confirm("Move this order back to Received Orders for correction?")) {
-    return;
-  }
-
-  await changeOrderStatus(order.orderId, "In Progress");
-  await refreshOrders();
-};
-
-const printDeliveryNote = (order) => {
+const printDeliveryNoteDocument = (order) => {
   const items = getDriverItems(order);
   const html = `
     <html>
@@ -396,6 +405,16 @@ const printDeliveryNote = (order) => {
         alert("Please enter who paid.");
         return;
       }
+
+      if (isLegacyTestText(paymentForm.paidBy) || isLegacyTestText(paymentForm.receivedBy)) {
+        alert("Please replace test payer/receiver names before saving.");
+        return;
+      }
+
+      if (isLegacyTestAmount(paymentAmount) && isLegacyTestText(order.paidBy || order.paid_by)) {
+        alert("Please replace the old test payment amount before saving.");
+        return;
+      }
     }
 
     const orderBranchKey =
@@ -422,27 +441,65 @@ const printDeliveryNote = (order) => {
       return;
     }
 
-      await updateOrderExtraFields(order.orderId, {
-  payment_type: paymentType,
+    const cashCollectionPayload = {
+      payment_type: paymentType,
 
-  payment_amount:
-    paymentType === "Credit" || paymentCollected === "No"
-      ? 0
-      : paymentAmount,
+      payment_amount:
+        paymentType === "Credit" || paymentCollected === "No"
+          ? 0
+          : paymentAmount,
 
-  payment_collected:
-    paymentType === "Credit" ? "No" : paymentCollected,
+      payment_collected:
+        paymentType === "Credit" ? "No" : paymentCollected,
 
-  paid_by:
-    paymentType === "Credit" || paymentCollected === "No"
-      ? ""
-      : paymentForm.paidBy,
+      paid_by:
+        paymentType === "Credit" || paymentCollected === "No"
+          ? ""
+          : paymentForm.paidBy,
 
-  received_by:
-    paymentType === "Credit" || paymentCollected === "No"
-      ? ""
-      : paymentForm.receivedBy,
-});
+      received_by:
+        paymentType === "Credit" || paymentCollected === "No"
+          ? ""
+          : paymentForm.receivedBy,
+    };
+
+    console.log("[Driver] saveCashCollection updateOrderExtraFields", {
+      orderNumber: order.orderId || order.order_number,
+      priceMode: order.priceMode || order.price_mode,
+      status: order.status,
+      payload: cashCollectionPayload,
+    });
+
+    await updateOrderExtraFields(order.orderId, cashCollectionPayload);
+
+    console.log("[Driver] saveCashCollection calling ProcessingQueue save", {
+      orderNumber: order.orderId || order.order_number,
+      priceMode: order.priceMode || order.price_mode,
+      itemCount: (order.items || order.order_items || []).length,
+    });
+
+    const processingQueueResult =
+      await saveConfirmedServerManagerOrderToProcessingQueue({
+        orderNumber: order.orderId || order.order_number,
+        confirmedAt:
+          order.deliveredAt ||
+          order.delivered_at ||
+          order.delivery_confirmed_at ||
+          order.confirmed_at ||
+          new Date().toISOString(),
+        fallbackOrder: {
+          ...order,
+          ...cashCollectionPayload,
+          order_number: order.order_number || order.orderId,
+          price_mode: order.price_mode || order.priceMode,
+          order_items: order.order_items || order.items || [],
+        },
+      });
+
+    console.log("[Driver] ProcessingQueue save result", {
+      orderNumber: order.orderId || order.order_number,
+      result: processingQueueResult,
+    });
 
     // Ledger payment only if money collected
     if (paymentCollected === "Yes" && paymentAmount > 0) {
@@ -475,7 +532,7 @@ const printDeliveryNote = (order) => {
     collection_source: "DRIVER_DELIVERY_COLLECTION",
     who_paid: paymentForm.paidBy || null,
     paid_by: paymentForm.paidBy || null,
-    received_by: loggedInUser.name || null,
+    received_by: paymentForm.receivedBy || loggedInUser.name || loggedInUser.username || null,
     received_by_username: loggedInUser.username || null,
     received_by_role: loggedInUser.role || null,
     received_by_staff_id: loggedInUser.id || null,
@@ -502,6 +559,8 @@ await allocateCustomerPaymentToInvoices({
   } catch (error) {
     console.error("Cash collection error:", error);
     alert("Could not save cash collection: " + error.message);
+  } finally {
+    setSavingPayment(false);
   }
 };
 
@@ -704,10 +763,10 @@ await allocateCustomerPaymentToInvoices({
                 </button>
 
                 <button
-                  onClick={() => printDeliveryNote(order)}
-                  className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[130px]"
+                  onClick={() => printThermalReceipt(order)}
+                  className="bg-black text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[145px]"
                 >
-                  Print Delivery Note
+                  Print Thermal Receipt
                 </button>
 
                 {order.status === "Ready For Driver" && (
@@ -737,13 +796,6 @@ await allocateCustomerPaymentToInvoices({
                       className="bg-slate-700 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[130px]"
                     >
                       Back To Warehouse
-                    </button>
-
-                    <button
-                      onClick={() => moveBackToReceivedOrders(order)}
-                      className="bg-orange-600 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"
-                    >
-                      Modify Order
                     </button>
                   </>
                 )}
@@ -788,6 +840,16 @@ await allocateCustomerPaymentToInvoices({
             {cashCollectionOrder === order.orderId && (
               <div className="mt-4 border rounded-2xl p-3 bg-slate-50 space-y-3">
                 <h4 className="font-bold text-center">Cash Collection</h4>
+
+                <div className="grid grid-cols-1 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => printThermalReceipt(order)}
+                    className="w-full bg-black text-white py-2 rounded-xl text-sm font-bold"
+                  >
+                    Print Thermal Receipt
+                  </button>
+                </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   <div className="border rounded-xl p-3 bg-white">

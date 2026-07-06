@@ -3,6 +3,7 @@ import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../utils/currency";
 import { getProductPriceForMode } from "../utils/pricing";
+import { supabase } from "../services/supabase";
 
 import { calculateDocumentTotals } from "../utils/documentTotals";
 
@@ -39,6 +40,9 @@ export default function AdminOrders({
   const [customerFilter, setCustomerFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [countryFilter, setCountryFilter] = useState("All");
+  const isSuperAdmin =
+    loggedInUser?.role === "Super Admin" || loggedInUser?.access_level === "Super Admin";
 
   const receivedOrders = orders.filter(
     (order) => order.status === "Received" || order.status === "In Progress"
@@ -83,6 +87,19 @@ visibleOrders = visibleOrders.filter((order) => {
     !customerName.includes(customerFilter.toLowerCase())
   ) {
     return false;
+  }
+
+  if (countryFilter !== "All") {
+    const country = String(
+      order.customer_country ||
+        order.customerCountry ||
+        order.branch_country ||
+        order.branchCountry ||
+        order.delivery_country ||
+        order.country ||
+        ""
+    ).toLowerCase();
+    if (!country.includes(countryFilter.toLowerCase())) return false;
   }
 
   if (dateFrom && orderDate) {
@@ -240,6 +257,46 @@ visibleOrders = visibleOrders.filter((order) => {
     });
   };
 
+  const deleteArchivedOrder = async (orderId) => {
+    if (!isSuperAdmin) {
+      alert("Only Super Admin can delete archived orders.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `Permanently delete archived order ${orderId}? This cannot be undone.`
+    );
+    if (!ok) return;
+
+    const order = findOrder(orderId);
+    const orderDbId = order?.dbId || order?.id;
+
+    if (orderDbId) {
+      await supabase.from("order_items").delete().eq("order_id", orderDbId);
+    }
+
+    const deleteMatch = `order_number.eq.${orderId}${orderDbId ? `,id.eq.${orderDbId}` : ""}`;
+    const { error } = await supabase
+      .from("orders")
+      .delete()
+      .or(deleteMatch);
+
+    if (error) {
+      alert("Could not delete archived order: " + error.message);
+      return;
+    }
+
+    await logAction({
+      user: loggedInUser,
+      action_type: "Archived order deleted",
+      page_module: "Received Orders",
+      order_id: orderId,
+      old_value: order?.status,
+      new_value: "Deleted",
+    });
+    await fetchOrders();
+  };
+
   const openAddItemModal = (order) => {
   if (!requirePermission(loggedInUser, "can_add_product_to_order", "You cannot add products to orders.")) return;
 
@@ -342,6 +399,33 @@ const getOrderCountry = (order = {}) =>
 
 const normalizeText = (value) => String(value || "").trim().toLowerCase();
 
+const hasValidMoney = (value) =>
+  value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+
+const getSavedOrderItemPrice = (item = {}) => {
+  if (hasValidMoney(item.price)) return Number(item.price);
+  if (hasValidMoney(item.unit_price)) return Number(item.unit_price);
+  if (hasValidMoney(item.unitPrice)) return Number(item.unitPrice);
+  if (hasValidMoney(item.selectedPrice)) return Number(item.selectedPrice);
+  if (hasValidMoney(item.selected_price)) return Number(item.selected_price);
+  return 0;
+};
+
+const loadFreshPricingSettings = async () => {
+  const { data, error } = await supabase
+    .from("pricing_settings")
+    .select("*")
+    .eq("id", 1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("Could not load latest pricing settings for price refresh:", error.message);
+    return pricingSettings;
+  }
+
+  return data || pricingSettings;
+};
+
 const getProductDisplayName = (product = {}) =>
   product.name || product.productName || product.product_name || "";
 
@@ -400,7 +484,7 @@ const getSelectableProductSeries = () =>
     ),
   ].sort((a, b) => String(a).localeCompare(String(b)));
 
-const buildPriceRefreshPayload = (order, item) => {
+const buildPriceRefreshPayload = async (order, item) => {
   const latestProduct = getLatestProductForItem(item);
 
   if (!latestProduct) {
@@ -409,7 +493,13 @@ const buildPriceRefreshPayload = (order, item) => {
 
   const priceMode = order.priceMode || order.price_mode || "vat";
   const country = getOrderCountry(order);
-  const price = getProductPriceForMode(latestProduct, priceMode, country, pricingSettings);
+  const latestPricingSettings = await loadFreshPricingSettings();
+  const price = getProductPriceForMode(
+    latestProduct,
+    priceMode,
+    country,
+    latestPricingSettings
+  );
 
   return {
     latestProduct,
@@ -425,7 +515,7 @@ const buildPriceRefreshPayload = (order, item) => {
 const refreshOrderItemPrice = async (order, item) => {
   if (!requirePermission(loggedInUser, "can_receive_order", "You cannot update received order prices.")) return;
 
-  const result = buildPriceRefreshPayload(order, item);
+  const result = await buildPriceRefreshPayload(order, item);
 
   if (result.error) {
     alert(result.error);
@@ -501,7 +591,7 @@ const bulkRefreshOrderPrices = async (order) => {
   if (!window.confirm(`Refresh prices for ${matchingItems.length} matching item(s) in this order?`)) return;
 
   for (const item of matchingItems) {
-    const result = buildPriceRefreshPayload(order, item);
+    const result = await buildPriceRefreshPayload(order, item);
     if (!result.error) {
       await updateOrderItem(order.orderId, item.dbId, result.updates);
     }
@@ -545,7 +635,7 @@ const bulkRefreshOrderPrices = async (order) => {
       </div>
 
       <div className="bg-white border rounded-2xl p-4 mb-4">
-  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
     <input
       className="border rounded-lg p-2"
       placeholder="Customer name..."
@@ -567,12 +657,23 @@ const bulkRefreshOrderPrices = async (order) => {
       onChange={(e) => setDateTo(e.target.value)}
     />
 
+    <select
+      className="border rounded-lg p-2 bg-white"
+      value={countryFilter}
+      onChange={(e) => setCountryFilter(e.target.value)}
+    >
+      <option value="All">All Countries</option>
+      <option value="Wales">Wales</option>
+      <option value="England">England</option>
+    </select>
+
     <button
       type="button"
       onClick={() => {
         setCustomerFilter("");
         setDateFrom("");
         setDateTo("");
+        setCountryFilter("All");
       }}
       className="bg-slate-800 text-white rounded-lg font-bold"
     >
@@ -690,19 +791,22 @@ const bulkRefreshOrderPrices = async (order) => {
       </button>
     </div>
 
+    <div className="overflow-x-auto">
     <div
       className="received-item-header"
       style={{
         display: "grid",
-        gridTemplateColumns: "55px 45px minmax(360px, 1fr) 130px 95px 75px",
-        columnGap: "8px",
+        gridTemplateColumns: "70px 70px minmax(420px, 1fr) 110px 160px 120px 110px",
+        columnGap: "10px",
         alignItems: "center",
+        minWidth: "1120px",
         width: "100%",
       }}
     >
       <div>QNT</div>
       <div>Upt</div>
       <div>Product Name</div>
+      <div>Unit</div>
       <div>Status</div>
       <div>Line</div>
       <div>Remove</div>
@@ -719,9 +823,10 @@ const bulkRefreshOrderPrices = async (order) => {
 
 const fallbackLineTotal =
   Number(item.qty ?? item.quantity ?? 0) *
-  Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
+  getSavedOrderItemPrice(item);
 
 const lineTotal = savedLineTotal > 0 ? savedLineTotal : fallbackLineTotal;
+const savedUnitPrice = getSavedOrderItemPrice(item);
 
       return (
         <div
@@ -731,9 +836,10 @@ const lineTotal = savedLineTotal > 0 ? savedLineTotal : fallbackLineTotal;
           }`}
           style={{
             display: "grid",
-            gridTemplateColumns: "55px 45px minmax(360px, 1fr) 130px 95px 75px",
-            columnGap: "8px",
+            gridTemplateColumns: "70px 70px minmax(420px, 1fr) 110px 160px 120px 110px",
+            columnGap: "10px",
             alignItems: "center",
+            minWidth: "1120px",
             width: "100%",
           }}
         >
@@ -785,6 +891,7 @@ const lineTotal = savedLineTotal > 0 ? savedLineTotal : fallbackLineTotal;
           <div className="received-product-name">
             {item.productName || item.name}
           </div>
+          <div className="received-line-total">{formatCurrency(savedUnitPrice)}</div>
           <div>
             <select
               className="received-status-select"
@@ -828,6 +935,7 @@ const lineTotal = savedLineTotal > 0 ? savedLineTotal : fallbackLineTotal;
         </div>
       );
     })}
+    </div>
 
                   <div className="flex flex-wrap justify-end gap-2 pt-3">
                     {!showArchive &&
@@ -862,14 +970,24 @@ const lineTotal = savedLineTotal > 0 ? savedLineTotal : fallbackLineTotal;
                     )}
 
                     {showArchive ? (
-                      hasPermission(loggedInUser, "can_archive_order") && (
-                      <button
-                        onClick={() => restoreOrder(order.orderId)}
-                        className={`bg-green-600 text-white ${btn}`}
-                      >
-                        Restore
-                      </button>
-                      )
+                      <div className="flex flex-wrap gap-2">
+                        {hasPermission(loggedInUser, "can_archive_order") && (
+                          <button
+                            onClick={() => restoreOrder(order.orderId)}
+                            className={`bg-green-600 text-white ${btn}`}
+                          >
+                            Restore
+                          </button>
+                        )}
+                        {isSuperAdmin && (
+                          <button
+                            onClick={() => deleteArchivedOrder(order.orderId)}
+                            className={`bg-red-700 text-white ${btn}`}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     ) : (
                       <>
                         {hasPermission(loggedInUser, "can_archive_order") && (

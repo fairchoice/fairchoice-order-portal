@@ -35,11 +35,11 @@ export const getOrderItemQty = (item = {}) =>
 
 export const getOrderItemUnitPrice = (item = {}) =>
   roundMoney(
-    item.selectedPrice ??
-      item.selected_price ??
-      item.price ??
+    item.price ??
       item.unit_price ??
       item.unitPrice ??
+      item.selectedPrice ??
+      item.selected_price ??
       item.vat_price ??
       item.vatPrice ??
       item.cash_price ??

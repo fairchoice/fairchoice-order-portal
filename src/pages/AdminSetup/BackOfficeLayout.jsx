@@ -23,6 +23,7 @@ const navSections = [
     title: "Order",
     items: [
       { label: "Sales Rep Orders", page: "order", permission: "access_sales_rep" },
+      { label: "Sales Invoices", page: "orderSalesInvoices", permission: "access_accounts" },
     ],
   },
   {
@@ -44,6 +45,12 @@ const navSections = [
       {
         label: "Warehouse",
         page: "warehouse",
+        fetchOrdersBefore: true,
+        permission: "access_warehouse",
+      },
+      {
+        label: "Pre-order Supply",
+        page: "preOrderSupply",
         fetchOrdersBefore: true,
         permission: "access_warehouse",
       },
@@ -101,9 +108,11 @@ const navSections = [
 
 const pagePermissions = {
   order: "access_sales_rep",
+  orderSalesInvoices: "access_accounts",
   receivedOrders: "access_received_orders",
   orders: "access_received_orders",
   warehouse: "access_warehouse",
+  preOrderSupply: "access_warehouse",
   driver: "access_driver",
   returnsPortal: "access_received_orders",
   customerPortal: "access_customer_portal",

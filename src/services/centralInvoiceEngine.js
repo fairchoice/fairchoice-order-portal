@@ -1,12 +1,22 @@
 import { supabase } from "./supabase";
 import { calculateDocumentTotals } from "../utils/documentTotals";
-import { roundMoney } from "../utils/pricing";
+import { calculateCartOrderItems, calculateCartTotals } from "../utils/orderTotals";
+import { isServerManagerPriceMode, roundMoney } from "../utils/pricing";
+import { formatCurrency } from "../utils/currency";
+import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
 const getOrderReference = (order = {}) => order.orderId || order.order_number || order.id;
 const getCustomerName = (order = {}) => order.companyName || order.company_name || order.customerName || "Unknown Customer";
 const getBranchName = (order = {}) => order.branchName || order.branch_name || order.delivery_branch_name || "";
 const getBranchId = (order = {}) => order.customerBranchId || order.customer_branch_id || null;
 const getCustomerAccountId = (order = {}) => order.customerAccountId || order.customer_account_id || null;
+const getInvoiceReference = (row = {}) =>
+  row.reference_no ||
+  row.order_number ||
+  row.invoice_number ||
+  row.orderId ||
+  row.id ||
+  "";
 const getDeliveredDate = (order = {}) =>
   order.deliveredAt ||
   order.delivered_at ||
@@ -14,9 +24,1941 @@ const getDeliveredDate = (order = {}) =>
   order.confirmed_at ||
   order.updated_at ||
   new Date().toISOString();
+const inactiveInvoiceStatuses = new Set(["removed", "cancelled", "deleted"]);
+const activeProcessingQueueStatuses = ["queued", "pending", "processing"];
+
+export const getInvoiceLineQuantity = (item = {}) =>
+  Number(item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0);
+
+export const isActiveInvoiceLine = (item = {}) => {
+  if (getInvoiceLineQuantity(item) <= 0) return false;
+  if (item.includeInPicking === false || item.include_in_picking === false) return false;
+
+  const status = String(item.sourceStatus || item.source_status || item.status || "")
+    .trim()
+    .toLowerCase();
+
+  return !inactiveInvoiceStatuses.has(status);
+};
+
+export const filterActiveInvoiceLines = (items = []) =>
+  (items || []).filter(isActiveInvoiceLine);
+
+const normalizeInvoiceOrder = (order = {}) => {
+  const activeItems = filterActiveInvoiceLines(order.items || order.order_items || []);
+
+  return {
+    ...order,
+    orderId: order.orderId || order.order_number,
+    order_number: order.order_number || order.orderId,
+    companyName: order.companyName || order.company_name,
+    company_name: order.company_name || order.companyName,
+    branchName:
+      order.branchName ||
+      order.delivery_branch_name ||
+      order.branch_name ||
+      order.shop_name ||
+      "",
+    branch_name: order.branch_name || order.delivery_branch_name || order.branchName || "",
+    items: activeItems,
+    order_items: activeItems,
+  };
+};
+
+export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
+  const reference =
+    typeof rowOrReference === "string"
+      ? rowOrReference
+      : getInvoiceReference(rowOrReference);
+
+  if (!reference) throw new Error("Invoice reference is required.");
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("order_number", reference)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error) throw error;
+
+  const order = Array.isArray(data) ? data[0] : data;
+  if (!order) return null;
+
+  const { data: orderItems, error: itemsError } = await supabase
+    .from("order_items")
+    .select("*")
+    .eq("order_id", order.id)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+
+  if (itemsError) throw itemsError;
+
+  const productIds = [
+    ...new Set((orderItems || []).map((item) => item.product_id).filter(Boolean)),
+  ];
+  let productsById = {};
+
+  if (productIds.length) {
+    const { data: products, error: productsError } = await supabase
+      .from("products")
+      .select("id, product_code")
+      .in("id", productIds);
+
+    if (!productsError) {
+      productsById = Object.fromEntries(
+        (products || []).map((product) => [String(product.id), product])
+      );
+    }
+  }
+
+  return normalizeInvoiceOrder({
+    ...order,
+    order_items: (orderItems || []).map((item) => ({
+      ...item,
+      products: item.products || productsById[String(item.product_id)] || null,
+      product: item.product || productsById[String(item.product_id)] || null,
+    })),
+  });
+}
+
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+
+const escapePdfText = (value) =>
+  String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/£/g, "\\243");
+
+const formatReceiptDateTime = (value) => {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return new Date().toLocaleString("en-GB");
+  return date.toLocaleString("en-GB");
+};
+
+const isInvoiceGeneratedForOrder = (order = {}) => {
+  if (order.invoice_number || order.invoiceNo || order.invoice_id || order.invoiceId) {
+    return true;
+  }
+
+  return isDeliveredInvoiceStatus(order.status);
+};
+
+const pushAddressValue = (lines, value) => {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    value.forEach((entry) => pushAddressValue(lines, entry));
+    return;
+  }
+
+  String(value)
+    .split(/\r?\n|,\s*/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => lines.push(line));
+};
+
+const uniqueAddressLines = (lines = []) => {
+  const seen = new Set();
+  return lines.filter((line) => {
+    const key = String(line || "").trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+export const getDeliveryAddressLines = (order = {}) => {
+  const branchLines = [];
+  pushAddressValue(
+    branchLines,
+    order.branchDeliveryAddress ||
+      order.branch_delivery_address ||
+      order.customer_branches?.delivery_address ||
+      order.branch?.delivery_address ||
+      order.branchAddress ||
+      order.branch_address ||
+      order.customer_branches?.address ||
+      order.branch?.address
+  );
+  pushAddressValue(branchLines, order.branch_address_line_1 || order.branchAddressLine1);
+  pushAddressValue(branchLines, order.branch_address_line_2 || order.branchAddressLine2);
+  pushAddressValue(branchLines, order.branch_town || order.branch_city);
+  pushAddressValue(
+    branchLines,
+    order.branch_postcode ||
+      order.branchPostcode ||
+      order.customer_branches?.postcode ||
+      order.branch?.postcode
+  );
+
+  if (branchLines.length) return uniqueAddressLines(branchLines);
+
+  const customerLines = [];
+  pushAddressValue(
+    customerLines,
+    order.invoiceAddress ||
+      order.invoice_address ||
+      order.customerInvoiceAddress ||
+      order.customer_invoice_address ||
+      order.customerAddress ||
+      order.customer_address ||
+      order.account_address ||
+      order.customer_accounts?.invoice_address ||
+      order.customer_accounts?.address ||
+      order.customer?.invoice_address ||
+      order.customer?.address ||
+      order.address
+  );
+  pushAddressValue(customerLines, order.addressLine1 || order.address_line_1);
+  pushAddressValue(customerLines, order.addressLine2 || order.address_line_2);
+  pushAddressValue(customerLines, order.town || order.city);
+  pushAddressValue(customerLines, order.postcode || order.billing_postcode);
+
+  if (customerLines.length) return uniqueAddressLines(customerLines);
+
+  const orderLines = [];
+  pushAddressValue(orderLines, order.deliveryAddress || order.delivery_address);
+  pushAddressValue(orderLines, order.delivery_address_line_1 || order.deliveryAddressLine1);
+  pushAddressValue(orderLines, order.delivery_address_line_2 || order.deliveryAddressLine2);
+  pushAddressValue(orderLines, order.delivery_town || order.delivery_city);
+  pushAddressValue(orderLines, order.deliveryPostcode || order.delivery_postcode);
+
+  return uniqueAddressLines(orderLines.length ? orderLines : ["Address not available"]);
+};
+
+export const getDeliveryAddress = (order = {}) =>
+  getDeliveryAddressLines(order).join(", ");
+
+const getBillingAddress = (order = {}) =>
+  [
+    order.billingAddress || order.billing_address,
+    order.invoiceAddress || order.invoice_address,
+    order.customerAddress || order.customer_address,
+    order.address || order.account_address,
+    order.addressLine1 || order.address_line_1,
+    order.addressLine2 || order.address_line_2,
+    order.town || order.city,
+    order.postcode || order.billing_postcode,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+const getDriverName = (order = {}) =>
+  order.driverName ||
+  order.driver_name ||
+  order.delivered_confirmed_by ||
+  order.confirmedBy ||
+  order.confirmed_by ||
+  "";
+
+const parseMoneyValue = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(String(value).replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const firstMoneyValue = (...values) => {
+  for (const value of values) {
+    const parsed = parseMoneyValue(value);
+    if (parsed !== null) return parsed;
+  }
+
+  return null;
+};
+
+export const isInvoicePaid = (order = {}, totals = {}) => {
+  const paymentStatus = String(order.payment_status || order.paymentStatus || "")
+    .trim()
+    .toLowerCase();
+
+  if (paymentStatus === "paid") return true;
+
+  const invoiceTotal = firstMoneyValue(
+    totals.grandTotal,
+    totals.grand_total,
+    order.grandTotal,
+    order.grand_total,
+    order.invoice_total,
+    order.invoiceTotal,
+    order.order_total,
+    order.orderTotal,
+    order.total_amount,
+    order.final_total,
+    order.total
+  );
+
+  const amountDue = firstMoneyValue(
+    order.amount_due,
+    order.amountDue,
+    order.remaining_amount,
+    order.remainingAmount,
+    order.balance_due,
+    order.balanceDue,
+    order.outstanding_amount,
+    order.outstandingAmount
+  );
+
+  if (amountDue !== null && amountDue <= 0) {
+    return true;
+  }
+
+  const paidAmount = firstMoneyValue(
+    order.payment_amount,
+    order.paymentAmount,
+    order.paid_amount,
+    order.paidAmount,
+    order.amount_paid,
+    order.amountPaid,
+    order.total_paid,
+    order.totalPaid
+  );
+
+  if (invoiceTotal !== null && invoiceTotal > 0 && paidAmount !== null && paidAmount >= invoiceTotal) {
+    return true;
+  }
+
+  return false;
+};
+
+const getInvoicePaymentStatus = (order = {}, totals = {}) =>
+  isInvoicePaid(order, totals) ? "PAID" : "UNPAID";
+
+export const getPrintTemplate = (priceMode) =>
+  isServerManagerPriceMode(priceMode)
+    ? "orderForm"
+    : "salesInvoice";
+
+const getThermalReceiptRows = (order = {}) => {
+  const invoiceOrder = normalizeInvoiceOrder(order);
+  const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+  const hasVat = Number(totals.vatTotal || 0) > 0;
+  const isServerManager = isServerManagerPriceMode(invoiceOrder.priceMode || invoiceOrder.price_mode);
+
+  return {
+    totals,
+    hasVat,
+    isServerManager,
+    items: totals.invoiceItems || [],
+    isInvoice: isInvoiceGeneratedForOrder(order),
+    reference: getOrderReference(order) || "-",
+    customerName: getCustomerName(invoiceOrder),
+    branchName: getBranchName(invoiceOrder),
+    deliveryAddress: getDeliveryAddress(invoiceOrder),
+    deliveryAddressLines: getDeliveryAddressLines(invoiceOrder),
+    driverName: getDriverName(invoiceOrder),
+    paymentStatus: getInvoicePaymentStatus(invoiceOrder, totals),
+    totalQuantity: totals.totalQuantity || 0,
+    totalLines: totals.totalLines || 0,
+    dateTime: formatReceiptDateTime(
+      order.invoiceDate ||
+        order.invoice_date ||
+        order.deliveredDate ||
+        order.delivered_date ||
+        order.deliveredAt ||
+        order.delivered_at ||
+        order.createdAt ||
+        order.created_at ||
+        new Date()
+    ),
+  };
+};
+
+const getThermalLineAmount = (item = {}) =>
+  item.gross_total ?? item.grossTotal ?? item.line_total ?? item.lineTotal ?? item.net_total ?? 0;
+
+const wrapText = (text, maxLength = 28) => {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = "";
+
+  words.forEach((word) => {
+    if (!current) {
+      current = word;
+      return;
+    }
+
+    if (`${current} ${word}`.length <= maxLength) {
+      current = `${current} ${word}`;
+      return;
+    }
+
+    lines.push(current);
+    current = word;
+  });
+
+  if (current) lines.push(current);
+  return lines.length ? lines : [""];
+};
+
+export function buildThermalReceiptHtml(order = {}) {
+  const receipt = getThermalReceiptRows(order);
+  const title = receipt.isServerManager
+    ? "ORDER FORM"
+    : receipt.isInvoice
+    ? "SALES RECEIPT"
+    : "ORDER RECEIPT";
+  const referenceLabel = receipt.isInvoice ? "Invoice No" : "Order No";
+
+  return `
+    <html>
+      <head>
+        <title>${escapeHtml(title)} - ${escapeHtml(receipt.reference)}</title>
+        <style>
+          @page { size: 80mm auto; margin: 0; }
+          * { box-sizing: border-box; }
+          body {
+            width: 80mm;
+            margin: 0;
+            padding: 4mm;
+            color: #111;
+            font-family: Arial, sans-serif;
+            font-size: 11px;
+            line-height: 1.28;
+          }
+          .center { text-align: center; }
+          .brand { font-size: 14px; font-weight: 800; }
+          .title { font-size: 13px; font-weight: 800; margin: 4px 0 8px; }
+          .line { border-top: 1px dashed #111; margin: 7px 0; }
+          .meta div { overflow-wrap: anywhere; }
+          .row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 9mm 20mm;
+            column-gap: 2mm;
+            align-items: start;
+          }
+          .product { overflow-wrap: anywhere; word-break: break-word; }
+          .qty { text-align: right; }
+          .amount { text-align: right; white-space: nowrap; }
+          .total-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 4mm;
+            font-weight: 800;
+          }
+          .grand { font-size: 13px; }
+          .unpaid-watermark {
+            margin: 5mm 0 3mm;
+            padding: 3mm 0;
+            border: 2px solid #d00;
+            color: #d00;
+            text-align: center;
+            font-size: 22px;
+            font-weight: 900;
+            letter-spacing: 0;
+          }
+          @media print {
+            html, body { width: 80mm; }
+          }
+        </style>
+      </head>
+      <body>
+        ${receipt.isServerManager ? "" : `<div class="center brand">Fair Choice Cash &amp; Carry</div>`}
+        <div class="center title">${escapeHtml(title)}</div>
+        ${!receipt.isServerManager && receipt.paymentStatus === "UNPAID" ? `<div class="unpaid-watermark">UNPAID</div>` : ""}
+        <div class="meta">
+          <div>${escapeHtml(referenceLabel)}: ${escapeHtml(receipt.reference)}</div>
+          <div>Customer: ${escapeHtml(receipt.customerName)}</div>
+          ${!receipt.isServerManager && receipt.branchName ? `<div>Branch: ${escapeHtml(receipt.branchName)}</div>` : ""}
+          <div><strong>Deliver To</strong></div>
+          ${receipt.deliveryAddressLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+          <div>Date/Time: ${escapeHtml(receipt.dateTime)}</div>
+          ${!receipt.isServerManager && receipt.driverName ? `<div>Driver: ${escapeHtml(receipt.driverName)}</div>` : ""}
+        </div>
+        <div class="line"></div>
+        <div class="row"><strong class="product">Product</strong><strong class="qty">Qty</strong><strong class="amount">Amount</strong></div>
+        <div class="line"></div>
+        ${receipt.items
+          .map((item) => {
+            const quantity = item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0;
+            return `<div class="row"><span class="product">${escapeHtml(
+              item.name || item.productName || item.product_name || ""
+            )}</span><span class="qty">${escapeHtml(quantity)}</span><span class="amount">${escapeHtml(
+              formatCurrency(getThermalLineAmount(item))
+            )}</span></div>`;
+          })
+          .join("")}
+        <div class="line"></div>
+        ${
+          receipt.isServerManager
+            ? `
+              <div class="total-row"><span>Total Qty</span><span>${escapeHtml(receipt.totalQuantity)}</span></div>
+              <div class="total-row"><span>Total Lines</span><span>${escapeHtml(receipt.totalLines)}</span></div>
+              <div class="total-row"><span>Net Total</span><span>${escapeHtml(
+                formatCurrency(receipt.totals.netTotal)
+              )}</span></div>
+              <div class="total-row grand"><span>Grand Total</span><span>${escapeHtml(
+                formatCurrency(receipt.totals.grandTotal)
+              )}</span></div>
+            `
+            : receipt.hasVat
+            ? `
+              <div class="total-row"><span>Total Qty</span><span>${escapeHtml(receipt.totalQuantity)}</span></div>
+              <div class="total-row"><span>Total Lines</span><span>${escapeHtml(receipt.totalLines)}</span></div>
+              <div class="total-row"><span>Net Total</span><span>${escapeHtml(
+                formatCurrency(receipt.totals.netTotal)
+              )}</span></div>
+              <div class="total-row"><span>VAT</span><span>${escapeHtml(
+                formatCurrency(receipt.totals.vatTotal)
+              )}</span></div>
+              <div class="total-row grand"><span>Grand Total</span><span>${escapeHtml(
+                formatCurrency(receipt.totals.grandTotal)
+              )}</span></div>
+            `
+            : `<div class="total-row grand"><span>Total</span><span>${escapeHtml(
+                formatCurrency(receipt.totals.grandTotal)
+              )}</span></div>
+              <div class="total-row"><span>Total Qty</span><span>${escapeHtml(receipt.totalQuantity)}</span></div>
+              <div class="total-row"><span>Total Lines</span><span>${escapeHtml(receipt.totalLines)}</span></div>`
+        }
+      </body>
+    </html>
+  `;
+}
+
+const buildThermalReceiptPdf = (order = {}) => {
+  const receipt = getThermalReceiptRows(order);
+  const title = receipt.isServerManager
+    ? "ORDER FORM"
+    : receipt.isInvoice
+    ? "SALES RECEIPT"
+    : "ORDER RECEIPT";
+  const referenceLabel = receipt.isInvoice ? "Invoice No" : "Order No";
+  const lines = [
+    ...(!receipt.isServerManager
+      ? [{ text: "Fair Choice Cash & Carry", size: 11, bold: true }]
+      : []),
+    { text: title, size: 11, bold: true },
+    ...(!receipt.isServerManager && receipt.paymentStatus === "UNPAID"
+      ? [{ text: "UNPAID", size: 18, bold: true }]
+      : []),
+    { text: `${referenceLabel}: ${receipt.reference}` },
+    { text: `Customer: ${receipt.customerName}` },
+  ];
+
+  if (!receipt.isServerManager && receipt.branchName) lines.push({ text: `Branch: ${receipt.branchName}` });
+  lines.push({ text: "Deliver To", bold: true });
+  receipt.deliveryAddressLines.forEach((line) => {
+    wrapText(line, 32).forEach((text) => lines.push({ text }));
+  });
+  lines.push({ text: `Date/Time: ${receipt.dateTime}` });
+  if (!receipt.isServerManager && receipt.driverName) lines.push({ text: `Driver: ${receipt.driverName}` });
+  lines.push({ text: "--------------------------------" });
+  lines.push({ text: "Product                 Qty Amount", bold: true });
+  lines.push({ text: "--------------------------------" });
+
+  receipt.items.forEach((item) => {
+    const quantity = String(item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0);
+    const amount = formatCurrency(getThermalLineAmount(item));
+    const nameLines = wrapText(item.name || item.productName || item.product_name || "", 21);
+    nameLines.forEach((text, index) => {
+      if (index === 0) {
+        lines.push({
+          text: `${text.padEnd(21, " ")} ${quantity.padStart(3, " ")} ${amount.padStart(8, " ")}`,
+        });
+      } else {
+        lines.push({ text });
+      }
+    });
+  });
+
+  lines.push({ text: "--------------------------------" });
+  lines.push({ text: `Total Qty ${receipt.totalQuantity}`, bold: true });
+  lines.push({ text: `Total Lines ${receipt.totalLines}`, bold: true });
+  if (receipt.isServerManager) {
+    lines.push({ text: `Net Total ${formatCurrency(receipt.totals.netTotal)}`, bold: true });
+    lines.push({ text: `Grand Total ${formatCurrency(receipt.totals.grandTotal)}`, bold: true });
+  } else if (receipt.hasVat) {
+    lines.push({ text: `Net Total ${formatCurrency(receipt.totals.netTotal)}`, bold: true });
+    lines.push({ text: `VAT ${formatCurrency(receipt.totals.vatTotal)}`, bold: true });
+    lines.push({ text: `Grand Total ${formatCurrency(receipt.totals.grandTotal)}`, bold: true });
+  } else {
+    lines.push({ text: `Total ${formatCurrency(receipt.totals.grandTotal)}`, bold: true });
+  }
+
+  const width = 226.77;
+  const height = Math.max(280, 28 + lines.length * 13);
+  let y = height - 18;
+  const content = lines
+    .map((line) => {
+      const font = line.bold ? "F2" : "F1";
+      const size = line.size || 9;
+      const output = `BT /${font} ${size} Tf 10 ${y} Td (${escapePdfText(line.text)}) Tj ET`;
+      y -= 13;
+      return output;
+    })
+    .join("\n");
+
+  const objects = [
+    "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+    "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+    `3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width.toFixed(
+      2
+    )} ${height.toFixed(
+      2
+    )}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >> endobj`,
+    "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj",
+    "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> endobj",
+    `6 0 obj << /Length ${content.length} >> stream\n${content}\nendstream endobj`,
+  ];
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object) => {
+    offsets.push(pdf.length);
+    pdf += `${object}\n`;
+  });
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return pdf;
+};
+
+export function printThermalReceipt(order = {}) {
+  const win = window.open("", "_blank", "width=380,height=720");
+  if (!win) {
+    alert("Popup blocked. Please allow popups to print the thermal receipt.");
+    return;
+  }
+
+  win.document.write(buildThermalReceiptHtml(order));
+  win.document.close();
+  win.focus();
+  win.print();
+}
+
+export function downloadThermalReceipt(order = {}) {
+  const orderNumber = getOrderReference(order) || "receipt";
+  const blob = new Blob([buildThermalReceiptPdf(order)], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `thermal-receipt-${orderNumber}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export const DEFAULT_INVOICE_SETTINGS = {
+  companyLogo: fairchoiceLogo,
+  companyName: "Fair Choice Cash & Carry",
+  companyAddress:
+    "Fair Choice Cash and Carry Ltd\n177 Pant Yr Heol, Panty Yr Heol\nNeath, SA11 2HB\nUnited Kingdom\nRegistered in England and Wales No. 16350457",
+  vatNumber: "GB 489728125",
+  companyRegistrationNumber: "16350457",
+  telephone: "07491116595",
+  email: "info@fairchoice.co.uk",
+  footerText: "Thank you for your business.",
+  paymentTerms: "Payment due according to agreed credit terms.",
+  defaultNotes: "",
+  invoiceTitle: "SALES INVOICE",
+  thermalReceiptWidth: "80mm",
+};
+
+export function getInvoiceSettings(overrides = {}) {
+  let storedSettings = {};
+
+  try {
+    storedSettings = JSON.parse(
+      localStorage.getItem("fairchoice_invoice_settings") || "{}"
+    );
+  } catch {
+    storedSettings = {};
+  }
+
+  return {
+    ...DEFAULT_INVOICE_SETTINGS,
+    ...storedSettings,
+    ...overrides,
+  };
+}
+
+export function saveInvoiceSettings(settings = {}) {
+  const nextSettings = {
+    ...getInvoiceSettings(),
+    ...settings,
+  };
+  localStorage.setItem("fairchoice_invoice_settings", JSON.stringify(nextSettings));
+  return nextSettings;
+}
+
+const getOrderDate = (order = {}) =>
+  order.invoiceDate ||
+  order.invoice_date ||
+  order.createdAt ||
+  order.created_at ||
+  order.orderDate ||
+  order.order_date ||
+  new Date();
+
+const formatInvoiceDate = (value) => {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return String(value || "-");
+  return date.toLocaleDateString("en-GB");
+};
+
+const isSettingFalse = (...values) => values.some((value) => value === false || value === "false");
+
+const shouldShowInvoiceHeaderFooter = (settings = {}, order = {}) => {
+  if (
+    isSettingFalse(
+      settings.showHeaderFooter,
+      settings.show_header_footer,
+      settings.includeHeaderFooter,
+      settings.include_header_footer
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    isServerManagerPriceMode(order.priceMode || order.price_mode) &&
+    (isSettingFalse(
+      settings.showServerManagerHeaderFooter,
+      settings.show_server_manager_header_footer
+    ) ||
+      settings.hideServerManagerHeaderFooter === true ||
+      settings.hide_server_manager_header_footer === true)
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const getOrderItemsForInvoice = (order = {}) =>
+  calculateDocumentTotals(filterActiveInvoiceLines(order.items || order.order_items || []), order)
+    .invoiceItems || [];
+
+const getLineQuantity = (item = {}) =>
+  Number(item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0);
+
+const getLinePrice = (item = {}) =>
+  Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
+
+const getLineVatRate = (item = {}) =>
+  Number(item.vatRate ?? item.vat_rate ?? item.vatPercent ?? item.vat_percent ?? 0);
+
+const getInvoiceProductCode = (item = {}) =>
+  item.product_code ||
+  item.productCode ||
+  item.sku ||
+  item.SKU ||
+  item.code ||
+  item.products?.product_code ||
+  item.products?.code ||
+  item.product?.product_code ||
+  item.product?.code ||
+  item.product?.productCode ||
+  "";
+
+const getPrintableCompanyAddress = (address = "") =>
+  String(address || "")
+    .split(/\r?\n/)
+    .filter((line) => !/registered in england and wales no/i.test(line))
+    .join("\n");
+
+function buildLegacyStandardInvoiceHtml(
+  order = {},
+  { documentType = "invoice", autoPrint = false, settings: settingsOverride = {} } = {}
+) {
+  const invoiceOrder = normalizeInvoiceOrder(order);
+  const settings = getInvoiceSettings(settingsOverride);
+  const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+  const items = getOrderItemsForInvoice(invoiceOrder);
+  const isDeliveryNote = documentType === "deliveryNote";
+  const isOrderForm = documentType === "orderForm";
+  const isServerManagerDocument = isServerManagerPriceMode(
+    invoiceOrder.priceMode || invoiceOrder.price_mode
+  );
+  const showPrices = !isDeliveryNote;
+  const title = isDeliveryNote
+    ? "DELIVERY NOTE"
+    : isOrderForm
+    ? "ORDER FORM"
+    : settings.invoiceTitle || "SALES INVOICE";
+  const showHeaderFooter =
+    isServerManagerDocument && (isDeliveryNote || isOrderForm)
+      ? false
+      : shouldShowInvoiceHeaderFooter(settings, invoiceOrder);
+  const referenceLabel = isOrderForm || isDeliveryNote ? "Order Number" : "Invoice Number";
+  const reference = getOrderReference(invoiceOrder) || "-";
+  const customerName = getCustomerName(invoiceOrder);
+  const branchName = getBranchName(invoiceOrder);
+  const deliveryAddress = getDeliveryAddress(invoiceOrder);
+  const rows = items
+    .map((item) => {
+      const quantity = getLineQuantity(item);
+      const unitPrice = getLinePrice(item);
+      const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
+      const vatRate = getLineVatRate(item);
+
+      return `
+        <tr>
+          <td>${escapeHtml(item.productCode || item.product_code || "")}</td>
+          <td>${escapeHtml(item.name || item.productName || item.product_name || "")}</td>
+          <td class="right">${escapeHtml(quantity)}</td>
+          ${
+            showPrices
+              ? `
+                <td class="right">${escapeHtml(formatCurrency(unitPrice))}</td>
+                <td class="right">${escapeHtml(vatRate.toFixed(2))}</td>
+                <td class="right">${escapeHtml(formatCurrency(netTotal))}</td>
+              `
+              : ""
+          }
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <html>
+      <head>
+        <title>${escapeHtml(title)} ${escapeHtml(reference)}</title>
+        <style>
+          @page { size: A4; margin: 10mm; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            color: #000;
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+          }
+          .page {
+            width: 190mm;
+            max-width: 190mm;
+            margin: 0 auto;
+            min-height: 277mm;
+            display: flex;
+            flex-direction: column;
+          }
+          .content {
+            flex: 1 0 auto;
+            padding-bottom: 8mm;
+          }
+          .top {
+            display: flex;
+            justify-content: space-between;
+            gap: 18px;
+            border-bottom: 1px solid #000;
+            padding-bottom: 9px;
+          }
+          .company {
+            white-space: pre-line;
+            line-height: 1.4;
+            font-size: 12px;
+          }
+          .logo {
+            height: 82px;
+            max-width: 190px;
+            object-fit: contain;
+          }
+          .title {
+            font-size: 25px;
+            font-weight: 900;
+            text-align: center;
+            margin: 0 0 12px;
+          }
+          .invoice-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 220px;
+            gap: 22px;
+            margin-top: 15px;
+            page-break-inside: avoid;
+          }
+          .box-title {
+            font-size: 12px;
+            font-weight: 800;
+            margin-bottom: 5px;
+          }
+          .invoice-to {
+            font-size: 12px;
+            line-height: 1.45;
+          }
+          .details-row {
+            display: grid;
+            grid-template-columns: 105px 1fr;
+            gap: 6px;
+            margin-bottom: 5px;
+            font-size: 12px;
+          }
+          .details-row:last-child span {
+            font-size: 13px;
+            font-weight: 800;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            margin-top: 18px;
+            font-size: 11.5px;
+          }
+          thead { display: table-header-group; }
+          tfoot { display: table-footer-group; }
+          th {
+            background-color: #d9e2f3 !important;
+            color: #000 !important;
+            font-size: 11.5px;
+            font-weight: 800;
+            padding: 6px;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          td {
+            padding: 4px 5px;
+            vertical-align: top;
+            overflow-wrap: anywhere;
+          }
+          .right { text-align: right; }
+          .summary-area {
+            display: grid;
+            grid-template-columns: 1fr 285px;
+            gap: 22px;
+            align-items: start;
+            margin-top: 18px;
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .qty-box {
+            font-size: 13px;
+            font-weight: 800;
+            line-height: 1.8;
+          }
+          .summary-box {
+            border: 1px solid #000;
+            font-size: 12px;
+          }
+          .summary-row {
+            display: grid;
+            grid-template-columns: 1fr 115px;
+            border-bottom: 1px solid #000;
+          }
+          .summary-row:last-child { border-bottom: none; }
+          .summary-label,
+          .summary-value {
+            padding: 7px;
+          }
+          .summary-label { font-weight: 800; }
+          .summary-value { text-align: right; }
+          .grand {
+            font-size: 16px;
+            font-weight: 900;
+          }
+          .deliver {
+            margin-top: 18px;
+            line-height: 1.45;
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .notes {
+            margin-top: 14px;
+            line-height: 1.45;
+            page-break-inside: avoid;
+          }
+          .footer {
+            flex-shrink: 0;
+            border-top: 1px solid #000;
+            padding-top: 8px;
+            margin-top: 10mm;
+            font-size: 10.5px;
+            line-height: 1.4;
+          }
+          @media print {
+            * {
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            html,
+            body {
+              width: 210mm;
+              max-width: 210mm;
+              overflow: visible;
+            }
+            .page {
+              width: 190mm;
+              max-width: 190mm;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="page">
+          <main class="content">
+            ${
+              showHeaderFooter
+                ? `
+                  <div class="top">
+                    <div class="company">
+                      <strong>${escapeHtml(settings.companyName)}</strong>
+                      ${escapeHtml(settings.companyAddress)}
+                      ${settings.vatNumber ? `VAT Number: ${escapeHtml(settings.vatNumber)}` : ""}
+                      ${settings.telephone ? `Telephone: ${escapeHtml(settings.telephone)}` : ""}
+                      ${settings.email ? `Email: ${escapeHtml(settings.email)}` : ""}
+                    </div>
+                    ${settings.companyLogo ? `<img src="${escapeHtml(settings.companyLogo)}" class="logo" />` : ""}
+                  </div>
+                `
+                : ""
+            }
+
+            <section class="invoice-grid">
+              <div class="invoice-to">
+                <div class="box-title">${isDeliveryNote ? "Deliver To:" : "Invoice To:"}</div>
+                <div>${escapeHtml(customerName)}</div>
+                ${branchName ? `<div>${escapeHtml(branchName)}</div>` : ""}
+                ${deliveryAddress ? `<div>${escapeHtml(deliveryAddress)}</div>` : ""}
+              </div>
+              <div>
+                <div class="title">${escapeHtml(title)}</div>
+                <div class="details-row"><strong>Date</strong><span>${escapeHtml(formatInvoiceDate(getOrderDate(invoiceOrder)))}</span></div>
+                <div class="details-row"><strong>Due Date</strong><span>${escapeHtml(invoiceOrder.dueDate || invoiceOrder.due_date || "-")}</span></div>
+                <div class="details-row"><strong>Customer Code</strong><span>${escapeHtml(invoiceOrder.customerCode || invoiceOrder.customer_code || customerName || "-")}</span></div>
+                <div class="details-row"><strong>${escapeHtml(referenceLabel)}</strong><span>${escapeHtml(reference)}</span></div>
+              </div>
+            </section>
+
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:90px;">Code</th>
+                  <th>Description</th>
+                  <th style="width:58px;" class="right">Qty</th>
+                  ${
+                    showPrices
+                      ? `
+                        <th style="width:78px;" class="right">Price</th>
+                        <th style="width:58px;" class="right">VAT %</th>
+                        <th style="width:88px;" class="right">Net</th>
+                      `
+                      : ""
+                  }
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || `<tr><td colspan="${showPrices ? 6 : 3}">No supplied items.</td></tr>`}
+              </tbody>
+            </table>
+
+            <section class="summary-area">
+              <div class="qty-box">
+                <div>Total Quantity&nbsp;&nbsp;&nbsp; ${escapeHtml(totals.totalQuantity)}</div>
+                <div>Total Lines&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${escapeHtml(totals.totalLines)}</div>
+              </div>
+              ${
+                showPrices
+                  ? `
+                    <div class="summary-box">
+                      <div class="summary-row"><div class="summary-label">Total Net</div><div class="summary-value">${escapeHtml(formatCurrency(totals.netTotal))}</div></div>
+                      <div class="summary-row"><div class="summary-label">Total VAT</div><div class="summary-value">${escapeHtml(formatCurrency(totals.vatTotal))}</div></div>
+                      <div class="summary-row grand"><div class="summary-label">TOTAL</div><div class="summary-value">${escapeHtml(formatCurrency(totals.grandTotal))}</div></div>
+                    </div>
+                  `
+                  : ""
+              }
+            </section>
+
+            <section class="deliver">
+              <div class="box-title">Deliver To:</div>
+              <div>${escapeHtml(customerName)}</div>
+              ${branchName ? `<div>${escapeHtml(branchName)}</div>` : ""}
+              ${deliveryAddress ? `<div>${escapeHtml(deliveryAddress)}</div>` : ""}
+            </section>
+
+            ${(settings.defaultNotes || invoiceOrder.notes) ? `<section class="notes">${escapeHtml(invoiceOrder.notes || settings.defaultNotes)}</section>` : ""}
+          </main>
+          ${
+            showHeaderFooter
+              ? `
+                <footer class="footer">
+                  ${escapeHtml(settings.footerText)}<br />
+                  ${escapeHtml(settings.paymentTerms)}
+                </footer>
+              `
+              : ""
+          }
+        </div>
+        ${autoPrint ? "<script>window.print();</script>" : ""}
+      </body>
+    </html>
+  `;
+}
+
+export function buildStandardInvoiceHtml(
+  order = {},
+  { documentType = "invoice", autoPrint = false, settings: settingsOverride = {} } = {}
+) {
+  const invoiceOrder = normalizeInvoiceOrder(order);
+  const printTemplate = getPrintTemplate(invoiceOrder.priceMode || invoiceOrder.price_mode);
+  const resolvedDocumentType =
+    documentType === "invoice" &&
+    printTemplate === "orderForm"
+      ? "orderForm"
+      : documentType;
+  const settings = getInvoiceSettings(settingsOverride);
+  const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+  const items = getOrderItemsForInvoice(invoiceOrder);
+  const isDeliveryNote = resolvedDocumentType === "deliveryNote";
+  const isOrderForm = resolvedDocumentType === "orderForm";
+  const isServerManagerDocument = isServerManagerPriceMode(
+    invoiceOrder.priceMode || invoiceOrder.price_mode
+  );
+  const showPrices = !isDeliveryNote;
+  const title = isDeliveryNote
+    ? "DELIVERY NOTE"
+    : isOrderForm
+    ? "ORDER FORM"
+    : "SALES INVOICE";
+  const showHeaderFooter = isDeliveryNote
+    ? !isServerManagerDocument && shouldShowInvoiceHeaderFooter(settings, invoiceOrder)
+    : !isOrderForm;
+  const showInvoiceTotals = showPrices && !isOrderForm;
+  const referenceLabel = isOrderForm || isDeliveryNote ? "Order Number" : "Invoice Number";
+  const reference = getOrderReference(invoiceOrder) || "-";
+  const customerName = getCustomerName(invoiceOrder);
+  const branchName = getBranchName(invoiceOrder);
+  const billingAddress = getBillingAddress(invoiceOrder) || getDeliveryAddress(invoiceOrder);
+  const deliveryAddress = getDeliveryAddress(invoiceOrder);
+  const invoiceDate = formatInvoiceDate(getOrderDate(invoiceOrder));
+  const dueDate = invoiceOrder.dueDate || invoiceOrder.due_date || "-";
+  const paymentTerms =
+    invoiceOrder.paymentTerms ||
+    invoiceOrder.payment_terms ||
+    settings.paymentTerms ||
+    "-";
+  const salesperson =
+    invoiceOrder.salesperson ||
+    invoiceOrder.sales_person ||
+    invoiceOrder.salesRep ||
+    invoiceOrder.sales_rep ||
+    invoiceOrder.created_by_name ||
+    invoiceOrder.confirmed_by ||
+    "";
+  const customerCode =
+    invoiceOrder.customerCode ||
+    invoiceOrder.customer_code ||
+    invoiceOrder.customer_account_code ||
+    invoiceOrder.account_code ||
+    invoiceOrder.customer_account_id ||
+    "-";
+  const companyRegistrationNumber =
+    settings.companyRegistrationNumber ||
+    settings.company_registration_number ||
+    "16350457";
+  const companyAddress = getPrintableCompanyAddress(settings.companyAddress);
+  const paymentStatus = getInvoicePaymentStatus(invoiceOrder, totals);
+  const vatGroups = (totals.vatGroups || totals.vat_groups || []).filter(
+    (group) => Number(group.net_total ?? group.netTotal ?? 0) || Number(group.vat_total ?? group.vatTotal ?? 0)
+  );
+  const vatSummaryRows = vatGroups.length
+    ? vatGroups
+    : [
+        {
+          vatRate: 0,
+          vat_rate: 0,
+          netTotal: totals.netTotal,
+          net_total: totals.netTotal,
+          vatTotal: totals.vatTotal,
+          vat_total: totals.vatTotal,
+        },
+      ];
+  const formatVatRate = (value) => {
+    const rate = Number(value || 0);
+    return Number.isInteger(rate) ? String(rate) : rate.toFixed(2);
+  };
+  const rows = items
+    .map((item) => {
+      const quantity = getLineQuantity(item);
+      const unitPrice = getLinePrice(item);
+      const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
+      const vatRate = getLineVatRate(item);
+      const productCode = getInvoiceProductCode(item);
+
+      return `
+        <tr>
+          ${
+            isOrderForm
+              ? ""
+              : `<td class="code">${escapeHtml(productCode)}</td>`
+          }
+          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}</td>
+          <td class="right">${escapeHtml(quantity)}</td>
+          ${
+            showPrices
+              ? `
+                <td class="right">${escapeHtml(formatCurrency(unitPrice))}</td>
+                ${
+                  isOrderForm
+                    ? ""
+                    : `<td class="right">${escapeHtml(formatVatRate(vatRate))}</td>`
+                }
+                <td class="right">${escapeHtml(formatCurrency(netTotal))}</td>
+              `
+              : ""
+          }
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <html>
+      <head>
+        <title>${escapeHtml(title)} ${escapeHtml(reference)}</title>
+        <style>
+          @page {
+            size: A4;
+            margin: 11mm 10mm 13mm;
+            @bottom-right {
+              content: "Page " counter(page) " of " counter(pages);
+              font-family: Arial, sans-serif;
+              font-size: 9px;
+              color: #64748b;
+            }
+          }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            color: #0f172a;
+            background: #fff;
+            font-family: Arial, sans-serif;
+            font-size: 11.5px;
+            line-height: 1.35;
+          }
+          .page {
+            width: 190mm;
+            max-width: 190mm;
+            min-height: 273mm;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+          }
+          .content { flex: 1 0 auto; }
+          .watermark {
+            position: fixed;
+            top: 43%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-28deg);
+            color: rgba(239, 68, 68, 0.16);
+            border: 4px solid rgba(239, 68, 68, 0.2);
+            padding: 10mm 18mm;
+            font-size: 46px;
+            font-weight: 900;
+            letter-spacing: 0;
+            z-index: 5;
+            pointer-events: none;
+            background: transparent;
+          }
+          .watermark.paid {
+            color: rgba(22, 163, 74, 0.12);
+            border-color: rgba(22, 163, 74, 0.16);
+          }
+          .content,
+          .footer {
+            position: relative;
+            z-index: 2;
+          }
+          .document-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 170px;
+            gap: 16px;
+            align-items: start;
+            padding-bottom: 12px;
+            border-bottom: 1.5px solid #111827;
+          }
+          .company-name {
+            color: #111827;
+            font-size: 18px;
+            font-weight: 900;
+            margin-bottom: 5px;
+          }
+          .company-details {
+            white-space: pre-line;
+            color: #334155;
+            font-size: 10.5px;
+          }
+          .brand-panel {
+            text-align: right;
+          }
+          .logo {
+            max-width: 155px;
+            max-height: 74px;
+            object-fit: contain;
+          }
+          .document-title {
+            margin-top: 8px;
+            color: #111827;
+            font-size: 22px;
+            font-weight: 900;
+            letter-spacing: 0;
+          }
+          .standalone-title {
+            margin: 0 0 12px;
+            text-align: right;
+            border-bottom: 1.5px solid #111827;
+            padding-bottom: 8px;
+          }
+          .panel-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 78mm;
+            gap: 12px;
+            margin-top: 14px;
+          }
+          .panel {
+            border: 1px solid #fed7aa;
+            border-radius: 6px;
+            overflow: hidden;
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .panel-title {
+            background: #fed7aa;
+            color: #111827;
+            font-size: 10px;
+            font-weight: 900;
+            letter-spacing: 0;
+            padding: 6px 8px;
+            text-transform: uppercase;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .panel-body {
+            padding: 8px;
+            background: #fff;
+          }
+          .customer-name {
+            font-size: 13px;
+            font-weight: 900;
+            margin-bottom: 5px;
+          }
+          .address-block {
+            color: #334155;
+            margin-top: 4px;
+          }
+          .muted-label {
+            color: #64748b;
+            font-size: 9.5px;
+            font-weight: 800;
+            text-transform: uppercase;
+          }
+          .detail-row {
+            display: grid;
+            grid-template-columns: 31mm minmax(0, 1fr);
+            gap: 7px;
+            padding: 4px 0;
+            border-bottom: 1px solid #e2e8f0;
+          }
+          .detail-row:last-child { border-bottom: 0; }
+          .detail-label {
+            color: #475569;
+            font-weight: 800;
+          }
+          .detail-value {
+            color: #0f172a;
+            font-weight: 700;
+            overflow-wrap: anywhere;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            margin-top: 14px;
+            font-size: 10.8px;
+          }
+          thead { display: table-header-group; }
+          th {
+            background: #dbeafe !important;
+            color: #111827 !important;
+            padding: 7px 6px;
+            font-size: 10px;
+            font-weight: 900;
+            text-transform: uppercase;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          td {
+            padding: 6px;
+            vertical-align: top;
+            border: 1px solid #e5e7eb;
+            overflow-wrap: anywhere;
+            background: #fff;
+          }
+          .right { text-align: right; }
+          .code {
+            width: 32mm;
+            max-width: 32mm;
+            color: #334155;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          .code-heading {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          .description { font-weight: 700; }
+          .summary-area {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 78mm;
+            gap: 12px;
+            align-items: start;
+            margin-top: 14px;
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .count-strip {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+          }
+          .count-card {
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 8px;
+            background: #fff;
+          }
+          .count-value {
+            font-size: 18px;
+            font-weight: 900;
+            color: #0f172a;
+          }
+          .vat-summary {
+            margin-top: 10px;
+            border: 1px solid #fed7aa;
+            border-radius: 6px;
+            overflow: hidden;
+          }
+          .vat-summary table {
+            margin: 0;
+            font-size: 10px;
+          }
+          .vat-summary th {
+            background: #fed7aa !important;
+            color: #111827 !important;
+          }
+          .vat-summary td {
+            background: #fff !important;
+            padding: 5px 6px;
+          }
+          .totals-box {
+            border: 1px solid #bfdbfe;
+            border-radius: 6px;
+            overflow: hidden;
+          }
+          .total-row {
+            display: grid;
+            grid-template-columns: 1fr 32mm;
+            gap: 8px;
+            padding: 7px 9px;
+            border-bottom: 1px solid #dbeafe;
+          }
+          .total-row:last-child { border-bottom: 0; }
+          .total-label {
+            font-weight: 900;
+            color: #334155;
+          }
+          .total-value {
+            text-align: right;
+            font-weight: 900;
+          }
+          .grand-total {
+            background: #dbeafe !important;
+            color: #111827 !important;
+            font-size: 15px;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .grand-total .total-label,
+          .grand-total .total-value {
+            color: #111827 !important;
+            font-weight: 900;
+          }
+          .notes {
+            margin-top: 12px;
+            color: #334155;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 8px;
+          }
+          .footer {
+            flex-shrink: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: end;
+            border-top: 1.5px solid #111827;
+            color: #475569;
+            font-size: 9.5px;
+            line-height: 1.45;
+            margin-top: 12mm;
+            padding-top: 7px;
+          }
+          .deliver-bottom {
+            margin-top: 14px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 8px;
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .page-number::after {
+            content: "Page " counter(page);
+          }
+          @media print {
+            * {
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            html,
+            body {
+              width: 210mm;
+              max-width: 210mm;
+              overflow: visible;
+            }
+            .page {
+              width: 190mm;
+              max-width: 190mm;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="page">
+          ${!isOrderForm && !isDeliveryNote ? `<div class="watermark ${paymentStatus === "PAID" ? "paid" : ""}">${escapeHtml(paymentStatus)}</div>` : ""}
+          <main class="content">
+            ${
+              showHeaderFooter
+                ? `
+                  <header class="document-header">
+                    <div>
+                      <div class="company-name">Fair Choice Cash and Carry</div>
+                      <div class="company-details">
+                        ${escapeHtml(companyAddress)}
+                        ${settings.telephone ? `Telephone: ${escapeHtml(settings.telephone)}` : ""}
+                        ${settings.email ? `Email: ${escapeHtml(settings.email)}` : ""}
+                      </div>
+                    </div>
+                    <div class="brand-panel">
+                      ${settings.companyLogo ? `<img src="${escapeHtml(settings.companyLogo)}" class="logo" />` : ""}
+                      <div class="document-title">${escapeHtml(title)}</div>
+                    </div>
+                  </header>
+                `
+                : `<div class="document-title standalone-title">${escapeHtml(title)}</div>`
+            }
+
+            <section class="panel-grid">
+              <div class="panel">
+                <div class="panel-title">Customer</div>
+                <div class="panel-body">
+                  <div class="customer-name">${escapeHtml(customerName)}</div>
+                  <div><span class="muted-label">Customer Code</span><br />${escapeHtml(customerCode)}</div>
+                  ${billingAddress ? `<div class="address-block"><span class="muted-label">Billing Address</span><br />${escapeHtml(billingAddress)}</div>` : ""}
+                  <div class="address-block"><span class="muted-label">Deliver To</span><br />${escapeHtml(
+                    [branchName, deliveryAddress].filter(Boolean).join(", ")
+                  )}</div>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="panel-title">${isOrderForm ? "Order Details" : "Invoice Details"}</div>
+                <div class="panel-body">
+                  <div class="detail-row"><div class="detail-label">${escapeHtml(referenceLabel)}</div><div class="detail-value">${escapeHtml(reference)}</div></div>
+                  <div class="detail-row"><div class="detail-label">${isOrderForm ? "Order Date" : "Invoice Date"}</div><div class="detail-value">${escapeHtml(invoiceDate)}</div></div>
+                  ${isOrderForm ? "" : `<div class="detail-row"><div class="detail-label">Due Date</div><div class="detail-value">${escapeHtml(dueDate)}</div></div>`}
+                  ${isOrderForm ? "" : `<div class="detail-row"><div class="detail-label">Payment Terms</div><div class="detail-value">${escapeHtml(paymentTerms)}</div></div>`}
+                  ${salesperson ? `<div class="detail-row"><div class="detail-label">Salesperson</div><div class="detail-value">${escapeHtml(salesperson)}</div></div>` : ""}
+                </div>
+              </div>
+            </section>
+
+            <table>
+              <thead>
+                <tr>
+                  ${isOrderForm ? "" : `<th style="width:32mm;" class="code-heading">Product Code</th>`}
+                  <th>Description</th>
+                  <th style="width:15mm;" class="right">Quantity</th>
+                  ${
+                    showPrices
+                      ? `
+                        <th style="width:23mm;" class="right">Unit Price</th>
+                        ${isOrderForm ? "" : `<th style="width:16mm;" class="right">VAT %</th>`}
+                        <th style="width:25mm;" class="right">Net Amount</th>
+                      `
+                      : ""
+                  }
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || `<tr><td colspan="${isOrderForm ? 4 : showPrices ? 6 : 3}">No supplied items.</td></tr>`}
+              </tbody>
+            </table>
+
+            <section class="summary-area">
+              <div>
+                <div class="count-strip">
+                  <div class="count-card">
+                    <div class="muted-label">Total Quantity</div>
+                    <div class="count-value">${escapeHtml(totals.totalQuantity)}</div>
+                  </div>
+                  <div class="count-card">
+                    <div class="muted-label">Total Lines</div>
+                    <div class="count-value">${escapeHtml(totals.totalLines)}</div>
+                  </div>
+                </div>
+                ${
+                  showInvoiceTotals
+                    ? `
+                      <div class="vat-summary">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>VAT %</th>
+                              <th class="right">Net</th>
+                              <th class="right">VAT</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            ${vatSummaryRows
+                              .map(
+                                (group) => `
+                                  <tr>
+                                    <td>${escapeHtml(formatVatRate(group.vatRate ?? group.vat_rate))}</td>
+                                    <td class="right">${escapeHtml(formatCurrency(group.netTotal ?? group.net_total ?? 0))}</td>
+                                    <td class="right">${escapeHtml(formatCurrency(group.vatTotal ?? group.vat_total ?? 0))}</td>
+                                  </tr>
+                                `
+                              )
+                              .join("")}
+                          </tbody>
+                        </table>
+                      </div>
+                    `
+                    : ""
+                }
+              </div>
+              ${
+                showPrices
+                  ? `
+                    <div class="totals-box">
+                      ${isOrderForm ? "" : `
+                        <div class="total-row">
+                          <div class="total-label">Net Total</div>
+                          <div class="total-value">${escapeHtml(formatCurrency(totals.netTotal))}</div>
+                        </div>
+                        <div class="total-row">
+                          <div class="total-label">VAT Total</div>
+                          <div class="total-value">${escapeHtml(formatCurrency(totals.vatTotal))}</div>
+                        </div>
+                      `}
+                      <div class="total-row grand-total">
+                        <div class="total-label">Grand Total</div>
+                        <div class="total-value">${escapeHtml(formatCurrency(totals.grandTotal))}</div>
+                      </div>
+                    </div>
+                  `
+                  : ""
+              }
+            </section>
+
+            ${
+              `
+                  <section class="deliver-bottom">
+                    <div class="muted-label">Deliver To</div>
+                    <div class="customer-name">${escapeHtml(customerName)}</div>
+                    ${branchName ? `<div>${escapeHtml(branchName)}</div>` : ""}
+                    <div>${escapeHtml(deliveryAddress)}</div>
+                  </section>
+                `
+            }
+
+            ${(settings.defaultNotes || invoiceOrder.notes) ? `<section class="notes">${escapeHtml(invoiceOrder.notes || settings.defaultNotes)}</section>` : ""}
+          </main>
+          ${
+            showHeaderFooter
+              ? `
+                <footer class="footer">
+                  <div>
+                    <strong>${escapeHtml(settings.footerText)}</strong><br />
+                    ${escapeHtml(paymentTerms)}<br />
+                    Registered in England and Wales No. ${escapeHtml(companyRegistrationNumber)} | VAT Registration No. ${escapeHtml(settings.vatNumber || "-")}
+                  </div>
+                  <div class="page-number"></div>
+                </footer>
+              `
+              : ""
+          }
+        </div>
+        ${autoPrint ? "<script>window.print();</script>" : ""}
+      </body>
+    </html>
+  `;
+}
+
+const openInvoiceHtml = (html, popupMessage = "Popup blocked. Please allow popups for invoices.") => {
+  const win = window.open("", "_blank", "width=900,height=700");
+  if (!win) {
+    alert(popupMessage);
+    return null;
+  }
+  win.document.write(html);
+  win.document.close();
+  return win;
+};
+
+export function previewInvoice(order = {}, options = {}) {
+  return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: false }));
+}
+
+export function printInvoice(order = {}, options = {}) {
+  return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: true }));
+}
+
+export function printOrderForm(order = {}, options = {}) {
+  return printInvoice(order, { ...options, documentType: "orderForm" });
+}
+
+export function printDeliveryNote(order = {}, options = {}) {
+  return openInvoiceHtml(
+    buildLegacyStandardInvoiceHtml(order, { ...options, documentType: "deliveryNote", autoPrint: true })
+  );
+}
+
+export function downloadInvoice(order = {}, options = {}) {
+  return openInvoiceHtml(
+    buildStandardInvoiceHtml(order, { ...options, autoPrint: true }),
+    "Popup blocked. Please allow popups to download or save the invoice PDF."
+  );
+}
+
+export async function createInvoice({ order, confirmedBy, currentUser } = {}) {
+  return createOrUpdateInvoiceForDeliveredOrder({ order, confirmedBy, currentUser });
+}
+
+export async function createManualInvoice({
+  order,
+  companyName,
+  customerAccountId,
+  customerBranchId,
+  branchName = "",
+  deliveryAddress = "",
+  deliveryPostcode = "",
+  customerCountry = "",
+  priceMode = "VAT",
+  cart = [],
+  confirmedBy,
+  currentUser,
+  notes = "Manual invoice",
+} = {}) {
+  if (order) return createInvoice({ order, confirmedBy, currentUser });
+  if (!companyName) throw new Error("Customer is required");
+  if (!cart.length) throw new Error("Add at least one product");
+
+  const orderNumber = `ORD-${Date.now()}`;
+  const calculatedTotals = calculateCartTotals(cart, { priceMode });
+  const calculatedItems = calculateCartOrderItems(cart, { priceMode });
+
+  const orderPayload = {
+    order_number: orderNumber,
+    customer_account_id: customerAccountId || null,
+    customer_branch_id: customerBranchId || null,
+    branch_id: customerBranchId || null,
+    branch_name: branchName || "",
+    company_name: companyName,
+    delivery_branch_name: branchName || "",
+    delivery_address: deliveryAddress || "",
+    delivery_postcode: deliveryPostcode || "",
+    customer_country: customerCountry || "",
+    postcode: deliveryPostcode || "",
+    price_mode: String(priceMode || "VAT").toUpperCase(),
+    subtotal: calculatedTotals.netTotal.toFixed(2),
+    net_total: calculatedTotals.netTotal.toFixed(2),
+    vat_total: calculatedTotals.vatTotal.toFixed(2),
+    order_total: calculatedTotals.grandTotal.toFixed(2),
+    discount_percent: calculatedTotals.discountPercent || 0,
+    discount_amount: calculatedTotals.discountAmount.toFixed(2),
+    status: "Delivered",
+    delivered_at: new Date().toISOString(),
+    notes,
+    invoice_type: "MANUAL",
+    created_by: currentUser?.id || currentUser?.staff_id || null,
+    created_by_name: currentUser?.name || currentUser?.staff_name || currentUser?.username || null,
+  };
+
+  let { data: savedOrder, error: orderError } = await supabase
+    .from("orders")
+    .insert(orderPayload)
+    .select()
+    .single();
+
+  if (orderError) {
+    const fallback = { ...orderPayload };
+    ["net_total", "subtotal", "delivered_at", "notes"].forEach((key) => delete fallback[key]);
+    const retry = await supabase.from("orders").insert(fallback).select().single();
+    savedOrder = retry.data;
+    orderError = retry.error;
+  }
+
+  if (orderError) throw orderError;
+
+  const orderItems = calculatedItems.map((item) => ({
+    order_id: savedOrder.id,
+    product_id: item.id || item.productId || item.product_id,
+    product_code: item.productCode || item.product_code || "",
+    product_name: item.name || item.productName || item.product_name || "",
+    brand: item.brand || "",
+    series: item.series || "",
+    flavour: item.flavour || "",
+    carton_size: item.cartonSize || item.carton_size || "",
+    qty: item.qty,
+    picked_qty: item.qty,
+    price: item.price.toFixed(2),
+    line_total: item.line_total.toFixed(2),
+    net_total: item.net_total.toFixed(2),
+    gross_total: item.gross_total.toFixed(2),
+    vat_total: item.vat_total.toFixed(2),
+    vat_amount: item.vat_total.toFixed(2),
+    vat_rate: item.vat_rate,
+    vat_type: item.vat_type,
+    source_status: "In Stock",
+    include_in_picking: true,
+  }));
+
+  let { error: itemsError } = await supabase.from("order_items").insert(orderItems);
+  if (itemsError) {
+    const fallbackItems = orderItems.map((item) => {
+      const next = { ...item };
+      ["vat_type", "gross_total", "net_total", "vat_amount", "product_code"].forEach((key) => {
+        if (String(itemsError.message || "").toLowerCase().includes(key)) delete next[key];
+      });
+      return next;
+    });
+    const retry = await supabase.from("order_items").insert(fallbackItems);
+    itemsError = retry.error;
+  }
+
+  if (itemsError) throw itemsError;
+
+  const invoiceOrder = {
+    ...savedOrder,
+    orderId: savedOrder.order_number,
+    companyName: savedOrder.company_name,
+    branchName: savedOrder.delivery_branch_name,
+    deliveryAddress: savedOrder.delivery_address,
+    priceMode: savedOrder.price_mode,
+    items: calculatedItems,
+  };
+
+  const invoice = await createInvoice({
+    order: invoiceOrder,
+    confirmedBy: confirmedBy || currentUser?.name || currentUser?.username || "Manual Invoice",
+    currentUser,
+  });
+
+  await allocateCustomerPaymentToInvoices({
+    customerAccountId,
+    customerName: companyName,
+  });
+
+  return { order: invoiceOrder, invoice };
+}
+
+export async function amendInvoice({
+  order,
+  reason = "",
+  currentUser,
+  previousTotal,
+  newTotal,
+  changedItems = [],
+} = {}) {
+  const oldTotal = previousTotal ?? getInvoiceTotal(order);
+  const invoice = await createInvoice({ order, confirmedBy: currentUser?.name || currentUser?.username, currentUser });
+  const latestTotal = newTotal ?? getInvoiceTotal(order);
+
+  await recordInvoiceVersion({
+    order,
+    reason,
+    previousTotal: oldTotal,
+    newTotal: latestTotal,
+    changedItems,
+    currentUser,
+  });
+
+  return invoice;
+}
+
+export async function createReturnInvoice({ order, confirmedBy, currentUser } = {}) {
+  const invoice = await createInvoice({ order, confirmedBy, currentUser });
+  return {
+    ...invoice,
+    invoice_type: "RETURN",
+    invoiceType: "RETURN",
+  };
+}
+
+export async function recordInvoiceVersion({
+  order,
+  reason = "",
+  previousTotal = 0,
+  newTotal = 0,
+  changedItems = [],
+  currentUser,
+} = {}) {
+  const payload = {
+    order_number: getOrderReference(order),
+    invoice_number: getOrderReference(order),
+    version_number: Date.now(),
+    changed_by: currentUser?.name || currentUser?.username || null,
+    changed_by_id: currentUser?.id || currentUser?.staff_id || null,
+    changed_at: new Date().toISOString(),
+    changed_date: new Date().toISOString(),
+    reason,
+    previous_total: roundMoney(previousTotal),
+    new_total: roundMoney(newTotal),
+    changed_items: changedItems,
+  };
+
+  let { data, error } = await supabase
+    .from("invoice_version_history")
+    .insert(payload)
+    .select()
+    .single();
+
+  if (error && String(error.message || "").toLowerCase().includes("changed_items")) {
+    const fallback = { ...payload };
+    delete fallback.changed_items;
+    const retry = await supabase
+      .from("invoice_version_history")
+      .insert(fallback)
+      .select()
+      .single();
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error) {
+    console.warn("Invoice version history unavailable:", error.message);
+    return payload;
+  }
+
+  return data;
+}
 
 export function getInvoiceTotal(order = {}) {
-  return calculateDocumentTotals(order.items || order.order_items || [], order).grandTotal;
+  const invoiceOrder = normalizeInvoiceOrder(order);
+  return calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder).grandTotal;
 }
 
 const getLedgerType = (row = {}) =>
@@ -131,7 +2073,6 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
 
     price_mode: order.priceMode || order.price_mode || null,
     order_price_mode: order.priceMode || order.price_mode || null,
-    order_id: order.dbId || order.id || null,
     order_number: getOrderReference(order),
 
     confirmed_by: confirmedBy || null,
@@ -188,11 +2129,16 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
     .select("*")
     .eq("reference_no", referenceNo)
     .eq("entry_type", "INVOICE")
-    .maybeSingle();
+    .order("created_at", { ascending: true })
+    .limit(1);
 
-  if (existing.data?.id) {
+  if (existing.error) throw existing.error;
+
+  const existingInvoice = Array.isArray(existing.data) ? existing.data[0] : existing.data;
+
+  if (existingInvoice?.id) {
     const paidAmount = roundMoney(
-      Number(existing.data.paid_amount || existing.data.paidAmount || 0)
+      Number(existingInvoice.paid_amount || existingInvoice.paidAmount || 0)
     );
     payload.paid_amount = paidAmount;
     payload.remaining_amount = roundMoney(payload.invoice_total - paidAmount);
@@ -202,16 +2148,16 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
     );
   }
 
-  let query = existing.data?.id
-    ? supabase.from("customer_ledger").update(payload).eq("id", existing.data.id)
+  let query = existingInvoice?.id
+    ? supabase.from("customer_ledger").update(payload).eq("id", existingInvoice.id)
     : supabase.from("customer_ledger").insert(payload);
 
   let { data, error } = await query.select().single();
 
   if (error) {
     const fallbackPayload = stripUnsupportedColumns(payload, error.message || error.details || "");
-    query = existing.data?.id
-      ? supabase.from("customer_ledger").update(fallbackPayload).eq("id", existing.data.id)
+    query = existingInvoice?.id
+      ? supabase.from("customer_ledger").update(fallbackPayload).eq("id", existingInvoice.id)
       : supabase.from("customer_ledger").insert(fallbackPayload);
 
     const retry = await query.select().single();
@@ -243,7 +2189,15 @@ export async function allocateCustomerPaymentToInvoices({
   const { data, error } = await query;
   if (error) throw error;
 
-  const allocatedRows = applyInvoicePaymentAllocations(data || []);
+  const processingQueueOrders = await loadProcessingQueueOrders({
+    customerAccountId,
+    customerName,
+  });
+  const allocationSourceRows = mergeDeliveredOrderInvoicesIntoLedgerRows(
+    data || [],
+    processingQueueOrders
+  );
+  const allocatedRows = applyInvoicePaymentAllocations(allocationSourceRows);
   const invoiceRows = allocatedRows.filter((row) => getLedgerType(row) === "INVOICE");
 
   for (const invoice of invoiceRows) {
@@ -286,15 +2240,33 @@ const isDeliveredInvoiceStatus = (status) =>
   );
 
 const mapOrderItemForLedgerFallback = (item = {}) => ({
-  id: item.product_id,
-  productCode: item.product_code || item.code || "",
-  product_code: item.product_code || item.code || "",
-  name: item.product_name,
-  productName: item.product_name,
-  qty: Number(item.qty || item.quantity || 0),
-  quantity: Number(item.quantity || item.qty || 0),
-  price: Number(item.price || item.unit_price || 0),
-  unit_price: Number(item.unit_price || item.price || 0),
+  id: item.product_id || item.productId || item.id,
+  productCode:
+    item.product_code ||
+    item.productCode ||
+    item.sku ||
+    item.code ||
+    item.products?.product_code ||
+    item.products?.code ||
+    item.product?.product_code ||
+    item.product?.code ||
+    "",
+  product_code:
+    item.product_code ||
+    item.productCode ||
+    item.sku ||
+    item.code ||
+    item.products?.product_code ||
+    item.products?.code ||
+    item.product?.product_code ||
+    item.product?.code ||
+    "",
+  name: item.product_name || item.productName || item.name,
+  productName: item.product_name || item.productName || item.name,
+  qty: Number(item.qty || item.quantity || item.pickedQty || item.picked_qty || 0),
+  quantity: Number(item.quantity || item.qty || item.pickedQty || item.picked_qty || 0),
+  price: Number(item.price || item.unit_price || item.selectedPrice || 0),
+  unit_price: Number(item.unit_price || item.price || item.selectedPrice || 0),
   line_total: Number(item.line_total || item.lineTotal || 0),
   net_total: Number(item.net_total || item.netTotal || 0),
   gross_total: Number(item.gross_total || item.grossTotal || 0),
@@ -302,6 +2274,168 @@ const mapOrderItemForLedgerFallback = (item = {}) => ({
   vat_percent: Number(item.vat_percent || item.vatPercent || item.vat_rate || 20),
   vat_total: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
 });
+
+const getProcessingQueueLineItems = (row = {}) => {
+  const snapshot = row.transaction_snapshot || {};
+
+  if (Array.isArray(row.line_items)) return row.line_items;
+  if (Array.isArray(snapshot.order_items)) return snapshot.order_items;
+  if (Array.isArray(snapshot.items)) return snapshot.items;
+  return [];
+};
+
+export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
+  const snapshot = row.transaction_snapshot || {};
+  const confirmedAt =
+    row.confirmed_at ||
+    snapshot.confirmed_at ||
+    snapshot.delivered_at ||
+    snapshot.delivery_confirmed_at ||
+    row.queued_at ||
+    snapshot.updated_at ||
+    snapshot.created_at ||
+    row.created_at;
+  const orderNumber = row.order_number || snapshot.order_number || snapshot.orderId || "";
+  const customerAccountId = row.customer_account_id || snapshot.customer_account_id || "";
+  const customerBranchId =
+    row.customer_branch_id ||
+    row.branch_id ||
+    snapshot.customer_branch_id ||
+    snapshot.branch_id ||
+    "";
+  const customerName = row.customer_name || snapshot.company_name || snapshot.customer_name || "";
+  const branchName =
+    row.branch_name ||
+    snapshot.delivery_branch_name ||
+    snapshot.branch_name ||
+    snapshot.shop_name ||
+    "";
+  const priceMode = row.price_mode || snapshot.price_mode || "vat";
+  const lineItems = getProcessingQueueLineItems(row);
+
+  return {
+    ...snapshot,
+    id: row.order_id || snapshot.id || row.id,
+    dbId: row.order_id || snapshot.id || row.id,
+    processingQueueId: row.id,
+    isProcessingQueueOrder: true,
+    orderId: orderNumber,
+    orderNumber,
+    order_number: orderNumber,
+    customerAccountId,
+    customer_account_id: customerAccountId,
+    customerBranchId,
+    customer_branch_id: customerBranchId,
+    branch_id: customerBranchId,
+    customerName,
+    companyName: customerName,
+    company_name: customerName,
+    branchName,
+    branch_name: branchName,
+    delivery_branch_name: branchName,
+    deliveryAddress:
+      snapshot.delivery_address || snapshot.delivery_postcode || snapshot.postcode || "",
+    delivery_address: snapshot.delivery_address || "",
+    delivery_postcode: snapshot.delivery_postcode || snapshot.postcode || "",
+    priceMode,
+    price_mode: priceMode,
+    status: snapshot.status || "Delivered",
+    queueStatus: row.queue_status,
+    queue_status: row.queue_status,
+    total: Number(row.grand_total || snapshot.order_total || snapshot.total || 0),
+    orderTotal: Number(row.grand_total || snapshot.order_total || snapshot.total || 0),
+    order_total: Number(row.grand_total || snapshot.order_total || snapshot.total || 0),
+    totalAmount: Number(row.grand_total || snapshot.total_amount || 0),
+    total_amount: Number(row.grand_total || snapshot.total_amount || 0),
+    finalTotal: Number(row.grand_total || snapshot.final_total || snapshot.order_total || 0),
+    final_total: Number(row.grand_total || snapshot.final_total || snapshot.order_total || 0),
+    subtotal: Number(row.subtotal || snapshot.subtotal || 0),
+    net_total: Number(row.net_total || snapshot.net_total || snapshot.subtotal || 0),
+    vatTotal: Number(row.vat_total || snapshot.vat_total || snapshot.total_vat || 0),
+    vat_total: Number(row.vat_total || snapshot.vat_total || snapshot.total_vat || 0),
+    totalQuantity: Number(row.total_quantity || snapshot.total_quantity || 0),
+    totalLines: Number(row.total_lines || lineItems.length || 0),
+    createdAt: confirmedAt || row.created_at,
+    created_at: confirmedAt || row.created_at,
+    deliveredAt: confirmedAt,
+    delivered_at: confirmedAt,
+    confirmed_at: confirmedAt,
+    queued_at: row.queued_at,
+    order_items: lineItems,
+    items: lineItems.map(mapOrderItemForLedgerFallback),
+  };
+};
+
+export const mergeOperationalOrders = (normalOrders = [], processingQueueOrders = []) => {
+  const seenReferences = new Set(
+    (normalOrders || [])
+      .map((order) => String(order.orderId || order.order_number || order.orderNumber || "").trim())
+      .filter(Boolean)
+  );
+
+  const queueOnlyOrders = (processingQueueOrders || []).filter((order) => {
+    const reference = String(order.orderId || order.order_number || order.orderNumber || "").trim();
+    if (!reference || seenReferences.has(reference)) return false;
+    seenReferences.add(reference);
+    return true;
+  });
+
+  return [...(normalOrders || []), ...queueOnlyOrders];
+};
+
+export async function loadProcessingQueueOrders({
+  customerAccountId,
+  customerName,
+} = {}) {
+  const runQuery = async (buildQuery) => {
+    let query = supabase
+      .from("processing_queue")
+      .select("*")
+      .in("queue_status", activeProcessingQueueStatuses)
+      .order("confirmed_at", { ascending: true, nullsFirst: false })
+      .order("queued_at", { ascending: true });
+
+    query = buildQuery ? buildQuery(query) : query;
+    const { data, error } = await query;
+
+    if (error) {
+      console.warn("ProcessingQueue operational load skipped:", error.message);
+      return [];
+    }
+
+    return data || [];
+  };
+
+  let rows = [];
+
+  if (customerAccountId) {
+    rows = await runQuery((query) => query.eq("customer_account_id", customerAccountId));
+  }
+
+  if ((!customerAccountId || !rows.length) && customerName) {
+    rows = [
+      ...rows,
+      ...(await runQuery((query) => query.eq("customer_name", customerName))),
+    ];
+  }
+
+  if (!customerAccountId && !customerName) {
+    rows = await runQuery();
+  }
+
+  const seen = new Set();
+  return rows
+    .filter((row) => {
+      const key = String(row.order_id || row.order_number || row.id || "").trim();
+      if (!key || seen.has(key)) return false;
+      if (!isServerManagerPriceMode(row.price_mode || row.transaction_snapshot?.price_mode)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .map(mapProcessingQueueRowToOperationalOrder);
+}
 
 const mapOrderForLedgerFallback = (order = {}) => ({
   dbId: order.id,
@@ -324,7 +2458,7 @@ const mapOrderForLedgerFallback = (order = {}) => ({
   createdAt: order.created_at,
   deliveredAt: order.delivered_at || order.updated_at || order.created_at,
   status: order.status,
-  items: (order.order_items || []).map(mapOrderItemForLedgerFallback),
+  items: filterActiveInvoiceLines(order.order_items || []).map(mapOrderItemForLedgerFallback),
 });
 
 export function mergeDeliveredOrderInvoicesIntoLedgerRows(
@@ -344,7 +2478,8 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
       return referenceNo && !invoiceReferences.has(referenceNo);
     })
     .map((order) => {
-      const totals = calculateDocumentTotals(order.items || [], order);
+      const activeItems = filterActiveInvoiceLines(order.items || []);
+      const totals = calculateDocumentTotals(activeItems, { ...order, items: activeItems });
       const invoiceTotal = roundMoney(totals.grandTotal);
 
       return {
@@ -406,7 +2541,7 @@ export async function loadCustomerOutstandingSnapshot({
     return { openingBalance: 0, ledgerRows: [], allocatedRows: [], totalOutstanding: 0, branchOutstanding: {} };
   }
 
-  const [{ data: balanceRow }, ledgerResult, ordersResult] = await Promise.all([
+  const [{ data: balanceRow }, ledgerResult, ordersResult, processingQueueOrders] = await Promise.all([
     customerName
       ? supabase
           .from("customer_opening_balances")
@@ -422,6 +2557,7 @@ export async function loadCustomerOutstandingSnapshot({
       ? supabase.from("orders").select("*, order_items(*)").eq("customer_account_id", customerAccountId)
       : supabase.from("orders").select("*, order_items(*)").eq("company_name", customerName)
     ).order("created_at", { ascending: true }).limit(250),
+    loadProcessingQueueOrders({ customerAccountId, customerName }),
   ]);
 
   if (ledgerResult.error) throw ledgerResult.error;
@@ -431,9 +2567,10 @@ export async function loadCustomerOutstandingSnapshot({
   const deliveredOrders = (ordersResult.data || [])
     .filter((order) => isDeliveredInvoiceStatus(order.status))
     .map(mapOrderForLedgerFallback);
+  const operationalOrders = mergeOperationalOrders(deliveredOrders, processingQueueOrders);
   const ledgerRows = mergeDeliveredOrderInvoicesIntoLedgerRows(
     ledgerResult.data || [],
-    deliveredOrders
+    operationalOrders
   );
   const allocatedRows = applyInvoicePaymentAllocations(ledgerRows);
   const branchOutstanding = {};
