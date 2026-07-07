@@ -17,6 +17,7 @@ import {
   mergeOperationalOrders,
   mergeDeliveredOrderInvoicesIntoLedgerRows,
   printInvoice as printCentralInvoice,
+  withResolvedInvoicePaymentStatus,
 } from "../../services/centralInvoiceEngine";
 
 const DELIVERED_ORDERS_PAGE_SIZE = 3;
@@ -481,8 +482,9 @@ const removePayment = async (row) => {
     return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-GB");
   };
 
-  const openInvoiceDocument = (order) => {
-    printCentralInvoice(order);
+  const openInvoiceDocument = async (order) => {
+    const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+    printCentralInvoice(resolvedOrder);
   };
 
   let runningBalance = Number(openingBalance || 0);

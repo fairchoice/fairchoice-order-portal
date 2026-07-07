@@ -428,6 +428,19 @@ const [priceSearch, setPriceSearch] = useState("");
 const [pricePage, setPricePage] = useState(1);
 const [priceDrafts, setPriceDrafts] = useState({});
 const [bulkNewVatPrice, setBulkNewVatPrice] = useState("");
+const [bulkLabelFilters, setBulkLabelFilters] = useState({
+  brand: "",
+  series: "",
+  category: "",
+  subCategory: "",
+  supplier: "",
+  country: "",
+  status: "all",
+});
+const [bulkLabelLoaded, setBulkLabelLoaded] = useState(false);
+const [bulkLabelSelectedIds, setBulkLabelSelectedIds] = useState([]);
+const [bulkLabelAction, setBulkLabelAction] = useState("apply");
+const [bulkLabelValue, setBulkLabelValue] = useState("");
 
 const [visibleColumns, setVisibleColumns] = useState({
   code: true,
@@ -687,15 +700,174 @@ const productLabelOptions = [
   { value: "topSeller", label: "Top Seller" },
 ];
 
+const productLabelKeys = [
+  "comingSoon",
+  "isNew",
+  "isPromotion",
+  "isReduced",
+  "recommended",
+  "topSeller",
+];
+
+const productLabelDbFields = {
+  comingSoon: "coming_soon",
+  isNew: "is_new",
+  isPromotion: "is_promotion",
+  isReduced: "is_reduced",
+  recommended: "recommended",
+  topSeller: "top_seller",
+};
+
 const selectedProductLabel =
+  productLabelKeys.find((key) => productForm[key] === true) || "";
+
+const getProductLabelValue = (product = {}) =>
+  productLabelKeys.find((key) => product[key] === true) || "";
+
+const getProductLabelDisplay = (product = {}) => {
+  const labelValue =
+    typeof product === "string" ? product : getProductLabelValue(product);
+  return (
+    productLabelOptions.find((option) => option.value === labelValue)?.label ||
+    "No Label"
+  );
+};
+
+const buildProductLabelPayload = (labelValue = "") =>
+  productLabelKeys.reduce((payload, key) => {
+    payload[productLabelDbFields[key]] = key === labelValue;
+    return payload;
+  }, {});
+
+const uniqueProductValues = (field) =>
   [
-    "comingSoon",
-    "isNew",
-    "isPromotion",
-    "isReduced",
-    "recommended",
-    "topSeller",
-  ].find((key) => productForm[key] === true) || "";
+    ...new Set(
+      (products || [])
+        .map((product) => String(product?.[field] || "").trim())
+        .filter(Boolean)
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+
+const setBulkLabelFilter = (field, value) => {
+  setBulkLabelFilters((old) => ({
+    ...old,
+    [field]: value,
+  }));
+  setBulkLabelLoaded(false);
+  setBulkLabelSelectedIds([]);
+};
+
+const bulkLabelFilteredProducts = bulkLabelLoaded
+  ? (products || []).filter((product) => {
+      const isActive = product.active !== false;
+      const supplierName = String(
+        product.supplierName || product.supplier_name || ""
+      );
+
+      const matchesCountry =
+        !bulkLabelFilters.country ||
+        (bulkLabelFilters.country === "wales" &&
+          product.availableInWales === true) ||
+        (bulkLabelFilters.country === "england" &&
+          product.availableInEngland === true);
+
+      return (
+        (!bulkLabelFilters.brand ||
+          String(product.brand || "") === bulkLabelFilters.brand) &&
+        (!bulkLabelFilters.series ||
+          String(product.series || "") === bulkLabelFilters.series) &&
+        (!bulkLabelFilters.category ||
+          String(product.category || "") === bulkLabelFilters.category) &&
+        (!bulkLabelFilters.subCategory ||
+          String(product.subCategory || "") === bulkLabelFilters.subCategory) &&
+        (!bulkLabelFilters.supplier ||
+          supplierName === bulkLabelFilters.supplier) &&
+        matchesCountry &&
+        (bulkLabelFilters.status === "all" ||
+          (bulkLabelFilters.status === "active" && isActive) ||
+          (bulkLabelFilters.status === "inactive" && !isActive))
+      );
+    })
+  : [];
+
+const allBulkLabelProductsSelected =
+  bulkLabelFilteredProducts.length > 0 &&
+  bulkLabelFilteredProducts.every((product) =>
+    bulkLabelSelectedIds.includes(product.id)
+  );
+
+const toggleBulkLabelProduct = (id) => {
+  setBulkLabelSelectedIds((old) =>
+    old.includes(id) ? old.filter((item) => item !== id) : [...old, id]
+  );
+};
+
+const toggleAllBulkLabelProducts = () => {
+  if (allBulkLabelProductsSelected) {
+    setBulkLabelSelectedIds([]);
+    return;
+  }
+
+  setBulkLabelSelectedIds(bulkLabelFilteredProducts.map((product) => product.id));
+};
+
+const applyBulkProductLabel = async () => {
+  if (bulkLabelSelectedIds.length === 0) {
+    alert("Please select products first.");
+    return;
+  }
+
+  if (bulkLabelAction !== "clear" && !bulkLabelValue) {
+    alert("Please choose a product label.");
+    return;
+  }
+
+  const labelText = getProductLabelDisplay(bulkLabelValue);
+  const actionText =
+    bulkLabelAction === "apply"
+      ? `apply label '${labelText}' to`
+      : bulkLabelAction === "replace"
+        ? `replace the current label with '${labelText}' on`
+        : bulkLabelAction === "remove"
+          ? `remove label '${labelText}' from`
+          : "clear all labels from";
+
+  if (
+    !window.confirm(
+      `You are about to ${actionText} ${bulkLabelSelectedIds.length} products.`
+    )
+  ) {
+    return;
+  }
+
+  let payload = {};
+
+  if (bulkLabelAction === "apply" || bulkLabelAction === "replace") {
+    payload = buildProductLabelPayload(bulkLabelValue);
+  }
+
+  if (bulkLabelAction === "remove") {
+    payload = { [productLabelDbFields[bulkLabelValue]]: false };
+  }
+
+  if (bulkLabelAction === "clear") {
+    payload = buildProductLabelPayload("");
+  }
+
+  const { error } = await supabase
+    .from("products")
+    .update(payload)
+    .in("id", bulkLabelSelectedIds);
+
+  if (error) {
+    alert("Bulk label update failed: " + error.message);
+    return;
+  }
+
+  setBulkLabelSelectedIds([]);
+  await fetchProducts();
+  alert("Product labels updated successfully.");
+};
 
 const updateProductLabel = (labelValue) => {
   setProductForm({
@@ -728,6 +900,7 @@ const updateProductLabel = (labelValue) => {
             {[
         ["add", "Add Product"],
         ["edit", "Product List"],
+        ["bulkLabels", "Bulk Labels"],
         ["homepage", "Homepage"],
       ].map(([tab, label]) => (
           <button
@@ -1074,48 +1247,73 @@ const updateProductLabel = (labelValue) => {
               <h4 className="text-lg font-bold mb-4">Selling Information</h4>
 
               <div className="space-y-4">
-                <input
-                  className="input-box"
-                  type="number"
-                  placeholder="VAT Selling Price"
-                  value={productForm.vatPrice || ""}
-                  onChange={(e) => updateField("vatPrice", e.target.value)}
-                />
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
+                    VAT Selling Price
+                  </span>
+                  <input
+                    className="input-box"
+                    type="number"
+                    placeholder="VAT Selling Price"
+                    value={productForm.vatPrice || ""}
+                    onChange={(e) => updateField("vatPrice", e.target.value)}
+                  />
+                </label>
 
-                <input
-                  className="input-box"
-                  type="number"
-                  placeholder="Special Price"
-                  value={productForm.cashPrice || ""}
-                  onChange={(e) => updateField("cashPrice", e.target.value)}
-                />
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
+                    Wales Special Price
+                  </span>
+                  <input
+                    className="input-box"
+                    type="number"
+                    placeholder="Wales Special Price"
+                    value={productForm.walesSpecialPrice || ""}
+                    onChange={(e) => updateField("walesSpecialPrice", e.target.value)}
+                  />
+                </label>
 
-                <input
-                  className="input-box"
-                  type="number"
-                  placeholder="Wales Special Price"
-                  value={productForm.walesSpecialPrice || ""}
-                  onChange={(e) => updateField("walesSpecialPrice", e.target.value)}
-                />
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
+                    England Special Price
+                  </span>
+                  <input
+                    className="input-box"
+                    type="number"
+                    placeholder="England Special Price"
+                    value={productForm.englandSpecialPrice || ""}
+                    onChange={(e) => updateField("englandSpecialPrice", e.target.value)}
+                  />
+                </label>
 
-                <input
-                  className="input-box"
-                  type="number"
-                  placeholder="England Special Price"
-                  value={productForm.englandSpecialPrice || ""}
-                  onChange={(e) => updateField("englandSpecialPrice", e.target.value)}
-                />
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
+                    Product Special Price
+                  </span>
+                  <input
+                    className="input-box"
+                    type="number"
+                    placeholder="Product Special Price"
+                    value={productForm.cashPrice || ""}
+                    onChange={(e) => updateField("cashPrice", e.target.value)}
+                  />
+                </label>
 
-                <select
-                  className="input-box"
-                  value={productForm.vatType || "20"}
-                  onChange={(e) => updateField("vatType", e.target.value)}
-                >
-                  <option value="20">VAT 20%</option>
-                  <option value="5">VAT 5%</option>
-                  <option value="0">VAT 0%</option>
-                  <option value="exempt">VAT Exempt</option>
-                </select>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
+                    VAT Type
+                  </span>
+                  <select
+                    className="input-box"
+                    value={productForm.vatType || "20"}
+                    onChange={(e) => updateField("vatType", e.target.value)}
+                  >
+                    <option value="20">VAT 20%</option>
+                    <option value="5">VAT 5%</option>
+                    <option value="0">VAT 0%</option>
+                    <option value="exempt">VAT Exempt</option>
+                  </select>
+                </label>
               </div>
             </section>
 
@@ -1204,6 +1402,15 @@ const updateProductLabel = (labelValue) => {
               <h4 className="text-lg font-bold mb-4">Availability</h4>
 
               <div className="space-y-3">
+                <label className="checkbox-box">
+                  <input
+                    type="checkbox"
+                    checked={productForm.active !== false}
+                    onChange={(e) => updateField("active", e.target.checked)}
+                  />
+                  Active
+                </label>
+
                 <label className="checkbox-box">
                   <input
                     type="checkbox"
@@ -1297,35 +1504,26 @@ const updateProductLabel = (labelValue) => {
               </div>
             </section>
 
-            <section className="bg-white border rounded-2xl p-4 xl:col-span-2">
+            <section className="bg-white border rounded-2xl p-4">
               <h4 className="text-lg font-bold mb-4">Product Labels</h4>
 
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <select
                   className="input-box"
                   value={selectedProductLabel}
                   onChange={(e) => updateProductLabel(e.target.value)}
                 >
-                  {productLabelOptions.map((label) => (
-                    <option key={label.value || "none"} value={label.value}>
-                      {label.label}
+                  {productLabelOptions.map((option) => (
+                    <option key={option.value || "none"} value={option.value}>
+                      {option.label}
                     </option>
                   ))}
                 </select>
 
-                <label className="checkbox-box">
-                  <input
-                    type="checkbox"
-                    checked={productForm.active !== false}
-                    onChange={(e) => updateField("active", e.target.checked)}
-                  />
-                  Active
-                </label>
+                <p className="text-xs text-slate-500">
+                  Product labels are used for grouping and display. Promotion rules remain managed in the Promotion module.
+                </p>
               </div>
-
-              <p className="text-xs text-slate-500 mt-3">
-                Select one display label only. Active uses the product status field.
-              </p>
             </section>
           </div>
 
@@ -1339,6 +1537,232 @@ const updateProductLabel = (labelValue) => {
             <button onClick={saveProduct} className="px-6 py-3 rounded-xl bg-blue-600 text-white font-bold">
               {editingId ? "Update Product" : "Save Product"}
             </button>
+          </div>
+        </div>
+      )}
+
+
+      {activeTab === "bulkLabels" && (
+        <div className="bg-white rounded-2xl shadow-sm p-5">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-xl font-bold">Bulk Product Label Update</h3>
+              <p className="text-sm text-slate-500">
+                Filter products, select rows, then apply label changes to selected products only.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={fetchProducts}
+              className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold"
+            >
+              Refresh Products
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 rounded-2xl border bg-slate-50 p-4">
+            <select
+              className="input-box"
+              value={bulkLabelFilters.brand}
+              onChange={(e) => setBulkLabelFilter("brand", e.target.value)}
+            >
+              <option value="">All Brands</option>
+              {uniqueProductValues("brand").map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="input-box"
+              value={bulkLabelFilters.series}
+              onChange={(e) => setBulkLabelFilter("series", e.target.value)}
+            >
+              <option value="">All Series</option>
+              {uniqueProductValues("series").map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="input-box"
+              value={bulkLabelFilters.category}
+              onChange={(e) => setBulkLabelFilter("category", e.target.value)}
+            >
+              <option value="">All Categories</option>
+              {uniqueProductValues("category").map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="input-box"
+              value={bulkLabelFilters.subCategory}
+              onChange={(e) => setBulkLabelFilter("subCategory", e.target.value)}
+            >
+              <option value="">All Sub Categories</option>
+              {uniqueProductValues("subCategory").map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="input-box"
+              value={bulkLabelFilters.supplier}
+              onChange={(e) => setBulkLabelFilter("supplier", e.target.value)}
+            >
+              <option value="">All Suppliers</option>
+              {[
+                ...new Set(
+                  (products || [])
+                    .map((product) =>
+                      String(product.supplierName || product.supplier_name || "").trim()
+                    )
+                    .filter(Boolean)
+                ),
+              ]
+                .sort((a, b) => a.localeCompare(b))
+                .map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+            </select>
+
+            <select
+              className="input-box"
+              value={bulkLabelFilters.country}
+              onChange={(e) => setBulkLabelFilter("country", e.target.value)}
+            >
+              <option value="">All Countries</option>
+              <option value="wales">Wales</option>
+              <option value="england">England</option>
+            </select>
+
+            <select
+              className="input-box"
+              value={bulkLabelFilters.status}
+              onChange={(e) => setBulkLabelFilter("status", e.target.value)}
+            >
+              <option value="all">Active and Inactive</option>
+              <option value="active">Active Only</option>
+              <option value="inactive">Inactive Only</option>
+            </select>
+
+            <button
+              type="button"
+              onClick={() => {
+                setBulkLabelLoaded(true);
+                setBulkLabelSelectedIds([]);
+              }}
+              className="bg-slate-800 text-white px-4 py-2 rounded-xl font-bold"
+            >
+              Load Products
+            </button>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3 rounded-2xl border p-4">
+            <select
+              className="input-box"
+              value={bulkLabelAction}
+              onChange={(e) => setBulkLabelAction(e.target.value)}
+            >
+              <option value="apply">Apply Label</option>
+              <option value="remove">Remove Label</option>
+              <option value="replace">Replace Label</option>
+              <option value="clear">Clear All Labels</option>
+            </select>
+
+            <select
+              className="input-box md:col-span-2"
+              value={bulkLabelValue}
+              onChange={(e) => setBulkLabelValue(e.target.value)}
+              disabled={bulkLabelAction === "clear"}
+            >
+              <option value="">Choose Label</option>
+              {productLabelOptions
+                .filter((option) => option.value)
+                .map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+            </select>
+
+            <div className="rounded-xl bg-slate-50 p-3 text-sm font-bold text-slate-600">
+              {bulkLabelSelectedIds.length} selected / {bulkLabelFilteredProducts.length} loaded
+            </div>
+
+            <button
+              type="button"
+              onClick={applyBulkProductLabel}
+              disabled={bulkLabelSelectedIds.length === 0}
+              className="bg-green-700 text-white px-4 py-2 rounded-xl font-bold disabled:bg-slate-300"
+            >
+              Apply
+            </button>
+          </div>
+
+          <div className="mt-4 overflow-auto rounded-2xl border">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-100">
+                <tr>
+                  <th className="p-2 border">
+                    <input
+                      type="checkbox"
+                      checked={allBulkLabelProductsSelected}
+                      onChange={toggleAllBulkLabelProducts}
+                    />
+                  </th>
+                  <th className="p-2 border">Product Code</th>
+                  <th className="p-2 border">Product Name</th>
+                  <th className="p-2 border">Brand</th>
+                  <th className="p-2 border">Series</th>
+                  <th className="p-2 border">Current Label</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bulkLabelFilteredProducts.map((product) => (
+                  <tr key={product.id} className="border-t hover:bg-slate-50">
+                    <td className="p-2 border">
+                      <input
+                        type="checkbox"
+                        checked={bulkLabelSelectedIds.includes(product.id)}
+                        onChange={() => toggleBulkLabelProduct(product.id)}
+                      />
+                    </td>
+                    <td className="p-2 border font-bold">{product.productCode}</td>
+                    <td className="p-2 border">{product.name}</td>
+                    <td className="p-2 border">{product.brand}</td>
+                    <td className="p-2 border">{product.series}</td>
+                    <td className="p-2 border">{getProductLabelDisplay(product)}</td>
+                  </tr>
+                ))}
+
+                {!bulkLabelLoaded && (
+                  <tr>
+                    <td colSpan="6" className="p-6 text-center text-slate-500">
+                      Select filters and load products.
+                    </td>
+                  </tr>
+                )}
+
+                {bulkLabelLoaded && bulkLabelFilteredProducts.length === 0 && (
+                  <tr>
+                    <td colSpan="6" className="p-6 text-center text-slate-500">
+                      No products match these filters.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase";
 
@@ -20,6 +20,10 @@ const PRODUCT_COLUMNS = [
   ["Available In England", "available_in_england"],
   ["Available From Supplier", "available_from_supplier"],
   ["Image URL", "image_url"],
+  ["New", "is_new"],
+  ["Promotion Label", "is_promotion"],
+  ["Reduced", "is_reduced"],
+  ["Coming Soon", "coming_soon"],
   ["Recommended", "recommended"],
   ["Top Seller", "top_seller"],
   ["Wales Special Price", "wales_special_price"],
@@ -48,9 +52,34 @@ const BOOLEAN_FIELDS = new Set([
   "available_in_wales",
   "available_in_england",
   "available_from_supplier",
+  "is_new",
+  "is_promotion",
+  "is_reduced",
+  "coming_soon",
   "recommended",
   "top_seller",
 ]);
+
+const LABEL_DB_FIELDS = [
+  "is_new",
+  "is_promotion",
+  "is_reduced",
+  "coming_soon",
+  "recommended",
+  "top_seller",
+];
+
+const LABEL_DB_FIELD_SET = new Set(LABEL_DB_FIELDS);
+
+const LABEL_OPTIONS = [
+  { value: "", label: "No Label" },
+  { value: "isNew", label: "New" },
+  { value: "isPromotion", label: "Promotion" },
+  { value: "isReduced", label: "Reduced" },
+  { value: "comingSoon", label: "Coming Soon" },
+  { value: "recommended", label: "Recommended" },
+  { value: "topSeller", label: "Top Seller" },
+];
 
 const LEGACY_FIELD_ALIASES = {
   productCode: "product_code",
@@ -82,18 +111,35 @@ const normalizeHeader = (value) =>
 const normalizeText = (value) => String(value || "").trim();
 const normalizeCompare = (value) => String(value ?? "").trim();
 
-const getImportLabelFields = (label) => ({
-  ...(label
-    ? {
-        is_new: label === "new",
-        is_promotion: label === "promotion",
-        is_reduced: label === "reduced",
-        coming_soon: label === "comingSoon",
-        recommended: label === "recommended",
-        top_seller: label === "topSeller",
-      }
-    : {}),
-});
+const normalizeImportLabel = (value) => {
+  const text = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+
+  if (!text || ["none", "nolabel", "false", "0"].includes(text)) return "";
+  if (["new", "newarrival", "isnew", "isnewproduct"].includes(text)) return "isNew";
+  if (["promotion", "promo", "ispromotion", "promotionlabel"].includes(text)) return "isPromotion";
+  if (["reduced", "isreduced"].includes(text)) return "isReduced";
+  if (["comingsoon", "coming", "comingsoonlabel"].includes(text)) return "comingSoon";
+  if (["recommended", "recommend"].includes(text)) return "recommended";
+  if (["topseller", "top", "topselling"].includes(text)) return "topSeller";
+
+  return "";
+};
+
+const getImportLabelFields = (label) => {
+  const normalizedLabel = normalizeImportLabel(label);
+
+  return {
+    is_new: normalizedLabel === "isNew",
+    is_promotion: normalizedLabel === "isPromotion",
+    is_reduced: normalizedLabel === "isReduced",
+    coming_soon: normalizedLabel === "comingSoon",
+    recommended: normalizedLabel === "recommended",
+    top_seller: normalizedLabel === "topSeller",
+  };
+};
 
 const toBoolValue = (value, defaultValue = false) => {
   if (value === true || value === false) return value;
@@ -132,6 +178,25 @@ const pickCell = (row, label, field) => {
   return key ? row[key] : "";
 };
 
+const pickImportLabel = (row, parsed = {}) => {
+  const labelColumn = Object.keys(row).find((rowKey) =>
+    ["product_label", "label", "product_labels"].includes(normalizeHeader(rowKey))
+  );
+  const normalizedColumnLabel = normalizeImportLabel(
+    labelColumn ? row[labelColumn] : ""
+  );
+
+  if (normalizedColumnLabel) return normalizedColumnLabel;
+  if (parsed.is_new === true) return "isNew";
+  if (parsed.is_promotion === true) return "isPromotion";
+  if (parsed.is_reduced === true) return "isReduced";
+  if (parsed.coming_soon === true) return "comingSoon";
+  if (parsed.recommended === true) return "recommended";
+  if (parsed.top_seller === true) return "topSeller";
+
+  return "";
+};
+
 const formatPreviewValue = (value) => {
   if (value === true) return "TRUE";
   if (value === false) return "FALSE";
@@ -143,7 +208,28 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   const [productOptions, setProductOptions] = useState([]);
   const [importing, setImporting] = useState(false);
   const [updatingCodes, setUpdatingCodes] = useState(false);
+  const [uploadingImageProductId, setUploadingImageProductId] = useState(null);
+  const [imageFilters, setImageFilters] = useState({
+    subCategory: "",
+    brand: "",
+    series: "",
+    search: "",
+    withoutImageOnly: true,
+  });
+  const [missingCodeFilters, setMissingCodeFilters] = useState({
+    subCategory: "",
+    brand: "",
+    series: "",
+    search: "",
+    withoutCodeOnly: true,
+  });
+  const [productCodeDrafts, setProductCodeDrafts] = useState({});
+  const [savingProductCodeId, setSavingProductCodeId] = useState(null);
+  const productCodeInputRefs = useRef({});
+  const [activeSection, setActiveSection] = useState("export");
   const [importLabel, setImportLabel] = useState("");
+  const [importLabelSource, setImportLabelSource] = useState("single");
+  const [importLabelOverwrite, setImportLabelOverwrite] = useState("keep");
   const [importMode, setImportMode] = useState("update");
   const [productImportPreview, setProductImportPreview] = useState(null);
   const [selectedImportFileName, setSelectedImportFileName] = useState("");
@@ -160,6 +246,195 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
       .order("option_name");
 
     if (!error) setProductOptions(data || []);
+  };
+
+  const getProductValue = (product, camelField, dbField = camelField) =>
+    product?.[camelField] ?? product?.[dbField] ?? "";
+
+  const hasProductImage = (product) =>
+    Boolean(String(getProductValue(product, "image", "image_url")).trim());
+
+  const getCurrentProductCode = (product) =>
+    String(getProductValue(product, "productCode", "product_code")).trim();
+
+  const hasProductCode = (product) => Boolean(getCurrentProductCode(product));
+
+  const uniqueProductValues = (camelField, dbField = camelField) =>
+    [
+      ...new Set(
+        (products || [])
+          .map((product) =>
+            String(getProductValue(product, camelField, dbField)).trim()
+          )
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+
+  const updateImageFilter = (field, value) => {
+    setImageFilters((old) => ({
+      ...old,
+      [field]: value,
+    }));
+  };
+
+  const updateMissingCodeFilter = (field, value) => {
+    setMissingCodeFilters((old) => ({
+      ...old,
+      [field]: value,
+    }));
+  };
+
+  const filteredImageProducts = (products || []).filter((product) => {
+    const search = imageFilters.search.trim().toLowerCase();
+    const productCode = String(getProductValue(product, "productCode", "product_code"));
+    const productName = String(getProductValue(product, "name", "product_name"));
+    const brand = String(getProductValue(product, "brand"));
+    const series = String(getProductValue(product, "series"));
+    const subCategory = String(getProductValue(product, "subCategory", "sub_category"));
+
+    const matchesSearch =
+      !search ||
+      productCode.toLowerCase().includes(search) ||
+      productName.toLowerCase().includes(search) ||
+      brand.toLowerCase().includes(search) ||
+      series.toLowerCase().includes(search) ||
+      subCategory.toLowerCase().includes(search);
+
+    return (
+      (!imageFilters.subCategory || subCategory === imageFilters.subCategory) &&
+      (!imageFilters.brand || brand === imageFilters.brand) &&
+      (!imageFilters.series || series === imageFilters.series) &&
+      (!imageFilters.withoutImageOnly || !hasProductImage(product)) &&
+      matchesSearch
+    );
+  });
+
+  const filteredMissingCodeProducts = (products || []).filter((product) => {
+    const search = missingCodeFilters.search.trim().toLowerCase();
+    const productId = String(getProductValue(product, "id"));
+    const productCode = getCurrentProductCode(product);
+    const productName = String(getProductValue(product, "name", "product_name"));
+    const brand = String(getProductValue(product, "brand"));
+    const series = String(getProductValue(product, "series"));
+    const subCategory = String(getProductValue(product, "subCategory", "sub_category"));
+
+    const matchesSearch =
+      !search ||
+      productId.toLowerCase().includes(search) ||
+      productCode.toLowerCase().includes(search) ||
+      productName.toLowerCase().includes(search) ||
+      brand.toLowerCase().includes(search) ||
+      series.toLowerCase().includes(search) ||
+      subCategory.toLowerCase().includes(search);
+
+    return (
+      (!missingCodeFilters.subCategory || subCategory === missingCodeFilters.subCategory) &&
+      (!missingCodeFilters.brand || brand === missingCodeFilters.brand) &&
+      (!missingCodeFilters.series || series === missingCodeFilters.series) &&
+      (!missingCodeFilters.withoutCodeOnly || !hasProductCode(product)) &&
+      matchesSearch
+    );
+  });
+
+  const updateProductCodeDraft = (productId, value) => {
+    setProductCodeDrafts((old) => ({
+      ...old,
+      [productId]: value,
+    }));
+  };
+
+  const saveMissingProductCode = async (product) => {
+    if (!product?.id) return;
+
+    const productCode = String(productCodeDrafts[product.id] || "").trim();
+    if (!productCode) {
+      alert("Enter or scan a product code first.");
+      return;
+    }
+
+    const nextProduct = filteredMissingCodeProducts.find(
+      (row) => row.id !== product.id && !hasProductCode(row)
+    );
+
+    setSavingProductCodeId(product.id);
+
+    try {
+      const { error } = await supabase
+        .from("products")
+        .update({ product_code: productCode })
+        .eq("id", product.id);
+
+      if (error) throw error;
+
+      setProductCodeDrafts((old) => {
+        const next = { ...old };
+        delete next[product.id];
+        return next;
+      });
+
+      if (typeof fetchProducts === "function") {
+        await fetchProducts();
+      }
+
+      alert("Product code updated successfully.");
+
+      if (nextProduct?.id) {
+        setTimeout(() => {
+          productCodeInputRefs.current[nextProduct.id]?.focus();
+        }, 100);
+      }
+    } catch (error) {
+      alert("Product code update failed: " + error.message);
+    }
+
+    setSavingProductCodeId(null);
+  };
+
+  const uploadProductImage = async (product, file) => {
+    if (!file || !product?.id) return;
+
+    const productCode = String(
+      getProductValue(product, "productCode", "product_code") || product.id
+    )
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, "-");
+
+    setUploadingImageProductId(product.id);
+
+    try {
+      const fileExt = file.name.split(".").pop() || "jpg";
+      const fileName = `${productCode}.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("product-images")
+        .upload(fileName, file, {
+          cacheControl: "3600",
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage
+        .from("product-images")
+        .getPublicUrl(fileName);
+
+      const { error: updateError } = await supabase
+        .from("products")
+        .update({ image_url: data.publicUrl })
+        .eq("id", product.id);
+
+      if (updateError) throw updateError;
+
+      if (typeof fetchProducts === "function") {
+        await fetchProducts();
+      }
+
+      alert("Product image uploaded successfully.");
+    } catch (error) {
+      alert("Product image upload failed: " + error.message);
+    }
+
+    setUploadingImageProductId(null);
   };
 
   const validateOption = (errors, rowNumber, field, value, optionType, label) => {
@@ -217,6 +492,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
       parsed[field] = normalizeText(rawValue);
     });
 
+    parsed.__importLabel = pickImportLabel(row, parsed);
     parsed.status = parsed.status || "Active";
 
     if (!parsed.product_code) {
@@ -327,6 +603,8 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
 
           const changes = {};
           EDITABLE_PRODUCT_FIELDS.forEach((field) => {
+            if (LABEL_DB_FIELD_SET.has(field)) return;
+
             const oldValue = existing[field];
             const newValue = parsed[field];
 
@@ -348,6 +626,18 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
               changes[field] = newValue;
             }
           });
+
+          if (importLabelOverwrite === "replace") {
+            const selectedLabel =
+              importLabelSource === "file" ? parsed.__importLabel : importLabel;
+            const labelChanges = getImportLabelFields(selectedLabel);
+
+            Object.entries(labelChanges).forEach(([field, newValue]) => {
+              if (Boolean(existing[field]) !== Boolean(newValue)) {
+                changes[field] = newValue;
+              }
+            });
+          }
 
           if (Object.keys(changes).length) {
             Object.entries(changes).forEach(([field, newValue]) => {
@@ -389,8 +679,12 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
         creates.push({
           rowNumber,
           payload: {
-            ...parsed,
-            ...getImportLabelFields(importLabel),
+            ...Object.fromEntries(
+              Object.entries(parsed).filter(([field]) => field !== "__importLabel")
+            ),
+            ...getImportLabelFields(
+              importLabelSource === "file" ? parsed.__importLabel : importLabel
+            ),
           },
         });
       });
@@ -570,6 +864,10 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
       "Available In England": p.availableInEngland,
       "Available From Supplier": p.availableFromSupplier,
       "Image URL": p.image,
+      New: p.isNew,
+      "Promotion Label": p.isPromotion,
+      Reduced: p.isReduced,
+      "Coming Soon": p.comingSoon,
       Recommended: p.recommended,
       "Top Seller": p.topSeller,
       "Wales Special Price": p.walesSpecialPrice,
@@ -592,6 +890,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
       row[label] = "";
       return row;
     }, {});
+    templateRow["Product Label"] = "";
 
     const worksheet = XLSX.utils.json_to_sheet([templateRow]);
     const workbook = XLSX.utils.book_new();
@@ -628,7 +927,31 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="mb-4 flex flex-wrap gap-2">
+        {[
+          ["export", "Export"],
+          ["import", "Import File"],
+          ["codes", "Bulk Product Code"],
+          ["images", "Add Images"],
+          ["missingCodes", "Missing Product Code"],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setActiveSection(key)}
+            className={`rounded-xl px-4 py-2 text-sm font-bold ${
+              activeSection === key
+                ? "bg-blue-600 text-white"
+                : "border bg-white text-slate-700"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="space-y-4">
+        {activeSection === "export" && (
         <div className="bg-white rounded-2xl shadow-sm p-5">
           <h3 className="text-xl font-bold mb-4">Export Products</h3>
           <p className="text-sm text-slate-600 mb-4">
@@ -650,23 +973,49 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
             </button>
           </div>
         </div>
+        )}
 
+        {activeSection === "import" && (
         <div className="bg-white rounded-2xl shadow-sm p-5">
           <h3 className="text-xl font-bold mb-4">Import Products</h3>
 
-          <select
-            className="input-box mb-4"
-            value={importLabel}
-            onChange={(e) => setImportLabel(e.target.value)}
-          >
-            <option value="">No Label</option>
-            <option value="new">New Product</option>
-            <option value="promotion">Promotion Product</option>
-            <option value="comingSoon">Coming Soon</option>
-            <option value="recommended">Recommended Product</option>
-            <option value="topSeller">Top Seller</option>
-            <option value="reduced">Reduced</option>
-          </select>
+          <div className="mb-4 space-y-3 rounded-xl border bg-slate-50 p-3">
+            <select
+              className="input-box"
+              value={importLabelSource}
+              onChange={(e) => setImportLabelSource(e.target.value)}
+            >
+              <option value="single">Apply one label to every imported product</option>
+              <option value="file">Map label from import file</option>
+            </select>
+
+            {importLabelSource === "single" && (
+              <select
+                className="input-box"
+                value={importLabel}
+                onChange={(e) => setImportLabel(e.target.value)}
+              >
+                {LABEL_OPTIONS.map((option) => (
+                  <option key={option.value || "none"} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <select
+              className="input-box"
+              value={importLabelOverwrite}
+              onChange={(e) => setImportLabelOverwrite(e.target.value)}
+            >
+              <option value="keep">Keep existing labels when updating products</option>
+              <option value="replace">Replace existing labels from this import</option>
+            </select>
+
+            <p className="text-xs text-slate-500">
+              File mapping accepts Product Label, Label, or the label flag columns. Existing labels are only overwritten when Replace is selected.
+            </p>
+          </div>
 
           <label className="mb-3 inline-block cursor-pointer">
             <input
@@ -706,7 +1055,9 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
             </div>
           )}
         </div>
+        )}
 
+        {activeSection === "codes" && (
         <div className="bg-white rounded-2xl shadow-sm p-5">
           <h3 className="text-xl font-bold mb-4">Bulk Code Update</h3>
 
@@ -731,6 +1082,327 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
 
           {updatingCodes && <div className="mt-4">Updating product codes...</div>}
         </div>
+        )}
+
+        {activeSection === "images" && (
+      <div className="mt-5 rounded-2xl bg-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h3 className="text-xl font-bold">Product Image Upload</h3>
+            <p className="text-sm text-slate-600">
+              Find products without images and upload product images one by one.
+            </p>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-600">
+            {filteredImageProducts.length} products shown
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 rounded-2xl border bg-slate-50 p-4 md:grid-cols-5">
+          <select
+            className="input-box"
+            value={imageFilters.subCategory}
+            onChange={(e) => updateImageFilter("subCategory", e.target.value)}
+          >
+            <option value="">All Sub Categories</option>
+            {uniqueProductValues("subCategory", "sub_category").map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="input-box"
+            value={imageFilters.brand}
+            onChange={(e) => updateImageFilter("brand", e.target.value)}
+          >
+            <option value="">All Brands</option>
+            {uniqueProductValues("brand").map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="input-box"
+            value={imageFilters.series}
+            onChange={(e) => updateImageFilter("series", e.target.value)}
+          >
+            <option value="">All Series</option>
+            {uniqueProductValues("series").map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <input
+            className="input-box"
+            placeholder="Search product..."
+            value={imageFilters.search}
+            onChange={(e) => updateImageFilter("search", e.target.value)}
+          />
+
+          <label className="flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-700">
+            <input
+              type="checkbox"
+              checked={imageFilters.withoutImageOnly}
+              onChange={(e) =>
+                updateImageFilter("withoutImageOnly", e.target.checked)
+              }
+            />
+            Only without image
+          </label>
+        </div>
+
+        <div className="mt-4 overflow-auto rounded-2xl border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-100">
+              <tr>
+                <th className="p-2 border">Product Code</th>
+                <th className="p-2 border">Product Name</th>
+                <th className="p-2 border">Brand</th>
+                <th className="p-2 border">Series</th>
+                <th className="p-2 border">Sub Category</th>
+                <th className="p-2 border">Current Image</th>
+                <th className="p-2 border">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredImageProducts.map((product) => {
+                const productCode = getProductValue(
+                  product,
+                  "productCode",
+                  "product_code"
+                );
+                const productName = getProductValue(
+                  product,
+                  "name",
+                  "product_name"
+                );
+                const imagePresent = hasProductImage(product);
+                const isUploading = uploadingImageProductId === product.id;
+
+                return (
+                  <tr key={product.id} className="border-t hover:bg-slate-50">
+                    <td className="p-2 border font-bold">{productCode}</td>
+                    <td className="p-2 border">{productName}</td>
+                    <td className="p-2 border">{getProductValue(product, "brand")}</td>
+                    <td className="p-2 border">{getProductValue(product, "series")}</td>
+                    <td className="p-2 border">
+                      {getProductValue(product, "subCategory", "sub_category")}
+                    </td>
+                    <td className="p-2 border">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-bold ${
+                          imagePresent
+                            ? "bg-green-100 text-green-700"
+                            : "bg-orange-100 text-orange-700"
+                        }`}
+                      >
+                        {imagePresent ? "Image set" : "No image"}
+                      </span>
+                    </td>
+                    <td className="p-2 border">
+                      <label
+                        className={`inline-block rounded-lg px-4 py-2 text-sm font-bold text-white ${
+                          isUploading
+                            ? "cursor-not-allowed bg-slate-300"
+                            : "cursor-pointer bg-blue-600 hover:bg-blue-700"
+                        }`}
+                      >
+                        {isUploading ? "Uploading..." : "Upload Image"}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={isUploading}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            event.target.value = "";
+                            uploadProductImage(product, file);
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {filteredImageProducts.length === 0 && (
+                <tr>
+                  <td colSpan="7" className="p-6 text-center text-slate-500">
+                    No products match these image filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+        )}
+
+        {activeSection === "missingCodes" && (
+      <div className="mt-5 rounded-2xl bg-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h3 className="text-xl font-bold">Missing Product Code</h3>
+            <p className="text-sm text-slate-600">
+              Find products without product codes and update them one by one.
+            </p>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-600">
+            {filteredMissingCodeProducts.length} products shown
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 rounded-2xl border bg-slate-50 p-4 md:grid-cols-5">
+          <select
+            className="input-box"
+            value={missingCodeFilters.subCategory}
+            onChange={(e) => updateMissingCodeFilter("subCategory", e.target.value)}
+          >
+            <option value="">All Sub Categories</option>
+            {uniqueProductValues("subCategory", "sub_category").map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="input-box"
+            value={missingCodeFilters.brand}
+            onChange={(e) => updateMissingCodeFilter("brand", e.target.value)}
+          >
+            <option value="">All Brands</option>
+            {uniqueProductValues("brand").map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="input-box"
+            value={missingCodeFilters.series}
+            onChange={(e) => updateMissingCodeFilter("series", e.target.value)}
+          >
+            <option value="">All Series</option>
+            {uniqueProductValues("series").map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <input
+            className="input-box"
+            placeholder="Search product..."
+            value={missingCodeFilters.search}
+            onChange={(e) => updateMissingCodeFilter("search", e.target.value)}
+          />
+
+          <label className="flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm font-bold text-slate-700">
+            <input
+              type="checkbox"
+              checked={missingCodeFilters.withoutCodeOnly}
+              onChange={(e) =>
+                updateMissingCodeFilter("withoutCodeOnly", e.target.checked)
+              }
+            />
+            Only without Product Code
+          </label>
+        </div>
+
+        <div className="mt-4 overflow-auto rounded-2xl border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-100">
+              <tr>
+                <th className="p-2 border">Product ID</th>
+                <th className="p-2 border">Product Name</th>
+                <th className="p-2 border">Brand</th>
+                <th className="p-2 border">Series</th>
+                <th className="p-2 border">Sub Category</th>
+                <th className="p-2 border">Current Product Code</th>
+                <th className="p-2 border">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredMissingCodeProducts.map((product) => {
+                const productId = getProductValue(product, "id");
+                const productName = getProductValue(product, "name", "product_name");
+                const currentCode = getCurrentProductCode(product);
+                const isSaving = savingProductCodeId === product.id;
+
+                return (
+                  <tr key={product.id} className="border-t hover:bg-slate-50">
+                    <td className="p-2 border font-mono text-xs">{productId}</td>
+                    <td className="p-2 border">{productName}</td>
+                    <td className="p-2 border">{getProductValue(product, "brand")}</td>
+                    <td className="p-2 border">{getProductValue(product, "series")}</td>
+                    <td className="p-2 border">
+                      {getProductValue(product, "subCategory", "sub_category")}
+                    </td>
+                    <td className="p-2 border">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-bold ${
+                          currentCode
+                            ? "bg-green-100 text-green-700"
+                            : "bg-orange-100 text-orange-700"
+                        }`}
+                      >
+                        {currentCode || "No code"}
+                      </span>
+                    </td>
+                    <td className="p-2 border">
+                      <div className="flex min-w-[260px] flex-col gap-2 sm:flex-row">
+                        <input
+                          ref={(element) => {
+                            if (element) productCodeInputRefs.current[product.id] = element;
+                          }}
+                          className="input-box h-9"
+                          placeholder="Enter or scan code"
+                          value={productCodeDrafts[product.id] || ""}
+                          onChange={(event) =>
+                            updateProductCodeDraft(product.id, event.target.value)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              saveMissingProductCode(product);
+                            }
+                          }}
+                          disabled={isSaving}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => saveMissingProductCode(product)}
+                          disabled={isSaving}
+                          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-300"
+                        >
+                          {isSaving ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {filteredMissingCodeProducts.length === 0 && (
+                <tr>
+                  <td colSpan="7" className="p-6 text-center text-slate-500">
+                    No products match these product code filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+        )}
       </div>
 
       {productImportPreview && (

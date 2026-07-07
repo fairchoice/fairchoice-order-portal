@@ -12,6 +12,7 @@ import {
   mergeOperationalOrders,
   previewInvoice,
   printInvoice,
+  withResolvedInvoicePaymentStatus,
 } from "../../services/centralInvoiceEngine";
 import {
   confirmReturnCredit,
@@ -21,7 +22,11 @@ import {
 import { getCustomerAccounts } from "../../services/customerManagement";
 import { getProducts } from "../../services/products";
 import { getProductPriceForMode, isServerManagerPriceMode } from "../../utils/pricing";
-import { calculateCartOrderItems, calculateCartTotals } from "../../utils/orderTotals";
+import {
+  calculateCartOrderItems,
+  calculateCartTotals,
+  getOrderItemProductCode,
+} from "../../utils/orderTotals";
 
 const getCreatedDate = (row) => row.created_at || row.invoice_date || row.date || "";
 const getReference = (row) => row.reference_no || row.order_number || row.invoice_number || row.id || "-";
@@ -389,6 +394,9 @@ export default function InvoicesPortal() {
       id: product.id,
       productId: product.id,
       productCode: product.productCode || product.product_code || "",
+      product_code: product.productCode || product.product_code || "",
+      code: product.code || product.productCode || product.product_code || "",
+      sku: product.sku || product.SKU || product.product_sku || "",
       name: product.name || product.productName || product.product_name,
       brand: product.brand || "",
       series: product.series || "",
@@ -453,7 +461,8 @@ export default function InvoicesPortal() {
         ...item,
         id: item.product_id || item.productId || item.id,
         productId: item.product_id || item.productId || item.id,
-        productCode: item.product_code || item.productCode || "",
+        productCode: getOrderItemProductCode(item),
+        product_code: getOrderItemProductCode(item),
         name: item.product_name || item.productName || item.name,
         qty: Number(item.qty || item.quantity || 0),
         pickedQty: Number(item.picked_qty ?? item.pickedQty ?? item.qty ?? 0),
@@ -667,7 +676,7 @@ export default function InvoicesPortal() {
           const { error: itemInsertError } = await supabase.from("order_items").insert({
             order_id: orderRow?.id || amendOrder.id,
             product_id: line.id || line.productId,
-            product_code: line.productCode || "",
+            product_code: getOrderItemProductCode(line),
             product_name: line.name,
             brand: line.brand || "",
             series: line.series || "",
@@ -786,7 +795,8 @@ export default function InvoicesPortal() {
     try {
       const order = await getOrderForInvoice(row);
       if (!order) return;
-      action(order);
+      const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+      action(resolvedOrder);
     } catch (err) {
       console.error("Invoice action error:", err);
       alert(err.message || "Could not open invoice.");

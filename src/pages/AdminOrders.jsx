@@ -791,17 +791,8 @@ const bulkRefreshOrderPrices = async (order) => {
       </button>
     </div>
 
-    <div className="overflow-x-auto">
     <div
       className="received-item-header"
-      style={{
-        display: "grid",
-        gridTemplateColumns: "70px 70px minmax(420px, 1fr) 110px 160px 120px 110px",
-        columnGap: "10px",
-        alignItems: "center",
-        minWidth: "1120px",
-        width: "100%",
-      }}
     >
       <div>QNT</div>
       <div>Upt</div>
@@ -834,16 +825,8 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
           className={`received-item-row ${
             item.includeInPicking === false ? "opacity-50 bg-slate-50" : ""
           }`}
-          style={{
-            display: "grid",
-            gridTemplateColumns: "70px 70px minmax(420px, 1fr) 110px 160px 120px 110px",
-            columnGap: "10px",
-            alignItems: "center",
-            minWidth: "1120px",
-            width: "100%",
-          }}
         >
-          <div>
+          <div className="received-qty-cell">
             <input
               type="number"
               min="0"
@@ -858,7 +841,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
               }
             />
           </div>
-          <div>
+          <div className="received-update-cell">
             {hasPermission(loggedInUser, "can_receive_order") && (
               <button
                 onClick={() => {
@@ -891,8 +874,8 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
           <div className="received-product-name">
             {item.productName || item.name}
           </div>
-          <div className="received-line-total">{formatCurrency(savedUnitPrice)}</div>
-          <div>
+          <div className="received-line-total received-unit-price">{formatCurrency(savedUnitPrice)}</div>
+          <div className="received-status-cell">
             <select
               className="received-status-select"
               value={item.sourceStatus || "In Stock"}
@@ -913,8 +896,8 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
               <option value="Cannot Supply">Cannot Supply</option>
             </select>
           </div>
-          <div className="received-line-total">{formatCurrency(lineTotal)}</div>
-          <div>
+          <div className="received-line-total received-row-total">{formatCurrency(lineTotal)}</div>
+          <div className="received-remove-cell">
             {hasPermission(loggedInUser, "can_receive_order") && (
               <button
                 disabled={item.includeInPicking === false}
@@ -935,7 +918,6 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
         </div>
       );
     })}
-    </div>
 
                   <div className="flex flex-wrap justify-end gap-2 pt-3">
                     {!showArchive &&

@@ -47,9 +47,105 @@ const getProductCode = (line = {}) =>
   line.code ||
   line.products?.product_code ||
   line.products?.code ||
+  line.products?.sku ||
   line.product?.product_code ||
   line.product?.code ||
+  line.product?.sku ||
   "";
+
+const enrichQueueRowsWithProductCodes = async (rows = []) => {
+  const lines = rows.flatMap(getLineItems);
+  const missingProductIds = [
+    ...new Set(
+      lines
+        .filter((line) => !getProductCode(line))
+        .map((line) => line.product_id || line.productId || line.id)
+        .filter(Boolean)
+        .map(String)
+    ),
+  ];
+
+  const missingNames = [
+    ...new Set(
+      lines
+        .filter((line) => !getProductCode(line))
+        .map((line) => String(getDescription(line)).trim())
+        .filter(Boolean)
+    ),
+  ];
+
+  if (!missingProductIds.length && !missingNames.length) return rows;
+
+  let productsById = {};
+  let productsByName = {};
+
+  if (missingProductIds.length) {
+    const { data } = await supabase
+      .from("products")
+      .select("id, product_name, product_code, code, sku")
+      .in("id", missingProductIds);
+
+    productsById = Object.fromEntries(
+      (data || []).map((product) => [String(product.id), product])
+    );
+  }
+
+  if (missingNames.length) {
+    const { data } = await supabase
+      .from("products")
+      .select("id, product_name, product_code, code, sku")
+      .in("product_name", missingNames);
+
+    const groupedByName = (data || []).reduce((groups, product) => {
+      const key = String(product.product_name || "").trim().toLowerCase();
+      if (!key) return groups;
+      groups[key] = [...(groups[key] || []), product];
+      return groups;
+    }, {});
+
+    productsByName = Object.fromEntries(
+      Object.entries(groupedByName)
+        .filter(([, matches]) => matches.length === 1)
+        .map(([name, matches]) => [name, matches[0]])
+    );
+  }
+
+  const enrichLine = (line) => {
+    if (getProductCode(line)) return line;
+
+    const product =
+      productsById[String(line.product_id || line.productId || line.id)] ||
+      productsByName[String(getDescription(line)).trim().toLowerCase()] ||
+      null;
+    const productCode = getProductCode({ product, products: product });
+
+    return {
+      ...line,
+      product_code: productCode || line.product_code || "",
+      productCode: productCode || line.productCode || "",
+      product: line.product || product,
+      products: line.products || product,
+    };
+  };
+
+  return rows.map((row) => ({
+    ...row,
+    line_items: Array.isArray(row.line_items)
+      ? row.line_items.map(enrichLine)
+      : row.line_items,
+    transaction_snapshot: row.transaction_snapshot
+      ? {
+          ...row.transaction_snapshot,
+          order_items: Array.isArray(row.transaction_snapshot.order_items)
+            ? row.transaction_snapshot.order_items.map(enrichLine)
+            : row.transaction_snapshot.order_items,
+          items: Array.isArray(row.transaction_snapshot.items)
+            ? row.transaction_snapshot.items.map(enrichLine)
+            : row.transaction_snapshot.items,
+        }
+      : row.transaction_snapshot,
+  }));
+};
 
 const getDescription = (line = {}) =>
   line.product_name || line.productName || line.name || line.description || "";
@@ -383,7 +479,10 @@ export default function OrderSalesInvoices() {
         setError(getProcessingQueueLoadErrorMessage(loadError));
         setRows([]);
       } else {
-      setRows((data || []).filter(isServerManagerQueueRow).map(buildVatInvoice));
+      const enrichedRows = await enrichQueueRowsWithProductCodes(
+        (data || []).filter(isServerManagerQueueRow)
+      );
+      setRows(enrichedRows.map(buildVatInvoice));
     }
 
     setLoading(false);

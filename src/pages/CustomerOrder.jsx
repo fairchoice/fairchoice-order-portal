@@ -47,6 +47,7 @@ import {
   calculateCartOrderItems,
   calculateCartTotals,
   calculateOrderTotals,
+  getOrderItemProductCode,
   roundMoney,
 
   getOrderItemQty,
@@ -87,6 +88,7 @@ import {
   loadProcessingQueueOrders,
   mergeOperationalOrders,
   printInvoice as printCentralInvoice,
+  withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
 
 function normalizeProduct(raw) {
@@ -1060,10 +1062,10 @@ const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   const quantity = Math.max(1, Number(nextQty || 1));
   const priceDetails = getPriceDetails(item);
   const selectedPrice = Number(priceDetails.price || 0);
-  const exVatPrice = selectedPrice;
-  const vatRate = getVatRate(item.vatType || item.vat_type);
-  const vatAmount = isVatPriceMode(priceMode) ? exVatPrice * (vatRate / 100) : 0;
-  const incVatPrice = exVatPrice + vatAmount;
+  const exVatPrice = Number(priceDetails.exVatPrice ?? selectedPrice);
+  const vatRate = Number(priceDetails.vatRate ?? getVatRate(item.vatType || item.vat_type));
+  const vatAmount = Number(priceDetails.vatAmount || 0);
+  const incVatPrice = Number(priceDetails.grossPrice ?? selectedPrice);
   const lineTotal = quantity * selectedPrice;
 
   return {
@@ -2373,12 +2375,14 @@ const addOrderItem = async (orderId, newItem) => {
     },
     order
   );
+  const productCode = getOrderItemProductCode(calculatedItem);
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("order_items")
     .insert({
       order_id: order.dbId,
       product_id: newItem.productId,
+      product_code: productCode,
       product_name: newItem.name,
       brand: newItem.brand || "",
       series: newItem.series || "",
@@ -2396,6 +2400,37 @@ const addOrderItem = async (orderId, newItem) => {
     })
     .select("id")
     .single();
+
+  if (
+    error &&
+    String(error.message || error.details || "").toLowerCase().includes("product_code")
+  ) {
+    const retry = await supabase
+      .from("order_items")
+      .insert({
+        order_id: order.dbId,
+        product_id: newItem.productId,
+        product_name: newItem.name,
+        brand: newItem.brand || "",
+        series: newItem.series || "",
+        flavour: newItem.flavour || "",
+        carton_size: newItem.cartonSize || "",
+        qty,
+        picked_qty: qty,
+        price: calculatedItem.price.toFixed(2),
+        line_total: calculatedItem.line_total.toFixed(2),
+        net_total: calculatedItem.net_total.toFixed(2),
+        gross_total: calculatedItem.gross_total.toFixed(2),
+        vat_amount: calculatedItem.vat_total.toFixed(2),
+        source_status: "In Stock",
+        include_in_picking: true,
+      })
+      .select("id")
+      .single();
+
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) {
     console.error("Add item error:", error);
@@ -2796,8 +2831,9 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     win.document.close();
   };
 
-  const openCustomerInvoiceDocument = (order) => {
-    printCentralInvoice(order);
+  const openCustomerInvoiceDocument = async (order) => {
+    const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+    printCentralInvoice(resolvedOrder);
   };
 
   const comingSoonTitle = getComingSoonTitle(page);

@@ -134,7 +134,9 @@ const getProductOnlySpecialPrice = (product = {}) =>
     product.specialPrice ??
       product.special_price ??
       product.productSpecialPrice ??
-      product.product_special_price
+      product.product_special_price ??
+      product.cashPrice ??
+      product.cash_price
   );
 
 export const getProductSpecialPrice = (product = {}, country = "") => {
@@ -149,14 +151,30 @@ export const getProductSpecialPrice = (product = {}, country = "") => {
   return specialPrice;
 };
 
-export const calculateProductPrice = ({
-  product = {},
-  priceMode = "vat",
-  country = "",
-  customer,
-  branch,
-  pricingSettings = {},
-} = {}) => {
+const applyPricingDiscount = (basePrice, percent) => {
+  const discountPercent = Number(percent || 0);
+  if (!discountPercent) return roundMoney(basePrice);
+  return roundMoney(Number(basePrice || 0) * (1 - discountPercent / 100));
+};
+
+export const calculateProductPrice = (input = {}, positionalPriceMode, positionalCountry, positionalPricingSettings) => {
+  const options =
+    input && Object.prototype.hasOwnProperty.call(input, "product")
+      ? input
+      : {
+          product: input || {},
+          priceMode: positionalPriceMode,
+          country: positionalCountry,
+          pricingSettings: positionalPricingSettings,
+        };
+  const {
+    product = {},
+    priceMode = "vat",
+    country = "",
+    customer,
+    branch,
+    pricingSettings = {},
+  } = options;
   const mode = normalizePriceMode(priceMode);
   const vatRate = getVatRate(product.vatType ?? product.vat_type);
   const resolvedCountry =
@@ -171,8 +189,7 @@ export const calculateProductPrice = ({
   const productSpecialPrice = getProductOnlySpecialPrice(product);
   const countrySpecialPrice = getProductSpecialPrice(product, resolvedCountry);
   const pricingPercent = getPricingPercent(mode, pricingSettings);
-  const percentNetPrice =
-    pricingPercent > 0 ? roundMoney(exVatPrice * (pricingPercent / 100)) : exVatPrice;
+  const discountedNetPrice = applyPricingDiscount(exVatPrice, pricingPercent);
 
   let unitPrice = exVatPrice;
   let grossPrice = exVatPrice;
@@ -195,7 +212,7 @@ export const calculateProductPrice = ({
       appliedRule = "country_special_price";
       appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
     } else {
-      unitPrice = percentNetPrice;
+      unitPrice = discountedNetPrice;
       appliedRule = "server_pricing_percent";
     }
     grossPrice = unitPrice;
@@ -209,18 +226,18 @@ export const calculateProductPrice = ({
       appliedRule = "country_special_price";
       appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
     } else {
-      unitPrice = percentNetPrice;
+      unitPrice = discountedNetPrice;
       appliedRule = "manager_pricing_percent";
     }
     grossPrice = unitPrice;
   } else if (mode === "admin" || mode === "admin offer") {
-    const adminNet = percentNetPrice;
+    const adminNet = applyPricingDiscount(exVatPrice, pricingPercent);
     unitPrice = getGrossPrice(adminNet, vatRate);
     grossPrice = unitPrice;
     vatAmount = roundMoney(unitPrice - adminNet);
     appliedRule = "admin_pricing_percent_gross";
   } else if (mode === "super") {
-    unitPrice = percentNetPrice;
+    unitPrice = discountedNetPrice;
     grossPrice = unitPrice;
     appliedRule = "super_pricing_percent";
   }

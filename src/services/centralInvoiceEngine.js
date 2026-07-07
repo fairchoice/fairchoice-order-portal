@@ -1,6 +1,10 @@
 import { supabase } from "./supabase";
 import { calculateDocumentTotals } from "../utils/documentTotals";
-import { calculateCartOrderItems, calculateCartTotals } from "../utils/orderTotals";
+import {
+  calculateCartOrderItems,
+  calculateCartTotals,
+  getOrderItemProductCode,
+} from "../utils/orderTotals";
 import { isServerManagerPriceMode, roundMoney } from "../utils/pricing";
 import { formatCurrency } from "../utils/currency";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
@@ -98,11 +102,12 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     ...new Set((orderItems || []).map((item) => item.product_id).filter(Boolean)),
   ];
   let productsById = {};
+  let productsByName = {};
 
   if (productIds.length) {
     const { data: products, error: productsError } = await supabase
       .from("products")
-      .select("id, product_code")
+      .select("id, product_code, code, sku")
       .in("id", productIds);
 
     if (!productsError) {
@@ -112,12 +117,59 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     }
   }
 
+  const missingCodeNames = [
+    ...new Set(
+      (orderItems || [])
+        .filter((item) => !getProductCodeFromInvoiceItem(item))
+        .map((item) => String(item.product_name || item.name || "").trim())
+        .filter(Boolean)
+    ),
+  ];
+
+  if (missingCodeNames.length) {
+    const { data: namedProducts, error: namedProductsError } = await supabase
+      .from("products")
+      .select("id, product_name, product_code, code, sku")
+      .in("product_name", missingCodeNames);
+
+    if (!namedProductsError) {
+      const groupedByName = (namedProducts || []).reduce((groups, product) => {
+        const key = String(product.product_name || "").trim().toLowerCase();
+        if (!key) return groups;
+        groups[key] = [...(groups[key] || []), product];
+        return groups;
+      }, {});
+
+      productsByName = Object.fromEntries(
+        Object.entries(groupedByName)
+          .filter(([, matches]) => matches.length === 1)
+          .map(([name, matches]) => [name, matches[0]])
+      );
+    }
+  }
+
   return normalizeInvoiceOrder({
     ...order,
     order_items: (orderItems || []).map((item) => ({
       ...item,
-      products: item.products || productsById[String(item.product_id)] || null,
-      product: item.product || productsById[String(item.product_id)] || null,
+      ...(() => {
+        const fallbackProduct =
+          productsById[String(item.product_id)] ||
+          productsByName[String(item.product_name || item.name || "").trim().toLowerCase()] ||
+          null;
+        const productCode = getProductCodeFromInvoiceItem({
+          ...item,
+          products: item.products || fallbackProduct,
+          product: item.product || fallbackProduct,
+        });
+
+        return {
+          product_code: item.product_code || productCode,
+          productCode: item.productCode || productCode,
+          products: item.products || fallbackProduct,
+          product: item.product || fallbackProduct,
+        };
+      })(),
     })),
   });
 }
@@ -275,6 +327,8 @@ const firstMoneyValue = (...values) => {
 };
 
 export const isInvoicePaid = (order = {}, totals = {}) => {
+  if (order._ledgerPaid === true || order.ledgerPaid === true) return true;
+
   const paymentStatus = String(order.payment_status || order.paymentStatus || "")
     .trim()
     .toLowerCase();
@@ -327,6 +381,201 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
 
   return false;
 };
+
+const getInvoiceLedgerReferences = (order = {}) => [
+  order.order_number,
+  order.orderNumber,
+  order.orderId,
+  order.reference_no,
+  order.invoice_number,
+]
+  .map((value) => String(value || "").trim())
+  .filter(Boolean);
+
+const getLedgerRowDebit = (row = {}) =>
+  Number(row.debit ?? row.invoice_amount ?? row.invoice_total ?? 0);
+
+const getLedgerRowCredit = (row = {}) =>
+  Number(row.credit ?? row.payment_amount ?? row.amount_paid ?? 0);
+
+const getProductCodeFromInvoiceItem = (item = {}) =>
+  item.product_code ||
+  item.code ||
+  item.sku ||
+  item.SKU ||
+  item.productCode ||
+  item.products?.product_code ||
+  item.products?.code ||
+  item.products?.sku ||
+  item.product?.product_code ||
+  item.product?.code ||
+  item.product?.sku ||
+  item.product?.productCode ||
+  "";
+
+const withProductCodeFallbacks = async (order = {}) => {
+  const items = order.items || order.order_items || [];
+  const missingProductIds = [
+    ...new Set(
+      (items || [])
+        .filter((item) => !getProductCodeFromInvoiceItem(item))
+        .map((item) => item.product_id || item.productId || item.id)
+        .filter(Boolean)
+        .map(String)
+    ),
+  ];
+
+  const missingProductNames = [
+    ...new Set(
+      (items || [])
+        .filter((item) => !getProductCodeFromInvoiceItem(item))
+        .map((item) => String(item.product_name || item.productName || item.name || "").trim())
+        .filter(Boolean)
+    ),
+  ];
+
+  if (!missingProductIds.length && !missingProductNames.length) return order;
+
+  let productsById = {};
+  let productsByName = {};
+
+  if (missingProductIds.length) {
+    const { data, error } = await supabase
+      .from("products")
+      .select("id, product_name, product_code, code, sku")
+      .in("id", missingProductIds);
+
+    if (error) {
+      console.warn("Invoice product code fallback lookup failed", error);
+    } else {
+      productsById = Object.fromEntries(
+        (data || []).map((product) => [String(product.id), product])
+      );
+    }
+  }
+
+  if (missingProductNames.length) {
+    const { data, error } = await supabase
+      .from("products")
+      .select("id, product_name, product_code, code, sku")
+      .in("product_name", missingProductNames);
+
+    if (error) {
+      console.warn("Invoice product name fallback lookup failed", error);
+    } else {
+      const groupedByName = (data || []).reduce((groups, product) => {
+        const key = String(product.product_name || "").trim().toLowerCase();
+        if (!key) return groups;
+        groups[key] = [...(groups[key] || []), product];
+        return groups;
+      }, {});
+
+      productsByName = Object.fromEntries(
+        Object.entries(groupedByName)
+          .filter(([, matches]) => matches.length === 1)
+          .map(([name, matches]) => [name, matches[0]])
+      );
+    }
+  }
+
+  const nextItems = (items || []).map((item) => {
+    if (getProductCodeFromInvoiceItem(item)) return item;
+
+    const product =
+      productsById[String(item.product_id || item.productId || item.id)] ||
+      productsByName[
+        String(item.product_name || item.productName || item.name || "")
+          .trim()
+          .toLowerCase()
+      ];
+    const productCode = getProductCodeFromInvoiceItem({ product, products: product });
+
+    return {
+      ...item,
+      product_code: productCode || item.product_code || "",
+      productCode: productCode || item.productCode || "",
+      products: item.products || product || null,
+      product: item.product || product || null,
+    };
+  });
+
+  return {
+    ...order,
+    items: nextItems,
+    order_items: nextItems,
+  };
+};
+
+export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
+  const references = [...new Set(getInvoiceLedgerReferences(order))];
+  if (!references.length) return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
+
+  const { data, error } = await supabase
+    .from("customer_ledger")
+    .select("id, reference_no, order_number, entry_type, transaction_type, debit, credit, amount, payment_amount, invoice_amount, invoice_total")
+    .or(
+      references
+        .flatMap((reference) => [
+          `reference_no.eq.${reference}`,
+          `order_number.eq.${reference}`,
+        ])
+        .join(",")
+    );
+
+  if (error) {
+    console.warn("Invoice ledger payment status lookup failed", error);
+    return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
+  }
+
+  const rows = data || [];
+  if (!rows.length) return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
+
+  const netBalance = rows.reduce((sum, row) => {
+    const type = String(row.entry_type || row.transaction_type || "").toLowerCase();
+    const rawAmount = Number(row.amount || 0);
+    const debit =
+      getLedgerRowDebit(row) ||
+      (type.includes("invoice") && rawAmount > 0 ? rawAmount : 0);
+    const credit =
+      getLedgerRowCredit(row) ||
+      (rawAmount < 0
+        ? Math.abs(rawAmount)
+        : type.includes("payment") || type.includes("credit")
+          ? rawAmount
+          : 0);
+
+    return sum + debit - credit;
+  }, 0);
+
+  const hasInvoiceDebit = rows.some((row) => {
+    const type = String(row.entry_type || row.transaction_type || "").toLowerCase();
+    return getLedgerRowDebit(row) > 0 || (type.includes("invoice") && Number(row.amount || 0) > 0);
+  });
+  const hasCredit = rows.some((row) => getLedgerRowCredit(row) > 0 || Number(row.amount || 0) < 0);
+
+  return {
+    ledgerPaid: hasInvoiceDebit && hasCredit && netBalance <= 0.01,
+    ledgerBalance: netBalance,
+    ledgerRows: rows,
+  };
+}
+
+export async function withResolvedInvoicePaymentStatus(order = {}) {
+  const productCodeOrder = await withProductCodeFallbacks(order);
+  const invoiceOrder = normalizeInvoiceOrder(productCodeOrder);
+  const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+
+  if (isInvoicePaid(invoiceOrder, totals)) {
+    return { ...invoiceOrder, _ledgerPaid: true };
+  }
+
+  const ledgerStatus = await resolveInvoiceLedgerPaymentStatus(invoiceOrder);
+  return {
+    ...invoiceOrder,
+    _ledgerPaid: ledgerStatus.ledgerPaid,
+    _ledgerBalance: ledgerStatus.ledgerBalance,
+  };
+}
 
 const getInvoicePaymentStatus = (order = {}, totals = {}) =>
   isInvoicePaid(order, totals) ? "PAID" : "UNPAID";
@@ -750,18 +999,7 @@ const getLinePrice = (item = {}) =>
 const getLineVatRate = (item = {}) =>
   Number(item.vatRate ?? item.vat_rate ?? item.vatPercent ?? item.vat_percent ?? 0);
 
-const getInvoiceProductCode = (item = {}) =>
-  item.product_code ||
-  item.productCode ||
-  item.sku ||
-  item.SKU ||
-  item.code ||
-  item.products?.product_code ||
-  item.products?.code ||
-  item.product?.product_code ||
-  item.product?.code ||
-  item.product?.productCode ||
-  "";
+const getInvoiceProductCode = (item = {}) => getProductCodeFromInvoiceItem(item);
 
 const getPrintableCompanyAddress = (address = "") =>
   String(address || "")
@@ -803,10 +1041,11 @@ function buildLegacyStandardInvoiceHtml(
       const unitPrice = getLinePrice(item);
       const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
       const vatRate = getLineVatRate(item);
+      const productCode = getInvoiceProductCode(item);
 
       return `
         <tr>
-          <td>${escapeHtml(item.productCode || item.product_code || "")}</td>
+          <td>${escapeHtml(productCode)}</td>
           <td>${escapeHtml(item.name || item.productName || item.product_name || "")}</td>
           <td class="right">${escapeHtml(quantity)}</td>
           ${
@@ -1816,7 +2055,7 @@ export async function createManualInvoice({
   const orderItems = calculatedItems.map((item) => ({
     order_id: savedOrder.id,
     product_id: item.id || item.productId || item.product_id,
-    product_code: item.productCode || item.product_code || "",
+    product_code: getOrderItemProductCode(item),
     product_name: item.name || item.productName || item.product_name || "",
     brand: item.brand || "",
     series: item.series || "",

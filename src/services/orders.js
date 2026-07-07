@@ -1,5 +1,9 @@
 import { supabase } from "./supabase";
-import { calculateCartTotals, calculateCartOrderItems } from "../utils/orderTotals";
+import {
+  calculateCartTotals,
+  calculateCartOrderItems,
+  getOrderItemProductCode,
+} from "../utils/orderTotals";
 import { isServerManagerPriceMode } from "../utils/pricing";
 import {
   loadProcessingQueueOrders,
@@ -422,6 +426,7 @@ alert(
 const orderItems = calculatedOrderItems.map((item) => ({
   order_id: order.id,
   product_id: item.id,
+  product_code: getOrderItemProductCode(item),
   product_name: item.name,
   brand: item.brand || "",
   series: item.series || "",
@@ -445,6 +450,24 @@ const orderItems = calculatedOrderItems.map((item) => ({
   let { error: itemsError } = await supabase
     .from("order_items")
     .insert(orderItemsForInsert);
+
+  if (
+    itemsError &&
+    String(itemsError.message || itemsError.details || "")
+      .toLowerCase()
+      .includes("product_code")
+  ) {
+    orderItemsForInsert = orderItemsForInsert.map((item) => {
+      const nextItem = { ...item };
+      delete nextItem.product_code;
+      return nextItem;
+    });
+    const retry = await supabase
+      .from("order_items")
+      .insert(orderItemsForInsert);
+
+    itemsError = retry.error;
+  }
 
   if (
     itemsError &&

@@ -15,6 +15,7 @@ import {
   printInvoice as printCentralInvoice,
   printOrderForm as printCentralOrderForm,
   printThermalReceipt,
+  withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
 
 /*
@@ -942,7 +943,8 @@ const printProtectedOrderForm = async (order) => {
 const printProtectedInvoice = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  printCentralInvoice(order);
+  const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+  printCentralInvoice(resolvedOrder);
   await logAction({
     user: loggedInUser,
     action_type: "Printed picking list",
@@ -956,7 +958,8 @@ const printProtectedInvoice = async (order) => {
 const printProtectedDeliveryNote = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print delivery notes.")) return;
 
-  printCentralDeliveryNote(order);
+  const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+  printCentralDeliveryNote(resolvedOrder);
   await logAction({
     user: loggedInUser,
     action_type: "Printed delivery note",
@@ -1202,7 +1205,9 @@ const printCustomerDocumentForMode =
 
               {hasPermission(loggedInUser, "can_print") && (
                 <button
-                  onClick={() => printThermalReceipt(order)}
+                  onClick={async () =>
+                    printThermalReceipt(await withResolvedInvoicePaymentStatus(order))
+                  }
                   className={`bg-zinc-700 text-white ${btn}`}
                 >
                   Thermal Print

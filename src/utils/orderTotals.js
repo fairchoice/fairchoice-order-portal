@@ -64,6 +64,20 @@ export const getOrderItemVatType = (item = {}) =>
   item.vatRate ??
   "20";
 
+export const getOrderItemProductCode = (item = {}) =>
+  item.product_code ||
+  item.productCode ||
+  item.code ||
+  item.sku ||
+  item.SKU ||
+  item.product?.product_code ||
+  item.product?.code ||
+  item.product?.sku ||
+  item.products?.product_code ||
+  item.products?.code ||
+  item.products?.sku ||
+  "";
+
 const buildVatGroups = (items = [], includeVat = true) => {
   const groupsByRate = new Map();
 
@@ -183,12 +197,16 @@ export const calculateCartOrderItems = (cart = [], options = {}) => {
     const discountAmount = roundMoney(checkoutDiscountAllocations[index]);
     const vatRate = getOrderItemVatRate(item);
     const vatType = getOrderItemVatType(item);
+    const productCode = getOrderItemProductCode(item);
     const netTotal = roundMoney(
       Math.max(0, lineTotalBeforeDiscount - promotionDiscountTotal - discountAmount)
     );
 
     return {
       ...item,
+      productCode,
+      product_code: productCode,
+      code: item.code || productCode,
       qty,
       quantity: qty,
       price,

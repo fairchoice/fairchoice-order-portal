@@ -7,6 +7,7 @@ import {
   createOrUpdateInvoiceForDeliveredOrder,
   loadCustomerOutstandingSnapshot,
   printThermalReceipt,
+  withResolvedInvoicePaymentStatus,
 } from "../../services/centralInvoiceEngine";
 import { saveConfirmedServerManagerOrderToProcessingQueue } from "../../services/orders";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
@@ -66,6 +67,11 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   whoPaid: "",
   notes: "",
   });
+
+  const printResolvedThermalReceipt = async (order) => {
+    const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+    printThermalReceipt(resolvedOrder);
+  };
  
   const [paymentForm, setPaymentForm] = useState({
   paymentType: "Cash",
@@ -763,7 +769,7 @@ await allocateCustomerPaymentToInvoices({
                 </button>
 
                 <button
-                  onClick={() => printThermalReceipt(order)}
+                  onClick={() => printResolvedThermalReceipt(order)}
                   className="bg-black text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[145px]"
                 >
                   Print Thermal Receipt
@@ -844,7 +850,7 @@ await allocateCustomerPaymentToInvoices({
                 <div className="grid grid-cols-1 gap-2">
                   <button
                     type="button"
-                    onClick={() => printThermalReceipt(order)}
+                    onClick={() => printResolvedThermalReceipt(order)}
                     className="w-full bg-black text-white py-2 rounded-xl text-sm font-bold"
                   >
                     Print Thermal Receipt
