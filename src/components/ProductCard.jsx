@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { formatCurrency } from "../utils/currency";
+import { getDisplayProductImage } from "../utils/productImages";
 
 const getProductStatus = (product) => {
   const sourceStatus = String(product?.sourceStatus || "").trim();
@@ -84,6 +85,7 @@ export function ProductListRow({ product, addToCart, onImageClick, price, cartQt
   const status = getProductStatus(product);
   const promotionText = getPromotionText(product);
   const productSize = getProductSize(product);
+  const productImage = getDisplayProductImage(product);
   const ribbonLabel =
     product?.comingSoon ? "COMING SOON" :
     product?.isNew ? "NEW" :
@@ -103,9 +105,12 @@ export function ProductListRow({ product, addToCart, onImageClick, price, cartQt
           onClick={() => onImageClick?.(product)}
         >
           <img
-            src={product?.image || "https://placehold.co/400x300?text=Product"}
+            src={productImage}
             alt={product?.name || "Product"}
             className="h-full w-full object-contain"
+            onError={(event) => {
+              event.currentTarget.src = getDisplayProductImage({});
+            }}
           />
         </button>
 
@@ -157,6 +162,7 @@ export default function ProductCard({ product, addToCart, onImageClick, price, c
   const handleAdd = onAdd || addToCart;
   const promotionText = getPromotionText(product);
   const productSize = getProductSize(product);
+  const productImage = getDisplayProductImage(product);
 
   return (
     <div className="product-card relative flex h-full flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
@@ -167,9 +173,12 @@ export default function ProductCard({ product, addToCart, onImageClick, price, c
         onClick={() => onImageClick?.(product)}
       >
         <img
-          src={product?.image || "https://placehold.co/400x300?text=Product"}
+          src={productImage}
           alt={product?.name || "Product"}
           className="h-full w-full object-contain"
+          onError={(event) => {
+            event.currentTarget.src = getDisplayProductImage({});
+          }}
         />
       </button>
       <div className="flex flex-1 flex-col space-y-1">

@@ -670,7 +670,7 @@ const filteredStaff = staffUsers.filter((staff) =>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {[
               ["server_discount_percent", "Server Discount %"],
-              ["manager_discount_percent", "Manager Offer Discount %"],
+              ["manager_discount_percent", "Manager Discount %"],
               ["super_discount_percent", "Super Offer Discount %"],
             ].map(([field, label]) => (
               <div key={field}>

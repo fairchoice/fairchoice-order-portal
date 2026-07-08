@@ -281,13 +281,17 @@ function formatCollectionSource(source) {
     (c) => c.account_name === customerName
   );
 
-  const { data: balanceRow } = await supabase
+  const { data: balanceRows, error: balanceError } = await supabase
     .from("customer_opening_balances")
     .select("*")
     .eq("customer_name", customerName)
-    .maybeSingle();
+    .limit(1);
 
-  setOpeningBalance(Number(balanceRow?.opening_balance || 0));
+  if (balanceError) {
+    console.error("Could not load opening balance:", balanceError);
+  }
+
+  setOpeningBalance(Number(balanceRows?.[0]?.opening_balance || 0));
 
   let ledgerResult = customer?.id
     ? await supabase
@@ -422,21 +426,38 @@ const removePayment = async (row) => {
       return;
     }
 
-    const { error } = await supabase
+    const nextOpeningBalance = Number(openingBalanceInput || 0);
+    const { data: existingBalances, error: lookupError } = await supabase
       .from("customer_opening_balances")
-      .update({
-        opening_balance: Number(openingBalanceInput || 0),
-      })
-      .eq("customer_name", selectedCustomer);
+      .select("id")
+      .eq("customer_name", selectedCustomer)
+      .limit(1);
 
-    if (error) {
-      alert("Opening balance update failed: " + error.message);
+    if (lookupError) {
+      alert("Opening balance lookup failed: " + lookupError.message);
       return;
     }
 
-    setOpeningBalance(Number(openingBalanceInput || 0));
+    const saveRequest = existingBalances?.[0]?.id
+      ? supabase
+          .from("customer_opening_balances")
+          .update({ opening_balance: nextOpeningBalance })
+          .eq("customer_name", selectedCustomer)
+      : supabase.from("customer_opening_balances").insert({
+          customer_name: selectedCustomer,
+          opening_balance: nextOpeningBalance,
+        });
+
+    const { error: saveError } = await saveRequest;
+
+    if (saveError) {
+      alert("Opening balance update failed: " + saveError.message);
+      return;
+    }
+
+    setOpeningBalance(nextOpeningBalance);
     setEditOpeningBalance(false);
-    await loadCustomers();
+    await loadStatement(selectedCustomer);
 
     alert("Opening balance updated.");
   };

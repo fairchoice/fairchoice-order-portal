@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase";
+import {
+  getMissingProductImageReason,
+  getProductImageValue,
+  hasRealProductImage,
+} from "../../utils/productImages";
 
 const PRODUCT_COLUMNS = [
   ["Product ID", "id"],
@@ -216,6 +221,9 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     search: "",
     withoutImageOnly: true,
   });
+  const [unavailableProductImageKeys, setUnavailableProductImageKeys] = useState(
+    () => new Set()
+  );
   const [missingCodeFilters, setMissingCodeFilters] = useState({
     subCategory: "",
     brand: "",
@@ -251,8 +259,91 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   const getProductValue = (product, camelField, dbField = camelField) =>
     product?.[camelField] ?? product?.[dbField] ?? "";
 
+  const getProductImageKey = (product) =>
+    `${product?.id || getProductValue(product, "productCode", "product_code")}:${getProductImageValue(product)}`;
+
+  const isProductImageUnavailable = (product) =>
+    unavailableProductImageKeys.has(getProductImageKey(product));
+
   const hasProductImage = (product) =>
-    Boolean(String(getProductValue(product, "image", "image_url")).trim());
+    hasRealProductImage(product) && !isProductImageUnavailable(product);
+
+  const getImageMissingReason = (product) => {
+    const staticReason = getMissingProductImageReason(product);
+    if (staticReason) return staticReason;
+    if (isProductImageUnavailable(product)) {
+      return `broken/unavailable image: ${getProductImageValue(product)}`;
+    }
+    return "";
+  };
+
+  useEffect(() => {
+    const imageCandidates = (products || []).filter(hasRealProductImage);
+    if (!imageCandidates.length) return;
+
+    let cancelled = false;
+
+    imageCandidates.forEach((product) => {
+      const imageUrl = String(getProductImageValue(product) || "").trim();
+      const imageKey = getProductImageKey(product);
+      const image = new Image();
+
+      image.onload = () => {
+        if (cancelled) return;
+        setUnavailableProductImageKeys((current) => {
+          if (!current.has(imageKey)) return current;
+          const next = new Set(current);
+          next.delete(imageKey);
+          return next;
+        });
+      };
+
+      image.onerror = () => {
+        if (cancelled) return;
+        setUnavailableProductImageKeys((current) => {
+          if (current.has(imageKey)) return current;
+          const next = new Set(current);
+          next.add(imageKey);
+          return next;
+        });
+      };
+
+      image.src = imageUrl;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [products]);
+
+  useEffect(() => {
+    const debugProducts = (products || []).filter((product) => {
+      const name = String(getProductValue(product, "name", "product_name")).toLowerCase();
+      return (
+        name.includes("lost mary 6k cola lime") ||
+        name.includes("lost mary 600 cola ice") ||
+        name.includes("lost mary 600 cola ice")
+      );
+    });
+
+    debugProducts.forEach((product) => {
+      const productName = getProductValue(product, "name", "product_name");
+      const imageReason = getImageMissingReason(product);
+      console.info("[ProductImageUpload debug]", {
+        productName,
+        productCode: getProductValue(product, "productCode", "product_code"),
+        image: product.image,
+        image_url: product.image_url,
+        imageUrl: product.imageUrl,
+        product_image: product.product_image,
+        image_path: product.image_path,
+        thumbnail: product.thumbnail,
+        resolvedImageValue: getProductImageValue(product),
+        hasRealImage: hasProductImage(product),
+        reason: imageReason || "real image",
+      });
+    });
+  }, [products, unavailableProductImageKeys]);
 
   const getCurrentProductCode = (product) =>
     String(getProductValue(product, "productCode", "product_code")).trim();
@@ -863,7 +954,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
       "Available In Wales": p.availableInWales,
       "Available In England": p.availableInEngland,
       "Available From Supplier": p.availableFromSupplier,
-      "Image URL": p.image,
+      "Image URL": hasProductImage(p) ? getProductImageValue(p) : "",
       New: p.isNew,
       "Promotion Label": p.isPromotion,
       Reduced: p.isReduced,
@@ -1183,6 +1274,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
                   "product_name"
                 );
                 const imagePresent = hasProductImage(product);
+                const imageReason = getImageMissingReason(product);
                 const isUploading = uploadingImageProductId === product.id;
 
                 return (
@@ -1204,6 +1296,11 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
                       >
                         {imagePresent ? "Image set" : "No image"}
                       </span>
+                      {!imagePresent && imageReason && (
+                        <div className="mt-1 max-w-xs text-xs text-slate-500">
+                          {imageReason}
+                        </div>
+                      )}
                     </td>
                     <td className="p-2 border">
                       <label

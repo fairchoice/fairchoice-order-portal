@@ -8,6 +8,7 @@ import {
   fetchInvoiceOrderFromDb,
   filterActiveInvoiceLines,
   getInvoiceTotal,
+  hydrateOrdersWithFullOrderItems,
   loadProcessingQueueOrders,
   mergeOperationalOrders,
   previewInvoice,
@@ -31,7 +32,68 @@ import {
 const getCreatedDate = (row) => row.created_at || row.invoice_date || row.date || "";
 const getReference = (row) => row.reference_no || row.order_number || row.invoice_number || row.id || "-";
 const getCustomer = (row) => row.customer_name || row.company_name || row.account_name || "-";
-const getAmount = (row) => Number(row.invoice_amount ?? row.amount ?? row.debit ?? 0);
+const getReferenceCandidates = (row = {}) =>
+  [
+    row._freshOrder?.order_number,
+    row._freshOrder?.orderId,
+    row.order_number,
+    row.orderNumber,
+    row.orderId,
+    row.reference_no,
+    row.invoice_number,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+const getAmount = (row) =>
+  row._freshOrder
+    ? getInvoiceTotal(row._freshOrder)
+    : Number(row.invoice_total ?? row.invoice_amount ?? row.amount ?? row.debit ?? 0);
+const getOrderPaymentStatus = (order = {}, invoiceTotal = 0) => {
+  const explicitStatus = String(order.invoice_status || order.payment_status || order.paymentStatus || "")
+    .trim()
+    .toUpperCase();
+  if (["PAID", "PART PAID", "UNPAID"].includes(explicitStatus)) return explicitStatus;
+
+  const paymentCollected = String(order.payment_collected || order.paymentCollected || "")
+    .trim()
+    .toLowerCase();
+  const paymentAmount = Number(
+    order.payment_amount ??
+      order.paymentAmount ??
+      order.paid_amount ??
+      order.paidAmount ??
+      0
+  );
+
+  if (paymentCollected === "yes" || paymentCollected === "true") return "PAID";
+  if (invoiceTotal > 0 && paymentAmount >= invoiceTotal - 0.01) return "PAID";
+  if (paymentAmount > 0) return "PART PAID";
+  return "UNPAID";
+};
+const getLedgerRowForOrder = (ledgerRowsByReference, order = {}) => {
+  const references = getReferenceCandidates(order);
+  return references.map((reference) => ledgerRowsByReference.get(reference)).find(Boolean) || null;
+};
+const mergeLedgerMetadataIntoOrderRow = (orderRow = {}, ledgerRow = null) => {
+  if (!ledgerRow) return orderRow;
+
+  const invoiceTotal = getInvoiceTotal(orderRow._freshOrder || orderRow);
+
+  return {
+    ...ledgerRow,
+    ...orderRow,
+    id: ledgerRow.id || orderRow.id,
+    debit: invoiceTotal,
+    amount: invoiceTotal,
+    invoice_amount: invoiceTotal,
+    invoice_total: invoiceTotal,
+    paid_amount: ledgerRow.paid_amount ?? orderRow.paid_amount,
+    remaining_amount: ledgerRow.remaining_amount ?? orderRow.remaining_amount,
+    invoice_status: ledgerRow.invoice_status || orderRow.invoice_status,
+    status: ledgerRow.invoice_status || ledgerRow.status || orderRow.status,
+    _ledgerRow: ledgerRow,
+  };
+};
 const getBranch = (row) =>
   row.branch_name ||
   row.delivery_branch_name ||
@@ -103,6 +165,7 @@ const getOrderInvoiceListRow = (order = {}) => {
     ...order,
     items: order.items || order.order_items || [],
   });
+  const invoiceStatus = getOrderPaymentStatus(order, invoiceTotal);
 
   return {
     id: `order-invoice-${order.order_number}`,
@@ -122,8 +185,13 @@ const getOrderInvoiceListRow = (order = {}) => {
     invoice_amount: invoiceTotal,
     invoice_total: invoiceTotal,
     credit: 0,
-    invoice_status: order.invoice_status || order.status || "UNPAID",
-    status: order.invoice_status || order.status || "UNPAID",
+    paid_amount: invoiceStatus === "PAID" ? invoiceTotal : Number(order.payment_amount || 0),
+    remaining_amount:
+      invoiceStatus === "PAID"
+        ? 0
+        : Math.max(0, invoiceTotal - Number(order.payment_amount || 0)),
+    invoice_status: invoiceStatus,
+    status: invoiceStatus,
     _freshOrder: {
       ...order,
       items: order.items || order.order_items || [],
@@ -839,12 +907,18 @@ export default function InvoicesPortal() {
 
       if (ledgerError) throw ledgerError;
 
-      const rowsByReference = new Map();
-      (data || []).forEach((row) => {
-        rowsByReference.set(getReference(row), row);
+      const ledgerRows = data || [];
+      const ledgerRowsByReference = new Map();
+      ledgerRows.forEach((row) => {
+        getReferenceCandidates(row).forEach((reference) => {
+          if (!ledgerRowsByReference.has(reference)) {
+            ledgerRowsByReference.set(reference, row);
+          }
+        });
       });
 
-      const deliveredOrders = (ordersResult.data || [])
+      const fullOrders = await hydrateOrdersWithFullOrderItems(ordersResult.data || []);
+      const deliveredOrders = fullOrders
         .filter(isDeliveredInvoiceRow)
         .filter(canShowInvoiceRow);
       const operationalOrders = mergeOperationalOrders(
@@ -852,11 +926,31 @@ export default function InvoicesPortal() {
         processingQueueOrders
       );
 
+      const rowsByReference = new Map();
       operationalOrders.forEach((order) => {
-          const reference = order.order_number;
-          if (!reference || rowsByReference.has(reference)) return;
-          rowsByReference.set(reference, getOrderInvoiceListRow(order));
-        });
+        const reference = order.order_number || order.orderId;
+        if (!reference) return;
+
+        const orderRow = {
+          ...getOrderInvoiceListRow(order),
+          _invoiceSource: order.isProcessingQueueOrder
+            ? "processing_queue_operational_order"
+            : "delivered_order",
+        };
+        const ledgerRow = getLedgerRowForOrder(ledgerRowsByReference, order);
+        rowsByReference.set(reference, mergeLedgerMetadataIntoOrderRow(orderRow, ledgerRow));
+      });
+
+      ledgerRows.forEach((row) => {
+        const references = getReferenceCandidates(row);
+        const hasCanonicalOrder = references.some((reference) =>
+          rowsByReference.has(reference)
+        );
+
+        if (!hasCanonicalOrder) {
+          rowsByReference.set(getReference(row), row);
+        }
+      });
 
       const mergedRows = [...rowsByReference.values()].sort(
         (a, b) =>
@@ -871,14 +965,17 @@ export default function InvoicesPortal() {
             if (!order) return row;
 
             const invoiceTotal = getInvoiceTotal(order);
-            return {
+            const refreshedRow = {
               ...row,
               _freshOrder: order,
+              _invoiceSource: "canonical_order_refresh",
               debit: invoiceTotal,
               amount: invoiceTotal,
               invoice_amount: invoiceTotal,
               invoice_total: invoiceTotal,
             };
+
+            return refreshedRow;
           } catch (err) {
             console.warn("Could not refresh invoice order for list row:", err);
             return row;
@@ -946,6 +1043,7 @@ export default function InvoicesPortal() {
           hiddenProtectedReferences.add(orderSearch.bareOrder);
         } else if (order) {
           const invoiceTotal = getInvoiceTotal(order);
+          const invoiceStatus = getOrderPaymentStatus(order, invoiceTotal);
           rowsByReference.set(order.order_number, {
             id: `order-search-${order.order_number}`,
             reference_no: order.order_number,
@@ -957,11 +1055,17 @@ export default function InvoicesPortal() {
               order.delivery_branch_name ||
               "",
             created_at: order.created_at || order.invoice_date || order.delivered_at,
-            invoice_status: order.invoice_status || order.status || "UNPAID",
+            invoice_status: invoiceStatus,
+            status: invoiceStatus,
             debit: invoiceTotal,
             amount: invoiceTotal,
             invoice_amount: invoiceTotal,
             invoice_total: invoiceTotal,
+            paid_amount: invoiceStatus === "PAID" ? invoiceTotal : Number(order.payment_amount || 0),
+            remaining_amount:
+              invoiceStatus === "PAID"
+                ? 0
+                : Math.max(0, invoiceTotal - Number(order.payment_amount || 0)),
             _freshOrder: order,
           });
         }
@@ -983,9 +1087,10 @@ export default function InvoicesPortal() {
         (ledgerRows || []).filter(canShowInvoiceRow).forEach((row) => {
           const reference = getReference(row);
           if (hiddenProtectedReferences.has(reference)) return;
+          const freshRow = rowsByReference.get(reference) || {};
           rowsByReference.set(reference, {
-            ...(rowsByReference.get(reference) || {}),
             ...row,
+            ...freshRow,
           });
         });
       } catch (err) {
@@ -1529,25 +1634,29 @@ export default function InvoicesPortal() {
               ) : filteredInvoices.length === 0 ? (
                 <tr><td className="p-5 text-center text-slate-500" colSpan="6">No invoices found yet. Confirm a delivery to create an invoice.</td></tr>
               ) : (
-                pagedInvoices.map((row) => (
-                  <tr key={row.id || getReference(row)} className="border-t border-slate-100">
-                    <td className="p-3 font-bold text-slate-900">{getReference(row)}</td>
-                    <td className="p-3">{getCustomer(row)}</td>
-                    <td className="p-3">{getCreatedDate(row) ? new Date(getCreatedDate(row)).toLocaleDateString() : "-"}</td>
-                    <td className="p-3 text-right font-bold">{formatCurrency(getAmount(row))}</td>
-                    <td className="p-3"><span className="rounded-full bg-blue-50 text-blue-700 px-3 py-1 text-xs font-bold">{row.invoice_status || row.status || "UNPAID"}</span></td>
-                    <td className="p-3">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <button type="button" onClick={() => runInvoiceAction(row, previewInvoice)} className="bg-slate-100 text-slate-800 px-3 py-1 rounded-lg text-xs font-bold">View</button>
-                        <button type="button" onClick={() => runInvoiceAction(row, downloadInvoice)} className="bg-blue-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Download PDF</button>
-                        <button type="button" onClick={() => runInvoiceAction(row, printInvoice)} className="bg-black text-white px-3 py-1 rounded-lg text-xs font-bold">Print</button>
-                        {isAdminUser && (
-                          <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                pagedInvoices.map((row) => {
+                  const amount = getAmount(row);
+
+                  return (
+                    <tr key={row.id || getReference(row)} className="border-t border-slate-100">
+                      <td className="p-3 font-bold text-slate-900">{getReference(row)}</td>
+                      <td className="p-3">{getCustomer(row)}</td>
+                      <td className="p-3">{getCreatedDate(row) ? new Date(getCreatedDate(row)).toLocaleDateString() : "-"}</td>
+                      <td className="p-3 text-right font-bold">{formatCurrency(amount)}</td>
+                      <td className="p-3"><span className="rounded-full bg-blue-50 text-blue-700 px-3 py-1 text-xs font-bold">{row.invoice_status || row.status || "UNPAID"}</span></td>
+                      <td className="p-3">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button type="button" onClick={() => runInvoiceAction(row, previewInvoice)} className="bg-slate-100 text-slate-800 px-3 py-1 rounded-lg text-xs font-bold">View</button>
+                          <button type="button" onClick={() => runInvoiceAction(row, downloadInvoice)} className="bg-blue-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Download PDF</button>
+                          <button type="button" onClick={() => runInvoiceAction(row, printInvoice)} className="bg-black text-white px-3 py-1 rounded-lg text-xs font-bold">Print</button>
+                          {isAdminUser && (
+                            <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

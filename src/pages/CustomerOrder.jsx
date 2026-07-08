@@ -7,6 +7,7 @@ import LoginConfig from "./AdminSetup/LoginConfig";
 import PriceManagement from "./AdminSetup/PriceManagement";
 
 import { formatCurrency } from "../utils/currency";
+import { getDisplayProductImage, isPlaceholderProductImage } from "../utils/productImages";
 
 
 import BackOfficeLayout, {
@@ -106,7 +107,7 @@ function normalizeProduct(raw) {
     walesSpecialPrice: Number(raw.wales_special_price || 0),
     englandSpecialPrice: Number(raw.england_special_price || 0),
     cartonSize: raw.carton_size || "",
-    image: raw.image_url || "https://placehold.co/400x300?text=Product",
+    image: getDisplayProductImage(raw),
     stock: Number(raw.stock || 0),
     lowStockAlert: Number(raw.low_stock_alert || 10),
     status: raw.status || "Active",
@@ -2637,8 +2638,9 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       sales_account: productFormForSave.salesAccount || defaultAccounts.salesAccount || "",
       purchase_account: productFormForSave.purchaseAccount || defaultAccounts.purchaseAccount || "",
       carton_size: productFormForSave.cartonSize,
-      image_url:
-        productFormForSave.image || "https://placehold.co/400x300?text=Product",
+      image_url: isPlaceholderProductImage(productFormForSave.image)
+        ? ""
+        : String(productFormForSave.image || "").trim(),
       stock: Number(productFormForSave.stock || 0),
       low_stock_alert: Number(productFormForSave.lowStockAlert || 10),
       status: productFormForSave.active === false ? "Inactive" : "Active",

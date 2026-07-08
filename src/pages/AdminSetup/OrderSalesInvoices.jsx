@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
+import { fetchInvoiceOrderFromDb } from "../../services/centralInvoiceEngine";
 import { formatCurrency } from "../../utils/currency";
 
 const VAT_RATE = 0.2;
@@ -33,7 +34,10 @@ const isServerManagerQueueRow = (row = {}) => {
 };
 
 const getLineItems = (row = {}) => {
+  const freshOrder = row._freshOrder || row.__order || {};
   const snapshot = row.transaction_snapshot || {};
+  if (Array.isArray(freshOrder.order_items)) return freshOrder.order_items;
+  if (Array.isArray(freshOrder.items)) return freshOrder.items;
   if (Array.isArray(row.line_items)) return row.line_items;
   if (Array.isArray(snapshot.order_items)) return snapshot.order_items;
   if (Array.isArray(snapshot.items)) return snapshot.items;
@@ -151,7 +155,7 @@ const getDescription = (line = {}) =>
   line.product_name || line.productName || line.name || line.description || "";
 
 const getQty = (line = {}) =>
-  Number(line.picked_qty ?? line.pickedQty ?? line.qty ?? line.quantity ?? 0);
+  Number(line.qty ?? line.quantity ?? line.picked_qty ?? line.pickedQty ?? 0);
 
 const getGrossLineTotal = (line = {}) => {
   const directTotal =
@@ -170,7 +174,19 @@ const getGrossLineTotal = (line = {}) => {
 };
 
 const getQueueGrossTotal = (row = {}, lines = []) => {
+  if ((row._freshOrder || row.__order) && lines.length) {
+    return lines.reduce((sum, line) => sum + getGrossLineTotal(line), 0);
+  }
+
   const gross =
+    row._freshOrder?.final_total ??
+    row._freshOrder?.order_total ??
+    row._freshOrder?.total_amount ??
+    row._freshOrder?.total ??
+    row.__order?.final_total ??
+    row.__order?.order_total ??
+    row.__order?.total_amount ??
+    row.__order?.total ??
     row.grand_total ??
     row.transaction_snapshot?.order_total ??
     row.transaction_snapshot?.final_total ??
@@ -216,16 +232,36 @@ function buildVatInvoice(row = {}) {
   return {
     rawRow: row,
     id: row.id,
-    orderId: row.order_id,
-    orderNumber: row.order_number || row.transaction_snapshot?.order_number || "-",
-    customerName: row.customer_name || row.transaction_snapshot?.company_name || "-",
+    orderId: row.order_id || row._freshOrder?.id,
+    orderNumber:
+      row._freshOrder?.order_number ||
+      row._freshOrder?.orderId ||
+      row.order_number ||
+      row.transaction_snapshot?.order_number ||
+      "-",
+    customerName:
+      row._freshOrder?.company_name ||
+      row._freshOrder?.companyName ||
+      row.customer_name ||
+      row.transaction_snapshot?.company_name ||
+      "-",
     branchName:
+      row._freshOrder?.delivery_branch_name ||
+      row._freshOrder?.branch_name ||
+      row._freshOrder?.branchName ||
       row.branch_name ||
       row.transaction_snapshot?.delivery_branch_name ||
       row.transaction_snapshot?.branch_name ||
       "",
-    priceMode: row.price_mode || row.transaction_snapshot?.price_mode || "",
+    priceMode:
+      row._freshOrder?.price_mode ||
+      row._freshOrder?.priceMode ||
+      row.price_mode ||
+      row.transaction_snapshot?.price_mode ||
+      "",
     confirmedAt:
+      row._freshOrder?.delivered_at ||
+      row._freshOrder?.updated_at ||
       row.confirmed_at ||
       row.transaction_snapshot?.delivered_at ||
       row.transaction_snapshot?.updated_at ||
@@ -393,6 +429,29 @@ function getProcessingQueueLoadErrorMessage(error = {}) {
   return error.message || "Could not load sales invoices.";
 }
 
+async function refreshQueueRowsFromOrders(rows = []) {
+  const refreshedRows = await Promise.all(
+    rows.map(async (row) => {
+      const reference =
+        row.order_number ||
+        row.transaction_snapshot?.order_number ||
+        row.transaction_snapshot?.orderId;
+
+      if (!reference) return row;
+
+      try {
+        const freshOrder = await fetchInvoiceOrderFromDb(reference);
+        return freshOrder ? { ...row, _freshOrder: freshOrder } : row;
+      } catch (error) {
+        console.warn("Could not refresh sales invoice order:", reference, error);
+        return row;
+      }
+    })
+  );
+
+  return refreshedRows;
+}
+
 function getDraftTotals(draft = {}) {
   const lines = draft.lines || [];
   const grossTotal = roundMoney(
@@ -479,9 +538,10 @@ export default function OrderSalesInvoices() {
         setError(getProcessingQueueLoadErrorMessage(loadError));
         setRows([]);
       } else {
-      const enrichedRows = await enrichQueueRowsWithProductCodes(
+      const freshRows = await refreshQueueRowsFromOrders(
         (data || []).filter(isServerManagerQueueRow)
       );
+      const enrichedRows = await enrichQueueRowsWithProductCodes(freshRows);
       setRows(enrichedRows.map(buildVatInvoice));
     }
 

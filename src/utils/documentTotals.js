@@ -7,7 +7,7 @@ const hasMoneyValue = (value) =>
   value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 
 const getQuantity = (item = {}) =>
-  Number(item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0);
+  Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
 
 const getSavedVatRate = (item = {}) => {
   const rawRate =

@@ -139,7 +139,7 @@ export default function Pricing() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <PriceInput
             label="Ex. VAT / VAT %"
-            help="Default VAT calculation. Example: £10 + 20% = £12"
+            help="Default VAT calculation. Example: GBP 10 + 20% = GBP 12"
             value={form.vat_percent}
             disabled={!pricingUnlocked}
             onChange={(v) => updateField("vat_percent", v)}
@@ -147,15 +147,15 @@ export default function Pricing() {
 
           <PriceInput
             label="Server Discount %"
-            help="Applied after VAT. Example: £12 - 2% = £11.76"
+            help="Applied after VAT, then fair-quarter rounded. Example: GBP 10 + 20% VAT = GBP 12, then 2% off = GBP 11.76"
             value={form.server_discount_percent}
             disabled={!pricingUnlocked}
             onChange={(v) => updateField("server_discount_percent", v)}
           />
 
           <PriceInput
-            label="Manager Offer %"
-            help="Applied after VAT, same as Server."
+            label="Manager Discount %"
+            help="Applied after VAT, then fair-quarter rounded, same as Server."
             value={form.manager_discount_percent}
             disabled={!pricingUnlocked}
             onChange={(v) => updateField("manager_discount_percent", v)}

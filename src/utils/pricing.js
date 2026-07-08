@@ -134,9 +134,7 @@ const getProductOnlySpecialPrice = (product = {}) =>
     product.specialPrice ??
       product.special_price ??
       product.productSpecialPrice ??
-      product.product_special_price ??
-      product.cashPrice ??
-      product.cash_price
+      product.product_special_price
   );
 
 export const getProductSpecialPrice = (product = {}, country = "") => {
@@ -155,6 +153,21 @@ const applyPricingDiscount = (basePrice, percent) => {
   const discountPercent = Number(percent || 0);
   if (!discountPercent) return roundMoney(basePrice);
   return roundMoney(Number(basePrice || 0) * (1 - discountPercent / 100));
+};
+
+const getVatMultiplier = (vatRate) => {
+  const rate = Number(vatRate || 0);
+  if (!rate) return 1;
+  return 1 + rate / 100;
+};
+
+const applyServerManagerPricing = (basePrice, percent) => {
+  const pricingPercent = Number(percent || 0);
+  const discountedPrice = pricingPercent
+    ? Number(basePrice || 0) - (Number(basePrice || 0) * pricingPercent) / 100
+    : Number(basePrice || 0);
+
+  return roundToFairQuarter(discountedPrice);
 };
 
 export const calculateProductPrice = (input = {}, positionalPriceMode, positionalCountry, positionalPricingSettings) => {
@@ -190,6 +203,8 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
   const countrySpecialPrice = getProductSpecialPrice(product, resolvedCountry);
   const pricingPercent = getPricingPercent(mode, pricingSettings);
   const discountedNetPrice = applyPricingDiscount(exVatPrice, pricingPercent);
+  const serverManagerBasePrice = roundMoney(vatSellPrice * getVatMultiplier(vatRate));
+  const serverManagerPrice = applyServerManagerPricing(serverManagerBasePrice, pricingPercent);
 
   let unitPrice = exVatPrice;
   let grossPrice = exVatPrice;
@@ -211,22 +226,26 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
       unitPrice = countrySpecialPrice;
       appliedRule = "country_special_price";
       appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
+    } else if (productSpecialPrice > 0) {
+      unitPrice = productSpecialPrice;
+      appliedRule = "product_special_price";
+      appliedSpecialPriceType = "product";
     } else {
-      unitPrice = discountedNetPrice;
+      unitPrice = serverManagerPrice;
       appliedRule = "server_pricing_percent";
     }
     grossPrice = unitPrice;
   } else if (mode === "manager") {
-    if (productSpecialPrice > 0) {
-      unitPrice = productSpecialPrice;
-      appliedRule = "product_special_price";
-      appliedSpecialPriceType = "product";
-    } else if (countrySpecialPrice > 0) {
+    if (countrySpecialPrice > 0) {
       unitPrice = countrySpecialPrice;
       appliedRule = "country_special_price";
       appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
+    } else if (productSpecialPrice > 0) {
+      unitPrice = productSpecialPrice;
+      appliedRule = "product_special_price";
+      appliedSpecialPriceType = "product";
     } else {
-      unitPrice = discountedNetPrice;
+      unitPrice = serverManagerPrice;
       appliedRule = "manager_pricing_percent";
     }
     grossPrice = unitPrice;

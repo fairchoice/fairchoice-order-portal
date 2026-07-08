@@ -21,6 +21,35 @@ const getInvoiceReference = (row = {}) =>
   row.orderId ||
   row.id ||
   "";
+const getInvoiceReferenceCandidates = (rowOrReference = {}) => {
+  if (typeof rowOrReference === "string") return [rowOrReference];
+
+  const values = [
+    rowOrReference._freshOrder?.order_number,
+    rowOrReference._freshOrder?.orderId,
+    rowOrReference.order_number,
+    rowOrReference.orderNumber,
+    rowOrReference.orderId,
+    rowOrReference.reference_no,
+    rowOrReference.invoice_number,
+    rowOrReference.id,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  const expanded = values.flatMap((value) => {
+    const compact = value.toUpperCase().replace(/\s+/g, "");
+    const bare = compact.replace(/^ORD-?/, "");
+    return /^\d{6,}$/.test(bare) ? [value, `ORD-${bare}`] : [value];
+  });
+
+  return [...new Set(expanded)].sort((a, b) => {
+    const aIsOrder = /^ORD-?\d{6,}$/i.test(a);
+    const bIsOrder = /^ORD-?\d{6,}$/i.test(b);
+    if (aIsOrder === bIsOrder) return 0;
+    return aIsOrder ? -1 : 1;
+  });
+};
 const getDeliveredDate = (order = {}) =>
   order.deliveredAt ||
   order.delivered_at ||
@@ -32,7 +61,7 @@ const inactiveInvoiceStatuses = new Set(["removed", "cancelled", "deleted"]);
 const activeProcessingQueueStatuses = ["queued", "pending", "processing"];
 
 export const getInvoiceLineQuantity = (item = {}) =>
-  Number(item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0);
+  Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
 
 export const isActiveInvoiceLine = (item = {}) => {
   if (getInvoiceLineQuantity(item) <= 0) return false;
@@ -69,18 +98,73 @@ const normalizeInvoiceOrder = (order = {}) => {
   };
 };
 
-export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
-  const reference =
-    typeof rowOrReference === "string"
-      ? rowOrReference
-      : getInvoiceReference(rowOrReference);
+const ORDER_ITEMS_PAGE_SIZE = 1000;
+const ORDER_ITEMS_ORDER_ID_CHUNK_SIZE = 100;
 
-  if (!reference) throw new Error("Invoice reference is required.");
+async function fetchAllOrderItemsForOrderIds(orderIds = []) {
+  const uniqueOrderIds = [...new Set(orderIds.map(String).filter(Boolean))];
+  if (!uniqueOrderIds.length) return [];
+
+  const allItems = [];
+
+  for (let chunkStart = 0; chunkStart < uniqueOrderIds.length; chunkStart += ORDER_ITEMS_ORDER_ID_CHUNK_SIZE) {
+    const orderIdChunk = uniqueOrderIds.slice(
+      chunkStart,
+      chunkStart + ORDER_ITEMS_ORDER_ID_CHUNK_SIZE
+    );
+
+    for (let from = 0; ; from += ORDER_ITEMS_PAGE_SIZE) {
+      const to = from + ORDER_ITEMS_PAGE_SIZE - 1;
+      const { data, error } = await supabase
+        .from("order_items")
+        .select("*")
+        .in("order_id", orderIdChunk)
+        .order("order_id", { ascending: true })
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to);
+
+      if (error) throw error;
+
+      const rows = data || [];
+      allItems.push(...rows);
+
+      if (rows.length < ORDER_ITEMS_PAGE_SIZE) break;
+    }
+  }
+
+  return allItems;
+}
+
+export async function hydrateOrdersWithFullOrderItems(orders = []) {
+  if (!Array.isArray(orders) || !orders.length) return orders || [];
+
+  const orderIds = orders.map((order) => order?.id).filter(Boolean);
+  if (!orderIds.length) return orders;
+
+  const orderItems = await fetchAllOrderItemsForOrderIds(orderIds);
+  const itemsByOrderId = orderItems.reduce((groups, item) => {
+    const key = String(item.order_id || "");
+    if (!key) return groups;
+    groups[key] = [...(groups[key] || []), item];
+    return groups;
+  }, {});
+
+  return orders.map((order) => ({
+    ...order,
+    order_items: itemsByOrderId[String(order.id)] || [],
+  }));
+}
+
+export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
+  const references = getInvoiceReferenceCandidates(rowOrReference);
+
+  if (!references.length) throw new Error("Invoice reference is required.");
 
   const { data, error } = await supabase
     .from("orders")
     .select("*")
-    .eq("order_number", reference)
+    .in("order_number", references)
     .order("created_at", { ascending: false })
     .limit(1);
 
@@ -89,14 +173,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   const order = Array.isArray(data) ? data[0] : data;
   if (!order) return null;
 
-  const { data: orderItems, error: itemsError } = await supabase
-    .from("order_items")
-    .select("*")
-    .eq("order_id", order.id)
-    .order("created_at", { ascending: true })
-    .order("id", { ascending: true });
-
-  if (itemsError) throw itemsError;
+  const orderItems = await fetchAllOrderItemsForOrderIds([order.id]);
 
   const productIds = [
     ...new Set((orderItems || []).map((item) => item.product_id).filter(Boolean)),
@@ -726,7 +803,7 @@ export function buildThermalReceiptHtml(order = {}) {
         <div class="line"></div>
         ${receipt.items
           .map((item) => {
-            const quantity = item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0;
+            const quantity = getInvoiceLineQuantity(item);
             return `<div class="row"><span class="product">${escapeHtml(
               item.name || item.productName || item.product_name || ""
             )}</span><span class="qty">${escapeHtml(quantity)}</span><span class="amount">${escapeHtml(
@@ -804,7 +881,7 @@ const buildThermalReceiptPdf = (order = {}) => {
   lines.push({ text: "--------------------------------" });
 
   receipt.items.forEach((item) => {
-    const quantity = String(item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0);
+    const quantity = String(getInvoiceLineQuantity(item));
     const amount = formatCurrency(getThermalLineAmount(item));
     const nameLines = wrapText(item.name || item.productName || item.product_name || "", 21);
     nameLines.forEach((text, index) => {
@@ -991,7 +1068,7 @@ const getOrderItemsForInvoice = (order = {}) =>
     .invoiceItems || [];
 
 const getLineQuantity = (item = {}) =>
-  Number(item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0);
+  getInvoiceLineQuantity(item);
 
 const getLinePrice = (item = {}) =>
   Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
