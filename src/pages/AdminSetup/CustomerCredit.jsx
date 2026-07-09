@@ -107,10 +107,11 @@ function formatCollectionSource(source) {
           return;
         }
 
-        setCustomers(data || []);
+        const activeCustomers = (data || []).filter((customer) => customer.active !== false);
+        setCustomers(activeCustomers);
 
-        if (data?.length && !selectedCustomer) {
-          setSelectedCustomer(data[0].account_name);
+        if (activeCustomers.length && !selectedCustomer) {
+          setSelectedCustomer(activeCustomers[0].account_name);
         }
       };
 

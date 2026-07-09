@@ -39,6 +39,21 @@ const toNumber = (value) => {
 
 const normalize = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalize(value).toLowerCase();
+const getRowValue = (row, keys) => {
+  const normalizedEntries = Object.entries(row || {}).reduce((entries, [key, value]) => {
+    entries[normalizeKey(key)] = value;
+    return entries;
+  }, {});
+
+  for (const key of keys) {
+    const value = normalizedEntries[normalizeKey(key)];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+
+  return "";
+};
 const normalizePriceMode = (value) => {
   const mode = normalize(value);
   if (mode.toLowerCase() === "ex. vat" || mode.toLowerCase() === "ex vat") return "VAT";
@@ -233,6 +248,7 @@ export default function Customers() {
       Phone: customer.phone || "",
       Email: customer.email || "",
       Address: customer.address || customer.address_line_1 || "",
+      "City / Town": customer.town_city || customer.city || "",
       Postcode: customer.postcode || "",
       Country: customer.country || "",
       "Credit Limit": Number(customer.credit_limit || 0),
@@ -279,6 +295,7 @@ export default function Customers() {
           Phone: "",
           Email: "",
           Address: "",
+          "City / Town": "",
           Postcode: "",
           Country: "Wales",
           "Credit Limit": 0,
@@ -350,6 +367,17 @@ export default function Customers() {
         phone: normalize(row.Phone || row.phone),
         email: normalize(row.Email || row.email),
         address: normalize(row.Address || row.address),
+        address_line_1: normalize(row.Address || row.address),
+        town_city: normalize(
+          getRowValue(row, [
+            "City / Town",
+            "Town / City",
+            "City",
+            "Town",
+            "town_city",
+            "city",
+          ])
+        ),
         postcode: normalize(row.Postcode || row.postcode),
         country,
         credit_limit: creditLimit ?? 0,

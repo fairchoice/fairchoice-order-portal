@@ -4,7 +4,55 @@ import {
   getProductLocationStock,
 } from "./locationStock";
 
+const PRODUCT_SELECT_COLUMNS = [
+  "id",
+  "product_code",
+  "product_name",
+  "main_category",
+  "sub_category",
+  "brand",
+  "series",
+  "flavour",
+  "cash_price",
+  "vat_price",
+  "product_special_price",
+  "wales_special_price",
+  "england_special_price",
+  "carton_size",
+  "image_url",
+  "stock",
+  "low_stock_alert",
+  "status",
+  "available_in_england",
+  "available_in_wales",
+  "vat_type",
+  "available_from_supplier",
+  "cost_price",
+  "supplier_name",
+  "sales_account",
+  "purchase_account",
+  "is_new",
+  "is_promotion",
+  "is_reduced",
+  "coming_soon",
+  "recommended",
+  "top_seller",
+];
+
+const LEGACY_PRODUCT_SELECT_COLUMNS = PRODUCT_SELECT_COLUMNS.filter(
+  (column) => column !== "product_special_price"
+);
+
+const isMissingProductSpecialColumnError = (error) =>
+  String(error?.message || "")
+    .toLowerCase()
+    .includes("product_special_price");
+
 function normalizeProduct(p, locationStocksByProduct = {}) {
+  const productSpecialPrice = Number(
+    p.product_special_price ?? p.productSpecialPrice ?? p.cash_price ?? 0
+  );
+
   return {
     ...p,
 
@@ -16,8 +64,12 @@ function normalizeProduct(p, locationStocksByProduct = {}) {
 
     cashPrice: p.cash_price,
     vatPrice: p.vat_price,
+    productSpecialPrice,
+    product_special_price: productSpecialPrice,
     walesSpecialPrice: Number(p.wales_special_price || 0),
+    wales_special_price: Number(p.wales_special_price || 0),
     englandSpecialPrice: Number(p.england_special_price || 0),
+    england_special_price: Number(p.england_special_price || 0),
     cartonSize: p.carton_size,
     lowStockAlert: p.low_stock_alert,
     vatType: p.vat_type,
@@ -42,46 +94,24 @@ function normalizeProduct(p, locationStocksByProduct = {}) {
 }
 
 export async function getProducts() {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("products")
-    .select(
-      [
-        "id",
-        "product_code",
-        "product_name",
-        "main_category",
-        "sub_category",
-        "brand",
-        "series",
-        "flavour",
-        "cash_price",
-        "vat_price",
-        "wales_special_price",
-        "england_special_price",
-        "carton_size",
-        "image_url",
-        "stock",
-        "low_stock_alert",
-        "status",
-        "available_in_england",
-        "available_in_wales",
-        "vat_type",
-        "available_from_supplier",
-        "cost_price",
-        "supplier_name",
-        "sales_account",
-        "purchase_account",
-        "is_new",
-        "is_promotion",
-        "is_reduced",
-        "coming_soon",
-        "recommended",
-        "top_seller",
-      ].join(",")
-    )
+    .select(PRODUCT_SELECT_COLUMNS.join(","))
     .order("brand", { ascending: true })
     .order("series", { ascending: true })
     .order("product_name", { ascending: true });
+
+  if (error && isMissingProductSpecialColumnError(error)) {
+    const fallback = await supabase
+      .from("products")
+      .select(LEGACY_PRODUCT_SELECT_COLUMNS.join(","))
+      .order("brand", { ascending: true })
+      .order("series", { ascending: true })
+      .order("product_name", { ascending: true });
+
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) throw error;
 

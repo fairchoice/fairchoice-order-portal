@@ -104,8 +104,16 @@ function normalizeProduct(raw) {
     flavour: raw.flavour || "",
     cashPrice: Number(raw.cash_price || 0),
     vatPrice: Number(raw.vat_price || 0),
+    productSpecialPrice: Number(
+      raw.product_special_price ?? raw.productSpecialPrice ?? raw.cash_price ?? 0
+    ),
+    product_special_price: Number(
+      raw.product_special_price ?? raw.productSpecialPrice ?? raw.cash_price ?? 0
+    ),
     walesSpecialPrice: Number(raw.wales_special_price || 0),
+    wales_special_price: Number(raw.wales_special_price || 0),
     englandSpecialPrice: Number(raw.england_special_price || 0),
+    england_special_price: Number(raw.england_special_price || 0),
     cartonSize: raw.carton_size || "",
     image: getDisplayProductImage(raw),
     stock: Number(raw.stock || 0),
@@ -319,6 +327,51 @@ const getCustomerBranchCountry = (customer) => {
   return defaultBranch?.country || "";
 };
 
+const isOrderSelectableCustomer = (customer) => {
+  const status = String(
+    customer?.account_status || customer?.status || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  return (
+    customer?.active !== false &&
+    !["hold", "on hold", "stopped", "stop", "closed", "inactive"].includes(status)
+  );
+};
+
+const customerMatchesSearch = (customer, searchTerm) => {
+  const search = String(searchTerm || "").trim().toLowerCase();
+  if (!search) return true;
+
+  return [
+    customer?.account_name,
+    customer?.contact_name,
+    customer?.phone,
+    customer?.postcode,
+    customer?.town_city,
+    customer?.city,
+  ]
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(search));
+};
+
+const getAllowedPriceModesForCustomer = (customer, pricingSettings = {}) => {
+  if (!customer) return ["vat"];
+
+  const modes = [];
+  if (customer.allow_vat !== false) modes.push("vat");
+  if (customer.allow_server === true) modes.push("server");
+  if (customer.allow_manager === true && pricingSettings?.show_manager_offer) {
+    modes.push("manager");
+  }
+  if (customer.allow_super === true && pricingSettings?.show_super_offer) {
+    modes.push("super");
+  }
+
+  return modes.length ? modes : ["vat"];
+};
+
 const customerMatchesCountry = (customer, country) => {
   const selectedCountry = normalizeCountry(country);
   if (!selectedCountry) return true;
@@ -408,6 +461,15 @@ const loggedInUser =
 });
 
   const [customerAccounts, setCustomerAccounts] = useState([]);
+  const [customerSearchTerm, setCustomerSearchTerm] = useState("");
+  const [salesPaymentCustomerSearch, setSalesPaymentCustomerSearch] = useState("");
+  const [salesReturnCustomerSearch, setSalesReturnCustomerSearch] = useState("");
+  const [salesReturnForm, setSalesReturnForm] = useState({
+    customerId: "",
+    branchId: "",
+    previousInvoiceNumber: "",
+    previousInvoiceDate: "",
+  });
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const [selectedCustomerAccount, setSelectedCustomerAccount] = useState(null);
@@ -434,8 +496,16 @@ const [salesOutstandingSnapshot, setSalesOutstandingSnapshot] = useState({
 
 const [savingSalesPayment, setSavingSalesPayment] = useState(false);
 
-const selectedSalesPaymentCustomer = customerAccounts.find(
+const activeCustomerAccounts = useMemo(
+  () => customerAccounts.filter(isOrderSelectableCustomer),
+  [customerAccounts]
+);
+
+const selectedSalesPaymentCustomer = activeCustomerAccounts.find(
   (customer) => String(customer.id) === String(salesPaymentForm.customerId)
+);
+const filteredSalesPaymentCustomers = activeCustomerAccounts.filter((customer) =>
+  customerMatchesSearch(customer, salesPaymentCustomerSearch)
 );
 const selectedSalesPaymentBranches = (
   selectedSalesPaymentCustomer?.customer_branches || []
@@ -443,6 +513,19 @@ const selectedSalesPaymentBranches = (
 const selectedSalesPaymentBranch =
   selectedSalesPaymentBranches.find(
     (branch) => String(branch.id) === String(salesPaymentForm.branchId)
+  ) || null;
+const filteredSalesReturnCustomers = activeCustomerAccounts.filter((customer) =>
+  customerMatchesSearch(customer, salesReturnCustomerSearch)
+);
+const selectedSalesReturnCustomer = activeCustomerAccounts.find(
+  (customer) => String(customer.id) === String(salesReturnForm.customerId)
+);
+const selectedSalesReturnBranches = (
+  selectedSalesReturnCustomer?.customer_branches || []
+).filter((branch) => branch.active !== false);
+const selectedSalesReturnBranch =
+  selectedSalesReturnBranches.find(
+    (branch) => String(branch.id) === String(salesReturnForm.branchId)
   ) || null;
 
 useEffect(() => {
@@ -500,6 +583,7 @@ useEffect(() => {
   const [homepageSelectionType, setHomepageSelectionType] = useState("");
   const [homepagePromotionTarget, setHomepagePromotionTarget] = useState("");
   const [promotionRules, setPromotionRules] = useState([]);
+  const [productDisplayMessages, setProductDisplayMessages] = useState([]);
 
   const CART_KEY = "fairchoice_cart";
 
@@ -532,6 +616,21 @@ const refreshPromotionRules = async () => {
     setPromotionRules(rules || []);
   } catch (error) {
     console.error("Promotion rules loading error:", error);
+  }
+};
+
+const refreshProductDisplayMessages = async () => {
+  try {
+    const { data, error } = await supabase
+      .from("product_display_messages")
+      .select("*")
+      .eq("active", true)
+      .order("updated_at", { ascending: false });
+
+    if (error) throw error;
+    setProductDisplayMessages(data || []);
+  } catch {
+    setProductDisplayMessages([]);
   }
 };
 
@@ -832,12 +931,16 @@ useEffect(() => {
       "Wales";
 
   const filteredCustomersForSalesRep = useMemo(() => {
-    if (!isSalesRep) return customerAccounts;
+    const searchFilteredCustomers = activeCustomerAccounts.filter((customer) =>
+      customerMatchesSearch(customer, customerSearchTerm)
+    );
 
-    return customerAccounts.filter((customer) =>
+    if (!isSalesRep) return searchFilteredCustomers;
+
+    return searchFilteredCustomers.filter((customer) =>
       customerMatchesCountry(customer, orderCountry)
     );
-  }, [customerAccounts, isSalesRep, orderCountry]);
+  }, [activeCustomerAccounts, customerSearchTerm, isSalesRep, orderCountry]);
 
   const filteredBranchesForSelectedCustomer = useMemo(
     () =>
@@ -848,6 +951,32 @@ useEffect(() => {
       ),
     [selectedCustomerAccount, orderCountry, isSalesRep]
   );
+
+  const allowedPriceModes = useMemo(
+    () =>
+      isAdmin || isSalesRep
+        ? ["vat", "server", "manager", "super"]
+        : getAllowedPriceModesForCustomer(selectedCustomerAccount, pricingSettings),
+    [isAdmin, isSalesRep, pricingSettings, selectedCustomerAccount]
+  );
+  const showPriceModeSelector =
+    !isCustomer && (isAdmin || isSalesRep || allowedPriceModes.length > 1);
+  const salesReturnOrder = selectedSalesReturnCustomer
+    ? {
+        orderId: salesReturnForm.previousInvoiceNumber || `SALES-RETURN-${Date.now()}`,
+        order_number: salesReturnForm.previousInvoiceNumber || "",
+        previousInvoiceNumber: salesReturnForm.previousInvoiceNumber,
+        previousInvoiceDate: salesReturnForm.previousInvoiceDate,
+        companyName: selectedSalesReturnCustomer.account_name,
+        company_name: selectedSalesReturnCustomer.account_name,
+        customerAccountId: selectedSalesReturnCustomer.id,
+        customer_account_id: selectedSalesReturnCustomer.id,
+        customerBranchId: selectedSalesReturnBranch?.id || null,
+        customer_branch_id: selectedSalesReturnBranch?.id || null,
+        branchName: selectedSalesReturnBranch?.branch_name || "",
+        branch_name: selectedSalesReturnBranch?.branch_name || "",
+      }
+    : null;
 
 const normalizePromotionType = (value) =>
   String(value || "")
@@ -1017,6 +1146,35 @@ const findHomepagePriceProduct = (item) => {
   });
 };
 
+const getProductDisplayMessage = (product = {}) => {
+  const candidates = [
+    ["product", product.id],
+    ["product", product.productCode || product.product_code],
+    ["series", product.series],
+    ["brand", product.brand],
+    ["sub_category", product.subCategory || product.sub_category],
+    ["main_category", product.category || product.main_category],
+  ];
+
+  const match = candidates.reduce((found, [targetType, targetValue]) => {
+    if (found || !targetValue) return found;
+    return productDisplayMessages.find(
+      (message) =>
+        message.active !== false &&
+        message.target_type === targetType &&
+        String(message.target_value || "").trim().toLowerCase() ===
+          String(targetValue || "").trim().toLowerCase()
+    );
+  }, null);
+
+  return match
+    ? {
+        text: match.message,
+        color: match.color,
+      }
+    : null;
+};
+
 const getHomepageDisplayPrice = (item) => {
   return getHomepagePriceForMode(item.price, priceMode, pricingSettings);
 };
@@ -1043,8 +1201,12 @@ const openHomepageItem = (item) => {
   setSelectedSeries("All Series");
 
   if (categoryType === "sub_category") {
-    setSelectedCategory("All Products");
-    setSelectedSubCategory(item.targetValue || "All Sub Categories");
+    const targetSubCategory = item.targetValue || "All Sub Categories";
+    const parentCategory =
+      products.find((product) => product.subCategory === targetSubCategory)?.category ||
+      "All Products";
+    setSelectedCategory(parentCategory);
+    setSelectedSubCategory(targetSubCategory);
     return;
   }
 
@@ -1139,6 +1301,7 @@ useEffect(() => {
     fetchProducts();
     fetchPricingSettings();
     refreshPromotionRules();
+    refreshProductDisplayMessages();
 
  if (
   isAdmin ||
@@ -1440,14 +1603,22 @@ const fetchOrders = async () => {
     ...new Set(products.map((p) => p.category).filter(Boolean)),
   ];
 
+  const effectiveSelectedCategory =
+    selectedCategory !== "All Products"
+      ? selectedCategory
+      : selectedSubCategory !== "All Sub Categories"
+        ? products.find((product) => product.subCategory === selectedSubCategory)?.category ||
+          "All Products"
+        : "All Products";
+
   const subCategories = [
   "All Sub Categories",
   ...new Set(
     products
       .filter(
         (p) =>
-          selectedCategory === "All Products" ||
-          p.category === selectedCategory
+          effectiveSelectedCategory === "All Products" ||
+          p.category === effectiveSelectedCategory
       )
       .map((p) => String(p.subCategory || "").trim())
       .filter(Boolean)
@@ -1460,8 +1631,8 @@ const brands = [
     products
       .filter(
         (p) =>
-          (selectedCategory === "All Products" ||
-            p.category === selectedCategory) &&
+          (effectiveSelectedCategory === "All Products" ||
+            p.category === effectiveSelectedCategory) &&
           (selectedSubCategory === "All Sub Categories" ||
             p.subCategory === selectedSubCategory)
       )
@@ -1477,8 +1648,8 @@ const seriesList = [
     products
       .filter(
         (p) =>
-          (selectedCategory === "All Products" ||
-            p.category === selectedCategory) &&
+          (effectiveSelectedCategory === "All Products" ||
+            p.category === effectiveSelectedCategory) &&
           (selectedSubCategory === "All Sub Categories" ||
             p.subCategory === selectedSubCategory) &&
           (selectedBrand === "All Brands" ||
@@ -1510,8 +1681,8 @@ const filteredProducts = useMemo(() => {
         product.active &&
         (!homepagePromotionTarget ||
           productMatchesHomepagePromotion(product, homepagePromotionTarget)) &&
-        (selectedCategory === "All Products" ||
-          productCategory === selectedCategory) &&
+        (effectiveSelectedCategory === "All Products" ||
+          productCategory === effectiveSelectedCategory) &&
         (selectedSubCategory === "All Sub Categories" ||
           productSubCategory === selectedSubCategory) &&
         (selectedBrand === "All Brands" ||
@@ -1532,6 +1703,7 @@ const filteredProducts = useMemo(() => {
   search,
   orderCountry,
   selectedCategory,
+  effectiveSelectedCategory,
   selectedSubCategory,
   selectedBrand,
   selectedSeries,
@@ -3024,19 +3196,26 @@ const backOfficeContent = comingSoonTitle ? (
       )}
 
       {isSalesRep && (
-        <div className="customer-nav-buttons flex gap-2">
+        <div className="customer-nav-buttons flex gap-1 sm:gap-2">
           <button
             onClick={() => setPage("order")}
-            className={`order-tab-btn btn-secondary bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
+            className={`order-tab-btn btn-secondary bg-white text-blue-800 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
           >
             Order
           </button>
 
           <button
             onClick={() => setPage("salesCashCollection")}
-            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
+            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
           >
             Cash Collection
+          </button>
+
+          <button
+            onClick={() => setPage("salesReturn")}
+            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesReturn" ? "active" : ""}`}
+          >
+            Return
           </button>
         </div>
       )}
@@ -3100,55 +3279,47 @@ const backOfficeContent = comingSoonTitle ? (
   );
 })()}
 
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 w-full text-slate-700">
-      <div className="font-semibold">
+    <div className="grid w-full grid-cols-1 items-center gap-2 text-slate-700 md:grid-cols-[minmax(220px,1fr)_auto_auto_auto]">
+      <div className="font-semibold truncate">
         Address: {getCustomerAddress(selectedCustomerAccount, selectedBranch)}
       </div>
-      <div>{formatCurrency(selectedCustomerAccount?.credit_limit)}
+      <div className="whitespace-nowrap">
+        Credit Balance {formatCurrency(getCreditBalance(selectedCustomerAccount, customerLedger, customerOpeningBalance))}
       </div>
-      <div>
-        Credit Balance {formatCurrency(
-          getCreditBalance(selectedCustomerAccount, customerLedger, customerOpeningBalance)
-        )}
+      <div className="whitespace-nowrap">
+        Credit Limit {formatCurrency(selectedCustomerAccount?.credit_limit)}
       </div>
+      {showPriceModeSelector && (
+        <select
+          value={priceMode}
+          onChange={(e) => setPriceMode(e.target.value)}
+          className="border rounded-xl px-3 py-2 font-bold bg-white text-slate-700"
+        >
+          {allowedPriceModes.includes("vat") && <option value="vat">Ex. VAT</option>}
+          {allowedPriceModes.includes("server") && <option value="server">Server</option>}
+          {allowedPriceModes.includes("manager") && <option value="manager">Manager Offer</option>}
+          {allowedPriceModes.includes("super") && <option value="super">Admin Offer</option>}
+        </select>
+      )}
     </div>
-
-          <select
-  value={priceMode}
-  onChange={(e) => setPriceMode(e.target.value)}
-  disabled={
-    isCustomer &&
-    selectedCustomerAccount &&
-    [
-      selectedCustomerAccount.allow_vat,
-      selectedCustomerAccount.allow_server,
-      selectedCustomerAccount.allow_manager,
-      selectedCustomerAccount.allow_super,
-    ].filter(Boolean).length === 1
-  }
-  className="border rounded-xl px-3 py-2 font-bold bg-white text-slate-700 disabled:bg-slate-200 disabled:text-slate-500"
->
-  {(isAdmin || isSalesRep || selectedCustomerAccount?.allow_vat) && (
-    <option value="vat">Ex. VAT</option>
-  )}
-
-  {(isAdmin || isSalesRep || selectedCustomerAccount?.allow_server) && (
-    <option value="server">Server</option>
-  )}
-
-  {(isAdmin || isSalesRep || selectedCustomerAccount?.allow_manager) &&
-    pricingSettings?.show_manager_offer && (
-      <option value="manager">Manager Offer</option>
-    )}
-
-  {(isAdmin || isSalesRep || selectedCustomerAccount?.allow_super) &&
-    pricingSettings?.show_super_offer && (
-      <option value="super">Admin Offer</option>
-    )}
-</select>
   </div>
 
-  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+  <div className="grid grid-cols-1 md:grid-cols-[minmax(150px,0.8fr)_minmax(230px,1.2fr)_minmax(230px,1fr)_minmax(120px,0.45fr)] gap-3 mb-3 items-end">
+   {!isCustomer && (
+  <div>
+    <label className="font-bold text-sm block mb-1">
+      Search
+    </label>
+
+    <input
+      className="border rounded-xl p-3 w-full"
+      value={customerSearchTerm}
+      onChange={(e) => setCustomerSearchTerm(e.target.value)}
+      placeholder="Search customer"
+    />
+  </div>
+    )}
+
    {!isCustomer && (
   <div>
     <label className="font-bold text-sm block mb-1">
@@ -3161,7 +3332,7 @@ const backOfficeContent = comingSoonTitle ? (
       onChange={(e) => {
         const customerId = e.target.value;
 
-        const customer = customerAccounts.find(
+        const customer = activeCustomerAccounts.find(
           (c) => String(c.id) === String(customerId)
         );
 
@@ -3173,12 +3344,9 @@ const backOfficeContent = comingSoonTitle ? (
         if (customer) {
           setCompanyName(customer.account_name);
 
-          const allowedModes = [];
-
-          if (isAdmin || isSalesRep || customer.allow_vat) allowedModes.push("vat");
-          if (isAdmin || isSalesRep || customer.allow_server) allowedModes.push("server");
-          if (isAdmin || isSalesRep || customer.allow_manager) allowedModes.push("manager");
-          if (isAdmin || isSalesRep || customer.allow_super) allowedModes.push("super");
+          const allowedModes = isAdmin
+            ? ["vat", "server", "manager", "super"]
+            : getAllowedPriceModesForCustomer(customer, pricingSettings);
 
           const defaultMode = String(
             customer.default_price_mode || "vat"
@@ -3195,7 +3363,11 @@ const backOfficeContent = comingSoonTitle ? (
         }
       }}
     >
-      <option value="">Select Customer</option>
+      <option value="">
+        {customerSearchTerm && !filteredCustomersForSalesRep.length
+          ? "No matching active customers"
+          : "Select Customer"}
+      </option>
 
       {filteredCustomersForSalesRep.map((customer) => (
         <option key={customer.id} value={customer.id}>
@@ -3244,7 +3416,7 @@ const backOfficeContent = comingSoonTitle ? (
 })()}
 
 {(isAdmin || isSalesRep) && (
-  <div>
+  <div className="md:max-w-[150px]">
     <label className="font-bold text-sm block mb-1">
       Country
     </label>
@@ -3305,7 +3477,10 @@ const backOfficeContent = comingSoonTitle ? (
 />
 
 {!showHomepage && (
-  <div className="mt-3 flex justify-end gap-2">
+  <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+    <span className="rounded-xl bg-orange-100 px-3 py-2 text-sm font-extrabold text-orange-700">
+      🔁 Change View
+    </span>
     {["grid", "list"].map((view) => (
       <button
         key={view}
@@ -3317,7 +3492,7 @@ const backOfficeContent = comingSoonTitle ? (
             : "rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700"
         }
       >
-        {view === "grid" ? "Grid View" : "List View"}
+        {view === "grid" ? "▦ Grid View" : "☰ List View"}
       </button>
     ))}
   </div>
@@ -3418,6 +3593,7 @@ const backOfficeContent = comingSoonTitle ? (
                         promotionName:
                           activePromotionPriceRule?.promotion_name ||
                           product.promotionName,
+                        displayMessage: getProductDisplayMessage(product),
                       }}
                       addToCart={addToCart}
                       onImageClick={setSelectedImage}
@@ -3449,6 +3625,7 @@ const backOfficeContent = comingSoonTitle ? (
                         promotionName:
                           activePromotionPriceRule?.promotion_name ||
                           product.promotionName,
+                        displayMessage: getProductDisplayMessage(product),
                       }}
                       addToCart={addToCart}
                       onImageClick={setSelectedImage}
@@ -3784,6 +3961,13 @@ const backOfficeContent = comingSoonTitle ? (
         Sales Rep Cash Collection
       </h2>
 
+      <input
+        value={salesPaymentCustomerSearch}
+        onChange={(e) => setSalesPaymentCustomerSearch(e.target.value)}
+        placeholder="Search customer"
+        className="w-full border rounded-xl p-3"
+      />
+
       <select
         value={salesPaymentForm.customerId}
         onChange={(e) =>
@@ -3797,7 +3981,7 @@ const backOfficeContent = comingSoonTitle ? (
       >
         <option value="">Select Customer</option>
 
-        {customerAccounts.map((customer) => (
+        {filteredSalesPaymentCustomers.map((customer) => (
           <option
             key={customer.id}
             value={customer.id}
@@ -3943,6 +4127,107 @@ const backOfficeContent = comingSoonTitle ? (
     </div>
   </div>
 )}      
+
+       {isSalesRep && page === "salesReturn" && (
+  <div className="p-4">
+    <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-3">
+      <h2 className="text-xl font-bold">Sales Rep Return</h2>
+
+      <input
+        value={salesReturnCustomerSearch}
+        onChange={(e) => setSalesReturnCustomerSearch(e.target.value)}
+        placeholder="Search customer"
+        className="w-full border rounded-xl p-3"
+      />
+
+      <select
+        value={salesReturnForm.customerId}
+        onChange={(e) =>
+          setSalesReturnForm({
+            ...salesReturnForm,
+            customerId: e.target.value,
+            branchId: "",
+          })
+        }
+        className="w-full border rounded-xl p-3"
+      >
+        <option value="">Select Customer</option>
+        {filteredSalesReturnCustomers.map((customer) => (
+          <option key={customer.id} value={customer.id}>
+            {customer.account_name}
+          </option>
+        ))}
+      </select>
+
+      {selectedSalesReturnBranches.length > 0 && (
+        <select
+          value={salesReturnForm.branchId}
+          onChange={(e) =>
+            setSalesReturnForm({
+              ...salesReturnForm,
+              branchId: e.target.value,
+            })
+          }
+          className="w-full border rounded-xl p-3"
+        >
+          <option value="">Select Branch / Shop</option>
+          {selectedSalesReturnBranches.map((branch) => (
+            <option key={branch.id} value={branch.id}>
+              {branch.branch_name}
+              {branch.postcode ? ` - ${branch.postcode}` : ""}
+            </option>
+          ))}
+        </select>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <input
+          value={salesReturnForm.previousInvoiceNumber}
+          onChange={(e) =>
+            setSalesReturnForm({
+              ...salesReturnForm,
+              previousInvoiceNumber: e.target.value,
+            })
+          }
+          placeholder="Previous invoice number"
+          className="w-full border rounded-xl p-3"
+        />
+        <input
+          type="date"
+          value={salesReturnForm.previousInvoiceDate}
+          onChange={(e) =>
+            setSalesReturnForm({
+              ...salesReturnForm,
+              previousInvoiceDate: e.target.value,
+            })
+          }
+          className="w-full border rounded-xl p-3"
+        />
+      </div>
+
+      {salesReturnOrder ? (
+        <div className="rounded-2xl border bg-slate-50">
+          <ReturnRequestModal
+            order={salesReturnOrder}
+            source="SALES_REP_PORTAL"
+            currentUser={activeUser}
+            catalogProducts={products.filter((product) => product.active)}
+            allowCatalogProducts
+            embedded
+            onSaved={async () => {
+              await fetchOrders();
+              await fetchCustomerLedger();
+            }}
+          />
+        </div>
+      ) : (
+        <div className="rounded-xl border bg-slate-50 p-4 text-sm font-bold text-slate-500">
+          Select a customer to search products and create a return.
+        </div>
+      )}
+    </div>
+  </div>
+)}
      
         {selectedImage && (
           <div
@@ -4020,7 +4305,7 @@ const backOfficeContent = comingSoonTitle ? (
   onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
   className="fixed bottom-20 right-4 z-50 bg-slate-800 text-white text-sm font-bold px-5 py-3 rounded-full shadow-lg opacity-95 hover:opacity-100"
 >
-  â†‘ Top
+  ↑ Top
 </button>
 
       </div>
@@ -4030,6 +4315,8 @@ const backOfficeContent = comingSoonTitle ? (
           order={returnOrder}
           source={isSalesRep ? "SALES_REP_PORTAL" : "CUSTOMER_PAYMENT_HISTORY"}
           currentUser={activeUser}
+          catalogProducts={products.filter((product) => product.active)}
+          allowCatalogProducts={isSalesRep && page === "salesReturn"}
           onClose={() => setReturnOrder(null)}
           onSaved={async () => {
             await fetchOrders();

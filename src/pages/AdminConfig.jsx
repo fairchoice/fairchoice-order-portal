@@ -44,6 +44,34 @@ const [loginForm, setLoginForm] = useState({
   active: true,
 });
 
+const normaliseImportKey = (value) => String(value || "").trim().toLowerCase();
+const getImportValue = (row, keys) => {
+  const valuesByKey = Object.entries(row || {}).reduce((values, [key, value]) => {
+    values[normaliseImportKey(key)] = value;
+    return values;
+  }, {});
+
+  for (const key of keys) {
+    const value = valuesByKey[normaliseImportKey(key)];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+
+  return "";
+};
+const getImportBool = (row, keys, fallback = true) => {
+  const value = getImportValue(row, keys);
+  if (value === "") return fallback;
+  if (value === true || value === false) return value;
+
+  const text = String(value).trim().toLowerCase();
+  if (["true", "yes", "y", "1", "active"].includes(text)) return true;
+  if (["false", "no", "n", "0", "inactive"].includes(text)) return false;
+
+  return fallback;
+};
+
   const [suppliers, setSuppliers] = useState([]);
   const [supplierForm, setSupplierForm] = useState({
     supplier_name: "",
@@ -511,21 +539,37 @@ const processCustomerImport = async () => {
 
   try {
     for (const row of customerImportRows) {
-      const accountName = String(row.account_name || "").trim();
+      const accountName = String(
+        getImportValue(row, ["Customer Name", "account_name"])
+      ).trim();
       if (!accountName) continue;
 
       const customer = await saveCustomerAccount({
+        id: getImportValue(row, ["Customer Account ID", "id"]),
         account_name: accountName,
-        contact_name: row.contact_name || "",
-        phone: row.phone || "",
-        email: row.email || "",
-        address: row.address || "",
-        country: row.country || "Wales",
-        credit_limit: Number(row.credit_limit || 0),
-        default_price_mode: row.default_price_mode || "VAT",
-        active: true,
+        contact_name: getImportValue(row, ["Contact Name", "contact_name"]),
+        phone: getImportValue(row, ["Phone", "phone"]),
+        email: getImportValue(row, ["Email", "email"]),
+        address: getImportValue(row, ["Address", "address"]),
+        address_line_1: getImportValue(row, ["Address", "address"]),
+        town_city: getImportValue(row, [
+          "City / Town",
+          "Town / City",
+          "City",
+          "Town",
+          "town_city",
+          "city",
+        ]),
+        postcode: getImportValue(row, ["Postcode", "postcode"]),
+        country: getImportValue(row, ["Country", "country"]) || "Wales",
+        credit_limit: Number(getImportValue(row, ["Credit Limit", "credit_limit"]) || 0),
+        default_price_mode:
+          getImportValue(row, ["Default Price Mode", "default_price_mode"]) || "VAT",
+        active: getImportBool(row, ["Active", "active"], true),
         allow_vat: true,
-        allow_server: false,
+        allow_server: String(
+          getImportValue(row, ["Allowed Price Modes", "allowed_price_modes"])
+        ).toLowerCase().includes("server"),
         allow_manager: false,
         allow_super: false,
       });

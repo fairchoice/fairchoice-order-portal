@@ -6,6 +6,8 @@ export const fromPennies = (pennies) =>
 
 export const roundMoney = (value) => fromPennies(toPennies(value));
 
+const truncateMoney = (value) =>
+  Number((Math.floor((Number(value || 0) + Number.EPSILON) * 100) / 100).toFixed(2));
 
 export const roundToFairQuarter = (price) => {
   const value = Number(price || 0);
@@ -134,7 +136,9 @@ const getProductOnlySpecialPrice = (product = {}) =>
     product.specialPrice ??
       product.special_price ??
       product.productSpecialPrice ??
-      product.product_special_price
+      product.product_special_price ??
+      product.cashPrice ??
+      product.cash_price
   );
 
 export const getProductSpecialPrice = (product = {}, country = "") => {
@@ -226,39 +230,30 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
       unitPrice = countrySpecialPrice;
       appliedRule = "country_special_price";
       appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
-    } else if (productSpecialPrice > 0) {
-      unitPrice = productSpecialPrice;
-      appliedRule = "product_special_price";
-      appliedSpecialPriceType = "product";
     } else {
       unitPrice = serverManagerPrice;
       appliedRule = "server_pricing_percent";
     }
     grossPrice = unitPrice;
   } else if (mode === "manager") {
-    if (countrySpecialPrice > 0) {
-      unitPrice = countrySpecialPrice;
-      appliedRule = "country_special_price";
-      appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
-    } else if (productSpecialPrice > 0) {
+    if (productSpecialPrice > 0) {
       unitPrice = productSpecialPrice;
       appliedRule = "product_special_price";
       appliedSpecialPriceType = "product";
+    } else if (countrySpecialPrice > 0) {
+      unitPrice = countrySpecialPrice;
+      appliedRule = "country_special_price";
+      appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
     } else {
       unitPrice = serverManagerPrice;
       appliedRule = "manager_pricing_percent";
     }
     grossPrice = unitPrice;
-  } else if (mode === "admin" || mode === "admin offer") {
-    const adminNet = applyPricingDiscount(exVatPrice, pricingPercent);
-    unitPrice = getGrossPrice(adminNet, vatRate);
+  } else if (mode === "admin" || mode === "admin offer" || mode === "super") {
+    unitPrice = truncateMoney(Number(vatSellPrice || 0) * (1 - pricingPercent / 100));
     grossPrice = unitPrice;
-    vatAmount = roundMoney(unitPrice - adminNet);
-    appliedRule = "admin_pricing_percent_gross";
-  } else if (mode === "super") {
-    unitPrice = discountedNetPrice;
-    grossPrice = unitPrice;
-    appliedRule = "super_pricing_percent";
+    vatAmount = roundMoney(unitPrice * (vatRate / 100));
+    appliedRule = "admin_pricing_percent_vat_sell";
   }
 
   unitPrice = roundMoney(unitPrice);
@@ -275,8 +270,11 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
     grossPrice,
     normalPrice: vatSellPrice,
     vatSellPrice,
-    specialPrice:
-      appliedSpecialPriceType === "product" ? productSpecialPrice : countrySpecialPrice,
+    specialPrice: appliedSpecialPriceType
+      ? appliedSpecialPriceType === "product"
+        ? productSpecialPrice
+        : countrySpecialPrice
+      : 0,
     usesSpecialPrice: Boolean(appliedSpecialPriceType),
     appliedRule,
     appliedSpecialPriceType,

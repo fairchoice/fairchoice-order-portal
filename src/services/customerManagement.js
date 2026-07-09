@@ -71,8 +71,9 @@ export async function toggleCustomerActive(id, active) {
 }
 
 export async function saveCustomerAccount(account) {
+  const addressLine1 = account.address_line_1 || account.address || "";
   const fullAddress = [
-    account.address_line_1,
+    addressLine1,
     account.address_line_2,
     account.town_city,
     account.postcode,
@@ -90,7 +91,7 @@ export async function saveCustomerAccount(account) {
     email: account.email || "",
     vat_number: account.vat_number || "",
 
-    address_line_1: account.address_line_1 || "",
+    address_line_1: addressLine1,
     address_line_2: account.address_line_2 || "",
     town_city: account.town_city || "",
     postcode: account.postcode || "",

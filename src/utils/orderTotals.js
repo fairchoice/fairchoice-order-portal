@@ -1,12 +1,23 @@
 import {
   getVatRate,
   isVatPriceMode,
+  normalizePriceMode,
   roundMoney,
   toPennies,
   fromPennies,
-} from "./pricing";
+} from "./pricing.js";
 
 export { toPennies, fromPennies, roundMoney, isVatPriceMode, getVatRate };
+
+const shouldAddVatForPriceMode = (priceMode) => {
+  const mode = normalizePriceMode(priceMode);
+  return (
+    isVatPriceMode(mode) ||
+    mode === "admin" ||
+    mode === "admin offer" ||
+    mode === "super"
+  );
+};
 
 export const normalizeOrderItemStatus = (item = {}) =>
   String(item.status || item.sourceStatus || item.source_status || "")
@@ -153,6 +164,7 @@ export const calculateCartOrderItems = (cart = [], options = {}) => {
   const discountPercent = Number(
     options.discountPercent ?? options.discount_percent ?? 0
   );
+  const includeVat = shouldAddVatForPriceMode(options.priceMode || options.price_mode || "vat");
   const paidItems = (cart || []).filter((item) => !item.isPromotionFree);
   const lineTotals = paidItems.map((item) => {
     const qty = Number(item.qty ?? item.quantity ?? 0);
@@ -201,6 +213,8 @@ export const calculateCartOrderItems = (cart = [], options = {}) => {
     const netTotal = roundMoney(
       Math.max(0, lineTotalBeforeDiscount - promotionDiscountTotal - discountAmount)
     );
+    const vatTotal = includeVat ? roundMoney(netTotal * (vatRate / 100)) : 0;
+    const grossTotal = roundMoney(netTotal + vatTotal);
 
     return {
       ...item,
@@ -222,10 +236,10 @@ export const calculateCartOrderItems = (cart = [], options = {}) => {
       vat_rate: vatRate,
       vatType,
       vat_type: vatType,
-      vatTotal: 0,
-      vat_total: 0,
-      grossTotal: netTotal,
-      gross_total: netTotal,
+      vatTotal,
+      vat_total: vatTotal,
+      grossTotal,
+      gross_total: grossTotal,
     };
   });
 };
@@ -283,7 +297,7 @@ export const calculateCartTotals = (cart = [], options = {}) => {
   const netTotal = roundMoney(
     paidItems.reduce((sum, item) => sum + Number(item.net_total || 0), 0)
   );
-  const vatGroups = buildVatGroups(paidItems, isVatPriceMode(priceMode));
+  const vatGroups = buildVatGroups(paidItems, shouldAddVatForPriceMode(priceMode));
   const vatTotal = roundMoney(
     vatGroups.reduce((sum, group) => sum + Number(group.vat_total || 0), 0)
   );

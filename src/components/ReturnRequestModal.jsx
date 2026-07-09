@@ -8,14 +8,39 @@ const getItemName = (item = {}) => item.name || item.productName || item.product
 const getItemCode = (item = {}) => item.productCode || item.product_code || item.code || "";
 const getItemPrice = (item = {}) => Number(item.price || item.unit_price || item.selectedPrice || 0);
 
-export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", currentUser, onClose, onSaved }) {
+const normalizeCatalogProduct = (product = {}) => ({
+  ...product,
+  id: product.id || product.product_id,
+  product_id: product.id || product.product_id,
+  productCode: product.productCode || product.product_code,
+  product_code: product.productCode || product.product_code,
+  name: product.name || product.product_name,
+  product_name: product.name || product.product_name,
+  qty: product.qty || product.quantity || 1,
+  price: product.price || product.vatPrice || product.vat_price || 0,
+});
+
+export default function ReturnRequestModal({
+  order,
+  source = "RETURN_PORTAL",
+  currentUser,
+  onClose,
+  onSaved,
+  catalogProducts = [],
+  allowCatalogProducts = false,
+  embedded = false,
+}) {
   const [returnType, setReturnType] = useState(RETURN_TYPES[0]);
   const [search, setSearch] = useState("");
   const [lines, setLines] = useState([]);
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState("");
+  const [previousInvoiceNumber, setPreviousInvoiceNumber] = useState(order?.previousInvoiceNumber || "");
+  const [previousInvoiceDate, setPreviousInvoiceDate] = useState(order?.previousInvoiceDate || "");
 
-  const orderItems = getOrderItems(order);
+  const orderItems = allowCatalogProducts
+    ? catalogProducts.map(normalizeCatalogProduct)
+    : getOrderItems(order);
   const filteredItems = useMemo(() => {
     const value = search.trim().toLowerCase();
     if (!value) return orderItems.slice(0, 10);
@@ -62,6 +87,12 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
       return;
     }
 
+    const referenceNotes = [
+      previousInvoiceNumber ? `Previous invoice: ${previousInvoiceNumber}` : "",
+      previousInvoiceDate ? `Previous invoice date: ${previousInvoiceDate}` : "",
+      notes,
+    ].filter(Boolean).join("\n");
+
     setSaving(true);
     try {
       const savedReturn = await createReturnRequest({
@@ -69,7 +100,7 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
         returnType,
         source,
         currentUser,
-        notes,
+        notes: referenceNotes,
         items: lines,
       });
       alert("Return request created. Warehouse can confirm the return next.");
@@ -83,9 +114,8 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-3">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-auto p-4 space-y-4">
+  const content = (
+      <div className={`${embedded ? "w-full" : "bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-auto"} p-4 space-y-4`}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-xl font-extrabold">Create Return</h3>
@@ -93,9 +123,11 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
               {order.orderId || order.order_number || "Order"} | {order.companyName || order.company_name || "Customer"}
             </p>
           </div>
-          <button type="button" onClick={onClose} className="bg-slate-200 px-3 py-2 rounded-lg text-sm font-bold">
-            Close
-          </button>
+          {!embedded && (
+            <button type="button" onClick={onClose} className="bg-slate-200 px-3 py-2 rounded-lg text-sm font-bold">
+              Close
+            </button>
+          )}
         </div>
 
         <div>
@@ -106,7 +138,9 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-slate-500 mb-1">Search Delivered Product</label>
+          <label className="block text-xs font-bold text-slate-500 mb-1">
+            {allowCatalogProducts ? "Search Product" : "Search Delivered Product"}
+          </label>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by product name or code" className="w-full border rounded-xl p-3" />
 
           <div className="mt-2 border rounded-xl divide-y overflow-hidden">
@@ -119,7 +153,10 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
               >
                 <span>
                   <span className="font-bold">{getItemName(item)}</span>
-                  <span className="block text-xs text-slate-500">{getItemCode(item) || "No code"} | Delivered Qty: {getOrderItemQty(item)}</span>
+                  <span className="block text-xs text-slate-500">
+                    {getItemCode(item) || "No code"}
+                    {!allowCatalogProducts && ` | Delivered Qty: ${getOrderItemQty(item)}`}
+                  </span>
                 </span>
                 <span className="text-xs font-bold text-blue-700">Add</span>
               </button>
@@ -139,12 +176,15 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
               <div key={`${line.productKey}-${index}`} className="border rounded-xl p-3 grid grid-cols-1 md:grid-cols-[1fr_90px_170px_auto] gap-2 md:items-center">
                 <div>
                   <div className="font-bold">{getItemName(line)}</div>
-                  <div className="text-xs text-slate-500">Delivered: {deliveredQty} | Price: {formatCurrency(getItemPrice(line))}</div>
+                  <div className="text-xs text-slate-500">
+                    {!allowCatalogProducts && `Delivered: ${deliveredQty} | `}
+                    Price: {formatCurrency(getItemPrice(line))}
+                  </div>
                 </div>
                 <input
                   type="number"
                   min="1"
-                  max={deliveredQty || undefined}
+                  max={allowCatalogProducts ? undefined : deliveredQty || undefined}
                   value={line.returnQty}
                   onChange={(e) => updateLine(index, { returnQty: Math.max(1, Number(e.target.value || 1)) })}
                   className="border rounded-lg p-2"
@@ -162,6 +202,21 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
           {lines.length === 0 && <div className="border rounded-xl p-4 text-center text-slate-500">No products added yet.</div>}
         </div>
 
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <input
+            value={previousInvoiceNumber}
+            onChange={(e) => setPreviousInvoiceNumber(e.target.value)}
+            placeholder="Previous invoice number"
+            className="w-full border rounded-xl p-3"
+          />
+          <input
+            type="date"
+            value={previousInvoiceDate}
+            onChange={(e) => setPreviousInvoiceDate(e.target.value)}
+            className="w-full border rounded-xl p-3"
+          />
+        </div>
+
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" className="w-full border rounded-xl p-3" />
 
         <div className="border rounded-xl p-3 bg-slate-50 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -173,6 +228,13 @@ export default function ReturnRequestModal({ order, source = "RETURN_PORTAL", cu
           </button>
         </div>
       </div>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-3">
+      {content}
     </div>
   );
 }

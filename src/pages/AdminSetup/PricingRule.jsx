@@ -3,7 +3,7 @@ import { supabase } from "../../services/supabase";
 import { hasPermission, requirePermission } from "../../utils/permissions";
 import { logAction } from "../../utils/auditLog";
 
-const SUPER_ADMIN_PASSWORD = "CHANGE_THIS_PASSWORD";
+const PRICING_PASSWORD_SETTING_KEY = "pricing_super_admin_password";
 
 export default function Pricing() {
   const [form, setForm] = useState({
@@ -14,6 +14,7 @@ export default function Pricing() {
   });
 
   const [saving, setSaving] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
   const [pricingUnlocked, setPricingUnlocked] = useState(false);
   const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
   const [superAdminPassword, setSuperAdminPassword] = useState("");
@@ -51,7 +52,7 @@ export default function Pricing() {
     }));
   }
 
-  function unlockPricing() {
+  async function unlockPricing() {
     if (
       !requirePermission(
         loggedInUser,
@@ -64,7 +65,32 @@ export default function Pricing() {
       return;
     }
 
-    if (superAdminPassword !== SUPER_ADMIN_PASSWORD) {
+    const enteredPassword = superAdminPassword;
+
+    if (!enteredPassword) {
+      alert("Enter Super Admin password");
+      return;
+    }
+
+    setUnlocking(true);
+
+    const { data, error } = await supabase
+      .from("app_security_settings")
+      .select("value")
+      .eq("key", PRICING_PASSWORD_SETTING_KEY)
+      .eq("active", true)
+      .maybeSingle();
+
+    setUnlocking(false);
+
+    if (error || !data?.value) {
+      setSuperAdminPassword("");
+      alert("Pricing unlock password is not configured.");
+      return;
+    }
+
+    if (enteredPassword !== data.value) {
+      setSuperAdminPassword("");
       alert("Incorrect Super Admin password");
       return;
     }
@@ -215,9 +241,10 @@ export default function Pricing() {
               <button
                 type="button"
                 onClick={unlockPricing}
-                className="bg-blue-700 text-white font-bold px-5 py-3 rounded-xl"
+                disabled={unlocking}
+                className="bg-blue-700 text-white font-bold px-5 py-3 rounded-xl disabled:bg-slate-400"
               >
-                Confirm
+                {unlocking ? "Checking..." : "Confirm"}
               </button>
             </div>
           </div>

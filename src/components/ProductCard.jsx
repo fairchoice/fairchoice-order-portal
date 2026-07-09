@@ -52,6 +52,30 @@ const hasDisplayValue = (value) => {
   return text !== "" && text !== "-";
 };
 
+const getDisplayMessage = (product) => {
+  if (typeof product?.displayMessage === "string") {
+    return { text: product.displayMessage, color: "red" };
+  }
+
+  if (product?.displayMessage?.text) return product.displayMessage;
+  if (product?.display_message) return { text: product.display_message, color: "red" };
+
+  return null;
+};
+
+function ProductDisplayMessage({ message }) {
+  if (!message?.text) return null;
+
+  const colorClass =
+    message.color === "navy" ? "text-blue-950 bg-blue-50" : "text-red-700 bg-red-50";
+
+  return (
+    <div className={`mt-1 rounded px-2 py-1 text-[11px] font-bold leading-snug ${colorClass}`}>
+      {message.text}
+    </div>
+  );
+}
+
 function QuantityAddControls({ quantity, setQuantity, onAdd }) {
   const handleQuantityChange = (value) => {
     setQuantity(Math.max(1, Number(value || 1)));
@@ -84,6 +108,7 @@ export function ProductListRow({ product, addToCart, onImageClick, price, cartQt
   const stockQty = Number(product?.stock || 0);
   const status = getProductStatus(product);
   const promotionText = getPromotionText(product);
+  const displayMessage = getDisplayMessage(product);
   const productSize = getProductSize(product);
   const productImage = getDisplayProductImage(product);
   const ribbonLabel =
@@ -97,7 +122,7 @@ export function ProductListRow({ product, addToCart, onImageClick, price, cartQt
 
   return (
     <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
-      {ribbonLabel && <div className="product-card-ribbon" aria-label={ribbonLabel}>{ribbonLabel}</div>}
+      {ribbonLabel && <div className="product-card-ribbon z-10" aria-label={ribbonLabel}>{ribbonLabel}</div>}
       <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-3 min-[560px]:grid-cols-[70px_minmax(0,1fr)_150px]">
         <button
           type="button"
@@ -129,6 +154,7 @@ export function ProductListRow({ product, addToCart, onImageClick, price, cartQt
             <div>{getStockText(product)}</div>
             <div>Carton: {product?.cartonSize || "-"}</div>
             {cartQty > 0 && <div className="font-bold text-blue-700">{cartQty} in cart</div>}
+            <ProductDisplayMessage message={displayMessage} />
           </div>
         </div>
 
@@ -161,12 +187,13 @@ export default function ProductCard({ product, addToCart, onImageClick, price, c
   const inStock = stockText.startsWith("In Stock");
   const handleAdd = onAdd || addToCart;
   const promotionText = getPromotionText(product);
+  const displayMessage = getDisplayMessage(product);
   const productSize = getProductSize(product);
   const productImage = getDisplayProductImage(product);
 
   return (
     <div className="product-card relative flex h-full flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
-      {ribbonLabel && <div className="product-card-ribbon" aria-label={ribbonLabel}>{ribbonLabel}</div>}
+      {ribbonLabel && <div className="product-card-ribbon z-10" aria-label={ribbonLabel}>{ribbonLabel}</div>}
       <button
         type="button"
         className="mb-2 block h-32 w-full rounded-md bg-white"
@@ -205,6 +232,7 @@ export default function ProductCard({ product, addToCart, onImageClick, price, c
             onAdd={() => handleAdd?.(product, quantity)}
           />
           {cartQty > 0 && <div className="text-center text-[11px] font-bold text-blue-700">{cartQty} in cart</div>}
+          <ProductDisplayMessage message={displayMessage} />
         </div>
       </div>
     </div>

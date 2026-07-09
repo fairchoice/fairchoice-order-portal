@@ -1006,7 +1006,7 @@ export default function InvoicesPortal() {
           getProducts(),
           supabase.from("pricing_settings").select("*").eq("id", 1).maybeSingle(),
         ]);
-        setCustomers(customerRows || []);
+        setCustomers((customerRows || []).filter((customer) => customer.active !== false));
         setProducts(productRows || []);
         if (!pricingResult.error && pricingResult.data) {
           setPricingSettings(pricingResult.data);

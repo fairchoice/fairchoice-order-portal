@@ -34,7 +34,7 @@ export default function ProductFilters({
           <button
             type="button"
             onClick={onHomeClick}
-            className="border rounded-lg p-2 text-sm w-full font-bold text-blue-700 bg-blue-50"
+            className="border rounded-lg p-2 text-sm w-full font-bold text-white bg-orange-500 hover:bg-blue-700"
           >
             Home
           </button>
