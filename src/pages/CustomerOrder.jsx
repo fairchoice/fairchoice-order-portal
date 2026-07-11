@@ -22,6 +22,8 @@ import Driver from "./AdminSetup/Driver";
 import StockReceipts from "./AdminSetup/StockReceipts";
 import StockHistory from "./AdminSetup/StockHistory";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
+import CentralPayment from "./AdminSetup/CentralPayment";
+import BranchSeparation from "./AdminSetup/BranchSeparation";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
 import InvoicesPortal from "./AdminSetup/InvoicesPortal";
 import OrderSalesInvoices from "./AdminSetup/OrderSalesInvoices";
@@ -3077,6 +3079,8 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {page === "credit" && <CustomerCredit />}
+    {page === "centralPayment" && <CentralPayment />}
+    {page === "branchSeparation" && <BranchSeparation />}
     {page === "orderSalesInvoices" && <OrderSalesInvoices />}
     {page === "invoicesPortal" && <InvoicesPortal />}
     {page === "returnsPortal" && <ReturnsPortal />}
@@ -3209,6 +3213,13 @@ const backOfficeContent = comingSoonTitle ? (
             className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
           >
             Cash Collection
+          </button>
+
+          <button
+            onClick={() => setPage("salesCreditHistory")}
+            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCreditHistory" ? "active" : ""}`}
+          >
+            Credit History
           </button>
 
           <button
@@ -4127,6 +4138,10 @@ const backOfficeContent = comingSoonTitle ? (
     </div>
   </div>
 )}      
+
+       {isSalesRep && page === "salesCreditHistory" && (
+        <CustomerCredit readOnly />
+       )}
 
        {isSalesRep && page === "salesReturn" && (
   <div className="p-4">

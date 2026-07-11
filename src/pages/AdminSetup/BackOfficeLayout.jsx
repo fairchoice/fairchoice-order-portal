@@ -80,9 +80,11 @@ const navSections = [
   {
     title: "Accounts",
     items: [
+      { label: "Central Payment", page: "centralPayment", permission: "access_accounts" },
       { label: "Customer Credit", page: "credit", hash: "#credit", permission: "access_accounts" },
       { label: "Invoices", page: "invoicesPortal", permission: "access_accounts" },
       { label: "Weekly Account", page: "weeklyAccount", permission: "access_accounts" },
+      { label: "Branch Separation", page: "branchSeparation", permission: "can_edit_security" },
     ],
   },
   {
@@ -124,6 +126,8 @@ const pagePermissions = {
  pricingRule: "can_edit_pricing",
   priceManagement: "can_edit_pricing",
   credit: "access_accounts",
+  centralPayment: "access_accounts",
+  branchSeparation: "can_edit_security",
   weeklyAccount: "access_accounts",
   invoicesPortal: "access_accounts",
   profitPortal: "access_reports",

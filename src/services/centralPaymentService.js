@@ -4,8 +4,510 @@ import {
   applyAllocationsToInvoices,
   buildCustomerTransactionHistory,
   createPaymentIdempotencyKey,
+  filterInvoicesForAllocation,
+  getBranchKey,
+  money,
+  summarizeCreditSnapshot,
 } from "../utils/centralPaymentCalculations";
 
 const deliveredStatuses = ["delivered", "confirmed", "delivery confirmed", "completed"];
 
 const getActor = (user = {}) =>
+  String(
+    user?.username ||
+      user?.staff_username ||
+      user?.email ||
+      user?.name ||
+      user?.id ||
+      "unknown"
+  );
+
+const getBranchName = (customer, branchId) =>
+  (customer?.customer_branches || []).find((branch) => String(branch.id) === String(branchId))
+    ?.branch_name || "";
+
+const isMissingTableOrColumn = (error) =>
+  ["42P01", "42703", "PGRST204", "PGRST205", "PGRST200"].includes(error?.code);
+
+const emptyQueryResult = { data: [], error: null };
+
+async function safeSelect(table, buildQuery) {
+  try {
+    const query = buildQuery(supabase.from(table));
+    const { data, error } = await query;
+    if (error) {
+      if (isMissingTableOrColumn(error)) return emptyQueryResult;
+      return { data: [], error };
+    }
+    return { data: data || [], error: null };
+  } catch (error) {
+    if (isMissingTableOrColumn(error)) return emptyQueryResult;
+    return { data: [], error };
+  }
+}
+
+export async function loadCentralPaymentCustomers() {
+  const { data, error } = await supabase
+    .from("customer_accounts")
+    .select("*, customer_branches(*)")
+    .order("account_name");
+
+  if (error) throw error;
+  return (data || []).filter((customer) => customer.active !== false);
+}
+
+export async function loadBranchOpeningBalances(customerAccountId) {
+  if (!customerAccountId) return [];
+  const { data, error } = await safeSelect("customer_branch_opening_balances", (query) =>
+    query.select("*").eq("customer_account_id", customerAccountId).order("effective_at")
+  );
+  if (error) throw error;
+  return data || [];
+}
+
+export async function loadDeliveredInvoices({ customerAccountId, customerName } = {}) {
+  if (!customerAccountId && !customerName) return [];
+
+  const { data: centralInvoices, error: invoiceError } = await safeSelect(
+    "customer_invoices",
+    (query) => {
+      let next = query.select("*").neq("status", "CANCELLED").order("invoice_date", { ascending: true });
+      if (customerAccountId) next = next.eq("customer_account_id", customerAccountId);
+      return next;
+    }
+  );
+  if (invoiceError) throw invoiceError;
+  if (centralInvoices?.length) return centralInvoices;
+
+  const { data: orders, error: ordersError } = await safeSelect("orders", (query) => {
+    let next = query.select("*, order_items(*)").order("created_at", { ascending: true }).limit(500);
+    if (customerAccountId && customerName) {
+      next = next.or(`customer_account_id.eq.${customerAccountId},company_name.eq.${customerName}`);
+    } else if (customerAccountId) {
+      next = next.eq("customer_account_id", customerAccountId);
+    } else if (customerName) {
+      next = next.eq("company_name", customerName);
+    }
+    return next;
+  });
+  if (ordersError) throw ordersError;
+
+  return (orders || [])
+    .filter((order) => deliveredStatuses.includes(String(order.status || "").trim().toLowerCase()))
+    .map((order) => ({
+      id: order.id,
+      customer_account_id: order.customer_account_id || customerAccountId,
+      customer_branch_id: order.customer_branch_id || order.branch_id || null,
+      branch_name: order.delivery_branch_name || order.branch_name || order.shop_name || "",
+      invoice_number: order.invoice_number || order.order_number || order.id,
+      order_id: order.id,
+      invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
+      invoice_total: Number(order.final_total || order.total_amount || order.order_total || order.total || 0),
+      status: "ISSUED",
+      source: "orders",
+    }));
+}
+
+export async function loadPayments(customerAccountId) {
+  if (!customerAccountId) return [];
+  const { data, error } = await safeSelect("customer_payments", (query) =>
+    query
+      .select("*")
+      .eq("customer_account_id", customerAccountId)
+      .order("payment_date", { ascending: true })
+  );
+  if (error) throw error;
+  return data || [];
+}
+
+export async function loadAllocations(customerAccountId) {
+  if (!customerAccountId) return [];
+  const { data, error } = await safeSelect("customer_payment_allocations", (query) =>
+    query
+      .select("*")
+      .eq("customer_account_id", customerAccountId)
+      .order("created_at", { ascending: true })
+  );
+  if (error) throw error;
+  return data || [];
+}
+
+async function loadLegacyLedgerFallback({ customerAccountId, customerName } = {}) {
+  if (!customerAccountId && !customerName) return { invoices: [], payments: [] };
+
+  // Temporary legacy compatibility: read-only fallback for accounts that have not yet
+  // been represented in the new customer_invoices/customer_payments tables.
+  const ledgerById = customerAccountId
+    ? await safeSelect("customer_ledger", (query) =>
+        query
+          .select("*")
+          .eq("customer_account_id", customerAccountId)
+          .order("created_at", { ascending: true })
+      )
+    : emptyQueryResult;
+  const ledgerRows = ledgerById.data?.length
+    ? ledgerById.data
+    : (
+        await safeSelect("customer_ledger", (query) =>
+          query.select("*").eq("customer_name", customerName).order("created_at", { ascending: true })
+        )
+      ).data || [];
+
+  return {
+    invoices: ledgerRows
+      .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE")
+      .map((row) => ({
+        ...row,
+        id: `legacy-${row.id}`,
+        invoice_number: row.reference_no || row.order_number || row.id,
+        invoice_date: row.created_at,
+        invoice_total: Number(row.debit || row.amount || row.invoice_amount || 0),
+        source: "legacy_customer_ledger",
+      })),
+    payments: ledgerRows
+      .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT")
+      .map((row) => ({
+        ...row,
+        id: `legacy-${row.id}`,
+        payment_reference: row.payment_reference || row.reference_no || row.id,
+        payment_date: row.payment_date || row.created_at,
+        amount: Number(row.credit || row.amount || 0),
+        payment_method: row.payment_method || row.payment_type || "Other",
+        status: row.payment_status || "POSTED",
+        source: "legacy_customer_ledger",
+      })),
+  };
+}
+
+export async function loadCentralPaymentSnapshot({
+  customerAccountId,
+  customerName,
+  customer,
+  selectedBranchId = "",
+} = {}) {
+  if (!customerAccountId && !customerName) {
+    return {
+      openingBalances: [],
+      invoices: [],
+      payments: [],
+      allocations: [],
+      allocatedInvoices: [],
+      transactionHistory: [],
+      customerSummary: summarizeCreditSnapshot(),
+      branchSummary: summarizeCreditSnapshot(),
+      allocationPreview: { allocations: [], unallocatedAmount: 0 },
+      legacyFallbackUsed: false,
+    };
+  }
+
+  let [openingBalances, invoices, payments, allocations] = await Promise.all([
+    loadBranchOpeningBalances(customerAccountId),
+    loadDeliveredInvoices({ customerAccountId, customerName }),
+    loadPayments(customerAccountId),
+    loadAllocations(customerAccountId),
+  ]);
+
+  let legacyFallbackUsed = false;
+  if (!invoices.length && !payments.length) {
+    const legacy = await loadLegacyLedgerFallback({ customerAccountId, customerName });
+    invoices = legacy.invoices;
+    payments = legacy.payments;
+    legacyFallbackUsed = Boolean(invoices.length || payments.length);
+  }
+
+  const allocatedInvoices = applyAllocationsToInvoices(invoices, allocations);
+  const openingBalance = money(
+    (openingBalances || []).reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
+  );
+  const selectedOpeningBalance = money(
+    (openingBalances || [])
+      .filter((row) =>
+        selectedBranchId
+          ? getBranchKey(row.customer_branch_id) === getBranchKey(selectedBranchId)
+          : true
+      )
+      .reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
+  );
+  const selectedInvoices = filterInvoicesForAllocation(allocatedInvoices, selectedBranchId);
+  const selectedPayments = selectedBranchId
+    ? payments.filter((payment) => getBranchKey(payment.customer_branch_id) === getBranchKey(selectedBranchId))
+    : payments;
+
+  return {
+    openingBalances,
+    invoices,
+    payments,
+    allocations,
+    allocatedInvoices,
+    transactionHistory: buildCustomerTransactionHistory({
+      openingBalance,
+      invoices: allocatedInvoices,
+      payments,
+      newestFirst: true,
+    }),
+    customerSummary: summarizeCreditSnapshot({
+      creditLimit: customer?.credit_limit,
+      openingBalance,
+      invoices: allocatedInvoices,
+      payments,
+    }),
+    branchSummary: summarizeCreditSnapshot({
+      creditLimit: customer?.credit_limit,
+      openingBalance: selectedOpeningBalance,
+      invoices: selectedInvoices,
+      payments: selectedPayments,
+    }),
+    selectedInvoices,
+    selectedPayments,
+    selectedOpeningBalance,
+    branchName: getBranchName(customer, selectedBranchId),
+    legacyFallbackUsed,
+  };
+}
+
+export const loadReadOnlyCustomerCreditSnapshot = loadCentralPaymentSnapshot;
+
+export function buildPaymentPreview({ invoices = [], allocations = [], amount = 0, branchId = "" } = {}) {
+  const allocatedInvoices = applyAllocationsToInvoices(invoices, allocations);
+  return allocatePaymentOldestFirst(allocatedInvoices, Number(amount || 0), { branchId });
+}
+
+async function writeAuditLog(row) {
+  const { error } = await safeSelect("financial_audit_log", (query) =>
+    query.insert(row).select("id").limit(1)
+  );
+  if (error) console.warn("Financial audit log write failed:", error);
+}
+
+export async function createCentralPayment({
+  customer,
+  customerAccountId,
+  customerBranchId = null,
+  amount,
+  paymentMethod,
+  paymentDate,
+  paidBy,
+  externalReference,
+  notes,
+  currentUser,
+} = {}) {
+  const accountId = customerAccountId || customer?.id;
+  const paymentAmount = money(amount);
+  if (!accountId) throw new Error("Select a customer before saving a payment.");
+  if (paymentAmount <= 0) throw new Error("Payment amount must be greater than zero.");
+
+  const idempotencyKey = createPaymentIdempotencyKey({
+    customerAccountId: accountId,
+    customerBranchId,
+    amount: paymentAmount,
+    paymentDate,
+    paymentMethod,
+    externalReference,
+  });
+  const actor = getActor(currentUser);
+  const paymentReference =
+    String(externalReference || "").trim() ||
+    `CP-${new Date(paymentDate || Date.now()).toISOString().slice(0, 10).replaceAll("-", "")}-${Date.now()}`;
+
+  const duplicate = await safeSelect("customer_payments", (query) =>
+    query
+      .select("*")
+      .eq("customer_account_id", accountId)
+      .eq("idempotency_key", idempotencyKey)
+      .limit(1)
+  );
+  if (duplicate.error) throw duplicate.error;
+  if (duplicate.data?.length) {
+    return { duplicate: true, payment: duplicate.data[0], allocations: [] };
+  }
+
+  const snapshot = await loadCentralPaymentSnapshot({
+    customerAccountId: accountId,
+    customerName: customer?.account_name,
+    customer,
+    selectedBranchId: customerBranchId || "",
+  });
+  const preview = buildPaymentPreview({
+    invoices: snapshot.invoices,
+    allocations: snapshot.allocations,
+    amount: paymentAmount,
+    branchId: customerBranchId || "",
+  });
+
+  const rpcPayload = {
+    p_customer_account_id: accountId,
+    p_customer_branch_id: customerBranchId || null,
+    p_payment_reference: paymentReference,
+    p_payment_date: paymentDate || new Date().toISOString(),
+    p_amount: paymentAmount,
+    p_payment_method: paymentMethod || "Cash",
+    p_paid_by: paidBy || "",
+    p_notes: notes || "",
+    p_idempotency_key: idempotencyKey,
+    p_created_by: actor,
+    p_allocations: preview.allocations,
+  };
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc("post_central_payment", rpcPayload);
+  if (!rpcError) return { ...(rpcData || {}), preview };
+  if (!isMissingTableOrColumn(rpcError) && rpcError.code !== "42883") throw rpcError;
+
+  let payment = null;
+  try {
+    const { data: insertedPayment, error: paymentError } = await supabase
+      .from("customer_payments")
+      .insert({
+        customer_account_id: accountId,
+        customer_branch_id: customerBranchId || null,
+        payment_reference: paymentReference,
+        payment_date: paymentDate || new Date().toISOString(),
+        amount: paymentAmount,
+        payment_method: paymentMethod || "Cash",
+        paid_by: paidBy || "",
+        notes: notes || "",
+        idempotency_key: idempotencyKey,
+        created_by: actor,
+      })
+      .select("*")
+      .single();
+    if (paymentError) throw paymentError;
+    payment = insertedPayment;
+
+    const allocationRows = preview.allocations.map((allocation) => ({
+      payment_id: payment.id,
+      customer_account_id: accountId,
+      customer_branch_id: allocation.customerBranchId || customerBranchId || null,
+      invoice_reference: allocation.invoiceReference,
+      invoice_source_id: allocation.invoiceSourceId,
+      allocated_amount: allocation.allocatedAmount,
+      created_by: actor,
+    }));
+
+    let insertedAllocations = [];
+    if (allocationRows.length) {
+      const { data, error } = await supabase
+        .from("customer_payment_allocations")
+        .insert(allocationRows)
+        .select("*");
+      if (error) throw error;
+      insertedAllocations = data || [];
+    }
+
+    await writeAuditLog({
+      action: "PAYMENT_POSTED",
+      entity_type: "customer_payments",
+      entity_id: payment.id,
+      customer_account_id: accountId,
+      customer_branch_id: customerBranchId || null,
+      after_data: { payment, allocations: insertedAllocations },
+      changed_by: actor,
+    });
+
+    return { payment, allocations: insertedAllocations, preview };
+  } catch (error) {
+    if (payment?.id) {
+      await supabase.from("customer_payments").update({
+        status: "VOIDED",
+        void_reason: `Rollback after allocation failure: ${error.message}`,
+        voided_by: actor,
+        voided_at: new Date().toISOString(),
+      }).eq("id", payment.id);
+    }
+    throw error;
+  }
+}
+
+export async function voidCentralPayment({ payment, reason, currentUser } = {}) {
+  if (!payment?.id) throw new Error("Payment is required.");
+  if (!String(reason || "").trim()) throw new Error("Void reason is required.");
+  const actor = getActor(currentUser);
+  const before = payment;
+  const after = {
+    status: "VOIDED",
+    void_reason: reason,
+    voided_by: actor,
+    voided_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase
+    .from("customer_payments")
+    .update(after)
+    .eq("id", payment.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+
+  await writeAuditLog({
+    action: "PAYMENT_VOIDED",
+    entity_type: "customer_payments",
+    entity_id: payment.id,
+    customer_account_id: payment.customer_account_id,
+    customer_branch_id: payment.customer_branch_id,
+    reason,
+    before_data: before,
+    after_data: data,
+    changed_by: actor,
+  });
+  return data;
+}
+
+export async function previewBranchSeparation({
+  sourceCustomerAccountId,
+  sourceBranchId,
+  destinationCustomerAccountId,
+  reason,
+} = {}) {
+  if (!sourceCustomerAccountId || !sourceBranchId || !destinationCustomerAccountId) {
+    throw new Error("Source customer, source branch and destination customer are required.");
+  }
+  if (!String(reason || "").trim()) throw new Error("A reason is required.");
+
+  const { data, error } = await supabase.rpc("preview_branch_separation", {
+    p_source_customer_account_id: sourceCustomerAccountId,
+    p_source_branch_id: sourceBranchId,
+    p_destination_customer_account_id: destinationCustomerAccountId,
+  });
+  if (!error) return data;
+  if (!isMissingTableOrColumn(error) && error.code !== "42883") throw error;
+
+  const tables = [
+    ["invoices", "customer_invoices"],
+    ["payments", "customer_payments"],
+    ["payment_allocations", "customer_payment_allocations"],
+    ["opening_balances", "customer_branch_opening_balances"],
+    ["orders", "orders"],
+  ];
+  const counts = {};
+  for (const [key, table] of tables) {
+    const result = await safeSelect(table, (query) =>
+      query
+        .select("id", { count: "exact", head: true })
+        .eq("customer_account_id", sourceCustomerAccountId)
+        .eq(table === "orders" ? "customer_branch_id" : "customer_branch_id", sourceBranchId)
+    );
+    counts[key] = result.data?.length || 0;
+  }
+  return { counts, browser_fallback_preview: true };
+}
+
+export async function applyBranchSeparation({
+  sourceCustomerAccountId,
+  sourceBranchId,
+  destinationCustomerAccountId,
+  reason,
+  confirmation,
+  currentUser,
+} = {}) {
+  if (confirmation !== "SEPARATE BRANCH") {
+    throw new Error("Type SEPARATE BRANCH to confirm.");
+  }
+  const { data, error } = await supabase.rpc("apply_branch_separation", {
+    p_source_customer_account_id: sourceCustomerAccountId,
+    p_source_branch_id: sourceBranchId,
+    p_destination_customer_account_id: destinationCustomerAccountId,
+    p_reason: reason,
+    p_changed_by: getActor(currentUser),
+  });
+  if (error) throw error;
+  return data;
+}
