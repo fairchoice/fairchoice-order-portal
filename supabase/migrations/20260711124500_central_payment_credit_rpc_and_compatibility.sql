@@ -3,6 +3,17 @@
 
 create extension if not exists pgcrypto;
 
+create table if not exists public.staff_users (
+  id uuid primary key default gen_random_uuid(),
+  staff_name text null,
+  email text null,
+  role text null,
+  permissions jsonb not null default '{}'::jsonb,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.customer_payments (
   id uuid primary key default gen_random_uuid(),
   customer_account_id uuid not null references public.customer_accounts(id) on delete restrict,
@@ -28,7 +39,10 @@ alter table public.customer_payment_allocations
   add column if not exists payment_id uuid null,
   add column if not exists invoice_reference text null,
   add column if not exists invoice_source_id text null,
-  add column if not exists allocated_at timestamptz not null default now();
+  add column if not exists allocation_type text not null default 'automatic',
+  add column if not exists status text not null default 'active',
+  add column if not exists allocated_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
 
 create unique index if not exists customer_payments_idempotency_scope_idx
   on public.customer_payments (

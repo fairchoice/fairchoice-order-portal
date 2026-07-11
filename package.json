@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test \"src/**/*.test.js\"",
+    "test": "node --test \"src/**/*.test.js\" && node scripts/validate-central-payment-migrations.mjs",
+    "test:migrations": "node scripts/validate-central-payment-migrations.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

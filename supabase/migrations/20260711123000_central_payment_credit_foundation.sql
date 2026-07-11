@@ -3,6 +3,46 @@
 
 create extension if not exists pgcrypto;
 
+-- Minimal clean-install prerequisites. Existing production tables are left untouched.
+create table if not exists public.customer_accounts (
+  id uuid primary key default gen_random_uuid(),
+  account_name text not null,
+  active boolean not null default true,
+  credit_limit numeric(14,2) not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.customer_branches (
+  id uuid primary key default gen_random_uuid(),
+  customer_account_id uuid not null references public.customer_accounts(id) on delete restrict,
+  branch_name text not null,
+  postcode text null,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  order_number text null,
+  customer_account_id uuid null references public.customer_accounts(id) on delete restrict,
+  customer_branch_id uuid null references public.customer_branches(id) on delete restrict,
+  branch_id uuid null,
+  company_name text null,
+  status text null,
+  order_total numeric(14,2) not null default 0,
+  final_total numeric(14,2) not null default 0,
+  total_amount numeric(14,2) not null default 0,
+  total numeric(14,2) not null default 0,
+  branch_name text null,
+  delivery_branch_name text null,
+  shop_name text null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  delivered_at timestamptz null
+);
+
 create table if not exists public.customer_invoices (
   id uuid primary key default gen_random_uuid(),
   customer_account_id uuid not null references public.customer_accounts(id) on delete restrict,
@@ -59,9 +99,12 @@ create table if not exists public.customer_payment_allocations (
   invoice_reference text not null,
   invoice_source_id text null,
   allocated_amount numeric(14,2) not null check (allocated_amount > 0),
+  allocation_type text not null default 'automatic' check (allocation_type in ('automatic','manual','specific_invoice','rebuild')),
+  status text not null default 'active' check (status in ('active','reversed','void')),
   allocated_at timestamptz not null default now(),
   created_by text null,
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
   constraint customer_payment_allocations_payment_invoice_unique unique (payment_id, invoice_reference)
 );
 

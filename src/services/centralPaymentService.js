@@ -7,6 +7,7 @@ import {
   filterInvoicesForAllocation,
   getBranchKey,
   money,
+  resolveLegacyCompatibilityRows,
   summarizeCreditSnapshot,
 } from "../utils/centralPaymentCalculations";
 
@@ -207,13 +208,16 @@ export async function loadCentralPaymentSnapshot({
     loadAllocations(customerAccountId),
   ]);
 
-  let legacyFallbackUsed = false;
-  if (!invoices.length && !payments.length) {
-    const legacy = await loadLegacyLedgerFallback({ customerAccountId, customerName });
-    invoices = legacy.invoices;
-    payments = legacy.payments;
-    legacyFallbackUsed = Boolean(invoices.length || payments.length);
-  }
+  const legacy = await loadLegacyLedgerFallback({ customerAccountId, customerName });
+  const compatibilityRows = resolveLegacyCompatibilityRows({
+    invoices,
+    payments,
+    legacyInvoices: legacy.invoices,
+    legacyPayments: legacy.payments,
+  });
+  invoices = compatibilityRows.invoices;
+  payments = compatibilityRows.payments;
+  const legacyFallbackUsed = compatibilityRows.legacyFallbackUsed;
 
   const allocatedInvoices = applyAllocationsToInvoices(invoices, allocations);
   const openingBalance = money(
@@ -428,6 +432,13 @@ export async function voidCentralPayment({ payment, reason, currentUser } = {}) 
     voided_by: actor,
     voided_at: new Date().toISOString(),
   };
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc("void_central_payment", {
+    p_payment_id: payment.id,
+    p_reason: reason,
+  });
+  if (!rpcError) return rpcData;
+  if (!isMissingTableOrColumn(rpcError) && rpcError.code !== "42883") throw rpcError;
 
   const { data, error } = await supabase
     .from("customer_payments")

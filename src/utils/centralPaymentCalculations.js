@@ -243,6 +243,38 @@ export function summarizeCreditSnapshot({
   };
 }
 
+const mergeMissingByReference = (primaryRows = [], fallbackRows = [], getReference) => {
+  const existing = new Set(
+    primaryRows.map(getReference).map((value) => String(value || "").trim()).filter(Boolean)
+  );
+  const missing = fallbackRows.filter((row) => {
+    const reference = String(getReference(row) || "").trim();
+    return reference && !existing.has(reference);
+  });
+  return [...primaryRows, ...missing];
+};
+
+export function resolveLegacyCompatibilityRows({
+  invoices = [],
+  payments = [],
+  legacyInvoices = [],
+  legacyPayments = [],
+} = {}) {
+  return {
+    invoices: mergeMissingByReference(
+      invoices,
+      legacyInvoices,
+      (row) => row.invoice_number || row.reference_no || row.order_number || row.id
+    ),
+    payments: mergeMissingByReference(
+      payments,
+      legacyPayments,
+      (row) => row.payment_reference || row.reference_no || row.id
+    ),
+    legacyFallbackUsed: legacyInvoices.length > 0 || legacyPayments.length > 0,
+  };
+}
+
 export function createPaymentIdempotencyKey({
   customerAccountId,
   customerBranchId,
