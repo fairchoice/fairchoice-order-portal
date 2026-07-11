@@ -30,6 +30,25 @@ const getBranchName = (customer, branchId) =>
 const isMissingTableOrColumn = (error) =>
   ["42P01", "42703", "PGRST204", "PGRST205", "PGRST200"].includes(error?.code);
 
+export const isMissingRpcError = (error = {}) => {
+  const code = String(error?.code || "");
+  const message = String(error?.message || error?.details || "").toLowerCase();
+
+  return (
+    code === "42883" ||
+    code === "PGRST202" ||
+    message.includes("could not find the function") ||
+    (message.includes("function") && message.includes("does not exist"))
+  );
+};
+
+const centralPaymentUnavailableMessage =
+  "Central Payment service is unavailable. Apply the required database migrations before recording payments.";
+const paymentVoidUnavailableMessage =
+  "Payment void service is unavailable. Apply the required database migrations before voiding payments.";
+const branchSeparationUnavailableMessage =
+  "Branch Separation service is unavailable. Apply the required database migrations before continuing.";
+
 const emptyQueryResult = { data: [], error: null };
 
 async function safeSelect(table, buildQuery) {
@@ -276,13 +295,6 @@ export function buildPaymentPreview({ invoices = [], allocations = [], amount = 
   return allocatePaymentOldestFirst(allocatedInvoices, Number(amount || 0), { branchId });
 }
 
-async function writeAuditLog(row) {
-  const { error } = await safeSelect("financial_audit_log", (query) =>
-    query.insert(row).select("id").limit(1)
-  );
-  if (error) console.warn("Financial audit log write failed:", error);
-}
-
 export async function createCentralPayment({
   customer,
   customerAccountId,
@@ -354,112 +366,27 @@ export async function createCentralPayment({
 
   const { data: rpcData, error: rpcError } = await supabase.rpc("post_central_payment", rpcPayload);
   if (!rpcError) return { ...(rpcData || {}), preview };
-  if (!isMissingTableOrColumn(rpcError) && rpcError.code !== "42883") throw rpcError;
-
-  let payment = null;
-  try {
-    const { data: insertedPayment, error: paymentError } = await supabase
-      .from("customer_payments")
-      .insert({
-        customer_account_id: accountId,
-        customer_branch_id: customerBranchId || null,
-        payment_reference: paymentReference,
-        payment_date: paymentDate || new Date().toISOString(),
-        amount: paymentAmount,
-        payment_method: paymentMethod || "Cash",
-        paid_by: paidBy || "",
-        notes: notes || "",
-        idempotency_key: idempotencyKey,
-        created_by: actor,
-      })
-      .select("*")
-      .single();
-    if (paymentError) throw paymentError;
-    payment = insertedPayment;
-
-    const allocationRows = preview.allocations.map((allocation) => ({
-      payment_id: payment.id,
-      customer_account_id: accountId,
-      customer_branch_id: allocation.customerBranchId || customerBranchId || null,
-      invoice_reference: allocation.invoiceReference,
-      invoice_source_id: allocation.invoiceSourceId,
-      allocated_amount: allocation.allocatedAmount,
-      created_by: actor,
-    }));
-
-    let insertedAllocations = [];
-    if (allocationRows.length) {
-      const { data, error } = await supabase
-        .from("customer_payment_allocations")
-        .insert(allocationRows)
-        .select("*");
-      if (error) throw error;
-      insertedAllocations = data || [];
-    }
-
-    await writeAuditLog({
-      action: "PAYMENT_POSTED",
-      entity_type: "customer_payments",
-      entity_id: payment.id,
-      customer_account_id: accountId,
-      customer_branch_id: customerBranchId || null,
-      after_data: { payment, allocations: insertedAllocations },
-      changed_by: actor,
-    });
-
-    return { payment, allocations: insertedAllocations, preview };
-  } catch (error) {
-    if (payment?.id) {
-      await supabase.from("customer_payments").update({
-        status: "VOIDED",
-        void_reason: `Rollback after allocation failure: ${error.message}`,
-        voided_by: actor,
-        voided_at: new Date().toISOString(),
-      }).eq("id", payment.id);
-    }
-    throw error;
+  if (isMissingRpcError(rpcError)) {
+    throw new Error(centralPaymentUnavailableMessage);
   }
+
+  throw rpcError;
 }
 
-export async function voidCentralPayment({ payment, reason, currentUser } = {}) {
+export async function voidCentralPayment({ payment, reason } = {}) {
   if (!payment?.id) throw new Error("Payment is required.");
   if (!String(reason || "").trim()) throw new Error("Void reason is required.");
-  const actor = getActor(currentUser);
-  const before = payment;
-  const after = {
-    status: "VOIDED",
-    void_reason: reason,
-    voided_by: actor,
-    voided_at: new Date().toISOString(),
-  };
 
   const { data: rpcData, error: rpcError } = await supabase.rpc("void_central_payment", {
     p_payment_id: payment.id,
     p_reason: reason,
   });
   if (!rpcError) return rpcData;
-  if (!isMissingTableOrColumn(rpcError) && rpcError.code !== "42883") throw rpcError;
+  if (isMissingRpcError(rpcError)) {
+    throw new Error(paymentVoidUnavailableMessage);
+  }
 
-  const { data, error } = await supabase
-    .from("customer_payments")
-    .update(after)
-    .eq("id", payment.id)
-    .select("*")
-    .single();
-  if (error) throw error;
-
-  await writeAuditLog({
-    action: "PAYMENT_VOIDED",
-    entity_type: "customer_payments",
-    entity_id: payment.id,
-    customer_account_id: payment.customer_account_id,
-    customer_branch_id: payment.customer_branch_id,
-    reason,
-    before_data: before,
-    after_data: data,
-    changed_by: actor,
-  });
-  return data;
+  throw rpcError;
 }
 
 export async function previewBranchSeparation({
@@ -479,7 +406,7 @@ export async function previewBranchSeparation({
     p_destination_customer_account_id: destinationCustomerAccountId,
   });
   if (!error) return data;
-  if (!isMissingTableOrColumn(error) && error.code !== "42883") throw error;
+  if (!isMissingRpcError(error)) throw error;
 
   const tables = [
     ["invoices", "customer_invoices"],
@@ -498,7 +425,7 @@ export async function previewBranchSeparation({
     );
     counts[key] = result.data?.length || 0;
   }
-  return { counts, browser_fallback_preview: true };
+  return { counts, local_read_only_preview: true, applyRpcAvailable: false };
 }
 
 export async function applyBranchSeparation({
@@ -519,6 +446,9 @@ export async function applyBranchSeparation({
     p_reason: reason,
     p_changed_by: getActor(currentUser),
   });
-  if (error) throw error;
+  if (error) {
+    if (isMissingRpcError(error)) throw new Error(branchSeparationUnavailableMessage);
+    throw error;
+  }
   return data;
 }
