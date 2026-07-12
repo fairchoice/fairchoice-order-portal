@@ -8,4 +8,5 @@ import {
 const PAGE_SIZE = 20;
 
 const getLoggedInUser = () =>
-  JSON.parse
+  JSON.parse(
+    localStorage.getItem
