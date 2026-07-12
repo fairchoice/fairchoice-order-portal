@@ -9,4 +9,9 @@ const PAGE_SIZE = 20;
 
 const getLoggedInUser = () =>
   JSON.parse(
-    localStorage.getItem
+    localStorage.getItem("loggedInUser") ||
+      localStorage.getItem("fairchoice_user") ||
+      "null"
+  );
+
+const customerMatches = (customer, search
