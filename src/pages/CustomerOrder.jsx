@@ -22,6 +22,8 @@ import Driver from "./AdminSetup/Driver";
 import StockReceipts from "./AdminSetup/StockReceipts";
 import StockHistory from "./AdminSetup/StockHistory";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
+import CentralPayment from "./AdminSetup/CentralPayment";
+import BranchSeparation from "./AdminSetup/BranchSeparation";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
 import InvoicesPortal from "./AdminSetup/InvoicesPortal";
 import OrderSalesInvoices from "./AdminSetup/OrderSalesInvoices";
@@ -1924,6 +1926,21 @@ const customerLedgerRowsWithBalance = allocatedCustomerLedger.map((row) => {
     balance: customerLedgerRunningBalance,
   };
 });
+const displayedCustomerLedgerRowsWithBalance = [...customerLedgerRowsWithBalance].sort(
+  (a, b) => {
+    const dateDiff =
+      new Date(b.row.created_at || b.row.payment_date || 0).getTime() -
+      new Date(a.row.created_at || a.row.payment_date || 0).getTime();
+
+    if (dateDiff !== 0) return dateDiff;
+
+    return String(b.row.id || b.row.reference_no || "").localeCompare(
+      String(a.row.id || a.row.reference_no || ""),
+      undefined,
+      { numeric: true, sensitivity: "base" }
+    );
+  }
+);
 const customerInvoiceTotal = allocatedAllCustomerLedger.reduce(
   (sum, row) =>
     String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE"
@@ -2005,7 +2022,11 @@ const completedCustomerOrders = [
             String(existingOrder.orderId || "") === String(order.orderId || "")
         )
     ),
-];
+].sort(
+  (a, b) =>
+    new Date(b.deliveredAt || b.createdAt || 0).getTime() -
+    new Date(a.deliveredAt || a.createdAt || 0).getTime()
+);
 
 const getInvoiceOrderForLedgerRow = (row = {}) => {
   if (row.__order) return row.__order;
@@ -3077,6 +3098,8 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {page === "credit" && <CustomerCredit />}
+    {page === "centralPayment" && <CentralPayment />}
+    {page === "branchSeparation" && <BranchSeparation />}
     {page === "orderSalesInvoices" && <OrderSalesInvoices />}
     {page === "invoicesPortal" && <InvoicesPortal />}
     {page === "returnsPortal" && <ReturnsPortal />}
@@ -3209,6 +3232,13 @@ const backOfficeContent = comingSoonTitle ? (
             className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
           >
             Cash Collection
+          </button>
+
+          <button
+            onClick={() => setPage("salesCreditHistory")}
+            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCreditHistory" ? "active" : ""}`}
+          >
+            Credit History
           </button>
 
           <button
@@ -3848,21 +3878,7 @@ const backOfficeContent = comingSoonTitle ? (
           </thead>
 
           <tbody>
-            {!paymentHistoryBranchId && (
-              <tr className="border-b bg-blue-50">
-                <td className="p-3">-</td>
-                <td className="p-3 font-bold">Opening Balance</td>
-                <td className="p-3">Opening Balance</td>
-                <td className="p-3 text-right font-bold text-red-600">
-                  {formatCurrency(customerOpeningBalance)}
-                </td>
-                <td className="p-3 text-right font-bold">
-                  {formatCurrency(customerOpeningBalance)}
-                </td>
-                <td className="p-3 text-center">-</td>
-              </tr>
-            )}
-            {customerLedgerRowsWithBalance.map(({ row, debit, credit, balance }) => {
+            {displayedCustomerLedgerRowsWithBalance.map(({ row, debit, credit, balance }) => {
               const type = String(
                 row.entry_type || row.transaction_type || ""
               ).toUpperCase();
@@ -3947,6 +3963,20 @@ const backOfficeContent = comingSoonTitle ? (
                 </tr>
               );
             })}
+            {!paymentHistoryBranchId && (
+              <tr className="border-b bg-blue-50">
+                <td className="p-3">-</td>
+                <td className="p-3 font-bold">Opening Balance</td>
+                <td className="p-3">Opening Balance</td>
+                <td className="p-3 text-right font-bold text-red-600">
+                  {formatCurrency(customerOpeningBalance)}
+                </td>
+                <td className="p-3 text-right font-bold">
+                  {formatCurrency(customerOpeningBalance)}
+                </td>
+                <td className="p-3 text-center">-</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -4127,6 +4157,10 @@ const backOfficeContent = comingSoonTitle ? (
     </div>
   </div>
 )}      
+
+       {isSalesRep && page === "salesCreditHistory" && (
+        <CustomerCredit readOnly />
+       )}
 
        {isSalesRep && page === "salesReturn" && (
   <div className="p-4">

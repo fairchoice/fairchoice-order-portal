@@ -2308,42 +2308,18 @@ export const getInvoiceStatusFromAmounts = (invoiceTotal, paidAmount) => {
 
 export function applyInvoicePaymentAllocations(ledgerRows = []) {
   const invoiceRows = [];
+  let unappliedCredit = 0;
 
-  return (ledgerRows || []).map((row) => {
-    const type = getLedgerType(row);
-
-    if (type === "INVOICE") {
-      const invoiceTotal = getInvoiceLedgerTotal(row);
-      const paidAmount = 0;
-      const remainingAmount = invoiceTotal;
-      const invoiceRow = {
-        ...row,
-        invoice_total: invoiceTotal,
-        invoiceTotal,
-        paid_amount: paidAmount,
-        paidAmount,
-        remaining_amount: remainingAmount,
-        remainingAmount,
-        invoice_status:
-          row.invoice_status ||
-          getInvoiceStatusFromAmounts(invoiceTotal, paidAmount),
-      };
-
-      invoiceRows.push(invoiceRow);
-      return invoiceRow;
-    }
-
-    if (type !== "PAYMENT") return row;
-
-    let paymentRemaining = getPaymentLedgerTotal(row);
+  const allocateCreditToOldestInvoices = (amount) => {
+    let remaining = roundMoney(amount);
 
     for (const invoice of invoiceRows) {
-      if (paymentRemaining <= 0) break;
+      if (remaining <= 0) break;
 
       const currentRemaining = roundMoney(invoice.remaining_amount);
       if (currentRemaining <= 0) continue;
 
-      const appliedAmount = roundMoney(Math.min(currentRemaining, paymentRemaining));
+      const appliedAmount = roundMoney(Math.min(currentRemaining, remaining));
       invoice.paid_amount = roundMoney(invoice.paid_amount + appliedAmount);
       invoice.paidAmount = invoice.paid_amount;
       invoice.remaining_amount = roundMoney(currentRemaining - appliedAmount);
@@ -2352,10 +2328,48 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
         invoice.invoice_total,
         invoice.paid_amount
       );
-      paymentRemaining = roundMoney(paymentRemaining - appliedAmount);
+      remaining = roundMoney(remaining - appliedAmount);
     }
 
-    return row;
+    return remaining;
+  };
+
+  return (ledgerRows || []).map((row) => {
+    const type = getLedgerType(row);
+
+    if (type === "INVOICE") {
+      const invoiceTotal = getInvoiceLedgerTotal(row);
+      const invoiceRow = {
+        ...row,
+        invoice_total: invoiceTotal,
+        invoiceTotal,
+        paid_amount: 0,
+        paidAmount: 0,
+        remaining_amount: invoiceTotal,
+        remainingAmount: invoiceTotal,
+        invoice_status: getInvoiceStatusFromAmounts(invoiceTotal, 0),
+      };
+
+      invoiceRows.push(invoiceRow);
+
+      if (unappliedCredit > 0) {
+        unappliedCredit = allocateCreditToOldestInvoices(unappliedCredit);
+      }
+
+      return invoiceRow;
+    }
+
+    if (type !== "PAYMENT") return row;
+
+    unappliedCredit = allocateCreditToOldestInvoices(
+      roundMoney(unappliedCredit + getPaymentLedgerTotal(row))
+    );
+
+    return {
+      ...row,
+      unallocated_amount: unappliedCredit,
+      unallocatedAmount: unappliedCredit,
+    };
   });
 }
 
