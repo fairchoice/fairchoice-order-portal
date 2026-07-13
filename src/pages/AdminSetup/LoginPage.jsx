@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { loadAuthenticatedStaffProfile } from "../../services/authProfile";
 
@@ -28,6 +28,29 @@ export default function LoginPage({ onLogin }) {
   );
   const [submittingTradeApplication, setSubmittingTradeApplication] =
     useState(false);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [updatingPassword, setUpdatingPassword] = useState(false);
+  const [sendingReset, setSendingReset] = useState(false);
+
+  useEffect(() => {
+    const recoveryInUrl =
+      window.location.hash.includes("type=recovery") ||
+      new URLSearchParams(window.location.search).get("type") === "recovery";
+
+    if (recoveryInUrl) {
+      setIsPasswordRecovery(true);
+    }
+
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setIsPasswordRecovery(true);
+      }
+    });
+
+    return () => data.subscription.unsubscribe();
+  }, []);
 
   const submitLogin = async () => {
     const email = login.trim().toLowerCase();
@@ -92,8 +115,63 @@ export default function LoginPage({ onLogin }) {
     }
   };
 
-  const resetPassword = () => {
-    alert("Please contact FairChoice to reset your password.");
+  const resetPassword = async () => {
+    const email = login.trim().toLowerCase();
+
+    if (!email || !email.includes("@")) {
+      alert("Enter your email address first, then click Reset Password.");
+      return;
+    }
+
+    setSendingReset(true);
+    try {
+      const redirectTo = `${window.location.origin}/`;
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo,
+      });
+
+      if (error) {
+        alert(`Could not send reset email: ${error.message}`);
+        return;
+      }
+
+      alert("Password reset email sent. Open the link in that email to choose a new password.");
+    } finally {
+      setSendingReset(false);
+    }
+  };
+
+  const updatePassword = async () => {
+    if (newPassword.length < 8) {
+      alert("Password must be at least 8 characters long.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      alert("The passwords do not match.");
+      return;
+    }
+
+    setUpdatingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) {
+        alert(`Could not update password: ${error.message}`);
+        return;
+      }
+
+      await supabase.auth.signOut();
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setIsPasswordRecovery(false);
+      setNewPassword("");
+      setConfirmPassword("");
+      alert("Password updated successfully. Please sign in with your new password.");
+    } finally {
+      setUpdatingPassword(false);
+    }
   };
 
   const updateTradeApplicationField = (field, value) => {
@@ -156,6 +234,45 @@ export default function LoginPage({ onLogin }) {
     );
   };
 
+  if (isPasswordRecovery) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
+        <div className="bg-white p-6 rounded-2xl shadow w-full max-w-md">
+          <h1 className="text-2xl font-bold mb-2">Create New Password</h1>
+          <p className="mb-5 text-sm text-slate-600">
+            Enter your new FairChoice portal password.
+          </p>
+
+          <input
+            className="input-box mb-3"
+            type="password"
+            placeholder="New password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+          />
+
+          <input
+            className="input-box mb-4"
+            type="password"
+            placeholder="Confirm new password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && updatePassword()}
+          />
+
+          <button
+            type="button"
+            onClick={updatePassword}
+            disabled={updatingPassword}
+            className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold disabled:bg-slate-300"
+          >
+            {updatingPassword ? "Updating password..." : "Update Password"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
       <div className="bg-white p-6 rounded-2xl shadow w-full max-w-3xl">
@@ -188,8 +305,13 @@ export default function LoginPage({ onLogin }) {
               {submittingLogin ? "Signing in..." : "Login"}
             </button>
 
-            <button type="button" onClick={resetPassword} className="w-full mt-3 text-sm font-bold text-blue-700">
-              Reset Password
+            <button
+              type="button"
+              onClick={resetPassword}
+              disabled={sendingReset}
+              className="w-full mt-3 text-sm font-bold text-blue-700 disabled:text-slate-400"
+            >
+              {sendingReset ? "Sending reset email..." : "Reset Password"}
             </button>
 
             <button
