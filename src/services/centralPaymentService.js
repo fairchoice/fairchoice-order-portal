@@ -93,6 +93,18 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
 
   const mapOrderInvoice = (order) => {
     const totals = calculateDocumentTotals(order.order_items || order.items || [], order);
+    const savedTotal = [
+      order.order_total,
+      order.orderTotal,
+      order.totalAmount,
+      order.total,
+    ].find(
+      (value) =>
+        value !== null &&
+        value !== undefined &&
+        value !== "" &&
+        Number.isFinite(Number(value))
+    );
 
     return {
       id: order.id,
@@ -102,7 +114,7 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
       invoice_number: order.invoice_number || order.order_number || order.id,
       order_id: order.id,
       invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
-      invoice_total: totals.grandTotal,
+      invoice_total: savedTotal !== undefined ? Number(savedTotal) : totals.grandTotal,
       status: "ISSUED",
       source: "orders",
     };
