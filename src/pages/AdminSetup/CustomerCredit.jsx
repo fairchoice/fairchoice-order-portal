@@ -927,7 +927,11 @@ export default function CustomerCredit({ readOnly = false }) {
           <div className="flex flex-col gap-3 md:flex-row md:items-end">
             <div className="flex-1">
               <label className="mb-1 block text-sm font-bold text-slate-700">
-                Account opening balance
+                {hasSpecificBranch
+                    ? `Branch opening balance — ${
+                        selectedBranch?.branch_name || "Selected branch"
+                      }`
+                    : "Account opening balance"}
               </label>
               <input
                 type="number"
@@ -937,15 +941,19 @@ export default function CustomerCredit({ readOnly = false }) {
                 className="w-full rounded-xl border bg-white p-3"
                 placeholder="0.00"
               />
-              <p className="mt-1 text-xs font-semibold text-slate-500">
-                Account-wide value. Select All branches before editing.
+             <p className="mt-1 text-xs font-semibold text-slate-500">
+                {hasSpecificBranch
+                  ? `This opening balance applies only to ${
+                      selectedBranch?.branch_name || "the selected branch"
+                    }.`
+                  : "This opening balance applies to the full customer account."}
               </p>
             </div>
 
             <button
               type="button"
               onClick={saveOpeningBalance}
-              disabled={savingOpeningBalance || hasSpecificBranch}
+              disabled={savingOpeningBalance}
               className="rounded-xl bg-blue-700 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
               {savingOpeningBalance ? "Saving..." : "Save"}
