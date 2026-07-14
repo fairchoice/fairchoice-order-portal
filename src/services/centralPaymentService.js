@@ -90,6 +90,19 @@ export async function loadBranchOpeningBalances(customerAccountId) {
 export async function loadDeliveredInvoices({ customerAccountId, customerName } = {}) {
   if (!customerAccountId && !customerName) return [];
 
+  const mapOrderInvoice = (order) => ({
+    id: order.id,
+    customer_account_id: order.customer_account_id || customerAccountId,
+    customer_branch_id: order.customer_branch_id || order.branch_id || null,
+    branch_name: order.delivery_branch_name || order.branch_name || order.shop_name || "",
+    invoice_number: order.invoice_number || order.order_number || order.id,
+    order_id: order.id,
+    invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
+    invoice_total: Number(order.final_total || order.total_amount || order.order_total || order.total || 0),
+    status: "ISSUED",
+    source: "orders",
+  });
+
   const { data: centralInvoices, error: invoiceError } = await safeSelect(
     "customer_invoices",
     (query) => {
@@ -99,7 +112,6 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
     }
   );
   if (invoiceError) throw invoiceError;
-  if (centralInvoices?.length) return centralInvoices;
 
   const { data: orders, error: ordersError } = await safeSelect("orders", (query) => {
     let next = query.select("*, order_items(*)").order("created_at", { ascending: true }).limit(500);
@@ -114,20 +126,40 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
   });
   if (ordersError) throw ordersError;
 
-  return (orders || [])
+  const orderInvoiceRows = (orders || [])
     .filter((order) => deliveredStatuses.includes(String(order.status || "").trim().toLowerCase()))
-    .map((order) => ({
-      id: order.id,
-      customer_account_id: order.customer_account_id || customerAccountId,
-      customer_branch_id: order.customer_branch_id || order.branch_id || null,
-      branch_name: order.delivery_branch_name || order.branch_name || order.shop_name || "",
-      invoice_number: order.invoice_number || order.order_number || order.id,
-      order_id: order.id,
-      invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
-      invoice_total: Number(order.final_total || order.total_amount || order.order_total || order.total || 0),
-      status: "ISSUED",
-      source: "orders",
-    }));
+    .map(mapOrderInvoice);
+
+  if (!centralInvoices?.length) return orderInvoiceRows;
+
+  const ordersByReference = new Map(
+    orderInvoiceRows
+      .map((order) => [String(order.invoice_number || "").trim(), order])
+      .filter(([reference]) => Boolean(reference))
+  );
+  const ordersById = new Map(
+    orderInvoiceRows
+      .map((order) => [String(order.order_id || "").trim(), order])
+      .filter(([id]) => Boolean(id))
+  );
+
+  return centralInvoices.map((invoice) => {
+    const matchingOrder =
+      ordersByReference.get(String(invoice.invoice_number || "").trim()) ||
+      ordersById.get(String(invoice.order_id || "").trim());
+
+    if (!matchingOrder) return invoice;
+
+    return {
+      ...invoice,
+      customer_branch_id: invoice.customer_branch_id || matchingOrder.customer_branch_id,
+      branch_name: invoice.branch_name || matchingOrder.branch_name,
+      invoice_date: invoice.invoice_date || matchingOrder.invoice_date,
+      invoice_total: matchingOrder.invoice_total,
+      source: invoice.source || "customer_invoices",
+      orderSourceTotalApplied: true,
+    };
+  });
 }
 
 export async function loadPayments(customerAccountId) {

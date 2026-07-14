@@ -707,6 +707,9 @@ export default function InvoicesPortal() {
           net_total: totals.netTotal.toFixed(2),
           vat_total: totals.vatTotal.toFixed(2),
           order_total: totals.grandTotal.toFixed(2),
+          final_total: totals.grandTotal.toFixed(2),
+          total_amount: totals.grandTotal.toFixed(2),
+          total: totals.grandTotal.toFixed(2),
           notes: form.notes || null,
         })
         .eq("order_number", amendOrder.order_number || amendOrder.orderId);
