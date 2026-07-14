@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { calculateDocumentTotals } from "../utils/documentTotals";
 import {
   allocatePaymentOldestFirst,
   applyAllocationsToInvoices,
@@ -90,18 +91,22 @@ export async function loadBranchOpeningBalances(customerAccountId) {
 export async function loadDeliveredInvoices({ customerAccountId, customerName } = {}) {
   if (!customerAccountId && !customerName) return [];
 
-  const mapOrderInvoice = (order) => ({
-    id: order.id,
-    customer_account_id: order.customer_account_id || customerAccountId,
-    customer_branch_id: order.customer_branch_id || order.branch_id || null,
-    branch_name: order.delivery_branch_name || order.branch_name || order.shop_name || "",
-    invoice_number: order.invoice_number || order.order_number || order.id,
-    order_id: order.id,
-    invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
-    invoice_total: Number(order.final_total || order.total_amount || order.order_total || order.total || 0),
-    status: "ISSUED",
-    source: "orders",
-  });
+  const mapOrderInvoice = (order) => {
+    const totals = calculateDocumentTotals(order.order_items || order.items || [], order);
+
+    return {
+      id: order.id,
+      customer_account_id: order.customer_account_id || customerAccountId,
+      customer_branch_id: order.customer_branch_id || order.branch_id || null,
+      branch_name: order.delivery_branch_name || order.branch_name || order.shop_name || "",
+      invoice_number: order.invoice_number || order.order_number || order.id,
+      order_id: order.id,
+      invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
+      invoice_total: totals.grandTotal,
+      status: "ISSUED",
+      source: "orders",
+    };
+  };
 
   const { data: centralInvoices, error: invoiceError } = await safeSelect(
     "customer_invoices",
