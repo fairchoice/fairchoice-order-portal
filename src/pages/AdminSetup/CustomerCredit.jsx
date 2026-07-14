@@ -612,6 +612,14 @@ export default function CustomerCredit({ readOnly = false }) {
     let runningBalance = 0;
 
     const rowsWithBranchBalance = mappedRows.map((row) => {
+      if (row.type === "OPENING") {
+        runningBalance = Number(row.debit || row.runningBalance || 0);
+        return {
+          ...row,
+          runningBalance,
+        };
+      }
+
       runningBalance += Number(row.debit || 0) - Number(row.credit || 0);
       return {
         ...row,
