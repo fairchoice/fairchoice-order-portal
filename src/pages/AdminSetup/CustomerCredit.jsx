@@ -609,7 +609,7 @@ export default function CustomerCredit({ readOnly = false }) {
         return a.sortIndex - b.sortIndex;
       });
 
-    let runningBalance = Number(selectedOpeningBalance || 0);
+    let runningBalance = 0;
 
     const rowsWithBranchBalance = mappedRows.map((row) => {
       runningBalance += Number(row.debit || 0) - Number(row.credit || 0);
