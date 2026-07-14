@@ -175,6 +175,30 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   if (!order) return null;
 
   const orderItems = await fetchAllOrderItemsForOrderIds([order.id]);
+  const customerAccountId = order.customer_account_id || rowOrReference.customer_account_id;
+  const customerBranchId =
+    order.customer_branch_id ||
+    order.branch_id ||
+    rowOrReference.customer_branch_id ||
+    rowOrReference.branch_id;
+  const [customerAccountResult, customerBranchResult] = await Promise.all([
+    customerAccountId
+      ? supabase
+          .from("customer_accounts")
+          .select("*")
+          .eq("id", customerAccountId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    customerBranchId
+      ? supabase
+          .from("customer_branches")
+          .select("*")
+          .eq("id", customerBranchId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const customerAccount = customerAccountResult.data || null;
+  const customerBranch = customerBranchResult.data || null;
 
   const productIds = [
     ...new Set((orderItems || []).map((item) => item.product_id).filter(Boolean)),
@@ -228,6 +252,10 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
   return normalizeInvoiceOrder({
     ...order,
+    customer_accounts: customerAccount || order.customer_accounts || null,
+    customer: customerAccount || order.customer || null,
+    customer_branches: customerBranch || order.customer_branches || null,
+    branch: customerBranch || order.branch || null,
     order_items: (orderItems || []).map((item) => ({
       ...item,
       ...(() => {
@@ -305,6 +333,34 @@ const uniqueAddressLines = (lines = []) => {
   });
 };
 
+const getCustomerAccountAddressLines = (account = {}) => {
+  const lines = [];
+  pushAddressValue(lines, account.address_line_1 || account.addressLine1 || account.address);
+  pushAddressValue(lines, account.address_line_2 || account.addressLine2);
+  pushAddressValue(lines, account.town || account.city);
+  pushAddressValue(lines, account.county);
+  pushAddressValue(lines, account.postcode || account.post_code);
+  return uniqueAddressLines(lines);
+};
+
+const getOrderBillingAddressLines = (order = {}) => {
+  const lines = [];
+  pushAddressValue(
+    lines,
+    order.billingAddress ||
+      order.billing_address ||
+      order.invoiceAddress ||
+      order.invoice_address ||
+      order.customerInvoiceAddress ||
+      order.customer_invoice_address
+  );
+  pushAddressValue(lines, order.billing_address_line_1 || order.billingAddressLine1);
+  pushAddressValue(lines, order.billing_address_line_2 || order.billingAddressLine2);
+  pushAddressValue(lines, order.billing_town || order.billing_city);
+  pushAddressValue(lines, order.billing_postcode || order.billingPostcode);
+  return uniqueAddressLines(lines);
+};
+
 export const getDeliveryAddressLines = (order = {}) => {
   const branchLines = [];
   pushAddressValue(
@@ -331,19 +387,22 @@ export const getDeliveryAddressLines = (order = {}) => {
 
   if (branchLines.length) return uniqueAddressLines(branchLines);
 
+  const orderLines = [];
+  pushAddressValue(orderLines, order.deliveryAddress || order.delivery_address);
+  pushAddressValue(orderLines, order.delivery_address_line_1 || order.deliveryAddressLine1);
+  pushAddressValue(orderLines, order.delivery_address_line_2 || order.deliveryAddressLine2);
+  pushAddressValue(orderLines, order.delivery_town || order.delivery_city);
+  pushAddressValue(orderLines, order.deliveryPostcode || order.delivery_postcode);
+
+  if (orderLines.length) return uniqueAddressLines(orderLines);
+
   const customerLines = [];
   pushAddressValue(
     customerLines,
-    order.invoiceAddress ||
-      order.invoice_address ||
-      order.customerInvoiceAddress ||
-      order.customer_invoice_address ||
-      order.customerAddress ||
+    order.customerAddress ||
       order.customer_address ||
       order.account_address ||
-      order.customer_accounts?.invoice_address ||
       order.customer_accounts?.address ||
-      order.customer?.invoice_address ||
       order.customer?.address ||
       order.address
   );
@@ -354,32 +413,31 @@ export const getDeliveryAddressLines = (order = {}) => {
 
   if (customerLines.length) return uniqueAddressLines(customerLines);
 
-  const orderLines = [];
-  pushAddressValue(orderLines, order.deliveryAddress || order.delivery_address);
-  pushAddressValue(orderLines, order.delivery_address_line_1 || order.deliveryAddressLine1);
-  pushAddressValue(orderLines, order.delivery_address_line_2 || order.deliveryAddressLine2);
-  pushAddressValue(orderLines, order.delivery_town || order.delivery_city);
-  pushAddressValue(orderLines, order.deliveryPostcode || order.delivery_postcode);
-
-  return uniqueAddressLines(orderLines.length ? orderLines : ["Address not available"]);
+  return ["Address not available"];
 };
 
 export const getDeliveryAddress = (order = {}) =>
   getDeliveryAddressLines(order).join(", ");
 
-const getBillingAddress = (order = {}) =>
-  [
-    order.billingAddress || order.billing_address,
-    order.invoiceAddress || order.invoice_address,
-    order.customerAddress || order.customer_address,
-    order.address || order.account_address,
-    order.addressLine1 || order.address_line_1,
-    order.addressLine2 || order.address_line_2,
-    order.town || order.city,
-    order.postcode || order.billing_postcode,
-  ]
-    .filter(Boolean)
-    .join(", ");
+const getBillingAddress = (order = {}) => {
+  const customerAccount = order.customer_accounts || order.customer || {};
+
+  const accountInvoiceLines = [];
+  pushAddressValue(accountInvoiceLines, customerAccount.invoice_address);
+  if (accountInvoiceLines.length) return uniqueAddressLines(accountInvoiceLines).join(", ");
+
+  const accountBillingLines = [];
+  pushAddressValue(accountBillingLines, customerAccount.billing_address);
+  if (accountBillingLines.length) return uniqueAddressLines(accountBillingLines).join(", ");
+
+  const accountMainLines = getCustomerAccountAddressLines(customerAccount);
+  if (accountMainLines.length) return accountMainLines.join(", ");
+
+  const orderBillingLines = getOrderBillingAddressLines(order);
+  if (orderBillingLines.length) return orderBillingLines.join(", ");
+
+  return getDeliveryAddress(order);
+};
 
 const getDriverName = (order = {}) =>
   order.driverName ||
@@ -656,7 +714,7 @@ export async function withResolvedInvoicePaymentStatus(order = {}) {
 }
 
 const getInvoicePaymentStatus = (order = {}, totals = {}) =>
-  isInvoicePaid(order, totals) ? "PAID" : "UNPAID";
+  order._documentPaymentStatus || order.documentPaymentStatus || (isInvoicePaid(order, totals) ? "PAID" : "UNPAID");
 
 export const getPrintTemplate = (priceMode) =>
   isServerManagerPriceMode(priceMode)

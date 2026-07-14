@@ -89,10 +89,12 @@ import {
   allocateCustomerPaymentToInvoices,
   applyInvoicePaymentAllocations,
   createOrUpdateInvoiceForDeliveredOrder,
+  fetchInvoiceOrderFromDb,
   loadCustomerOutstandingSnapshot,
   loadProcessingQueueOrders,
   mergeOperationalOrders,
-  printInvoice as printCentralInvoice,
+  downloadInvoice as downloadCentralInvoice,
+  previewInvoice as previewCentralInvoice,
   withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
 
@@ -1943,20 +1945,18 @@ const displayedCustomerLedgerRowsWithBalance = [...customerLedgerRowsWithBalance
     );
   }
 );
-const customerInvoiceTotal = allocatedAllCustomerLedger.reduce(
-  (sum, row) =>
-    String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE"
-      ? sum + getLedgerDebit(row)
-      : sum,
-  0
-);
-const customerPaymentTotal = allocatedAllCustomerLedger.reduce(
-  (sum, row) =>
-    String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT"
-      ? sum + getLedgerCredit(row)
-      : sum,
-  0
-);
+const customerLastPaymentRow = [...allocatedAllCustomerLedger]
+  .filter(
+    (row) =>
+      String(row.entry_type || row.transaction_type || "").toUpperCase() ===
+      "PAYMENT"
+  )
+  .sort(
+    (a, b) =>
+      new Date(b.created_at || b.payment_date || 0).getTime() -
+      new Date(a.created_at || a.payment_date || 0).getTime()
+  )[0];
+const customerLastPayment = getLedgerCredit(customerLastPaymentRow);
 const customerCreditSummary = calculateCustomerCredit(
   selectedCustomerAccount,
   allocatedAllCustomerLedger,
@@ -2053,6 +2053,39 @@ const getInvoiceLedgerRowForOrder = (order = {}) => {
     return type === "INVOICE" && reference === orderReference;
   });
 };
+
+const getCustomerInvoiceStatus = (row = {}) => {
+  const status = String(row.invoice_status || row.status || "")
+    .trim()
+    .toUpperCase();
+
+  if (status === "PAID" || status === "PART PAID" || status === "UNPAID") {
+    return status;
+  }
+
+  const invoiceTotal = Number(
+    row.invoice_total ||
+      row.invoiceTotal ||
+      row.invoice_amount ||
+      row.debit ||
+      row.amount ||
+      0
+  );
+  const paidAmount = Number(row.paid_amount || row.paidAmount || 0);
+
+  if (paidAmount > 0 && invoiceTotal > 0 && paidAmount < invoiceTotal) {
+    return "PART PAID";
+  }
+
+  return paidAmount >= invoiceTotal && invoiceTotal > 0 ? "PAID" : "UNPAID";
+};
+
+const getCustomerInvoiceWatermark = (status) =>
+  status === "PAID"
+    ? "PAID"
+    : status === "PART PAID"
+    ? "PART PAID"
+    : "ORDER IN PROGRESS";
 
   const toggleOrderExpanded = (orderId) => {
     setExpandedOrders((old) => ({
@@ -3028,9 +3061,17 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     win.document.close();
   };
 
-  const openCustomerInvoiceDocument = async (order) => {
-    const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
-    printCentralInvoice(resolvedOrder);
+  const openCustomerInvoiceDocument = async (order, invoiceStatus = "PAID") => {
+    const freshOrder = (await fetchInvoiceOrderFromDb(order)) || order;
+    const resolvedOrder = await withResolvedInvoicePaymentStatus({
+      ...freshOrder,
+      _documentPaymentStatus: getCustomerInvoiceWatermark(invoiceStatus),
+    });
+    if (invoiceStatus === "PAID") {
+      downloadCentralInvoice(resolvedOrder);
+    } else {
+      previewCentralInvoice(resolvedOrder);
+    }
   };
 
   const comingSoonTitle = getComingSoonTitle(page);
@@ -3758,18 +3799,6 @@ const backOfficeContent = comingSoonTitle ? (
           </div>
         </div>
         <div className="border rounded-xl p-3 bg-slate-50">
-          <div className="text-xs font-bold text-slate-500">Total Invoices</div>
-          <div className="text-lg font-extrabold">
-            {formatCurrency(customerInvoiceTotal)}
-          </div>
-        </div>
-        <div className="border rounded-xl p-3 bg-slate-50">
-          <div className="text-xs font-bold text-slate-500">Total Payments</div>
-          <div className="text-lg font-extrabold text-green-700">
-            {formatCurrency(customerPaymentTotal)}
-          </div>
-        </div>
-        <div className="border rounded-xl p-3 bg-slate-50">
           <div className="text-xs font-bold text-slate-500">Available Credit</div>
           <div className="text-lg font-extrabold">
             {formatCurrency(customerCreditSummary.availableCredit)}
@@ -3781,6 +3810,14 @@ const backOfficeContent = comingSoonTitle ? (
             {formatCurrency(customerCreditSummary.creditLimit)}
           </div>
         </div>
+        {customerLastPayment > 0 && (
+          <div className="border rounded-xl p-3 bg-slate-50">
+            <div className="text-xs font-bold text-slate-500">Last Payment</div>
+            <div className="text-lg font-extrabold text-green-700">
+              {formatCurrency(customerLastPayment)}
+            </div>
+          </div>
+        )}
       </div>
 
       <h3 className="font-bold text-lg mb-3">
@@ -3818,57 +3855,6 @@ const backOfficeContent = comingSoonTitle ? (
         </div>
       )}
 
-      {completedCustomerOrders.length > 0 && (
-        <div className="mb-4 border rounded-2xl p-3 bg-slate-50">
-          <h3 className="font-bold text-base mb-3">Delivered Orders</h3>
-
-          <div className="space-y-2">
-            {completedCustomerOrders.map((order) => {
-              const orderTotals = calculateDocumentTotals(order.items || [], order);
-              const invoiceLedgerRow = getInvoiceLedgerRowForOrder(order);
-              const invoiceStatus = String(
-                invoiceLedgerRow?.invoice_status || "UNPAID"
-              ).toUpperCase();
-
-              return (
-                <div
-                  key={order.dbId || order.orderId}
-                  className="border rounded-xl bg-white p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
-                >
-                  <div>
-                    <div className="font-bold">
-                      {order.orderId || "-"}
-                      {order.branchName ? ` | ${order.branchName}` : ""}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {order.createdAt || "-"} | {String(order.priceMode || "-").toUpperCase()} |{" "}
-                      {formatCurrency(orderTotals.grandTotal)} | Total Qty: {orderTotals.totalQty}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    {invoiceStatus === "PAID" ? (
-                      <button
-                        type="button"
-                        onClick={() => openCustomerInvoiceDocument(order)}
-                        className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                      >
-                        Download Invoice
-                      </button>
-                    ) : (
-                      <span className="bg-slate-200 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold">
-                        Unpaid Invoice
-                      </span>
-                    )}
-
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       <div className="customer-ledger-table-wrap overflow-x-auto border rounded-2xl">
         <table className="customer-ledger-table w-full text-sm">
           <thead className="bg-slate-100">
@@ -3891,11 +3877,10 @@ const backOfficeContent = comingSoonTitle ? (
               const isInvoice = type === "INVOICE";
               const isPayment = type === "PAYMENT";
 
-              const status = String(
-                row.invoice_status || row.status || ""
-              ).toUpperCase();
+              const status = isInvoice ? getCustomerInvoiceStatus(row) : "";
               const invoiceOrder = isInvoice ? getInvoiceOrderForLedgerRow(row) : null;
               const invoicePaid = status === "PAID";
+              const invoiceActionTarget = invoiceOrder || row;
               const displayBalance = isInvoice
                 ? Number(row.remaining_amount ?? row.remainingAmount ?? balance)
                 : balance;
@@ -3949,18 +3934,22 @@ const backOfficeContent = comingSoonTitle ? (
                   </td>
 
                   <td className="p-3 text-center">
-                    {isInvoice && invoiceOrder && invoicePaid ? (
+                    {isInvoice && invoicePaid ? (
                       <button
                         type="button"
-                        onClick={() => openCustomerInvoiceDocument(invoiceOrder)}
+                        onClick={() => openCustomerInvoiceDocument(invoiceActionTarget, status)}
                         className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
                       >
                         Download Invoice
                       </button>
                     ) : isInvoice ? (
-                      <span className="text-xs font-bold text-slate-500">
-                        Unpaid Invoice
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openCustomerInvoiceDocument(invoiceActionTarget, status)}
+                        className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                      >
+                        View Order
+                      </button>
                     ) : (
                       "-"
                     )}
