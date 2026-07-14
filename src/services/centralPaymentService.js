@@ -16,6 +16,57 @@ import {
 
 const deliveredStatuses = ["delivered", "confirmed", "delivery confirmed", "completed"];
 
+const getInvoiceReferenceCandidates = (row = {}) =>
+  [
+    row.invoice_number,
+    row.reference_no,
+    row.order_number,
+    row.orderId,
+    row.order_id,
+    row.id,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+const buildInvoiceReferenceLookup = (rows = []) => {
+  const byReference = new Map();
+
+  (rows || []).forEach((row) => {
+    getInvoiceReferenceCandidates(row).forEach((reference) => {
+      if (!byReference.has(reference)) byReference.set(reference, row);
+    });
+  });
+
+  return byReference;
+};
+
+const findInvoiceByReference = (row = {}, lookup = new Map()) => {
+  for (const reference of getInvoiceReferenceCandidates(row)) {
+    const match = lookup.get(reference);
+    if (match) return match;
+  }
+  return null;
+};
+
+const withOrderBackedInvoiceTotal = (invoice, orderLookup) => {
+  const matchingOrder = findInvoiceByReference(invoice, orderLookup);
+
+  if (!matchingOrder) return invoice;
+
+  return {
+    ...invoice,
+    customer_branch_id: invoice.customer_branch_id || matchingOrder.customer_branch_id,
+    branch_name: invoice.branch_name || matchingOrder.branch_name,
+    invoice_date: invoice.invoice_date || matchingOrder.invoice_date,
+    invoice_total: matchingOrder.invoice_total,
+    invoice_amount: matchingOrder.invoice_total,
+    amount: matchingOrder.invoice_total,
+    debit: matchingOrder.invoice_total,
+    source: invoice.source || "customer_invoices",
+    orderSourceTotalApplied: true,
+  };
+};
+
 const getActor = (user = {}) =>
   String(
     user?.username ||
@@ -106,12 +157,16 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
         Number.isFinite(Number(value))
     );
 
+    const invoiceReference = order.invoice_number || order.order_number || order.orderId || order.id;
+
     return {
       id: order.id,
       customer_account_id: order.customer_account_id || customerAccountId,
       customer_branch_id: order.customer_branch_id || order.branch_id || null,
       branch_name: order.delivery_branch_name || order.branch_name || order.shop_name || "",
-      invoice_number: order.invoice_number || order.order_number || order.id,
+      invoice_number: invoiceReference,
+      reference_no: order.order_number || order.orderId || invoiceReference,
+      order_number: order.order_number || order.orderId || invoiceReference,
       order_id: order.id,
       invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
       invoice_total: savedTotal !== undefined ? Number(savedTotal) : totals.grandTotal,
@@ -149,34 +204,19 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
 
   if (!centralInvoices?.length) return orderInvoiceRows;
 
-  const ordersByReference = new Map(
-    orderInvoiceRows
-      .map((order) => [String(order.invoice_number || "").trim(), order])
-      .filter(([reference]) => Boolean(reference))
+  const orderLookup = buildInvoiceReferenceLookup(orderInvoiceRows);
+  const mergedCentralInvoices = centralInvoices.map((invoice) =>
+    withOrderBackedInvoiceTotal(invoice, orderLookup)
   );
-  const ordersById = new Map(
-    orderInvoiceRows
-      .map((order) => [String(order.order_id || "").trim(), order])
-      .filter(([id]) => Boolean(id))
+  const mergedReferences = new Set(
+    mergedCentralInvoices.flatMap((invoice) => getInvoiceReferenceCandidates(invoice))
+  );
+  const missingOrderInvoices = orderInvoiceRows.filter(
+    (order) =>
+      !getInvoiceReferenceCandidates(order).some((reference) => mergedReferences.has(reference))
   );
 
-  return centralInvoices.map((invoice) => {
-    const matchingOrder =
-      ordersByReference.get(String(invoice.invoice_number || "").trim()) ||
-      ordersById.get(String(invoice.order_id || "").trim());
-
-    if (!matchingOrder) return invoice;
-
-    return {
-      ...invoice,
-      customer_branch_id: invoice.customer_branch_id || matchingOrder.customer_branch_id,
-      branch_name: invoice.branch_name || matchingOrder.branch_name,
-      invoice_date: invoice.invoice_date || matchingOrder.invoice_date,
-      invoice_total: matchingOrder.invoice_total,
-      source: invoice.source || "customer_invoices",
-      orderSourceTotalApplied: true,
-    };
-  });
+  return [...mergedCentralInvoices, ...missingOrderInvoices];
 }
 
 export async function loadPayments(customerAccountId) {
@@ -203,7 +243,12 @@ export async function loadAllocations(customerAccountId) {
   return data || [];
 }
 
-async function loadLegacyLedgerFallback({ customerAccountId, customerName, customer } = {}) {
+async function loadLegacyLedgerFallback({
+  customerAccountId,
+  customerName,
+  customer,
+  invoiceRows = [],
+} = {}) {
   if (!customerAccountId && !customerName) return { invoices: [], payments: [] };
 
   // Temporary legacy compatibility: read-only fallback for accounts that have not yet
@@ -225,17 +270,28 @@ async function loadLegacyLedgerFallback({ customerAccountId, customerName, custo
       ).data || [];
 
   const branches = customer?.customer_branches || [];
+  const invoiceLookup = buildInvoiceReferenceLookup(invoiceRows);
 
   const legacyInvoices = ledgerRows
       .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE")
-      .map((row) => ({
-        ...row,
-        id: `legacy-${row.id}`,
-        invoice_number: row.reference_no || row.order_number || row.id,
-        invoice_date: row.created_at,
-        invoice_total: Number(row.debit || row.amount || row.invoice_amount || 0),
-        source: "legacy_customer_ledger",
-      }));
+      .map((row) => {
+        const matchingInvoice = findInvoiceByReference(row, invoiceLookup);
+        const invoiceTotal =
+          matchingInvoice?.invoice_total ?? Number(row.debit || row.amount || row.invoice_amount || 0);
+
+        return {
+          ...row,
+          id: `legacy-${row.id}`,
+          invoice_number: row.reference_no || row.order_number || row.id,
+          invoice_date: row.created_at,
+          invoice_total: invoiceTotal,
+          invoice_amount: invoiceTotal,
+          amount: invoiceTotal,
+          debit: invoiceTotal,
+          source: "legacy_customer_ledger",
+          orderSourceTotalApplied: Boolean(matchingInvoice?.orderSourceTotalApplied),
+        };
+      });
   const legacyPayments = ledgerRows
       .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT")
       .map((row) => ({
@@ -287,7 +343,12 @@ export async function loadCentralPaymentSnapshot({
   const scopedNewInvoices = withResolvedBranchScope(invoices, branches);
   const scopedNewPayments = withResolvedBranchScope(payments, branches);
   const scopedAllocations = withResolvedBranchScope(allocations, branches);
-  const legacy = await loadLegacyLedgerFallback({ customerAccountId, customerName, customer });
+  const legacy = await loadLegacyLedgerFallback({
+    customerAccountId,
+    customerName,
+    customer,
+    invoiceRows: scopedNewInvoices,
+  });
   const compatibilityRows = resolveLegacyCompatibilityRows({
     invoices: scopedNewInvoices,
     payments: scopedNewPayments,

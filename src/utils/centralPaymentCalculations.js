@@ -12,6 +12,7 @@ export const getInvoiceReference = (invoice = {}) =>
       invoice.reference_no ||
       invoice.order_number ||
       invoice.orderId ||
+      invoice.order_id ||
       invoice.id ||
       ""
   ).trim();
@@ -341,7 +342,7 @@ export function resolveLegacyCompatibilityRows({
     invoices: mergeMissingByReference(
       invoices,
       legacyInvoices,
-      (row) => row.invoice_number || row.reference_no || row.order_number || row.id
+      (row) => row.invoice_number || row.reference_no || row.order_number || row.orderId || row.order_id || row.id
     ),
     payments: mergeMissingByReference(
       payments,
