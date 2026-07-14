@@ -51,6 +51,83 @@ export function getBranchKey(value) {
   return value === null || value === undefined || value === "" ? "MAIN" : String(value);
 }
 
+export const normalizeBranchName = (value) =>
+  String(value || "")
+    .trim()
+    .toLocaleLowerCase("en-GB")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+export const buildBranchResolution = (branches = []) => {
+  const branchIds = new Set();
+  const idsByName = new Map();
+
+  (branches || []).forEach((branch) => {
+    const id = String(branch.id || "").trim();
+    if (!id) return;
+
+    branchIds.add(id);
+    const name = normalizeBranchName(branch.branch_name || branch.name);
+    if (name) idsByName.set(name, [...(idsByName.get(name) || []), id]);
+  });
+
+  return { branchIds, idsByName };
+};
+
+export const resolveRowBranchId = (row = {}, branchResolution = buildBranchResolution()) => {
+  const directId = String(
+    row.customer_branch_id || row.customerBranchId || row.branch_id || row.branchId || ""
+  ).trim();
+
+  if (directId && (!branchResolution.branchIds.size || branchResolution.branchIds.has(directId))) {
+    return { branchId: directId, matched: true, ambiguous: false };
+  }
+
+  const normalizedName = normalizeBranchName(
+    row.branch_name ||
+      row.branchName ||
+      row.delivery_branch_name ||
+      row.customer_branch_name ||
+      row.shop_name
+  );
+
+  if (!normalizedName) {
+    return { branchId: null, matched: false, ambiguous: false };
+  }
+
+  const matches = branchResolution.idsByName.get(normalizedName) || [];
+  if (matches.length === 1) {
+    return { branchId: matches[0], matched: true, ambiguous: false };
+  }
+
+  return { branchId: null, matched: false, ambiguous: matches.length > 1 };
+};
+
+export const withResolvedBranchScope = (rows = [], branches = []) => {
+  const branchResolution = buildBranchResolution(branches);
+
+  return (rows || []).map((row) => {
+    const resolved = resolveRowBranchId(row, branchResolution);
+    return {
+      ...row,
+      customer_branch_id: resolved.branchId || row.customer_branch_id || null,
+      _branchMatched: resolved.matched,
+      _branchAmbiguous: resolved.ambiguous,
+    };
+  });
+};
+
+export const filterRowsForBranchScope = (rows = [], selectedBranchId = "") => {
+  if (!selectedBranchId) return rows || [];
+
+  const selectedKey = getBranchKey(selectedBranchId);
+  return (rows || []).filter((row) => {
+    const branchId = row.customer_branch_id ?? row.customerBranchId ?? row.branch_id;
+    return row._branchMatched === true && getBranchKey(branchId) === selectedKey;
+  });
+};
+
 const sortByDateThenReference = (a, b) => {
   const dateDiff =
     new Date(normalizeDateValue(getInvoiceDate(a))).getTime() -

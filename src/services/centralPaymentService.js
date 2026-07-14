@@ -2,6 +2,7 @@ import { supabase } from "./supabase";
 import {
   allocatePaymentOldestFirst,
   applyAllocationsToInvoices,
+  filterRowsForBranchScope,
   buildCustomerTransactionHistory,
   createPaymentIdempotencyKey,
   filterInvoicesForAllocation,
@@ -9,6 +10,7 @@ import {
   money,
   resolveLegacyCompatibilityRows,
   summarizeCreditSnapshot,
+  withResolvedBranchScope,
 } from "../utils/centralPaymentCalculations";
 
 const deliveredStatuses = ["delivered", "confirmed", "delivery confirmed", "completed"];
@@ -152,7 +154,7 @@ export async function loadAllocations(customerAccountId) {
   return data || [];
 }
 
-async function loadLegacyLedgerFallback({ customerAccountId, customerName } = {}) {
+async function loadLegacyLedgerFallback({ customerAccountId, customerName, customer } = {}) {
   if (!customerAccountId && !customerName) return { invoices: [], payments: [] };
 
   // Temporary legacy compatibility: read-only fallback for accounts that have not yet
@@ -173,8 +175,9 @@ async function loadLegacyLedgerFallback({ customerAccountId, customerName } = {}
         )
       ).data || [];
 
-  return {
-    invoices: ledgerRows
+  const branches = customer?.customer_branches || [];
+
+  const legacyInvoices = ledgerRows
       .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE")
       .map((row) => ({
         ...row,
@@ -183,8 +186,8 @@ async function loadLegacyLedgerFallback({ customerAccountId, customerName } = {}
         invoice_date: row.created_at,
         invoice_total: Number(row.debit || row.amount || row.invoice_amount || 0),
         source: "legacy_customer_ledger",
-      })),
-    payments: ledgerRows
+      }));
+  const legacyPayments = ledgerRows
       .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT")
       .map((row) => ({
         ...row,
@@ -195,7 +198,11 @@ async function loadLegacyLedgerFallback({ customerAccountId, customerName } = {}
         payment_method: row.payment_method || row.payment_type || "Other",
         status: row.payment_status || "POSTED",
         source: "legacy_customer_ledger",
-      })),
+      }));
+
+  return {
+    invoices: withResolvedBranchScope(legacyInvoices, branches),
+    payments: withResolvedBranchScope(legacyPayments, branches),
   };
 }
 
@@ -227,18 +234,31 @@ export async function loadCentralPaymentSnapshot({
     loadAllocations(customerAccountId),
   ]);
 
-  const legacy = await loadLegacyLedgerFallback({ customerAccountId, customerName });
+  const branches = customer?.customer_branches || [];
+  const scopedNewInvoices = withResolvedBranchScope(invoices, branches);
+  const scopedNewPayments = withResolvedBranchScope(payments, branches);
+  const scopedAllocations = withResolvedBranchScope(allocations, branches);
+  const legacy = await loadLegacyLedgerFallback({ customerAccountId, customerName, customer });
   const compatibilityRows = resolveLegacyCompatibilityRows({
-    invoices,
-    payments,
+    invoices: scopedNewInvoices,
+    payments: scopedNewPayments,
     legacyInvoices: legacy.invoices,
     legacyPayments: legacy.payments,
   });
   invoices = compatibilityRows.invoices;
   payments = compatibilityRows.payments;
-  const legacyFallbackUsed = compatibilityRows.legacyFallbackUsed;
+  allocations = scopedAllocations;
+  const selectedInvoices = filterRowsForBranchScope(invoices, selectedBranchId);
+  const selectedPayments = filterRowsForBranchScope(payments, selectedBranchId);
+  const selectedAllocations = filterRowsForBranchScope(allocations, selectedBranchId);
+  const branchAwareRecordCount = [...scopedNewInvoices, ...scopedNewPayments, ...scopedAllocations].filter(
+    (row) => row._branchMatched === true
+  ).length;
+  const legacyFallbackUsed =
+    !selectedBranchId && compatibilityRows.legacyFallbackUsed && branchAwareRecordCount === 0;
 
   const allocatedInvoices = applyAllocationsToInvoices(invoices, allocations);
+  const selectedAllocatedInvoices = applyAllocationsToInvoices(selectedInvoices, selectedAllocations);
   const openingBalance = money(
     (openingBalances || []).reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
   );
@@ -251,10 +271,9 @@ export async function loadCentralPaymentSnapshot({
       )
       .reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
   );
-  const selectedInvoices = filterInvoicesForAllocation(allocatedInvoices, selectedBranchId);
-  const selectedPayments = selectedBranchId
-    ? payments.filter((payment) => getBranchKey(payment.customer_branch_id) === getBranchKey(selectedBranchId))
-    : payments;
+  const transactionInvoices = selectedBranchId ? selectedAllocatedInvoices : allocatedInvoices;
+  const transactionPayments = selectedBranchId ? selectedPayments : payments;
+  const transactionOpeningBalance = selectedBranchId ? selectedOpeningBalance : openingBalance;
 
   return {
     openingBalances,
@@ -263,9 +282,9 @@ export async function loadCentralPaymentSnapshot({
     allocations,
     allocatedInvoices,
     transactionHistory: buildCustomerTransactionHistory({
-      openingBalance,
-      invoices: allocatedInvoices,
-      payments,
+      openingBalance: transactionOpeningBalance,
+      invoices: transactionInvoices,
+      payments: transactionPayments,
       newestFirst: true,
     }),
     customerSummary: summarizeCreditSnapshot({
@@ -277,10 +296,10 @@ export async function loadCentralPaymentSnapshot({
     branchSummary: summarizeCreditSnapshot({
       creditLimit: customer?.credit_limit,
       openingBalance: selectedOpeningBalance,
-      invoices: selectedInvoices,
+      invoices: selectedAllocatedInvoices,
       payments: selectedPayments,
     }),
-    selectedInvoices,
+    selectedInvoices: selectedAllocatedInvoices,
     selectedPayments,
     selectedOpeningBalance,
     branchName: getBranchName(customer, selectedBranchId),

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { resolveLegacyCompatibilityRows } from "../utils/centralPaymentCalculations.js";
+import {
+  buildCustomerTransactionHistory,
+  filterRowsForBranchScope,
+  resolveLegacyCompatibilityRows,
+  withResolvedBranchScope,
+} from "../utils/centralPaymentCalculations.js";
 
 const serviceSource = fs.readFileSync(
   new URL("./centralPaymentService.js", import.meta.url),
@@ -138,4 +143,138 @@ test("bank confirmation is owner RPC-only and sends allocation preview", () => {
   assert.match(source, /bank verification note is compulsory/i);
   assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.update/s);
   assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.insert/s);
+});
+
+test("Penarth does not show Life Style payments", () => {
+  const branches = [
+    { id: "penarth", branch_name: "3S Penarth Store" },
+    { id: "life", branch_name: "3s Life Style" },
+  ];
+  const payments = withResolvedBranchScope(
+    [
+      { id: "pay-penarth", branch_name: "3S Penarth Store", amount: 10 },
+      { id: "pay-life", branch_name: "3S Life Style", amount: 20 },
+    ],
+    branches
+  );
+
+  assert.deepEqual(
+    filterRowsForBranchScope(payments, "penarth").map((row) => row.id),
+    ["pay-penarth"]
+  );
+});
+
+test("Life Style does not show Penarth invoices", () => {
+  const branches = [
+    { id: "penarth", branch_name: "3S Penarth Store" },
+    { id: "life", branch_name: "3s Life Style" },
+  ];
+  const invoices = withResolvedBranchScope(
+    [
+      { id: "inv-penarth", branch_name: "3S Penarth Store", invoice_total: 100 },
+      { id: "inv-life", branch_name: "3S Life Style", invoice_total: 200 },
+    ],
+    branches
+  );
+
+  assert.deepEqual(
+    filterRowsForBranchScope(invoices, "life").map((row) => row.id),
+    ["inv-life"]
+  );
+});
+
+test("All branches contains every unique transaction exactly once", () => {
+  const result = resolveLegacyCompatibilityRows({
+    invoices: [{ id: "new-invoice", invoice_number: "INV-1" }],
+    payments: [{ id: "new-payment", payment_reference: "PAY-1" }],
+    legacyInvoices: [
+      { id: "legacy-duplicate-invoice", invoice_number: "INV-1" },
+      { id: "legacy-missing-invoice", invoice_number: "INV-2" },
+    ],
+    legacyPayments: [
+      { id: "legacy-duplicate-payment", payment_reference: "PAY-1" },
+      { id: "legacy-missing-payment", payment_reference: "PAY-2" },
+    ],
+  });
+
+  assert.deepEqual(result.invoices.map((row) => row.id), [
+    "new-invoice",
+    "legacy-missing-invoice",
+  ]);
+  assert.deepEqual(result.payments.map((row) => row.id), [
+    "new-payment",
+    "legacy-missing-payment",
+  ]);
+});
+
+test("branch opening balances save and reload independently", () => {
+  const componentSource = fs.readFileSync(
+    new URL("../pages/AdminSetup/CustomerCredit.jsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(componentSource, /\.from\("customer_branch_opening_balances"\)/);
+  assert.match(componentSource, /customer_branch_id:\s*openingBranchId/);
+  assert.match(componentSource, /lookup\.eq\("customer_branch_id", openingBranchId\)/);
+  assert.match(componentSource, /lookup\.is\("customer_branch_id", null\)/);
+  assert.doesNotMatch(componentSource, /\.from\("customer_opening_balances"\)/);
+});
+
+test("running balances do not include other branch activity", () => {
+  const branches = [
+    { id: "penarth", branch_name: "3S Penarth Store" },
+    { id: "life", branch_name: "3s Life Style" },
+  ];
+  const invoices = filterRowsForBranchScope(
+    withResolvedBranchScope(
+      [
+        {
+          id: "inv-penarth",
+          branch_name: "3S Penarth Store",
+          invoice_number: "INV-P",
+          invoice_total: 50,
+          invoice_date: "2026-01-02",
+        },
+        {
+          id: "inv-life",
+          branch_name: "3S Life Style",
+          invoice_number: "INV-L",
+          invoice_total: 200,
+          invoice_date: "2026-01-03",
+        },
+      ],
+      branches
+    ),
+    "penarth"
+  );
+  const payments = filterRowsForBranchScope(
+    withResolvedBranchScope(
+      [
+        {
+          id: "pay-life",
+          branch_name: "3S Life Style",
+          payment_reference: "PAY-L",
+          amount: 25,
+          payment_date: "2026-01-04",
+        },
+      ],
+      branches
+    ),
+    "penarth"
+  );
+
+  const history = buildCustomerTransactionHistory({
+    openingBalance: 100,
+    invoices,
+    payments,
+    newestFirst: false,
+  });
+
+  assert.deepEqual(
+    history.map((row) => [row.reference, row.runningBalance]),
+    [
+      ["Opening Balance", 100],
+      ["INV-P", 150],
+    ]
+  );
 });

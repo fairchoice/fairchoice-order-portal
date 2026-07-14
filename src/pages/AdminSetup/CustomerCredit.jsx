@@ -378,6 +378,7 @@ export default function CustomerCredit({ readOnly = false }) {
 
   const transactionMatchesSelectedBranch = (transaction = {}, source = {}) => {
     if (!hasSpecificBranch) return true;
+    if (String(transaction.type || "").toUpperCase() === "OPENING") return true;
 
     const selectedId = String(selectedBranchId || "");
     const selectedName = String(selectedBranch?.branch_name || "")
@@ -728,35 +729,36 @@ export default function CustomerCredit({ readOnly = false }) {
       return;
     }
 
-    // Current production opening-balance records are customer-account level.
-    // Do not silently write a branch-specific figure into an account-wide record.
-    if (hasSpecificBranch) {
-      setError(
-        "Opening balance is account-wide. Select All branches before editing."
-      );
-      return;
-    }
-
     setSavingOpeningBalance(true);
     setError("");
 
     try {
-      const { data: existingRows, error: lookupError } = await supabase
-        .from("customer_opening_balances")
+      const openingBranchId = hasSpecificBranch ? selectedBranchId : null;
+      let lookup = supabase
+        .from("customer_branch_opening_balances")
         .select("id")
-        .eq("customer_name", selectedCustomer.account_name)
+        .eq("customer_account_id", selectedCustomer.id)
         .limit(1);
 
+      lookup = openingBranchId
+        ? lookup.eq("customer_branch_id", openingBranchId)
+        : lookup.is("customer_branch_id", null);
+
+      const { data: existingRows, error: lookupError } = await lookup;
       if (lookupError) throw lookupError;
 
       const existingId = existingRows?.[0]?.id;
       const request = existingId
         ? supabase
-            .from("customer_opening_balances")
-            .update({ opening_balance: nextOpeningBalance })
+            .from("customer_branch_opening_balances")
+            .update({
+              opening_balance: nextOpeningBalance,
+              updated_at: new Date().toISOString(),
+            })
             .eq("id", existingId)
-        : supabase.from("customer_opening_balances").insert({
-            customer_name: selectedCustomer.account_name,
+        : supabase.from("customer_branch_opening_balances").insert({
+            customer_account_id: selectedCustomer.id,
+            customer_branch_id: openingBranchId,
             opening_balance: nextOpeningBalance,
           });
 
@@ -767,7 +769,7 @@ export default function CustomerCredit({ readOnly = false }) {
         customerAccountId: selectedCustomer.id,
         customerName: selectedCustomer.account_name,
         customer: selectedCustomer,
-        selectedBranchId: "",
+        selectedBranchId: hasSpecificBranch ? selectedBranchId : "",
       });
 
       setSnapshot(refreshed);
