@@ -32,6 +32,8 @@ import {
 const getCreatedDate = (row) => row.created_at || row.invoice_date || row.date || "";
 const getReference = (row) => row.reference_no || row.order_number || row.invoice_number || row.id || "-";
 const getCustomer = (row) => row.customer_name || row.company_name || row.account_name || "-";
+const isSchemaCompatibilityError = (error = {}) =>
+  ["42P01", "42703", "PGRST204", "PGRST205"].includes(error?.code);
 const getReferenceCandidates = (row = {}) =>
   [
     row._freshOrder?.order_number,
@@ -802,6 +804,52 @@ export default function InvoicesPortal() {
       const freshAmendedOrder =
         (await fetchInvoiceOrderFromDb(amendOrder.order_number || amendOrder.orderId)) ||
         amendedOrder;
+      const invoiceReference =
+        amendOrder.order_number ||
+        amendOrder.orderId ||
+        freshAmendedOrder.order_number;
+
+      if (invoiceReference) {
+        const updatedAt = new Date().toISOString();
+        const { error: customerInvoiceUpdateError } = await supabase
+          .from("customer_invoices")
+          .update({
+            invoice_total: totals.grandTotal,
+            updated_at: updatedAt,
+          })
+          .eq("invoice_number", invoiceReference);
+
+        if (
+          customerInvoiceUpdateError &&
+          !isSchemaCompatibilityError(customerInvoiceUpdateError)
+        ) {
+          throw customerInvoiceUpdateError;
+        }
+
+        const { error: ledgerUpdateError } = await supabase
+          .from("customer_ledger")
+          .update({
+            debit: totals.grandTotal,
+            amount: totals.grandTotal,
+            invoice_amount: totals.grandTotal,
+            remaining_amount: Math.max(
+              0,
+              totals.grandTotal -
+                Number(
+                  amendOrder.paid_amount ||
+                    amendOrder.paidAmount ||
+                    0
+                )
+            ),
+            updated_at: updatedAt,
+          })
+          .eq("reference_no", invoiceReference)
+          .eq("entry_type", "INVOICE");
+
+        if (ledgerUpdateError && !isSchemaCompatibilityError(ledgerUpdateError)) {
+          throw ledgerUpdateError;
+        }
+      }
 
       await amendInvoice({
         order: freshAmendedOrder,
