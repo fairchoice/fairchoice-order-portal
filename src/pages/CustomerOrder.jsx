@@ -8,6 +8,7 @@ import PriceManagement from "./AdminSetup/PriceManagement";
 
 import { formatCurrency } from "../utils/currency";
 import { getDisplayProductImage, isPlaceholderProductImage } from "../utils/productImages";
+import { sortPrintItems } from "../utils/printItemSorting";
 
 
 import BackOfficeLayout, {
@@ -21,6 +22,7 @@ import PreOrderSupply from "./PreOrderSupply";
 import Driver from "./AdminSetup/Driver";
 import StockReceipts from "./AdminSetup/StockReceipts";
 import StockHistory from "./AdminSetup/StockHistory";
+import StockTaking from "./AdminSetup/StockTaking";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
 import CentralPayment from "./AdminSetup/CentralPayment";
 import BranchSeparation from "./AdminSetup/BranchSeparation";
@@ -2963,7 +2965,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
 
   const printPickingList = (order) => {
     const totals = calculateDocumentTotals(order.items || [], order);
-    const printableItems = totals.invoiceItems;
+    const printableItems = sortPrintItems(totals.invoiceItems);
 
     const rows = printableItems
       .map(
@@ -3105,6 +3107,9 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "returnsPortal" && <ReturnsPortal />}
     {page === "weeklyAccount" && <WeeklyAccount />}
     {page === "stockhistory" && <StockHistory />}
+    {page === "stockTaking" && (
+      <StockTaking products={products} fetchProducts={fetchProducts} />
+    )}
 
     {page === "stockreceipts" && (
       <StockReceipts products={products} fetchProducts={fetchProducts} />

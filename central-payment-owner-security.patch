@@ -1,0 +1,561 @@
+diff --git a/src/pages/AdminSetup/CentralPayment.jsx b/src/pages/AdminSetup/CentralPayment.jsx
+index cc641b5..c4e5c32 100644
+--- a/src/pages/AdminSetup/CentralPayment.jsx
++++ b/src/pages/AdminSetup/CentralPayment.jsx
+@@ -6,28 +6,60 @@ import {
+   loadCentralPaymentCustomers,
+   loadCentralPaymentSnapshot,
+ } from "../../services/centralPaymentService";
++import {
++  OWNER_USERNAME,
++  changeOwnerPassword,
++  getOwnerSecurityStatus,
++  isOwnerUser,
++  setupOwnerPassword,
++} from "../../services/ownerFinancialSecurity";
+ 
+ const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
++const getLoggedInUser = () => JSON.parse(localStorage.getItem("loggedInUser") || localStorage.getItem("fairchoice_user") || "null");
++const matchesCustomer = (customer, search) => [customer.account_name, customer.company_name, customer.customer_code, ...(customer.customer_branches || []).map((branch) => branch.branch_name)].join(" ").toLowerCase().includes(String(search || "").toLowerCase());
++
++function OwnerSecurityPanel({ status, onRefresh }) {
++  const [mode, setMode] = useState(status?.configured ? "change" : "setup");
++  const [currentLoginPassword, setCurrentLoginPassword] = useState("");
++  const [currentOwnerPassword, setCurrentOwnerPassword] = useState("");
++  const [newPassword, setNewPassword] = useState("");
++  const [confirmPassword, setConfirmPassword] = useState("");
++  const [busy, setBusy] = useState(false);
++  const [message, setMessage] = useState("");
++
++  const submit = async () => {
++    if (newPassword !== confirmPassword) return setMessage("New passwords do not match.");
++    setBusy(true); setMessage("");
++    try {
++      if (mode === "setup") await setupOwnerPassword({ currentLoginPassword, newPassword });
++      else await changeOwnerPassword({ currentOwnerPassword, newPassword });
++      setCurrentLoginPassword(""); setCurrentOwnerPassword(""); setNewPassword(""); setConfirmPassword("");
++      setMessage(mode === "setup" ? "Owner financial password configured." : "Owner financial password changed.");
++      await onRefresh();
++      setMode("change");
++    } catch (error) { setMessage(error.message || "Could not update owner security."); }
++    finally { setBusy(false); }
++  };
+ 
+-const getLoggedInUser = () =>
+-  JSON.parse(
+-    localStorage.getItem("loggedInUser") ||
+-      localStorage.getItem("fairchoice_user") ||
+-      "null"
+-  );
+-
+-const matchesCustomer = (customer, search) =>
+-  [
+-    customer.account_name,
+-    customer.company_name,
+-    customer.customer_code,
+-    ...(customer.customer_branches || []).map((branch) => branch.branch_name),
+-  ]
+-    .join(" ")
+-    .toLowerCase()
+-    .includes(String(search || "").toLowerCase());
++  return <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
++    <div className="flex flex-wrap items-center justify-between gap-2">
++      <div><h3 className="font-extrabold text-blue-950">Owner Financial Security</h3><p className="text-sm text-blue-800">Protected account: {OWNER_USERNAME}. Password is hashed in Supabase and never stored in browser code.</p></div>
++      <span className={`rounded-full px-3 py-1 text-xs font-bold ${status?.configured ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>{status?.configured ? "Configured" : "Setup required"}</span>
++    </div>
++    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
++      {mode === "setup" ? <input type="password" value={currentLoginPassword} onChange={(e)=>setCurrentLoginPassword(e.target.value)} placeholder="Current login password" className="rounded-xl border p-3" autoComplete="current-password" /> : <input type="password" value={currentOwnerPassword} onChange={(e)=>setCurrentOwnerPassword(e.target.value)} placeholder="Current financial password" className="rounded-xl border p-3" autoComplete="current-password" />}
++      <input type="password" value={newPassword} onChange={(e)=>setNewPassword(e.target.value)} placeholder="New secure password" className="rounded-xl border p-3" autoComplete="new-password" />
++      <input type="password" value={confirmPassword} onChange={(e)=>setConfirmPassword(e.target.value)} placeholder="Confirm new password" className="rounded-xl border p-3" autoComplete="new-password" />
++    </div>
++    <button type="button" onClick={submit} disabled={busy || !newPassword || !confirmPassword || (mode === "setup" ? !currentLoginPassword : !currentOwnerPassword)} className="mt-3 rounded-xl bg-blue-800 px-4 py-3 font-bold text-white disabled:bg-slate-300">{busy ? "Saving..." : mode === "setup" ? "Set owner financial password" : "Change owner financial password"}</button>
++    {message && <div className="mt-3 rounded-lg bg-white p-3 text-sm font-semibold">{message}</div>}
++  </section>;
++}
+ 
+ export default function CentralPayment() {
++  const currentUser = getLoggedInUser();
++  const owner = isOwnerUser(currentUser);
++  const [securityStatus, setSecurityStatus] = useState({ installed: false, configured: false });
+   const [customers, setCustomers] = useState([]);
+   const [search, setSearch] = useState("");
+   const [selectedCustomerId, setSelectedCustomerId] = useState("");
+@@ -37,292 +69,53 @@ export default function CentralPayment() {
+   const [saving, setSaving] = useState(false);
+   const [error, setError] = useState("");
+   const [success, setSuccess] = useState("");
+-  const [form, setForm] = useState({
+-    amount: "",
+-    paymentMethod: "Cash",
+-    paymentDate: new Date().toISOString().slice(0, 10),
+-    paidBy: "",
+-    externalReference: "",
+-    notes: "",
+-  });
+-
+-  const selectedCustomer = customers.find(
+-    (customer) => String(customer.id) === String(selectedCustomerId)
+-  );
+-  const branches = (selectedCustomer?.customer_branches || []).filter(
+-    (branch) => branch.active !== false
+-  );
+-  const filteredCustomers = useMemo(
+-    () => customers.filter((customer) => matchesCustomer(customer, search)),
+-    [customers, search]
+-  );
+-  const preview = useMemo(
+-    () =>
+-      buildPaymentPreview({
+-        invoices: snapshot?.invoices || [],
+-        allocations: snapshot?.allocations || [],
+-        amount: Number(form.amount || 0),
+-        branchId: selectedBranchId,
+-      }),
+-    [form.amount, selectedBranchId, snapshot]
+-  );
+-
+-  useEffect(() => {
+-    let active = true;
+-    loadCentralPaymentCustomers()
+-      .then((rows) => {
+-        if (!active) return;
+-        setCustomers(rows);
+-        if (rows.length) setSelectedCustomerId((value) => value || rows[0].id);
+-      })
+-      .catch((loadError) => setError(loadError.message || "Could not load customers."));
+-    return () => {
+-      active = false;
+-    };
+-  }, []);
+-
+-  const refreshSnapshot = async (options = {}) => {
+-    if (!selectedCustomer) return;
+-    if (!options.silent) {
+-      setLoading(true);
+-      setError("");
+-    }
+-    try {
+-      const data = await loadCentralPaymentSnapshot({
+-        customerAccountId: selectedCustomer.id,
+-        customerName: selectedCustomer.account_name,
+-        customer: selectedCustomer,
+-        selectedBranchId,
+-      });
+-      setSnapshot(data);
+-    } catch (loadError) {
+-      setError(loadError.message || "Could not load payment snapshot.");
+-    } finally {
+-      if (!options.silent) setLoading(false);
+-    }
+-  };
+-
+-  useEffect(() => {
+-    if (!selectedCustomer) return;
+-    let active = true;
+-    loadCentralPaymentSnapshot({
+-      customerAccountId: selectedCustomer.id,
+-      customerName: selectedCustomer.account_name,
+-      customer: selectedCustomer,
+-      selectedBranchId,
+-    })
+-      .then((data) => {
+-        if (active) setSnapshot(data);
+-      })
+-      .catch((loadError) => {
+-        if (active) setError(loadError.message || "Could not load payment snapshot.");
+-      })
+-      .finally(() => {
+-        if (active) setLoading(false);
+-      });
+-    return () => {
+-      active = false;
+-    };
+-  }, [selectedCustomer, selectedBranchId]);
+-
+-  const updateForm = (field, value) => {
+-    setForm((current) => ({ ...current, [field]: value }));
+-    setSuccess("");
+-    setError("");
+-  };
+-
+-  const savePayment = async () => {
+-    if (saving) return;
+-    setSaving(true);
+-    setError("");
+-    setSuccess("");
++  const [form, setForm] = useState({ transactionType: "PAYMENT", amount: "", paymentMethod: "Cash", paymentDate: new Date().toISOString().slice(0,10), paidBy: "", externalReference: "", notes: "", ownerPassword: "" });
++
++  const refreshSecurity = async () => { try { setSecurityStatus(await getOwnerSecurityStatus()); } catch (e) { setError(e.message); } };
++  useEffect(() => { refreshSecurity(); }, []);
++  useEffect(() => { let active=true; loadCentralPaymentCustomers().then((rows)=>{ if(!active)return; setCustomers(rows); if(rows.length)setSelectedCustomerId((v)=>v||rows[0].id); }).catch((e)=>setError(e.message||"Could not load customers.")); return()=>{active=false}; },[]);
++
++  const selectedCustomer = customers.find((c)=>String(c.id)===String(selectedCustomerId));
++  const branches=(selectedCustomer?.customer_branches||[]).filter((b)=>b.active!==false);
++  const filteredCustomers=useMemo(()=>customers.filter((c)=>matchesCustomer(c,search)),[customers,search]);
++  const preview=useMemo(()=>buildPaymentPreview({ invoices:snapshot?.invoices||[], allocations:snapshot?.allocations||[], amount:Number(form.amount||0), branchId:selectedBranchId }),[form.amount,selectedBranchId,snapshot]);
++
++  const refreshSnapshot=async()=>{ if(!selectedCustomer)return; setLoading(true); try { setSnapshot(await loadCentralPaymentSnapshot({customerAccountId:selectedCustomer.id,customerName:selectedCustomer.account_name,customer:selectedCustomer,selectedBranchId})); } catch(e){setError(e.message)} finally{setLoading(false)} };
++  useEffect(()=>{refreshSnapshot();},[selectedCustomerId,selectedBranchId]);
++  const updateForm=(field,value)=>{setForm((f)=>({...f,[field]:value}));setError("");setSuccess("");};
++
++  const savePayment=async()=>{
++    if(!owner) return setError("Only nisstaj_admin can create or edit Central Payment transactions.");
++    if(!securityStatus.configured) return setError("Set the owner financial password before posting transactions.");
++    if(form.transactionType==="DISCOUNT" && !String(form.notes).trim()) return setError("A detailed discount reason is compulsory.");
++    setSaving(true); setError(""); setSuccess("");
+     try {
+-      const result = await createCentralPayment({
+-        customer: selectedCustomer,
+-        customerAccountId: selectedCustomer?.id,
+-        customerBranchId: selectedBranchId || null,
+-        amount: form.amount,
+-        paymentMethod: form.paymentMethod,
+-        paymentDate: form.paymentDate ? `${form.paymentDate}T12:00:00` : new Date().toISOString(),
+-        paidBy: form.paidBy,
+-        externalReference: form.externalReference,
+-        notes: form.notes,
+-        currentUser: getLoggedInUser(),
+-      });
+-
+-      setSuccess(
+-        result.duplicate
+-          ? "Duplicate payment detected. Existing payment was not posted again."
+-          : "Payment saved and allocated oldest-first."
+-      );
+-      setForm((current) => ({ ...current, amount: "", externalReference: "", notes: "" }));
+-      await refreshSnapshot({ silent: true });
+-    } catch (saveError) {
+-      setError(saveError.message || "Could not save payment.");
+-    } finally {
+-      setSaving(false);
+-    }
++      const result=await createCentralPayment({ customer:selectedCustomer,customerAccountId:selectedCustomer?.id,customerBranchId:selectedBranchId||null,transactionType:form.transactionType,amount:form.amount,paymentMethod:form.transactionType==="DISCOUNT"?"Other":form.paymentMethod,paymentDate:form.paymentDate?`${form.paymentDate}T12:00:00`:new Date().toISOString(),paidBy:form.paidBy,externalReference:form.externalReference,notes:form.notes,currentUser,ownerPassword:form.ownerPassword });
++      const pending=result?.verification_status==="PENDING_VERIFICATION"||result?.payment?.verification_status==="PENDING_VERIFICATION";
++      setSuccess(result.duplicate?"Duplicate transaction detected; nothing was posted.":pending?"Bank transfer recorded as Pending Verification. It has not reduced the balance or paid invoices.":form.transactionType==="DISCOUNT"?"Owner discount saved with compulsory audit reason.":"Payment saved and allocated oldest-first.");
++      setForm((f)=>({...f,amount:"",externalReference:"",notes:"",ownerPassword:""})); await refreshSnapshot();
++    } catch(e){setError(e.message||"Could not save transaction.");} finally{setSaving(false)}
+   };
+ 
+-  return (
+-    <div className="space-y-4 p-4">
+-      <div className="rounded-2xl border bg-white p-4 shadow-sm">
+-        <h2 className="text-2xl font-extrabold text-slate-900">Central Payment</h2>
+-        <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1.2fr_1fr]">
+-          <input
+-            value={search}
+-            onChange={(event) => setSearch(event.target.value)}
+-            placeholder="Search customer"
+-            className="rounded-xl border p-3"
+-          />
+-          <select
+-            value={selectedCustomerId}
+-            onChange={(event) => {
+-              setSelectedCustomerId(event.target.value);
+-              setSelectedBranchId("");
+-            }}
+-            className="rounded-xl border p-3"
+-          >
+-            {filteredCustomers.map((customer) => (
+-              <option key={customer.id} value={customer.id}>
+-                {customer.account_name}
+-              </option>
+-            ))}
+-          </select>
+-          <select
+-            value={selectedBranchId}
+-            onChange={(event) => setSelectedBranchId(event.target.value)}
+-            className="rounded-xl border p-3"
+-          >
+-            <option value="">All branches</option>
+-            {branches.map((branch) => (
+-              <option key={branch.id} value={branch.id}>
+-                {branch.branch_name}
+-              </option>
+-            ))}
+-          </select>
+-        </div>
+-      </div>
+-
+-      {loading && <div className="rounded-xl bg-slate-50 p-3 font-bold">Loading balances...</div>}
+-      {error && <div className="rounded-xl bg-red-50 p-3 font-bold text-red-700">{error}</div>}
+-      {success && <div className="rounded-xl bg-green-50 p-3 font-bold text-green-700">{success}</div>}
+-      {snapshot?.legacyFallbackUsed && (
+-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+-          Temporary legacy compatibility is active. New payments will still be written only to customer_payments.
+-        </div>
+-      )}
+-
+-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <div className="text-xs font-bold uppercase text-slate-500">Customer outstanding</div>
+-          <div className="mt-1 text-2xl font-extrabold text-red-700">
+-            {formatCurrency(snapshot?.customerSummary?.outstanding || 0)}
+-          </div>
+-        </div>
+-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <div className="text-xs font-bold uppercase text-slate-500">Selected branch outstanding</div>
+-          <div className="mt-1 text-2xl font-extrabold text-red-700">
+-            {formatCurrency(snapshot?.branchSummary?.outstanding || 0)}
+-          </div>
+-        </div>
+-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <div className="text-xs font-bold uppercase text-slate-500">Opening balance</div>
+-          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+-            {formatCurrency(snapshot?.selectedOpeningBalance ?? snapshot?.customerSummary?.openingBalance ?? 0)}
+-          </div>
+-        </div>
+-      </div>
+-
+-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+-        <section className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <h3 className="mb-3 text-lg font-extrabold">Payment Details</h3>
+-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+-            <input
+-              type="number"
+-              min="0"
+-              step="0.01"
+-              value={form.amount}
+-              onChange={(event) => updateForm("amount", event.target.value)}
+-              placeholder="Payment amount"
+-              className="rounded-xl border p-3"
+-            />
+-            <select
+-              value={form.paymentMethod}
+-              onChange={(event) => updateForm("paymentMethod", event.target.value)}
+-              className="rounded-xl border p-3"
+-            >
+-              {paymentMethods.map((method) => (
+-                <option key={method} value={method}>{method}</option>
+-              ))}
+-            </select>
+-            <input
+-              type="date"
+-              value={form.paymentDate}
+-              onChange={(event) => updateForm("paymentDate", event.target.value)}
+-              className="rounded-xl border p-3"
+-            />
+-            <input
+-              value={form.paidBy}
+-              onChange={(event) => updateForm("paidBy", event.target.value)}
+-              placeholder="Who paid"
+-              className="rounded-xl border p-3"
+-            />
+-            <input
+-              value={form.externalReference}
+-              onChange={(event) => updateForm("externalReference", event.target.value)}
+-              placeholder="External / reference number"
+-              className="rounded-xl border p-3 md:col-span-2"
+-            />
+-            <textarea
+-              value={form.notes}
+-              onChange={(event) => updateForm("notes", event.target.value)}
+-              placeholder="Notes"
+-              className="min-h-24 rounded-xl border p-3 md:col-span-2"
+-            />
+-          </div>
+-          <button
+-            type="button"
+-            onClick={savePayment}
+-            disabled={saving || !selectedCustomer || Number(form.amount || 0) <= 0}
+-            className="mt-4 w-full rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+-          >
+-            {saving ? "Saving payment..." : "Save payment"}
+-          </button>
+-        </section>
+-
+-        <section className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <div className="mb-3 flex items-center justify-between gap-3">
+-            <h3 className="text-lg font-extrabold">Allocation Preview</h3>
+-            <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
+-              Unallocated {formatCurrency(preview.unallocatedAmount || 0)}
+-            </span>
+-          </div>
+-          <div className="overflow-x-auto">
+-            <table className="w-full min-w-[520px] text-sm">
+-              <thead>
+-                <tr className="border-b bg-slate-50 text-left">
+-                  <th className="p-3">Invoice</th>
+-                  <th className="p-3">Branch</th>
+-                  <th className="p-3 text-right">Allocated</th>
+-                </tr>
+-              </thead>
+-              <tbody>
+-                {preview.allocations.map((allocation) => (
+-                  <tr key={allocation.invoiceReference} className="border-b">
+-                    <td className="p-3 font-bold">{allocation.invoiceReference}</td>
+-                    <td className="p-3">{branches.find((branch) => String(branch.id) === String(allocation.customerBranchId))?.branch_name || "-"}</td>
+-                    <td className="p-3 text-right font-bold">{formatCurrency(allocation.allocatedAmount)}</td>
+-                  </tr>
+-                ))}
+-                {!preview.allocations.length && (
+-                  <tr><td colSpan="3" className="p-4 text-center text-slate-500">Enter a payment amount to preview oldest-first allocation.</td></tr>
+-                )}
+-              </tbody>
+-            </table>
+-          </div>
+-        </section>
+-      </div>
++  if(!owner) return <div className="rounded-2xl border border-red-200 bg-red-50 p-5"><h2 className="text-xl font-extrabold text-red-900">Central Payment restricted</h2><p className="mt-2 text-red-800">Only the owner account <strong>{OWNER_USERNAME}</strong> can create, edit, confirm, void, reverse, reallocate or discount financial transactions.</p></div>;
++
++  return <div className="space-y-4 p-4">
++    <OwnerSecurityPanel status={securityStatus} onRefresh={refreshSecurity}/>
++    <div className="rounded-2xl border bg-white p-4 shadow-sm"><h2 className="text-2xl font-extrabold">Central Payment</h2><p className="mt-1 text-sm text-slate-600">One owner-controlled view for payments, pending bank transfers and audited discounts.</p><div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1.2fr_1fr]"><input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Search customer" className="rounded-xl border p-3"/><select value={selectedCustomerId} onChange={(e)=>{setSelectedCustomerId(e.target.value);setSelectedBranchId("")}} className="rounded-xl border p-3">{filteredCustomers.map((c)=><option key={c.id} value={c.id}>{c.account_name}</option>)}</select><select value={selectedBranchId} onChange={(e)=>setSelectedBranchId(e.target.value)} className="rounded-xl border p-3"><option value="">All branches</option>{branches.map((b)=><option key={b.id} value={b.id}>{b.branch_name}</option>)}</select></div></div>
++    {loading&&<div className="rounded-xl bg-slate-50 p-3 font-bold">Loading balances...</div>}{error&&<div className="rounded-xl bg-red-50 p-3 font-bold text-red-700">{error}</div>}{success&&<div className="rounded-xl bg-green-50 p-3 font-bold text-green-700">{success}</div>}
++    <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><Summary label="Customer outstanding" value={snapshot?.customerSummary?.outstanding}/><Summary label="Selected branch outstanding" value={snapshot?.branchSummary?.outstanding}/><Summary label="Opening balance" value={snapshot?.selectedOpeningBalance??snapshot?.customerSummary?.openingBalance} neutral/></div>
++    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
++      <section className="rounded-2xl border bg-white p-4 shadow-sm"><h3 className="mb-3 text-lg font-extrabold">Owner Transaction</h3><div className="grid grid-cols-1 gap-3 md:grid-cols-2">
++        <select value={form.transactionType} onChange={(e)=>updateForm("transactionType",e.target.value)} className="rounded-xl border p-3"><option value="PAYMENT">Payment</option><option value="DISCOUNT">Discount / goodwill adjustment</option></select>
++        <input type="number" min="0" step="0.01" value={form.amount} onChange={(e)=>updateForm("amount",e.target.value)} placeholder={form.transactionType==="DISCOUNT"?"Discount amount":"Payment amount"} className="rounded-xl border p-3"/>
++        {form.transactionType==="PAYMENT"&&<select value={form.paymentMethod} onChange={(e)=>updateForm("paymentMethod",e.target.value)} className="rounded-xl border p-3">{paymentMethods.map((m)=><option key={m}>{m}</option>)}</select>}
++        <input type="date" value={form.paymentDate} onChange={(e)=>updateForm("paymentDate",e.target.value)} className="rounded-xl border p-3"/><input value={form.paidBy} onChange={(e)=>updateForm("paidBy",e.target.value)} placeholder="Who paid / discount beneficiary" className="rounded-xl border p-3"/><input value={form.externalReference} onChange={(e)=>updateForm("externalReference",e.target.value)} placeholder="Bank/reference number (optional)" className="rounded-xl border p-3"/>
++        <textarea value={form.notes} onChange={(e)=>updateForm("notes",e.target.value)} placeholder={form.transactionType==="DISCOUNT"?"Compulsory detailed discount reason":"Notes"} className="min-h-24 rounded-xl border p-3 md:col-span-2"/>
++        <input type="password" value={form.ownerPassword} onChange={(e)=>updateForm("ownerPassword",e.target.value)} placeholder="Owner financial password required" className="rounded-xl border border-blue-300 p-3 md:col-span-2" autoComplete="current-password"/>
++      </div>{form.paymentMethod==="Bank Transfer"&&form.transactionType==="PAYMENT"&&<div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Bank transfers are recorded as Pending Verification and are not allocated until owner confirmation.</div>}<button type="button" onClick={savePayment} disabled={saving||!selectedCustomer||Number(form.amount||0)<=0||!form.ownerPassword} className="mt-4 w-full rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:bg-slate-300">{saving?"Saving...":form.transactionType==="DISCOUNT"?"Save audited discount":"Save owner payment"}</button></section>
++      <section className="rounded-2xl border bg-white p-4 shadow-sm"><div className="mb-3 flex items-center justify-between"><h3 className="text-lg font-extrabold">Allocation Preview</h3><span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold">Unallocated {formatCurrency(preview.unallocatedAmount||0)}</span></div><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Invoice</th><th className="p-3">Branch</th><th className="p-3 text-right">Allocated</th></tr></thead><tbody>{preview.allocations.map((a)=><tr key={a.invoiceReference} className="border-b"><td className="p-3 font-bold">{a.invoiceReference}</td><td className="p-3">{branches.find((b)=>String(b.id)===String(a.customerBranchId))?.branch_name||"-"}</td><td className="p-3 text-right font-bold">{formatCurrency(a.allocatedAmount)}</td></tr>)}{!preview.allocations.length&&<tr><td colSpan="3" className="p-4 text-center text-slate-500">Enter an amount to preview oldest-first allocation.</td></tr>}</tbody></table></div></section>
+     </div>
+-  );
++  </div>;
+ }
++
++function Summary({label,value,neutral=false}){return <div className="rounded-2xl border bg-white p-4 shadow-sm"><div className="text-xs font-bold uppercase text-slate-500">{label}</div><div className={`mt-1 text-2xl font-extrabold ${neutral?"text-slate-900":"text-red-700"}`}>{formatCurrency(value||0)}</div></div>}
+diff --git a/src/services/centralPaymentService.js b/src/services/centralPaymentService.js
+index ea73f3c..4f51eb5 100644
+--- a/src/services/centralPaymentService.js
++++ b/src/services/centralPaymentService.js
+@@ -299,6 +299,7 @@ export async function createCentralPayment({
+   customer,
+   customerAccountId,
+   customerBranchId = null,
++  transactionType = "PAYMENT",
+   amount,
+   paymentMethod,
+   paymentDate,
+@@ -306,71 +307,45 @@ export async function createCentralPayment({
+   externalReference,
+   notes,
+   currentUser,
++  ownerPassword,
+ } = {}) {
+   const accountId = customerAccountId || customer?.id;
+   const paymentAmount = money(amount);
+-  if (!accountId) throw new Error("Select a customer before saving a payment.");
+-  if (paymentAmount <= 0) throw new Error("Payment amount must be greater than zero.");
+-
+-  const idempotencyKey = createPaymentIdempotencyKey({
+-    customerAccountId: accountId,
+-    customerBranchId,
+-    amount: paymentAmount,
+-    paymentDate,
+-    paymentMethod,
+-    externalReference,
+-  });
+-  const actor = getActor(currentUser);
+-  const paymentReference =
+-    String(externalReference || "").trim() ||
+-    `CP-${new Date(paymentDate || Date.now()).toISOString().slice(0, 10).replaceAll("-", "")}-${Date.now()}`;
+-
+-  const duplicate = await safeSelect("customer_payments", (query) =>
+-    query
+-      .select("*")
+-      .eq("customer_account_id", accountId)
+-      .eq("idempotency_key", idempotencyKey)
+-      .limit(1)
+-  );
++  const actor = getActor(currentUser).toLowerCase();
++  const type = String(transactionType || "PAYMENT").toUpperCase();
++  if (actor !== "nisstaj_admin") throw new Error("Only nisstaj_admin can post Central Payment transactions.");
++  if (!ownerPassword) throw new Error("Owner financial password is required.");
++  if (!accountId) throw new Error("Select a customer before saving a transaction.");
++  if (paymentAmount <= 0) throw new Error("Amount must be greater than zero.");
++  if (type === "DISCOUNT" && !String(notes || "").trim()) throw new Error("A detailed discount reason is compulsory.");
++
++  const idempotencyKey = createPaymentIdempotencyKey({ customerAccountId: accountId, customerBranchId, amount: paymentAmount, paymentDate, paymentMethod: type === "DISCOUNT" ? "Discount" : paymentMethod, externalReference });
++  const duplicate = await safeSelect("customer_payments", (query) => query.select("*").eq("customer_account_id", accountId).eq("idempotency_key", idempotencyKey).limit(1));
+   if (duplicate.error) throw duplicate.error;
+-  if (duplicate.data?.length) {
+-    return { duplicate: true, payment: duplicate.data[0], allocations: [] };
+-  }
++  if (duplicate.data?.length) return { duplicate: true, payment: duplicate.data[0], allocations: [] };
+ 
+-  const snapshot = await loadCentralPaymentSnapshot({
+-    customerAccountId: accountId,
+-    customerName: customer?.account_name,
+-    customer,
+-    selectedBranchId: customerBranchId || "",
+-  });
+-  const preview = buildPaymentPreview({
+-    invoices: snapshot.invoices,
+-    allocations: snapshot.allocations,
+-    amount: paymentAmount,
+-    branchId: customerBranchId || "",
+-  });
++  const snapshot = await loadCentralPaymentSnapshot({ customerAccountId: accountId, customerName: customer?.account_name, customer, selectedBranchId: customerBranchId || "" });
++  const preview = buildPaymentPreview({ invoices: snapshot.invoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
++  const isPendingBank = type === "PAYMENT" && paymentMethod === "Bank Transfer";
+ 
+-  const rpcPayload = {
++  const { data, error } = await supabase.rpc("post_owner_central_transaction", {
++    p_owner_username: "nisstaj_admin",
++    p_owner_password: ownerPassword,
+     p_customer_account_id: accountId,
+     p_customer_branch_id: customerBranchId || null,
+-    p_payment_reference: paymentReference,
++    p_transaction_type: type,
+     p_payment_date: paymentDate || new Date().toISOString(),
+     p_amount: paymentAmount,
+-    p_payment_method: paymentMethod || "Cash",
++    p_payment_method: type === "DISCOUNT" ? "Other" : paymentMethod || "Cash",
+     p_paid_by: paidBy || "",
++    p_external_reference: String(externalReference || "").trim() || null,
+     p_notes: notes || "",
+     p_idempotency_key: idempotencyKey,
+-    p_created_by: actor,
+-    p_allocations: preview.allocations,
+-  };
+-
+-  const { data: rpcData, error: rpcError } = await supabase.rpc("post_central_payment", rpcPayload);
+-  if (!rpcError) return { ...(rpcData || {}), preview };
+-  if (isMissingRpcError(rpcError)) {
+-    throw new Error(centralPaymentUnavailableMessage);
+-  }
+-
+-  throw rpcError;
++    p_allocations: isPendingBank ? [] : preview.allocations,
++  });
++  if (!error) return { ...(data || {}), preview };
++  if (isMissingRpcError(error)) throw new Error("Protected Central Payment is not installed. Review and apply the additive owner-security migration first.");
++  throw error;
+ }
+ 
+ export async function voidCentralPayment({ payment, reason } = {}) {
+diff --git a/src/services/centralPaymentService.test.js b/src/services/centralPaymentService.test.js
+index 890c151..613c4da 100644
+--- a/src/services/centralPaymentService.test.js
++++ b/src/services/centralPaymentService.test.js
+@@ -62,12 +62,11 @@ test("equivalent legacy and new records do not duplicate", () => {
+   assert.deepEqual(result.payments.map((row) => row.id), ["new-payment"]);
+ });
+ 
+-test("missing post_central_payment RPC fails closed without direct browser writes", () => {
++test("protected owner payment RPC fails closed without direct browser writes", () => {
+   const source = getFunctionSource("createCentralPayment");
+ 
+-  assert.match(source, /supabase\.rpc\("post_central_payment"/);
+-  assert.match(source, /centralPaymentUnavailableMessage/);
+-  assert.match(serviceSource, /Central Payment service is unavailable/);
++  assert.match(source, /supabase\.rpc\("post_owner_central_transaction"/);
++  assert.match(source, /Protected Central Payment is not installed/);
+   assert.doesNotMatch(source, /\.from\("customer_payments"\)\s*\.\s*insert/);
+   assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\)\s*\.\s*insert/);
+   assert.doesNotMatch(source, /\.from\("financial_audit_log"\)/);
+@@ -77,8 +76,8 @@ test("missing post_central_payment RPC fails closed without direct browser write
+ test("authorization failure from payment posting is surfaced", () => {
+   const source = getFunctionSource("createCentralPayment");
+ 
+-  assert.match(source, /if \(isMissingRpcError\(rpcError\)\)/);
+-  assert.match(source, /throw rpcError;/);
++  assert.match(source, /if \(isMissingRpcError\(error\)\)/);
++  assert.match(source, /throw error;/);
+   assert.doesNotMatch(source, /42501.*Central Payment service is unavailable/s);
+ });
+ 

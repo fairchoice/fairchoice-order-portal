@@ -7,6 +7,7 @@ import {
 } from "../utils/orderTotals";
 import { isServerManagerPriceMode, roundMoney } from "../utils/pricing";
 import { formatCurrency } from "../utils/currency";
+import { sortPrintItems } from "../utils/printItemSorting";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
 const getOrderReference = (order = {}) => order.orderId || order.order_number || order.id;
@@ -672,7 +673,7 @@ const getThermalReceiptRows = (order = {}) => {
     totals,
     hasVat,
     isServerManager,
-    items: totals.invoiceItems || [],
+    items: sortPrintItems(totals.invoiceItems || []),
     isInvoice: isInvoiceGeneratedForOrder(order),
     reference: getOrderReference(order) || "-",
     customerName: getCustomerName(invoiceOrder),
@@ -1091,7 +1092,7 @@ function buildLegacyStandardInvoiceHtml(
   const invoiceOrder = normalizeInvoiceOrder(order);
   const settings = getInvoiceSettings(settingsOverride);
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
-  const items = getOrderItemsForInvoice(invoiceOrder);
+  const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
   const isDeliveryNote = documentType === "deliveryNote";
   const isOrderForm = documentType === "orderForm";
   const isServerManagerDocument = isServerManagerPriceMode(
@@ -1424,7 +1425,7 @@ export function buildStandardInvoiceHtml(
       : documentType;
   const settings = getInvoiceSettings(settingsOverride);
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
-  const items = getOrderItemsForInvoice(invoiceOrder);
+  const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
   const isDeliveryNote = resolvedDocumentType === "deliveryNote";
   const isOrderForm = resolvedDocumentType === "orderForm";
   const isServerManagerDocument = isServerManagerPriceMode(

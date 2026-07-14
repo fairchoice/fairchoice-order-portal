@@ -859,17 +859,97 @@ export default function InvoicesPortal() {
     alert("Current product price updated.");
   };
 
-  const runInvoiceAction = async (row, action) => {
-    try {
-      const order = await getOrderForInvoice(row);
-      if (!order) return;
-      const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
-      action(resolvedOrder);
-    } catch (err) {
-      console.error("Invoice action error:", err);
-      alert(err.message || "Could not open invoice.");
-    }
-  };
+const normalizeInvoicePaymentStatus = (value) => {
+  const status = String(value || "")
+    .trim()
+    .replaceAll("_", " ")
+    .toUpperCase();
+
+  if (status === "PAID" || status === "COMPLETED" || status === "POSTED") {
+    return "PAID";
+  }
+
+  if (
+    status === "PART PAID" ||
+    status === "PARTIALLY PAID" ||
+    status === "PARTIAL"
+  ) {
+    return "PART PAID";
+  }
+
+  return "UNPAID";
+};
+
+const runInvoiceAction = async (row, action) => {
+  try {
+    const order = await getOrderForInvoice(row);
+    if (!order) return;
+
+    const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+
+    // The invoice list has already resolved the ledger allocation.
+    // Preserve PAID from the list when the fresh order still contains
+    // an old or missing payment status.
+    const listStatus = normalizeInvoicePaymentStatus(
+      row.invoice_status ||
+        row.payment_status ||
+        row.paymentStatus ||
+        row.status
+    );
+
+    const engineStatus = normalizeInvoicePaymentStatus(
+      resolvedOrder.invoice_status ||
+        resolvedOrder.payment_status ||
+        resolvedOrder.paymentStatus
+    );
+
+    const paymentStatus =
+      listStatus === "PAID"
+        ? "PAID"
+        : engineStatus === "PAID"
+        ? "PAID"
+        : listStatus === "PART PAID" || engineStatus === "PART PAID"
+        ? "PART PAID"
+        : "UNPAID";
+
+    const invoiceTotal = getInvoiceTotal(resolvedOrder);
+
+    const paidAmount =
+      paymentStatus === "PAID"
+        ? invoiceTotal
+        : Number(
+            resolvedOrder.paid_amount ??
+              resolvedOrder.amount_paid ??
+              row.paid_amount ??
+              row.amount_paid ??
+              0
+          );
+
+    action({
+      ...resolvedOrder,
+
+      payment_status: paymentStatus,
+      paymentStatus,
+      invoice_status: paymentStatus,
+
+      paid_amount: paidAmount,
+      amount_paid: paidAmount,
+
+      remaining_amount:
+        paymentStatus === "PAID"
+          ? 0
+          : Math.max(0, invoiceTotal - paidAmount),
+
+      outstanding_amount:
+        paymentStatus === "PAID"
+          ? 0
+          : Math.max(0, invoiceTotal - paidAmount),
+    });
+  } catch (err) {
+    console.error("Invoice action error:", err);
+    alert(err.message || "Could not open invoice.");
+  }
+};
 
   const loadInvoices = async () => {
     setLoading(true);

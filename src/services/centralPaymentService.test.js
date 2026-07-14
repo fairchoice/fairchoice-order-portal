@@ -62,12 +62,11 @@ test("equivalent legacy and new records do not duplicate", () => {
   assert.deepEqual(result.payments.map((row) => row.id), ["new-payment"]);
 });
 
-test("missing post_central_payment RPC fails closed without direct browser writes", () => {
+test("protected owner payment RPC fails closed without direct browser writes", () => {
   const source = getFunctionSource("createCentralPayment");
 
-  assert.match(source, /supabase\.rpc\("post_central_payment"/);
-  assert.match(source, /centralPaymentUnavailableMessage/);
-  assert.match(serviceSource, /Central Payment service is unavailable/);
+  assert.match(source, /supabase\.rpc\("post_owner_central_transaction"/);
+  assert.match(source, /Protected Central Payment is not installed/);
   assert.doesNotMatch(source, /\.from\("customer_payments"\)\s*\.\s*insert/);
   assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\)\s*\.\s*insert/);
   assert.doesNotMatch(source, /\.from\("financial_audit_log"\)/);
@@ -77,8 +76,8 @@ test("missing post_central_payment RPC fails closed without direct browser write
 test("authorization failure from payment posting is surfaced", () => {
   const source = getFunctionSource("createCentralPayment");
 
-  assert.match(source, /if \(isMissingRpcError\(rpcError\)\)/);
-  assert.match(source, /throw rpcError;/);
+  assert.match(source, /if \(isMissingRpcError\(error\)\)/);
+  assert.match(source, /throw error;/);
   assert.doesNotMatch(source, /42501.*Central Payment service is unavailable/s);
 });
 
@@ -128,4 +127,15 @@ test("missing RPC detection does not classify authorization failures as unavaila
   assert.match(serviceSource, /code === "PGRST202"/);
   assert.doesNotMatch(serviceSource, /code === "42501"/);
   assert.doesNotMatch(serviceSource, /code === "PGRST301"/);
+});
+
+test("bank confirmation is owner RPC-only and sends allocation preview", () => {
+  const source = getFunctionSource("confirmOwnerBankTransfer");
+
+  assert.match(source, /supabase\.rpc\("confirm_owner_bank_transfer"/);
+  assert.match(source, /p_owner_username:\s*"nisstaj_admin"/);
+  assert.match(source, /p_allocations:\s*preview\.allocations/);
+  assert.match(source, /bank verification note is compulsory/i);
+  assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.update/s);
+  assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.insert/s);
 });

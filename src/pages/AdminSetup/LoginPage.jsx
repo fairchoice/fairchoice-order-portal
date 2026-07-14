@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
-import { loadAuthenticatedStaffProfile } from "../../services/authProfile";
 
 const TRADE_BUSINESS_TYPES = ["Off Licence", "Restaurant"];
 
@@ -52,46 +51,81 @@ export default function LoginPage({ onLogin }) {
     return () => data.subscription.unsubscribe();
   }, []);
 
-  const submitLogin = async () => {
-    const email = login.trim().toLowerCase();
-    const cleanPassword = password.trim();
+    const submitLogin = async () => {
+  const username = login.trim().toLowerCase();
+  const cleanPassword = password.trim();
 
-    if (!email || !cleanPassword) {
-      alert("Email and password are required");
+  if (!username || !cleanPassword) {
+    alert("Username and password are required");
+    return;
+  }
+
+  setSubmittingLogin(true);
+
+  try {
+    const { data: loginUser, error: loginError } = await supabase
+      .from("login_users")
+      .select("*")
+      .ilike("username", username)
+      .eq("password", cleanPassword)
+      .eq("active", true)
+      .maybeSingle();
+
+    if (loginError) {
+      console.error("Login error:", loginError);
+      alert(`Login failed: ${loginError.message}`);
       return;
     }
 
-    if (!email.includes("@")) {
-      alert("Please use your FairChoice email address to sign in.");
+    if (!loginUser) {
+      alert("Invalid username or password");
       return;
     }
 
-    setSubmittingLogin(true);
+    let staffProfile = null;
 
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password: cleanPassword,
-      });
+    if (loginUser.staff_id) {
+      const { data, error } = await supabase
+        .from("staff_users")
+        .select("*")
+        .eq("id", loginUser.staff_id)
+        .eq("active", true)
+        .maybeSingle();
 
-      if (error || !data.session) {
-        alert("Invalid email or password");
+      if (error) {
+        console.error("Staff profile error:", error);
+        alert(`Could not load staff profile: ${error.message}`);
         return;
       }
 
-      let loggedInUser;
-      try {
-        loggedInUser = await loadAuthenticatedStaffProfile(
-          supabase,
-          data.session
-        );
-      } catch (profileError) {
-        await supabase.auth.signOut();
-        alert(profileError.message);
+      if (!data) {
+        alert("This staff account is inactive or unavailable.");
         return;
       }
 
-      await supabase.from("audit_logs").insert({
+      staffProfile = data;
+    }
+
+    const loggedInUser = {
+      ...loginUser,
+      ...(staffProfile || {}),
+      id: loginUser.id,
+      login_user_id: loginUser.id,
+      staff_id: loginUser.staff_id || staffProfile?.id || null,
+      username: loginUser.username,
+      role: loginUser.role,
+      access_level: loginUser.role,
+      permissions: loginUser.permissions || {},
+      staff_name:
+        staffProfile?.staff_name ||
+        loginUser.staff_name ||
+        loginUser.username,
+      customer_account_id: loginUser.customer_account_id || null,
+    };
+
+    const { error: auditError } = await supabase
+      .from("audit_logs")
+      .insert({
         user_id: loggedInUser.id,
         username: loggedInUser.username,
         staff_name: loggedInUser.staff_name,
@@ -105,15 +139,29 @@ export default function LoginPage({ onLogin }) {
         created_at: new Date().toISOString(),
       });
 
-      localStorage.setItem("fairchoice_user", JSON.stringify(loggedInUser));
-      localStorage.setItem("loggedInUser", JSON.stringify(loggedInUser));
-      localStorage.setItem("loginPortal", "staff");
-
-      onLogin(loggedInUser);
-    } finally {
-      setSubmittingLogin(false);
+    if (auditError) {
+      console.warn("Could not write login audit:", auditError);
     }
-  };
+
+    localStorage.setItem(
+      "fairchoice_user",
+      JSON.stringify(loggedInUser)
+    );
+    localStorage.setItem(
+      "loggedInUser",
+      JSON.stringify(loggedInUser)
+    );
+    localStorage.setItem("loginPortal", "staff");
+
+    onLogin(loggedInUser);
+  } catch (error) {
+    console.error("Unexpected login error:", error);
+    alert(`Login failed: ${error.message}`);
+  } finally {
+    setSubmittingLogin(false);
+  }
+};
+
 
   const resetPassword = async () => {
     const email = login.trim().toLowerCase();

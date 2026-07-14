@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { calculateDocumentTotals } from "../../utils/documentTotals";
+import { sortPrintItems } from "../../utils/printItemSorting";
 import {
   allocateCustomerPaymentToInvoices,
   createOrUpdateInvoiceForDeliveredOrder,
@@ -57,7 +58,7 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   const getDriverTotals = (order) =>
     calculateDocumentTotals(order.items || [], order);
 
-  const getDriverItems = (order) => getDriverTotals(order).invoiceItems;
+  const getDriverItems = (order) => sortPrintItems(getDriverTotals(order).invoiceItems);
 
   const [showPreviousBalance, setShowPreviousBalance] = useState(false);
 

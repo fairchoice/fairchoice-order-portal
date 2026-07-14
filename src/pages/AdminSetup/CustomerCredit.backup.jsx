@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
-import { supabase } from "../../services/supabase";
 import {
   loadCentralPaymentCustomers,
   loadReadOnlyCustomerCreditSnapshot,
 } from "../../services/centralPaymentService";
 
 const PAGE_SIZE = 20;
-const BRANCH_SELECT = "__select__";
-const ALL_BRANCHES = "__all__";
+const BRANCH_SELECT = "**select**";
+const ALL_BRANCHES = "**all**";
 
 const getLoggedInUser = () =>
   JSON.parse(
@@ -40,99 +39,14 @@ const firstValue = (...values) =>
 
 const normalizeReference = (value) => String(value || "").trim().toLowerCase();
 
+const isActiveBranch = (branch = {}) => {
+  const active = firstValue(branch.active, branch.is_active);
+  const status = String(branch.status || "").trim().toLowerCase();
 
-const getInvoiceAmount = (invoice = {}) =>
-  Math.abs(
-    Number(
-      firstValue(
-        invoice.invoice_total,
-        invoice.invoice_amount,
-        invoice.debit,
-        invoice.amount,
-        invoice.total,
-        0
-      )
-    )
-  );
+  if (active === false || String(active).toLowerCase() === "false") return false;
+  if (status === "inactive" || status === "disabled" || status === "archived") return false;
 
-const getPaymentAmount = (payment = {}) =>
-  Math.abs(
-    Number(
-      firstValue(
-        payment.payment_amount,
-        payment.credit,
-        payment.amount,
-        payment.total,
-        0
-      )
-    )
-  );
-
-const getRecordDate = (record = {}) =>
-  firstValue(
-    record.transaction_date,
-    record.payment_date,
-    record.invoice_date,
-    record.date,
-    record.created_at
-  );
-
-const buildFifoInvoiceAllocation = ({
-  invoices = [],
-  payments = [],
-  openingBalance = 0,
-}) => {
-  const oldestInvoices = [...invoices].sort(
-    (a, b) => asTimestamp(getRecordDate(a)) - asTimestamp(getRecordDate(b))
-  );
-
-  const totalPayments = payments.reduce(
-    (sum, payment) => sum + getPaymentAmount(payment),
-    0
-  );
-
-  // Customer payments clear the brought-forward opening balance first.
-  let remainingPayment = Math.max(
-    0,
-    totalPayments - Math.max(0, Number(openingBalance || 0))
-  );
-
-  const allocationByReference = new Map();
-
-  oldestInvoices.forEach((invoice) => {
-    const invoiceAmount = getInvoiceAmount(invoice);
-    const allocatedAmount = Math.min(invoiceAmount, remainingPayment);
-    const remainingAmount = Math.max(0, invoiceAmount - allocatedAmount);
-
-    let status = "UNPAID";
-    if (invoiceAmount > 0 && remainingAmount <= 0.009) {
-      status = "PAID";
-    } else if (allocatedAmount > 0) {
-      status = "PART PAID";
-    }
-
-    const allocation = {
-      status,
-      allocatedAmount,
-      remainingAmount,
-      invoiceAmount,
-    };
-
-    [
-      invoice.id,
-      invoice.invoice_number,
-      invoice.reference_no,
-      invoice.invoice_reference,
-      invoice.order_number,
-    ].forEach((value) => {
-      const key = normalizeReference(value);
-      if (key) allocationByReference.set(key, allocation);
-    });
-
-    remainingPayment = Math.max(0, remainingPayment - allocatedAmount);
-  });
-
-  return allocationByReference;
+  return true;
 };
 
 const getDocumentUrl = (record, kind) => {
@@ -174,7 +88,7 @@ function StatusBadge({ status }) {
   const className =
     normalized === "PAID" || normalized === "COMPLETED" || normalized === "POSTED"
       ? "bg-green-100 text-green-700"
-      : normalized.includes("PARTIAL") || normalized === "PART PAID" || normalized === "PENDING"
+      : normalized.includes("PARTIAL") || normalized === "PENDING"
       ? "bg-amber-100 text-amber-700"
       : normalized === "VOID" || normalized === "CANCELLED"
       ? "bg-slate-100 text-slate-600"
@@ -217,44 +131,25 @@ export default function CustomerCredit({ readOnly = false }) {
   const [customers, setCustomers] = useState([]);
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
-  const [selectedBranchId, setSelectedBranchId] = useState(ALL_BRANCHES);
+  const [selectedBranchId, setSelectedBranchId] = useState(BRANCH_SELECT);
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
   const [activeTab, setActiveTab] = useState("summary");
-  const [editingOpeningBalance, setEditingOpeningBalance] = useState(false);
-  const [openingBalanceInput, setOpeningBalanceInput] = useState("");
-  const [savingOpeningBalance, setSavingOpeningBalance] = useState(false);
 
   const currentUser = getLoggedInUser();
   const userRole = String(
     currentUser?.role || currentUser?.access_level || ""
   ).toLowerCase();
 
-  const username = String(
-    currentUser?.username ||
-      currentUser?.user_name ||
-      currentUser?.login ||
-      ""
-  )
-    .trim()
-    .toLowerCase();
-
-  const isAdminUser =
-    userRole.includes("admin") ||
-    currentUser?.permissions?.access_accounts === true;
-
-  const canEditOpeningBalance = username === "nisstaj_admin";
-
   const historyOnlyRole =
     readOnly ||
-    (!isAdminUser &&
-      (userRole.includes("sales") ||
-        userRole.includes("server") ||
-        userRole.includes("manager") ||
-        userRole.includes("cash") ||
-        userRole.includes("driver")));
+    userRole.includes("sales") ||
+    userRole.includes("server") ||
+    userRole.includes("manager") ||
+    userRole.includes("cash") ||
+    userRole.includes("driver");
 
   useEffect(() => {
     let active = true;
@@ -285,49 +180,78 @@ export default function CustomerCredit({ readOnly = false }) {
     (customer) => String(customer.id) === String(selectedCustomerId)
   );
 
-  const branches = (selectedCustomer?.customer_branches || []).filter(
-    (branch) => branch.active !== false
-  );
+  useEffect(() => {
+    if (!filteredCustomers.length) {
+      if (selectedCustomerId) {
+        setSelectedCustomerId("");
+        setSelectedBranchId(BRANCH_SELECT);
+      }
+      return;
+    }
+
+    const selectedStillVisible = filteredCustomers.some(
+      (customer) => String(customer.id) === String(selectedCustomerId)
+    );
+
+    if (!selectedStillVisible) {
+      setSelectedCustomerId(String(filteredCustomers[0].id));
+      setSelectedBranchId(BRANCH_SELECT);
+    }
+  }, [filteredCustomers, selectedCustomerId]);
+
+  const branches = (selectedCustomer?.customer_branches || []).filter((branch) => {
+    const branchCustomerId = firstValue(
+      branch.customer_account_id,
+      branch.customerAccountId,
+      branch.customer_id
+    );
+
+    return (
+      isActiveBranch(branch) &&
+      (!branchCustomerId || String(branchCustomerId) === String(selectedCustomer?.id))
+    );
+  });
 
   const hasBranches = branches.length > 0;
   const hasOneBranch = branches.length === 1;
   const hasMultipleBranches = branches.length > 1;
-  const branchSelectionRequired =
-    hasMultipleBranches && selectedBranchId === BRANCH_SELECT;
-  const isAllBranches = selectedBranchId === ALL_BRANCHES;
-  const snapshotBranchId =
-    selectedBranchId === BRANCH_SELECT || selectedBranchId === ALL_BRANCHES
+  const branchIds = branches.map((branch) => String(branch.id));
+  const branchIdsSignature = branchIds.join("|");
+  const effectiveBranchId =
+    selectedBranchId === ALL_BRANCHES || selectedBranchId === BRANCH_SELECT
       ? ""
       : selectedBranchId;
+  const branchSelectionRequired =
+    hasMultipleBranches && selectedBranchId === BRANCH_SELECT;
 
   useEffect(() => {
     if (!selectedCustomer) {
-      setSelectedBranchId(ALL_BRANCHES);
+      setSnapshot(null);
       return;
     }
 
     if (!hasBranches) {
-      setSelectedBranchId(ALL_BRANCHES);
-      return;
-    }
-
-    if (hasOneBranch) {
+      if (selectedBranchId !== ALL_BRANCHES) {
+        setSelectedBranchId(ALL_BRANCHES);
+        return;
+      }
+    } else if (hasOneBranch && selectedBranchId !== String(branches[0].id)) {
       setSelectedBranchId(String(branches[0].id));
       return;
-    }
-
-    setSelectedBranchId(BRANCH_SELECT);
-  }, [selectedCustomer?.id]);
-
-  useEffect(() => {
-    if (!selectedCustomer) {
-      setSnapshot(null);
+    } else if (
+      hasMultipleBranches &&
+      selectedBranchId !== BRANCH_SELECT &&
+      selectedBranchId !== ALL_BRANCHES &&
+      !branchIds.includes(String(selectedBranchId))
+    ) {
+      setSelectedBranchId(BRANCH_SELECT);
       return;
     }
 
-    if (selectedBranchId === BRANCH_SELECT) {
+    if (branchSelectionRequired) {
       setSnapshot(null);
       setLoading(false);
+      setError("");
       return;
     }
 
@@ -339,7 +263,7 @@ export default function CustomerCredit({ readOnly = false }) {
       customerAccountId: selectedCustomer.id,
       customerName: selectedCustomer.account_name,
       customer: selectedCustomer,
-      selectedBranchId: snapshotBranchId,
+      selectedBranchId: effectiveBranchId,
     })
       .then((data) => {
         if (active) setSnapshot(data);
@@ -356,7 +280,16 @@ export default function CustomerCredit({ readOnly = false }) {
     return () => {
       active = false;
     };
-  }, [selectedCustomer, selectedBranchId, snapshotBranchId]);
+  }, [
+    selectedCustomer,
+    selectedBranchId,
+    hasBranches,
+    hasOneBranch,
+    hasMultipleBranches,
+    branchIdsSignature,
+    effectiveBranchId,
+    branchSelectionRequired,
+  ]);
 
   useEffect(() => {
     setPage(1);
@@ -367,84 +300,25 @@ export default function CustomerCredit({ readOnly = false }) {
     setPage(1);
   }, [selectedBranchId]);
 
-  const hasSpecificBranch =
-    selectedBranchId !== ALL_BRANCHES &&
-    selectedBranchId !== BRANCH_SELECT &&
-    Boolean(selectedBranchId);
-
-  const selectedBranch = branches.find(
-    (branch) => String(branch.id) === String(selectedBranchId)
-  );
-
-  const transactionMatchesSelectedBranch = (transaction = {}, source = {}) => {
-    if (!hasSpecificBranch) return true;
-
-    const selectedId = String(selectedBranchId || "");
-    const selectedName = String(selectedBranch?.branch_name || "")
-      .trim()
-      .toLowerCase();
-
-    const transactionBranchIds = [
-      transaction.branch_id,
-      transaction.customer_branch_id,
-      transaction.branchId,
-      transaction.customerBranchId,
-      source?.branch_id,
-      source?.customer_branch_id,
-      source?.branchId,
-      source?.customerBranchId,
-    ]
-      .map((value) => String(value || ""))
-      .filter(Boolean);
-
-    if (transactionBranchIds.includes(selectedId)) return true;
-
-    const transactionBranchNames = [
-      transaction.branch_name,
-      transaction.customer_branch_name,
-      transaction.branchName,
-      transaction.customerBranchName,
-      source?.branch_name,
-      source?.customer_branch_name,
-      source?.branchName,
-      source?.customerBranchName,
-    ]
-      .map((value) => String(value || "").trim().toLowerCase())
-      .filter(Boolean);
-
-    return Boolean(
-      selectedName && transactionBranchNames.includes(selectedName)
-    );
-  };
-
-  const summary = hasSpecificBranch
+  const summary = effectiveBranchId
     ? snapshot?.branchSummary
     : snapshot?.customerSummary;
 
-  const invoices = hasSpecificBranch
+  const invoices = effectiveBranchId
     ? snapshot?.selectedInvoices || []
     : snapshot?.allocatedInvoices || [];
 
-  const payments = hasSpecificBranch
+  const payments = effectiveBranchId
     ? snapshot?.selectedPayments || []
     : snapshot?.payments || [];
 
-
-  const selectedOpeningBalance = Number(
-    hasSpecificBranch
-      ? snapshot?.branchSummary?.openingBalance || 0
-      : snapshot?.customerSummary?.openingBalance || 0
-  );
-
-  const fifoInvoiceAllocation = useMemo(
-    () =>
-      buildFifoInvoiceAllocation({
-        invoices,
-        payments,
-        openingBalance: selectedOpeningBalance,
-      }),
-    [invoices, payments, selectedOpeningBalance]
-  );
+  const transactions = effectiveBranchId
+    ? (snapshot?.transactionHistory || []).filter(
+        (transaction) =>
+          String(transaction.branchId || transaction.customer_branch_id || "") ===
+          String(effectiveBranchId)
+      )
+    : snapshot?.transactionHistory || [];
 
   const invoiceByReference = useMemo(() => {
     const map = new Map();
@@ -483,24 +357,7 @@ export default function CustomerCredit({ readOnly = false }) {
   }, [payments]);
 
   const creditHistory = useMemo(() => {
-    const mappedRows = (snapshot?.transactionHistory || [])
-      .filter((transaction) => {
-        const type = String(transaction.type || "TRANSACTION").toUpperCase();
-        const reference = firstValue(
-          transaction.reference,
-          transaction.invoice_number,
-          transaction.payment_reference,
-          transaction.reference_no,
-          transaction.id
-        );
-        const lookupKey = normalizeReference(reference);
-        const source =
-          type === "PAYMENT"
-            ? paymentByReference.get(lookupKey)
-            : invoiceByReference.get(lookupKey);
-
-        return transactionMatchesSelectedBranch(transaction, source);
-      })
+    return transactions
       .map((transaction, index) => {
         const type = String(transaction.type || "TRANSACTION").toUpperCase();
         const reference = firstValue(
@@ -560,24 +417,13 @@ export default function CustomerCredit({ readOnly = false }) {
           debit: isCredit ? 0 : Math.abs(amount),
           credit: isCredit ? Math.abs(amount) : 0,
           runningBalance: Number(transaction.runningBalance || 0),
-          status:
-            type === "INVOICE"
-              ? firstValue(
-                  fifoInvoiceAllocation.get(lookupKey)?.status,
-                  source?.paymentStatus,
-                  source?.payment_status,
-                  source?.invoice_status,
-                  source?.status,
-                  transaction.status,
-                  "UNPAID"
-                )
-              : firstValue(
-                  transaction.status,
-                  source?.paymentStatus,
-                  source?.payment_status,
-                  source?.status,
-                  type === "PAYMENT" ? "POSTED" : "UNPAID"
-                ),
+          status: firstValue(
+            transaction.status,
+            source?.paymentStatus,
+            source?.payment_status,
+            source?.status,
+            type === "PAYMENT" ? "POSTED" : "UNPAID"
+          ),
           branchName: firstValue(
             transaction.branchName,
             source?.branch_name,
@@ -596,90 +442,18 @@ export default function CustomerCredit({ readOnly = false }) {
       })
       .sort((a, b) => {
         const dateDifference =
-          asTimestamp(a.transactionDate) - asTimestamp(b.transactionDate);
+          asTimestamp(b.transactionDate) - asTimestamp(a.transactionDate);
 
         if (dateDifference !== 0) return dateDifference;
 
         const createdDifference =
-          asTimestamp(a.createdAt) - asTimestamp(b.createdAt);
+          asTimestamp(b.createdAt) - asTimestamp(a.createdAt);
 
         if (createdDifference !== 0) return createdDifference;
 
-        return a.sortIndex - b.sortIndex;
+        return b.sortIndex - a.sortIndex;
       });
-
-    let runningBalance = Number(selectedOpeningBalance || 0);
-
-    const rowsWithBranchBalance = mappedRows.map((row) => {
-      runningBalance += Number(row.debit || 0) - Number(row.credit || 0);
-      return {
-        ...row,
-        runningBalance,
-      };
-    });
-
-    return rowsWithBranchBalance.sort((a, b) => {
-      const dateDifference =
-        asTimestamp(b.transactionDate) - asTimestamp(a.transactionDate);
-
-      if (dateDifference !== 0) return dateDifference;
-
-      const createdDifference =
-        asTimestamp(b.createdAt) - asTimestamp(a.createdAt);
-
-      if (createdDifference !== 0) return createdDifference;
-
-      return b.sortIndex - a.sortIndex;
-    });
-  }, [
-    snapshot,
-    invoiceByReference,
-    paymentByReference,
-    fifoInvoiceAllocation,
-    hasSpecificBranch,
-    selectedBranchId,
-    selectedBranch?.branch_name,
-    selectedOpeningBalance,
-  ]);
-
-  const selectedInvoiceTotal = useMemo(
-    () => invoices.reduce((sum, invoice) => sum + getInvoiceAmount(invoice), 0),
-    [invoices]
-  );
-
-  const selectedPaymentTotal = useMemo(
-    () => payments.reduce((sum, payment) => sum + getPaymentAmount(payment), 0),
-    [payments]
-  );
-
-  const selectedOutstanding = Number(
-    firstValue(
-      hasSpecificBranch ? snapshot?.branchSummary?.outstanding : undefined,
-      hasSpecificBranch ? snapshot?.branchSummary?.balance : undefined,
-      selectedOpeningBalance + selectedInvoiceTotal - selectedPaymentTotal
-    ) || 0
-  );
-
-  const accountCreditLimit = Number(
-    firstValue(
-      snapshot?.customerSummary?.creditLimit,
-      snapshot?.customerSummary?.credit_limit,
-      selectedCustomer?.credit_limit,
-      selectedCustomer?.creditLimit,
-      0
-    ) || 0
-  );
-
-  const selectedAvailableCredit = Number(
-    firstValue(
-      hasSpecificBranch ? snapshot?.branchSummary?.availableCredit : undefined,
-      hasSpecificBranch ? snapshot?.branchSummary?.available_credit : undefined,
-      hasSpecificBranch
-        ? accountCreditLimit - selectedOutstanding
-        : snapshot?.customerSummary?.availableCredit,
-      0
-    ) || 0
-  );
+  }, [transactions, invoiceByReference, paymentByReference]);
 
   const sortedPayments = useMemo(
     () =>
@@ -706,112 +480,18 @@ export default function CustomerCredit({ readOnly = false }) {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  const beginOpeningBalanceEdit = () => {
-    if (!canEditOpeningBalance || !selectedCustomer) return;
-
-    setOpeningBalanceInput(
-      String(
-        hasSpecificBranch
-          ? snapshot?.branchSummary?.openingBalance || 0
-          : snapshot?.customerSummary?.openingBalance || 0
-      )
-    );
-    setEditingOpeningBalance(true);
-  };
-
-  const saveOpeningBalance = async () => {
-    if (!canEditOpeningBalance || !selectedCustomer) return;
-
-    const nextOpeningBalance = Number(openingBalanceInput || 0);
-    if (!Number.isFinite(nextOpeningBalance)) {
-      setError("Enter a valid opening balance.");
-      return;
-    }
-
-    // Current production opening-balance records are customer-account level.
-    // Do not silently write a branch-specific figure into an account-wide record.
-    if (hasSpecificBranch) {
-      setError(
-        "Opening balance is account-wide. Select All branches before editing."
-      );
-      return;
-    }
-
-    setSavingOpeningBalance(true);
-    setError("");
-
-    try {
-      const { data: existingRows, error: lookupError } = await supabase
-        .from("customer_opening_balances")
-        .select("id")
-        .eq("customer_name", selectedCustomer.account_name)
-        .limit(1);
-
-      if (lookupError) throw lookupError;
-
-      const existingId = existingRows?.[0]?.id;
-      const request = existingId
-        ? supabase
-            .from("customer_opening_balances")
-            .update({ opening_balance: nextOpeningBalance })
-            .eq("id", existingId)
-        : supabase.from("customer_opening_balances").insert({
-            customer_name: selectedCustomer.account_name,
-            opening_balance: nextOpeningBalance,
-          });
-
-      const { error: saveError } = await request;
-      if (saveError) throw saveError;
-
-      const refreshed = await loadReadOnlyCustomerCreditSnapshot({
-        customerAccountId: selectedCustomer.id,
-        customerName: selectedCustomer.account_name,
-        customer: selectedCustomer,
-        selectedBranchId: "",
-      });
-
-      setSnapshot(refreshed);
-      setEditingOpeningBalance(false);
-    } catch (saveError) {
-      setError(
-        saveError?.message || "Could not update the opening balance."
-      );
-    } finally {
-      setSavingOpeningBalance(false);
-    }
-  };
-
   const summaryCards = [
-    {
-      label: "Outstanding",
-      value: hasSpecificBranch
-        ? selectedOutstanding
-        : snapshot?.customerSummary?.outstanding,
-    },
-    {
-      label: "Available credit",
-      value: hasSpecificBranch
-        ? selectedAvailableCredit
-        : snapshot?.customerSummary?.availableCredit,
-    },
+    { label: "Outstanding", value: snapshot?.customerSummary?.outstanding },
+    { label: "Available credit", value: snapshot?.customerSummary?.availableCredit },
     {
       label: "Opening balance",
-      value: selectedOpeningBalance,
+      value: effectiveBranchId
+        ? snapshot?.branchSummary?.openingBalance
+        : snapshot?.customerSummary?.openingBalance,
       placeholder: branchSelectionRequired ? "Select branch" : "",
-      isOpeningBalance: true,
     },
-    {
-      label: "Total invoices",
-      value: hasSpecificBranch
-        ? selectedInvoiceTotal
-        : snapshot?.customerSummary?.invoiceTotal,
-    },
-    {
-      label: "Total payments",
-      value: hasSpecificBranch
-        ? selectedPaymentTotal
-        : snapshot?.customerSummary?.paymentTotal,
-    },
+    { label: "Total invoices", value: snapshot?.customerSummary?.invoiceTotal },
+    { label: "Total payments", value: snapshot?.customerSummary?.paymentTotal },
     { label: "Last payment", value: lastPayment },
   ];
 
@@ -835,7 +515,7 @@ export default function CustomerCredit({ readOnly = false }) {
           )}
         </div>
 
-        <div className={`mt-4 grid grid-cols-1 gap-3 ${hasMultipleBranches ? "md:grid-cols-[1fr_1.2fr_1fr]" : "md:grid-cols-[1fr_1.2fr]"}`}>
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_1.2fr_1fr]">
           <input
             value={customerSearch}
             onChange={(event) => setCustomerSearch(event.target.value)}
@@ -847,7 +527,7 @@ export default function CustomerCredit({ readOnly = false }) {
             value={selectedCustomerId}
             onChange={(event) => {
               setSelectedCustomerId(event.target.value);
-              setSelectedBranchId(ALL_BRANCHES);
+              setSelectedBranchId(BRANCH_SELECT);
             }}
             className="rounded-xl border p-3"
           >
@@ -896,70 +576,17 @@ export default function CustomerCredit({ readOnly = false }) {
       )}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {summaryCards.map(
-          ({ label, value, placeholder, isOpeningBalance }) => (
-            <div key={label} className="rounded-2xl border bg-white p-4 shadow-sm">
-              <div className="text-xs font-bold uppercase text-slate-500">
-                {label}
-              </div>
-              <div className="mt-1 text-xl font-extrabold text-slate-900">
-                {placeholder || formatCurrency(Number(value || 0))}
-              </div>
-
-              {isOpeningBalance && canEditOpeningBalance && !branchSelectionRequired && (
-                <button
-                  type="button"
-                  onClick={beginOpeningBalanceEdit}
-                  className="mt-3 rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100"
-                >
-                  Edit opening balance
-                </button>
-              )}
+        {summaryCards.map(({ label, value, placeholder }) => (
+          <div key={label} className="rounded-2xl border bg-white p-4 shadow-sm">
+            <div className="text-xs font-bold uppercase text-slate-500">
+              {label}
             </div>
-          )
-        )}
-      </div>
-
-      {editingOpeningBalance && canEditOpeningBalance && (
-        <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end">
-            <div className="flex-1">
-              <label className="mb-1 block text-sm font-bold text-slate-700">
-                Account opening balance
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={openingBalanceInput}
-                onChange={(event) => setOpeningBalanceInput(event.target.value)}
-                className="w-full rounded-xl border bg-white p-3"
-                placeholder="0.00"
-              />
-              <p className="mt-1 text-xs font-semibold text-slate-500">
-                Account-wide value. Select All branches before editing.
-              </p>
+            <div className="mt-1 text-xl font-extrabold text-slate-900">
+              {placeholder || formatCurrency(Number(value || 0))}
             </div>
-
-            <button
-              type="button"
-              onClick={saveOpeningBalance}
-              disabled={savingOpeningBalance || hasSpecificBranch}
-              className="rounded-xl bg-blue-700 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {savingOpeningBalance ? "Saving..." : "Save"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setEditingOpeningBalance(false)}
-              disabled={savingOpeningBalance}
-              className="rounded-xl border bg-white px-5 py-3 font-bold text-slate-700 disabled:opacity-50"
-            >
-              Cancel
-            </button>
           </div>
-        </section>
-      )}
+        ))}
+      </div>
 
       <div className="rounded-2xl border bg-white p-2 shadow-sm">
         <div className="flex flex-wrap gap-2">
@@ -991,12 +618,12 @@ export default function CustomerCredit({ readOnly = false }) {
         <section className="rounded-2xl border bg-white p-5 shadow-sm">
           <h3 className="text-lg font-extrabold text-slate-900">Account Summary</h3>
           <p className="mt-1 text-sm text-slate-500">
-            {hasSpecificBranch
-              ? "All cards and history below are filtered to the selected branch."
-              : hasMultipleBranches
-              ? "The figures above show the total position across all branches."
-              : hasOneBranch
+            {hasOneBranch
               ? "This customer has one branch, which is selected automatically."
+              : effectiveBranchId
+              ? "The account totals remain customer-wide. Opening balance and history are filtered to the selected branch."
+              : hasMultipleBranches
+              ? "The figures above show the total position across all branches. Select a branch or choose All branches."
               : "This customer has no separate branches. Credit History and Transactions are available for the main account."}
           </p>
         </section>
@@ -1039,10 +666,7 @@ export default function CustomerCredit({ readOnly = false }) {
                 <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
                   <tr className="border-b text-left text-xs uppercase tracking-wide text-slate-500">
                     <th className="p-3">Date</th>
-                                        {activeTab === "transactions" && (
-                      <th className="p-3">Type</th>
-                    )}
-                    <th className="p-3">Reference</th>
+                                        <th className="p-3">Reference</th>
                     <th className="p-3">Description</th>
                                         <th className="p-3 text-right">Debit</th>
                     <th className="p-3 text-right">Credit</th>
@@ -1063,9 +687,6 @@ export default function CustomerCredit({ readOnly = false }) {
                           ? new Date(row.transactionDate).toLocaleString("en-GB")
                           : "-"}
                       </td>
-                      {activeTab === "transactions" && (
-                        <td className="p-3 font-bold">{row.type}</td>
-                      )}
                       <td className="p-3 font-semibold">{row.reference}</td>
                       <td className="p-3 text-slate-600">{row.description}</td>
                       <td className="p-3 text-right font-bold text-red-700">
@@ -1091,7 +712,7 @@ export default function CustomerCredit({ readOnly = false }) {
                   {!pageRows.length && !loading && (
                     <tr>
                       <td
-                        colSpan={(historyOnlyRole ? 7 : 8) + (activeTab === "transactions" ? 1 : 0)}
+                        colSpan={historyOnlyRole ? 9 : 10}
                         className="p-8 text-center text-slate-500"
                       >
                         No {activeTab === "credit" ? "credit history" : "transactions"} found.

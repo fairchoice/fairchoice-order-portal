@@ -67,6 +67,7 @@ const navSections = [
         children: [
           { label: "Categories", page: "categories", permission: "access_product_setup" },
           { label: "Products", page: "products", permission: "access_product_setup" },
+          { label: "Stock Taking", page: "stockTaking", permission: "access_product_setup" },
           { label: "Product Import / Export", page: "productImportExport", permission: "access_product_setup" },
           { label: "Pricing Rules", page: "pricingRule", permission: "can_edit_pricing" },
           { label: "Price Management", page: "priceManagement", permission: "can_edit_pricing" },
@@ -121,6 +122,7 @@ const pagePermissions = {
   customers: "access_customer_setup",
   categories: "access_product_setup",
   products: "access_product_setup",
+  stockTaking: "access_product_setup",
   productImportExport: "access_product_setup",
   promotions: "access_product_setup",
  pricingRule: "can_edit_pricing",

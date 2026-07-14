@@ -299,6 +299,7 @@ export async function createCentralPayment({
   customer,
   customerAccountId,
   customerBranchId = null,
+  transactionType = "PAYMENT",
   amount,
   paymentMethod,
   paymentDate,
@@ -306,71 +307,93 @@ export async function createCentralPayment({
   externalReference,
   notes,
   currentUser,
+  ownerPassword,
 } = {}) {
   const accountId = customerAccountId || customer?.id;
   const paymentAmount = money(amount);
-  if (!accountId) throw new Error("Select a customer before saving a payment.");
-  if (paymentAmount <= 0) throw new Error("Payment amount must be greater than zero.");
+  const actor = getActor(currentUser).toLowerCase();
+  const type = String(transactionType || "PAYMENT").toUpperCase();
+  if (actor !== "nisstaj_admin") throw new Error("Only nisstaj_admin can post Central Payment transactions.");
+  if (!ownerPassword) throw new Error("Owner financial password is required.");
+  if (!accountId) throw new Error("Select a customer before saving a transaction.");
+  if (paymentAmount <= 0) throw new Error("Amount must be greater than zero.");
+  if (type === "DISCOUNT" && !String(notes || "").trim()) throw new Error("A detailed discount reason is compulsory.");
 
-  const idempotencyKey = createPaymentIdempotencyKey({
-    customerAccountId: accountId,
-    customerBranchId,
-    amount: paymentAmount,
-    paymentDate,
-    paymentMethod,
-    externalReference,
-  });
-  const actor = getActor(currentUser);
-  const paymentReference =
-    String(externalReference || "").trim() ||
-    `CP-${new Date(paymentDate || Date.now()).toISOString().slice(0, 10).replaceAll("-", "")}-${Date.now()}`;
-
-  const duplicate = await safeSelect("customer_payments", (query) =>
-    query
-      .select("*")
-      .eq("customer_account_id", accountId)
-      .eq("idempotency_key", idempotencyKey)
-      .limit(1)
-  );
+  const idempotencyKey = createPaymentIdempotencyKey({ customerAccountId: accountId, customerBranchId, amount: paymentAmount, paymentDate, paymentMethod: type === "DISCOUNT" ? "Discount" : paymentMethod, externalReference });
+  const duplicate = await safeSelect("customer_payments", (query) => query.select("*").eq("customer_account_id", accountId).eq("idempotency_key", idempotencyKey).limit(1));
   if (duplicate.error) throw duplicate.error;
-  if (duplicate.data?.length) {
-    return { duplicate: true, payment: duplicate.data[0], allocations: [] };
+  if (duplicate.data?.length) return { duplicate: true, payment: duplicate.data[0], allocations: [] };
+
+  const snapshot = await loadCentralPaymentSnapshot({ customerAccountId: accountId, customerName: customer?.account_name, customer, selectedBranchId: customerBranchId || "" });
+  const preview = buildPaymentPreview({ invoices: snapshot.invoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
+  const isPendingBank = type === "PAYMENT" && paymentMethod === "Bank Transfer";
+
+  const { data, error } = await supabase.rpc("post_owner_central_transaction", {
+    p_owner_username: "nisstaj_admin",
+    p_owner_password: ownerPassword,
+    p_customer_account_id: accountId,
+    p_customer_branch_id: customerBranchId || null,
+    p_transaction_type: type,
+    p_payment_date: paymentDate || new Date().toISOString(),
+    p_amount: paymentAmount,
+    p_payment_method: type === "DISCOUNT" ? "Other" : paymentMethod || "Cash",
+    p_paid_by: paidBy || "",
+    p_external_reference: String(externalReference || "").trim() || null,
+    p_notes: notes || "",
+    p_idempotency_key: idempotencyKey,
+    p_allocations: isPendingBank ? [] : preview.allocations,
+  });
+  if (!error) return { ...(data || {}), preview };
+  if (isMissingRpcError(error)) throw new Error("Protected Central Payment is not installed. Review and apply the additive owner-security migration first.");
+  throw error;
+}
+
+export async function confirmOwnerBankTransfer({
+  payment,
+  customer,
+  ownerPassword,
+  note,
+} = {}) {
+  if (!payment?.id) throw new Error("Pending bank transfer is required.");
+  if (!ownerPassword) throw new Error("Owner financial password is required.");
+  if (!String(note || "").trim()) {
+    throw new Error("A bank verification note is compulsory.");
+  }
+  if (payment.payment_method !== "Bank Transfer") {
+    throw new Error("Only bank transfers can be confirmed here.");
+  }
+  if (payment.verification_status !== "PENDING_VERIFICATION") {
+    throw new Error("This bank transfer is not pending verification.");
   }
 
   const snapshot = await loadCentralPaymentSnapshot({
-    customerAccountId: accountId,
+    customerAccountId: payment.customer_account_id,
     customerName: customer?.account_name,
     customer,
-    selectedBranchId: customerBranchId || "",
+    selectedBranchId: payment.customer_branch_id || "",
   });
   const preview = buildPaymentPreview({
     invoices: snapshot.invoices,
     allocations: snapshot.allocations,
-    amount: paymentAmount,
-    branchId: customerBranchId || "",
+    amount: Number(payment.amount || 0),
+    branchId: payment.customer_branch_id || "",
   });
 
-  const rpcPayload = {
-    p_customer_account_id: accountId,
-    p_customer_branch_id: customerBranchId || null,
-    p_payment_reference: paymentReference,
-    p_payment_date: paymentDate || new Date().toISOString(),
-    p_amount: paymentAmount,
-    p_payment_method: paymentMethod || "Cash",
-    p_paid_by: paidBy || "",
-    p_notes: notes || "",
-    p_idempotency_key: idempotencyKey,
-    p_created_by: actor,
+  const { data, error } = await supabase.rpc("confirm_owner_bank_transfer", {
+    p_owner_username: "nisstaj_admin",
+    p_owner_password: ownerPassword,
+    p_payment_id: payment.id,
+    p_note: String(note).trim(),
     p_allocations: preview.allocations,
-  };
+  });
 
-  const { data: rpcData, error: rpcError } = await supabase.rpc("post_central_payment", rpcPayload);
-  if (!rpcError) return { ...(rpcData || {}), preview };
-  if (isMissingRpcError(rpcError)) {
-    throw new Error(centralPaymentUnavailableMessage);
+  if (!error) return { payment: data, preview };
+  if (isMissingRpcError(error)) {
+    throw new Error(
+      "Bank confirmation is not installed. Review and apply the additive owner-security migration first."
+    );
   }
-
-  throw rpcError;
+  throw error;
 }
 
 export async function voidCentralPayment({ payment, reason } = {}) {

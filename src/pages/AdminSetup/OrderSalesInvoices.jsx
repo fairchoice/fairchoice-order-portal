@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { fetchInvoiceOrderFromDb } from "../../services/centralInvoiceEngine";
 import { formatCurrency } from "../../utils/currency";
+import { sortPrintItems } from "../../utils/printItemSorting";
 
 const VAT_RATE = 0.2;
 const VAT_DIVISOR = 1 + VAT_RATE;
@@ -207,7 +208,7 @@ const escapeHtml = (value) =>
     .replace(/"/g, "&quot;");
 
 function buildVatInvoice(row = {}) {
-  const lines = getLineItems(row).map((line) => {
+  const lines = sortPrintItems(getLineItems(row)).map((line) => {
     const qty = getQty(line);
     const gross = roundMoney(getGrossLineTotal(line));
     const net = roundMoney(gross / VAT_DIVISOR);
@@ -278,7 +279,7 @@ function buildVatInvoice(row = {}) {
 }
 
 function printVatInvoice(invoice) {
-  const rows = invoice.lines
+  const rows = sortPrintItems(invoice.lines)
     .map(
       (line) => `
         <tr>

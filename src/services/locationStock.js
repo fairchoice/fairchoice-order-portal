@@ -120,3 +120,34 @@ export async function saveProductLocationStock(productId, locationStocks = {}) {
 
   if (error) throw error;
 }
+
+
+export async function saveStockTakeCounts(locationId, counts = []) {
+  if (!locationId) throw new Error("A stock location is required.");
+
+  const rows = counts
+    .map((count) => ({
+      product_id: count.productId,
+      location_id: locationId,
+      qty: Number(count.qty),
+      updated_at: new Date().toISOString(),
+    }))
+    .filter(
+      (row) =>
+        row.product_id &&
+        Number.isFinite(row.qty) &&
+        row.qty >= 0
+    );
+
+  if (!rows.length) return [];
+
+  for (const chunk of chunkArray(rows, 100)) {
+    const { error } = await supabase
+      .from("product_location_stock")
+      .upsert(chunk, { onConflict: "product_id,location_id" });
+
+    if (error) throw error;
+  }
+
+  return rows;
+}

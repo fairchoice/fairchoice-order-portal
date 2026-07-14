@@ -8,6 +8,7 @@ const migrationFiles = [
   "supabase/migrations/20260711123000_central_payment_credit_foundation.sql",
   "supabase/migrations/20260711124500_central_payment_credit_rpc_and_compatibility.sql",
   "supabase/migrations/20260711125500_central_payment_rpc_security_and_consistency.sql",
+  "supabase/migrations/20260714120000_owner_central_payment_security.sql",
 ];
 
 const requiredAllocationColumns = [
@@ -87,6 +88,12 @@ function assertStaticMigrationContract() {
     "void_central_payment",
     "customer_payments_idempotency_scope_idx",
     "customer_payment_allocations_payment_id_fk",
+    "post_owner_central_transaction",
+    "confirm_owner_bank_transfer",
+    "OWNER_DISCOUNT_CREATED",
+    "BANK_TRANSFER_RECORDED_PENDING",
+    "BANK_TRANSFER_CONFIRMED",
+    "owner_financial_security",
   ]) {
     assert.ok(
       combinedSql.includes(requiredSnippet),

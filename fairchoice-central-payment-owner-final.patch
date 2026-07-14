@@ -1,0 +1,1468 @@
+diff --git a/scripts/validate-central-payment-migrations.mjs b/scripts/validate-central-payment-migrations.mjs
+index 1cab006..299b515 100644
+--- a/scripts/validate-central-payment-migrations.mjs
++++ b/scripts/validate-central-payment-migrations.mjs
+@@ -8,6 +8,7 @@ const migrationFiles = [
+   "supabase/migrations/20260711123000_central_payment_credit_foundation.sql",
+   "supabase/migrations/20260711124500_central_payment_credit_rpc_and_compatibility.sql",
+   "supabase/migrations/20260711125500_central_payment_rpc_security_and_consistency.sql",
++  "supabase/migrations/20260714120000_owner_central_payment_security.sql",
+ ];
+ 
+ const requiredAllocationColumns = [
+@@ -87,6 +88,12 @@ function assertStaticMigrationContract() {
+     "void_central_payment",
+     "customer_payments_idempotency_scope_idx",
+     "customer_payment_allocations_payment_id_fk",
++    "post_owner_central_transaction",
++    "confirm_owner_bank_transfer",
++    "OWNER_DISCOUNT_CREATED",
++    "BANK_TRANSFER_RECORDED_PENDING",
++    "BANK_TRANSFER_CONFIRMED",
++    "owner_financial_security",
+   ]) {
+     assert.ok(
+       combinedSql.includes(requiredSnippet),
+diff --git a/src/pages/AdminSetup/CentralPayment.jsx b/src/pages/AdminSetup/CentralPayment.jsx
+index cc641b5..7e12fce 100644
+--- a/src/pages/AdminSetup/CentralPayment.jsx
++++ b/src/pages/AdminSetup/CentralPayment.jsx
+@@ -2,10 +2,18 @@ import { useEffect, useMemo, useState } from "react";
+ import { formatCurrency } from "../../utils/currency";
+ import {
+   buildPaymentPreview,
++  confirmOwnerBankTransfer,
+   createCentralPayment,
+   loadCentralPaymentCustomers,
+   loadCentralPaymentSnapshot,
+ } from "../../services/centralPaymentService";
++import {
++  OWNER_USERNAME,
++  changeOwnerPassword,
++  getOwnerSecurityStatus,
++  isOwnerUser,
++  setupOwnerPassword,
++} from "../../services/ownerFinancialSecurity";
+ 
+ const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
+ 
+@@ -27,7 +35,160 @@ const matchesCustomer = (customer, search) =>
+     .toLowerCase()
+     .includes(String(search || "").toLowerCase());
+ 
++function OwnerSecurityPanel({ status, onRefresh }) {
++  const [mode, setMode] = useState(status?.configured ? "change" : "setup");
++  const [currentLoginPassword, setCurrentLoginPassword] = useState("");
++  const [currentOwnerPassword, setCurrentOwnerPassword] = useState("");
++  const [newPassword, setNewPassword] = useState("");
++  const [confirmPassword, setConfirmPassword] = useState("");
++  const [busy, setBusy] = useState(false);
++  const [message, setMessage] = useState("");
++
++  useEffect(() => {
++    setMode(status?.configured ? "change" : "setup");
++  }, [status?.configured]);
++
++  const submit = async () => {
++    if (newPassword !== confirmPassword) {
++      setMessage("New passwords do not match.");
++      return;
++    }
++
++    setBusy(true);
++    setMessage("");
++
++    try {
++      if (mode === "setup") {
++        await setupOwnerPassword({ currentLoginPassword, newPassword });
++      } else {
++        await changeOwnerPassword({ currentOwnerPassword, newPassword });
++      }
++
++      setCurrentLoginPassword("");
++      setCurrentOwnerPassword("");
++      setNewPassword("");
++      setConfirmPassword("");
++      setMessage(
++        mode === "setup"
++          ? "Owner financial password configured."
++          : "Owner financial password changed."
++      );
++      await onRefresh();
++    } catch (error) {
++      setMessage(error.message || "Could not update owner security.");
++    } finally {
++      setBusy(false);
++    }
++  };
++
++  return (
++    <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
++      <div className="flex flex-wrap items-center justify-between gap-2">
++        <div>
++          <h3 className="font-extrabold text-blue-950">Owner Financial Security</h3>
++          <p className="text-sm text-blue-800">
++            Protected account: {OWNER_USERNAME}. The financial password is hashed
++            in Supabase and is never stored in browser code.
++          </p>
++        </div>
++        <span
++          className={`rounded-full px-3 py-1 text-xs font-bold ${
++            status?.configured
++              ? "bg-green-100 text-green-800"
++              : "bg-amber-100 text-amber-800"
++          }`}
++        >
++          {status?.configured ? "Configured" : "Setup required"}
++        </span>
++      </div>
++
++      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
++        {mode === "setup" ? (
++          <input
++            type="password"
++            value={currentLoginPassword}
++            onChange={(event) => setCurrentLoginPassword(event.target.value)}
++            placeholder="Current login password"
++            className="rounded-xl border p-3"
++            autoComplete="current-password"
++          />
++        ) : (
++          <input
++            type="password"
++            value={currentOwnerPassword}
++            onChange={(event) => setCurrentOwnerPassword(event.target.value)}
++            placeholder="Current financial password"
++            className="rounded-xl border p-3"
++            autoComplete="current-password"
++          />
++        )}
++        <input
++          type="password"
++          value={newPassword}
++          onChange={(event) => setNewPassword(event.target.value)}
++          placeholder="New secure password"
++          className="rounded-xl border p-3"
++          autoComplete="new-password"
++        />
++        <input
++          type="password"
++          value={confirmPassword}
++          onChange={(event) => setConfirmPassword(event.target.value)}
++          placeholder="Confirm new password"
++          className="rounded-xl border p-3"
++          autoComplete="new-password"
++        />
++      </div>
++
++      <button
++        type="button"
++        onClick={submit}
++        disabled={
++          busy ||
++          !newPassword ||
++          !confirmPassword ||
++          (mode === "setup" ? !currentLoginPassword : !currentOwnerPassword)
++        }
++        className="mt-3 rounded-xl bg-blue-800 px-4 py-3 font-bold text-white disabled:bg-slate-300"
++      >
++        {busy
++          ? "Saving..."
++          : mode === "setup"
++            ? "Set owner financial password"
++            : "Change owner financial password"}
++      </button>
++
++      {message && (
++        <div className="mt-3 rounded-lg bg-white p-3 text-sm font-semibold">
++          {message}
++        </div>
++      )}
++    </section>
++  );
++}
++
++function Summary({ label, value, neutral = false }) {
++  return (
++    <div className="rounded-2xl border bg-white p-4 shadow-sm">
++      <div className="text-xs font-bold uppercase text-slate-500">{label}</div>
++      <div
++        className={`mt-1 text-2xl font-extrabold ${
++          neutral ? "text-slate-900" : "text-red-700"
++        }`}
++      >
++        {formatCurrency(value || 0)}
++      </div>
++    </div>
++  );
++}
++
+ export default function CentralPayment() {
++  const currentUser = getLoggedInUser();
++  const owner = isOwnerUser(currentUser);
++  const [securityStatus, setSecurityStatus] = useState({
++    installed: false,
++    configured: false,
++  });
+   const [customers, setCustomers] = useState([]);
+   const [search, setSearch] = useState("");
+   const [selectedCustomerId, setSelectedCustomerId] = useState("");
+@@ -35,17 +196,48 @@ export default function CentralPayment() {
+   const [snapshot, setSnapshot] = useState(null);
+   const [loading, setLoading] = useState(false);
+   const [saving, setSaving] = useState(false);
++  const [confirmingId, setConfirmingId] = useState("");
+   const [error, setError] = useState("");
+   const [success, setSuccess] = useState("");
+   const [form, setForm] = useState({
++    transactionType: "PAYMENT",
+     amount: "",
+     paymentMethod: "Cash",
+     paymentDate: new Date().toISOString().slice(0, 10),
+     paidBy: "",
+     externalReference: "",
+     notes: "",
++    ownerPassword: "",
+   });
+ 
++  const refreshSecurity = async () => {
++    try {
++      setSecurityStatus(await getOwnerSecurityStatus());
++    } catch (securityError) {
++      setError(securityError.message);
++    }
++  };
++
++  useEffect(() => {
++    refreshSecurity();
++  }, []);
++
++  useEffect(() => {
++    let active = true;
++    loadCentralPaymentCustomers()
++      .then((rows) => {
++        if (!active) return;
++        setCustomers(rows);
++        if (rows.length) setSelectedCustomerId((value) => value || rows[0].id);
++      })
++      .catch((loadError) =>
++        setError(loadError.message || "Could not load customers.")
++      );
++    return () => {
++      active = false;
++    };
++  }, []);
++
+   const selectedCustomer = customers.find(
+     (customer) => String(customer.id) === String(selectedCustomerId)
+   );
+@@ -66,108 +258,174 @@ export default function CentralPayment() {
+       }),
+     [form.amount, selectedBranchId, snapshot]
+   );
++  const payments = useMemo(
++    () =>
++      [...(snapshot?.selectedPayments || snapshot?.payments || [])].sort(
++        (left, right) =>
++          new Date(right.payment_date || right.created_at || 0) -
++          new Date(left.payment_date || left.created_at || 0)
++      ),
++    [snapshot]
++  );
++  const pendingBankTransfers = payments.filter(
++    (payment) =>
++      payment.payment_method === "Bank Transfer" &&
++      payment.verification_status === "PENDING_VERIFICATION"
++  );
+ 
+-  useEffect(() => {
+-    let active = true;
+-    loadCentralPaymentCustomers()
+-      .then((rows) => {
+-        if (!active) return;
+-        setCustomers(rows);
+-        if (rows.length) setSelectedCustomerId((value) => value || rows[0].id);
+-      })
+-      .catch((loadError) => setError(loadError.message || "Could not load customers."));
+-    return () => {
+-      active = false;
+-    };
+-  }, []);
+-
+-  const refreshSnapshot = async (options = {}) => {
++  const refreshSnapshot = async () => {
+     if (!selectedCustomer) return;
+-    if (!options.silent) {
+-      setLoading(true);
+-      setError("");
+-    }
++    setLoading(true);
+     try {
+-      const data = await loadCentralPaymentSnapshot({
+-        customerAccountId: selectedCustomer.id,
+-        customerName: selectedCustomer.account_name,
+-        customer: selectedCustomer,
+-        selectedBranchId,
+-      });
+-      setSnapshot(data);
++      setSnapshot(
++        await loadCentralPaymentSnapshot({
++          customerAccountId: selectedCustomer.id,
++          customerName: selectedCustomer.account_name,
++          customer: selectedCustomer,
++          selectedBranchId,
++        })
++      );
+     } catch (loadError) {
+-      setError(loadError.message || "Could not load payment snapshot.");
++      setError(loadError.message);
+     } finally {
+-      if (!options.silent) setLoading(false);
++      setLoading(false);
+     }
+   };
+ 
+   useEffect(() => {
+-    if (!selectedCustomer) return;
+-    let active = true;
+-    loadCentralPaymentSnapshot({
+-      customerAccountId: selectedCustomer.id,
+-      customerName: selectedCustomer.account_name,
+-      customer: selectedCustomer,
+-      selectedBranchId,
+-    })
+-      .then((data) => {
+-        if (active) setSnapshot(data);
+-      })
+-      .catch((loadError) => {
+-        if (active) setError(loadError.message || "Could not load payment snapshot.");
+-      })
+-      .finally(() => {
+-        if (active) setLoading(false);
+-      });
+-    return () => {
+-      active = false;
+-    };
+-  }, [selectedCustomer, selectedBranchId]);
++    refreshSnapshot();
++  }, [selectedCustomerId, selectedBranchId]);
+ 
+   const updateForm = (field, value) => {
+     setForm((current) => ({ ...current, [field]: value }));
+-    setSuccess("");
+     setError("");
++    setSuccess("");
+   };
+ 
+   const savePayment = async () => {
+-    if (saving) return;
++    if (!owner) {
++      setError("Only nisstaj_admin can create Central Payment transactions.");
++      return;
++    }
++    if (!securityStatus.configured) {
++      setError("Set the owner financial password before posting transactions.");
++      return;
++    }
++    if (form.transactionType === "DISCOUNT" && !String(form.notes).trim()) {
++      setError("A detailed discount reason is compulsory.");
++      return;
++    }
++
+     setSaving(true);
+     setError("");
+     setSuccess("");
++
+     try {
+       const result = await createCentralPayment({
+         customer: selectedCustomer,
+         customerAccountId: selectedCustomer?.id,
+         customerBranchId: selectedBranchId || null,
++        transactionType: form.transactionType,
+         amount: form.amount,
+-        paymentMethod: form.paymentMethod,
+-        paymentDate: form.paymentDate ? `${form.paymentDate}T12:00:00` : new Date().toISOString(),
++        paymentMethod:
++          form.transactionType === "DISCOUNT" ? "Other" : form.paymentMethod,
++        paymentDate: form.paymentDate
++          ? `${form.paymentDate}T12:00:00`
++          : new Date().toISOString(),
+         paidBy: form.paidBy,
+         externalReference: form.externalReference,
+         notes: form.notes,
+-        currentUser: getLoggedInUser(),
++        currentUser,
++        ownerPassword: form.ownerPassword,
+       });
+ 
++      const pending =
++        result?.verification_status === "PENDING_VERIFICATION" ||
++        result?.payment?.verification_status === "PENDING_VERIFICATION";
++
+       setSuccess(
+         result.duplicate
+-          ? "Duplicate payment detected. Existing payment was not posted again."
+-          : "Payment saved and allocated oldest-first."
++          ? "Duplicate transaction detected; nothing was posted."
++          : pending
++            ? "Bank transfer recorded as Pending Verification. It has not reduced the balance or paid invoices."
++            : form.transactionType === "DISCOUNT"
++              ? "Owner discount saved with a compulsory audit reason."
++              : "Payment saved and allocated oldest-first."
+       );
+-      setForm((current) => ({ ...current, amount: "", externalReference: "", notes: "" }));
+-      await refreshSnapshot({ silent: true });
++      setForm((current) => ({
++        ...current,
++        amount: "",
++        externalReference: "",
++        notes: "",
++        ownerPassword: "",
++      }));
++      await refreshSnapshot();
+     } catch (saveError) {
+-      setError(saveError.message || "Could not save payment.");
++      setError(saveError.message || "Could not save transaction.");
+     } finally {
+       setSaving(false);
+     }
+   };
+ 
++  const confirmBank = async (payment) => {
++    const ownerPassword = window.prompt(
++      "Enter the owner financial password to confirm this bank transfer."
++    );
++    if (!ownerPassword) return;
++
++    const note = window.prompt(
++      "Enter the compulsory bank verification note or bank statement reference."
++    );
++    if (!String(note || "").trim()) {
++      setError("A bank verification note is compulsory.");
++      return;
++    }
++
++    setConfirmingId(payment.id);
++    setError("");
++    setSuccess("");
++    try {
++      await confirmOwnerBankTransfer({
++        payment,
++        customer: selectedCustomer,
++        ownerPassword,
++        note,
++      });
++      setSuccess(
++        "Bank transfer confirmed, audited and allocated to the oldest outstanding invoices."
++      );
++      await refreshSnapshot();
++    } catch (confirmError) {
++      setError(confirmError.message || "Could not confirm bank transfer.");
++    } finally {
++      setConfirmingId("");
++    }
++  };
++
++  if (!owner) {
++    return (
++      <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
++        <h2 className="text-xl font-extrabold text-red-900">
++          Central Payment restricted
++        </h2>
++        <p className="mt-2 text-red-800">
++          Only the owner account <strong>{OWNER_USERNAME}</strong> can create,
++          confirm, void, reverse, reallocate or discount financial transactions.
++        </p>
++      </div>
++    );
++  }
++
+   return (
+     <div className="space-y-4 p-4">
++      <OwnerSecurityPanel status={securityStatus} onRefresh={refreshSecurity} />
++
+       <div className="rounded-2xl border bg-white p-4 shadow-sm">
+-        <h2 className="text-2xl font-extrabold text-slate-900">Central Payment</h2>
++        <h2 className="text-2xl font-extrabold">Central Payment</h2>
++        <p className="mt-1 text-sm text-slate-600">
++          One owner-controlled view for payments, pending bank transfers and
++          audited discounts.
++        </p>
+         <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1.2fr_1fr]">
+           <input
+             value={search}
+@@ -204,97 +462,165 @@ export default function CentralPayment() {
+         </div>
+       </div>
+ 
+-      {loading && <div className="rounded-xl bg-slate-50 p-3 font-bold">Loading balances...</div>}
+-      {error && <div className="rounded-xl bg-red-50 p-3 font-bold text-red-700">{error}</div>}
+-      {success && <div className="rounded-xl bg-green-50 p-3 font-bold text-green-700">{success}</div>}
+-      {snapshot?.legacyFallbackUsed && (
+-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+-          Temporary legacy compatibility is active. New payments will still be written only to customer_payments.
++      {loading && (
++        <div className="rounded-xl bg-slate-50 p-3 font-bold">
++          Loading balances...
+         </div>
+       )}
+-
+-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <div className="text-xs font-bold uppercase text-slate-500">Customer outstanding</div>
+-          <div className="mt-1 text-2xl font-extrabold text-red-700">
+-            {formatCurrency(snapshot?.customerSummary?.outstanding || 0)}
+-          </div>
+-        </div>
+-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <div className="text-xs font-bold uppercase text-slate-500">Selected branch outstanding</div>
+-          <div className="mt-1 text-2xl font-extrabold text-red-700">
+-            {formatCurrency(snapshot?.branchSummary?.outstanding || 0)}
+-          </div>
++      {error && (
++        <div className="rounded-xl bg-red-50 p-3 font-bold text-red-700">
++          {error}
+         </div>
+-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <div className="text-xs font-bold uppercase text-slate-500">Opening balance</div>
+-          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+-            {formatCurrency(snapshot?.selectedOpeningBalance ?? snapshot?.customerSummary?.openingBalance ?? 0)}
+-          </div>
++      )}
++      {success && (
++        <div className="rounded-xl bg-green-50 p-3 font-bold text-green-700">
++          {success}
+         </div>
++      )}
++
++      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
++        <Summary
++          label="Customer outstanding"
++          value={snapshot?.customerSummary?.outstanding}
++        />
++        <Summary
++          label="Selected branch outstanding"
++          value={snapshot?.branchSummary?.outstanding}
++        />
++        <Summary
++          label="Opening balance"
++          value={
++            snapshot?.selectedOpeningBalance ??
++            snapshot?.customerSummary?.openingBalance
++          }
++          neutral
++        />
++        <Summary
++          label="Pending bank transfers"
++          value={pendingBankTransfers.reduce(
++            (sum, payment) => sum + Number(payment.amount || 0),
++            0
++          )}
++          neutral
++        />
+       </div>
+ 
+       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+         <section className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <h3 className="mb-3 text-lg font-extrabold">Payment Details</h3>
++          <h3 className="mb-3 text-lg font-extrabold">Owner Transaction</h3>
+           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
++            <select
++              value={form.transactionType}
++              onChange={(event) =>
++                updateForm("transactionType", event.target.value)
++              }
++              className="rounded-xl border p-3"
++            >
++              <option value="PAYMENT">Payment</option>
++              <option value="DISCOUNT">Discount / goodwill adjustment</option>
++            </select>
+             <input
+               type="number"
+               min="0"
+               step="0.01"
+               value={form.amount}
+               onChange={(event) => updateForm("amount", event.target.value)}
+-              placeholder="Payment amount"
++              placeholder={
++                form.transactionType === "DISCOUNT"
++                  ? "Discount amount"
++                  : "Payment amount"
++              }
+               className="rounded-xl border p-3"
+             />
+-            <select
+-              value={form.paymentMethod}
+-              onChange={(event) => updateForm("paymentMethod", event.target.value)}
+-              className="rounded-xl border p-3"
+-            >
+-              {paymentMethods.map((method) => (
+-                <option key={method} value={method}>{method}</option>
+-              ))}
+-            </select>
++            {form.transactionType === "PAYMENT" && (
++              <select
++                value={form.paymentMethod}
++                onChange={(event) =>
++                  updateForm("paymentMethod", event.target.value)
++                }
++                className="rounded-xl border p-3"
++              >
++                {paymentMethods.map((method) => (
++                  <option key={method}>{method}</option>
++                ))}
++              </select>
++            )}
+             <input
+               type="date"
+               value={form.paymentDate}
+-              onChange={(event) => updateForm("paymentDate", event.target.value)}
++              onChange={(event) =>
++                updateForm("paymentDate", event.target.value)
++              }
+               className="rounded-xl border p-3"
+             />
+             <input
+               value={form.paidBy}
+               onChange={(event) => updateForm("paidBy", event.target.value)}
+-              placeholder="Who paid"
++              placeholder="Who paid / discount beneficiary"
+               className="rounded-xl border p-3"
+             />
+             <input
+               value={form.externalReference}
+-              onChange={(event) => updateForm("externalReference", event.target.value)}
+-              placeholder="External / reference number"
+-              className="rounded-xl border p-3 md:col-span-2"
++              onChange={(event) =>
++                updateForm("externalReference", event.target.value)
++              }
++              placeholder="Bank/reference number (optional)"
++              className="rounded-xl border p-3"
+             />
+             <textarea
+               value={form.notes}
+               onChange={(event) => updateForm("notes", event.target.value)}
+-              placeholder="Notes"
++              placeholder={
++                form.transactionType === "DISCOUNT"
++                  ? "Compulsory detailed discount reason"
++                  : "Notes"
++              }
+               className="min-h-24 rounded-xl border p-3 md:col-span-2"
+             />
++            <input
++              type="password"
++              value={form.ownerPassword}
++              onChange={(event) =>
++                updateForm("ownerPassword", event.target.value)
++              }
++              placeholder="Owner financial password required"
++              className="rounded-xl border border-blue-300 p-3 md:col-span-2"
++              autoComplete="current-password"
++            />
+           </div>
++
++          {form.paymentMethod === "Bank Transfer" &&
++            form.transactionType === "PAYMENT" && (
++              <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">
++                Bank transfers are recorded as Pending Verification. They are
++                not allocated and do not reduce the customer balance until the
++                owner confirms them against the bank statement.
++              </div>
++            )}
++
+           <button
+             type="button"
+             onClick={savePayment}
+-            disabled={saving || !selectedCustomer || Number(form.amount || 0) <= 0}
+-            className="mt-4 w-full rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
++            disabled={
++              saving ||
++              !selectedCustomer ||
++              Number(form.amount || 0) <= 0 ||
++              !form.ownerPassword
++            }
++            className="mt-4 w-full rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:bg-slate-300"
+           >
+-            {saving ? "Saving payment..." : "Save payment"}
++            {saving
++              ? "Saving..."
++              : form.transactionType === "DISCOUNT"
++                ? "Save audited discount"
++                : "Save owner payment"}
+           </button>
+         </section>
+ 
+         <section className="rounded-2xl border bg-white p-4 shadow-sm">
+-          <div className="mb-3 flex items-center justify-between gap-3">
++          <div className="mb-3 flex items-center justify-between">
+             <h3 className="text-lg font-extrabold">Allocation Preview</h3>
+-            <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
++            <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold">
+               Unallocated {formatCurrency(preview.unallocatedAmount || 0)}
+             </span>
+           </div>
+@@ -310,19 +636,130 @@ export default function CentralPayment() {
+               <tbody>
+                 {preview.allocations.map((allocation) => (
+                   <tr key={allocation.invoiceReference} className="border-b">
+-                    <td className="p-3 font-bold">{allocation.invoiceReference}</td>
+-                    <td className="p-3">{branches.find((branch) => String(branch.id) === String(allocation.customerBranchId))?.branch_name || "-"}</td>
+-                    <td className="p-3 text-right font-bold">{formatCurrency(allocation.allocatedAmount)}</td>
++                    <td className="p-3 font-bold">
++                      {allocation.invoiceReference}
++                    </td>
++                    <td className="p-3">
++                      {branches.find(
++                        (branch) =>
++                          String(branch.id) ===
++                          String(allocation.customerBranchId)
++                      )?.branch_name || "-"}
++                    </td>
++                    <td className="p-3 text-right font-bold">
++                      {formatCurrency(allocation.allocatedAmount)}
++                    </td>
+                   </tr>
+                 ))}
+                 {!preview.allocations.length && (
+-                  <tr><td colSpan="3" className="p-4 text-center text-slate-500">Enter a payment amount to preview oldest-first allocation.</td></tr>
++                  <tr>
++                    <td colSpan="3" className="p-4 text-center text-slate-500">
++                      Enter an amount to preview oldest-first allocation.
++                    </td>
++                  </tr>
+                 )}
+               </tbody>
+             </table>
+           </div>
+         </section>
+       </div>
++
++      <section className="rounded-2xl border bg-white p-4 shadow-sm">
++        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
++          <div>
++            <h3 className="text-lg font-extrabold">All Customer Payments</h3>
++            <p className="text-sm text-slate-600">
++              Cash, card, bank, other payments and owner discounts in one place.
++            </p>
++          </div>
++          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold">
++            {payments.length} records
++          </span>
++        </div>
++        <div className="overflow-x-auto">
++          <table className="w-full min-w-[980px] text-sm">
++            <thead>
++              <tr className="border-b bg-slate-50 text-left">
++                <th className="p-3">Date</th>
++                <th className="p-3">Reference</th>
++                <th className="p-3">Type</th>
++                <th className="p-3">Method</th>
++                <th className="p-3">Paid by</th>
++                <th className="p-3">Status</th>
++                <th className="p-3">Notes</th>
++                <th className="p-3 text-right">Amount</th>
++                <th className="p-3 text-right">Action</th>
++              </tr>
++            </thead>
++            <tbody>
++              {payments.map((payment) => {
++                const pending =
++                  payment.payment_method === "Bank Transfer" &&
++                  payment.verification_status === "PENDING_VERIFICATION";
++                return (
++                  <tr key={payment.id} className="border-b align-top">
++                    <td className="p-3">
++                      {new Date(
++                        payment.payment_date || payment.created_at
++                      ).toLocaleDateString("en-GB")}
++                    </td>
++                    <td className="p-3 font-bold">
++                      {payment.payment_reference || "-"}
++                    </td>
++                    <td className="p-3">
++                      {payment.transaction_type || "PAYMENT"}
++                    </td>
++                    <td className="p-3">{payment.payment_method || "-"}</td>
++                    <td className="p-3">{payment.paid_by || "-"}</td>
++                    <td className="p-3">
++                      <span
++                        className={`rounded-full px-2 py-1 text-xs font-bold ${
++                          pending
++                            ? "bg-amber-100 text-amber-800"
++                            : payment.status === "VOIDED"
++                              ? "bg-red-100 text-red-800"
++                              : "bg-green-100 text-green-800"
++                        }`}
++                      >
++                        {payment.verification_status || payment.status || "POSTED"}
++                      </span>
++                    </td>
++                    <td className="max-w-[300px] whitespace-pre-wrap p-3">
++                      {payment.mandatory_reason || payment.notes || "-"}
++                    </td>
++                    <td className="p-3 text-right font-bold">
++                      {formatCurrency(payment.amount || 0)}
++                    </td>
++                    <td className="p-3 text-right">
++                      {pending ? (
++                        <button
++                          type="button"
++                          onClick={() => confirmBank(payment)}
++                          disabled={confirmingId === payment.id}
++                          className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300"
++                        >
++                          {confirmingId === payment.id
++                            ? "Confirming..."
++                            : "Confirm bank"}
++                        </button>
++                      ) : (
++                        <span className="text-xs text-slate-400">—</span>
++                      )}
++                    </td>
++                  </tr>
++                );
++              })}
++              {!payments.length && (
++                <tr>
++                  <td colSpan="9" className="p-5 text-center text-slate-500">
++                    No payment records found for this customer.
++                  </td>
++                </tr>
++              )}
++            </tbody>
++          </table>
++        </div>
++      </section>
+     </div>
+   );
+ }
+diff --git a/src/services/centralPaymentService.js b/src/services/centralPaymentService.js
+index ea73f3c..b1074a3 100644
+--- a/src/services/centralPaymentService.js
++++ b/src/services/centralPaymentService.js
+@@ -299,6 +299,7 @@ export async function createCentralPayment({
+   customer,
+   customerAccountId,
+   customerBranchId = null,
++  transactionType = "PAYMENT",
+   amount,
+   paymentMethod,
+   paymentDate,
+@@ -306,71 +307,93 @@ export async function createCentralPayment({
+   externalReference,
+   notes,
+   currentUser,
++  ownerPassword,
+ } = {}) {
+   const accountId = customerAccountId || customer?.id;
+   const paymentAmount = money(amount);
+-  if (!accountId) throw new Error("Select a customer before saving a payment.");
+-  if (paymentAmount <= 0) throw new Error("Payment amount must be greater than zero.");
+-
+-  const idempotencyKey = createPaymentIdempotencyKey({
+-    customerAccountId: accountId,
+-    customerBranchId,
+-    amount: paymentAmount,
+-    paymentDate,
+-    paymentMethod,
+-    externalReference,
++  const actor = getActor(currentUser).toLowerCase();
++  const type = String(transactionType || "PAYMENT").toUpperCase();
++  if (actor !== "nisstaj_admin") throw new Error("Only nisstaj_admin can post Central Payment transactions.");
++  if (!ownerPassword) throw new Error("Owner financial password is required.");
++  if (!accountId) throw new Error("Select a customer before saving a transaction.");
++  if (paymentAmount <= 0) throw new Error("Amount must be greater than zero.");
++  if (type === "DISCOUNT" && !String(notes || "").trim()) throw new Error("A detailed discount reason is compulsory.");
++
++  const idempotencyKey = createPaymentIdempotencyKey({ customerAccountId: accountId, customerBranchId, amount: paymentAmount, paymentDate, paymentMethod: type === "DISCOUNT" ? "Discount" : paymentMethod, externalReference });
++  const duplicate = await safeSelect("customer_payments", (query) => query.select("*").eq("customer_account_id", accountId).eq("idempotency_key", idempotencyKey).limit(1));
++  if (duplicate.error) throw duplicate.error;
++  if (duplicate.data?.length) return { duplicate: true, payment: duplicate.data[0], allocations: [] };
++
++  const snapshot = await loadCentralPaymentSnapshot({ customerAccountId: accountId, customerName: customer?.account_name, customer, selectedBranchId: customerBranchId || "" });
++  const preview = buildPaymentPreview({ invoices: snapshot.invoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
++  const isPendingBank = type === "PAYMENT" && paymentMethod === "Bank Transfer";
++
++  const { data, error } = await supabase.rpc("post_owner_central_transaction", {
++    p_owner_username: "nisstaj_admin",
++    p_owner_password: ownerPassword,
++    p_customer_account_id: accountId,
++    p_customer_branch_id: customerBranchId || null,
++    p_transaction_type: type,
++    p_payment_date: paymentDate || new Date().toISOString(),
++    p_amount: paymentAmount,
++    p_payment_method: type === "DISCOUNT" ? "Other" : paymentMethod || "Cash",
++    p_paid_by: paidBy || "",
++    p_external_reference: String(externalReference || "").trim() || null,
++    p_notes: notes || "",
++    p_idempotency_key: idempotencyKey,
++    p_allocations: isPendingBank ? [] : preview.allocations,
+   });
+-  const actor = getActor(currentUser);
+-  const paymentReference =
+-    String(externalReference || "").trim() ||
+-    `CP-${new Date(paymentDate || Date.now()).toISOString().slice(0, 10).replaceAll("-", "")}-${Date.now()}`;
++  if (!error) return { ...(data || {}), preview };
++  if (isMissingRpcError(error)) throw new Error("Protected Central Payment is not installed. Review and apply the additive owner-security migration first.");
++  throw error;
++}
+ 
+-  const duplicate = await safeSelect("customer_payments", (query) =>
+-    query
+-      .select("*")
+-      .eq("customer_account_id", accountId)
+-      .eq("idempotency_key", idempotencyKey)
+-      .limit(1)
+-  );
+-  if (duplicate.error) throw duplicate.error;
+-  if (duplicate.data?.length) {
+-    return { duplicate: true, payment: duplicate.data[0], allocations: [] };
++export async function confirmOwnerBankTransfer({
++  payment,
++  customer,
++  ownerPassword,
++  note,
++} = {}) {
++  if (!payment?.id) throw new Error("Pending bank transfer is required.");
++  if (!ownerPassword) throw new Error("Owner financial password is required.");
++  if (!String(note || "").trim()) {
++    throw new Error("A bank verification note is compulsory.");
++  }
++  if (payment.payment_method !== "Bank Transfer") {
++    throw new Error("Only bank transfers can be confirmed here.");
++  }
++  if (payment.verification_status !== "PENDING_VERIFICATION") {
++    throw new Error("This bank transfer is not pending verification.");
+   }
+ 
+   const snapshot = await loadCentralPaymentSnapshot({
+-    customerAccountId: accountId,
++    customerAccountId: payment.customer_account_id,
+     customerName: customer?.account_name,
+     customer,
+-    selectedBranchId: customerBranchId || "",
++    selectedBranchId: payment.customer_branch_id || "",
+   });
+   const preview = buildPaymentPreview({
+     invoices: snapshot.invoices,
+     allocations: snapshot.allocations,
+-    amount: paymentAmount,
+-    branchId: customerBranchId || "",
++    amount: Number(payment.amount || 0),
++    branchId: payment.customer_branch_id || "",
+   });
+ 
+-  const rpcPayload = {
+-    p_customer_account_id: accountId,
+-    p_customer_branch_id: customerBranchId || null,
+-    p_payment_reference: paymentReference,
+-    p_payment_date: paymentDate || new Date().toISOString(),
+-    p_amount: paymentAmount,
+-    p_payment_method: paymentMethod || "Cash",
+-    p_paid_by: paidBy || "",
+-    p_notes: notes || "",
+-    p_idempotency_key: idempotencyKey,
+-    p_created_by: actor,
++  const { data, error } = await supabase.rpc("confirm_owner_bank_transfer", {
++    p_owner_username: "nisstaj_admin",
++    p_owner_password: ownerPassword,
++    p_payment_id: payment.id,
++    p_note: String(note).trim(),
+     p_allocations: preview.allocations,
+-  };
++  });
+ 
+-  const { data: rpcData, error: rpcError } = await supabase.rpc("post_central_payment", rpcPayload);
+-  if (!rpcError) return { ...(rpcData || {}), preview };
+-  if (isMissingRpcError(rpcError)) {
+-    throw new Error(centralPaymentUnavailableMessage);
++  if (!error) return { payment: data, preview };
++  if (isMissingRpcError(error)) {
++    throw new Error(
++      "Bank confirmation is not installed. Review and apply the additive owner-security migration first."
++    );
+   }
+-
+-  throw rpcError;
++  throw error;
+ }
+ 
+ export async function voidCentralPayment({ payment, reason } = {}) {
+diff --git a/src/services/centralPaymentService.test.js b/src/services/centralPaymentService.test.js
+index 890c151..54a27a8 100644
+--- a/src/services/centralPaymentService.test.js
++++ b/src/services/centralPaymentService.test.js
+@@ -62,12 +62,11 @@ test("equivalent legacy and new records do not duplicate", () => {
+   assert.deepEqual(result.payments.map((row) => row.id), ["new-payment"]);
+ });
+ 
+-test("missing post_central_payment RPC fails closed without direct browser writes", () => {
++test("protected owner payment RPC fails closed without direct browser writes", () => {
+   const source = getFunctionSource("createCentralPayment");
+ 
+-  assert.match(source, /supabase\.rpc\("post_central_payment"/);
+-  assert.match(source, /centralPaymentUnavailableMessage/);
+-  assert.match(serviceSource, /Central Payment service is unavailable/);
++  assert.match(source, /supabase\.rpc\("post_owner_central_transaction"/);
++  assert.match(source, /Protected Central Payment is not installed/);
+   assert.doesNotMatch(source, /\.from\("customer_payments"\)\s*\.\s*insert/);
+   assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\)\s*\.\s*insert/);
+   assert.doesNotMatch(source, /\.from\("financial_audit_log"\)/);
+@@ -77,8 +76,8 @@ test("missing post_central_payment RPC fails closed without direct browser write
+ test("authorization failure from payment posting is surfaced", () => {
+   const source = getFunctionSource("createCentralPayment");
+ 
+-  assert.match(source, /if \(isMissingRpcError\(rpcError\)\)/);
+-  assert.match(source, /throw rpcError;/);
++  assert.match(source, /if \(isMissingRpcError\(error\)\)/);
++  assert.match(source, /throw error;/);
+   assert.doesNotMatch(source, /42501.*Central Payment service is unavailable/s);
+ });
+ 
+@@ -129,3 +128,14 @@ test("missing RPC detection does not classify authorization failures as unavaila
+   assert.doesNotMatch(serviceSource, /code === "42501"/);
+   assert.doesNotMatch(serviceSource, /code === "PGRST301"/);
+ });
++
++test("bank confirmation is owner RPC-only and sends allocation preview", () => {
++  const source = getFunctionSource("confirmOwnerBankTransfer");
++
++  assert.match(source, /supabase\.rpc\("confirm_owner_bank_transfer"/);
++  assert.match(source, /p_owner_username:\s*"nisstaj_admin"/);
++  assert.match(source, /p_allocations:\s*preview\.allocations/);
++  assert.match(source, /bank verification note is compulsory/i);
++  assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.update/s);
++  assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.insert/s);
++});
+diff --git a/src/services/ownerFinancialSecurity.js b/src/services/ownerFinancialSecurity.js
+new file mode 100644
+index 0000000..27cfd1d
+--- /dev/null
++++ b/src/services/ownerFinancialSecurity.js
+@@ -0,0 +1,63 @@
++import { supabase } from "./supabase";
++
++export const OWNER_USERNAME = "nisstaj_admin";
++
++const missingSecurityMessage =
++  "Owner financial security is not installed yet. Review and apply the additive owner-security migration before using protected payment actions.";
++
++const isMissingRpc = (error = {}) => {
++  const text = String(error.message || error.details || "").toLowerCase();
++  return error.code === "42883" || error.code === "PGRST202" || text.includes("could not find the function");
++};
++
++export function isOwnerUser(user) {
++  return String(user?.username || "").trim().toLowerCase() === OWNER_USERNAME;
++}
++
++export function validateOwnerPassword(password) {
++  const value = String(password || "");
++  if (value.length < 12) throw new Error("Owner password must be at least 12 characters.");
++  if (!/[a-z]/.test(value) || !/[A-Z]/.test(value) || !/[0-9]/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
++    throw new Error("Owner password must include upper-case, lower-case, number and symbol characters.");
++  }
++  return value;
++}
++
++export async function getOwnerSecurityStatus() {
++  const { data, error } = await supabase.rpc("owner_financial_security_status", {
++    p_username: OWNER_USERNAME,
++  });
++  if (error) {
++    if (isMissingRpc(error)) return { installed: false, configured: false };
++    throw error;
++  }
++  return { installed: true, configured: Boolean(data?.configured), lockedUntil: data?.locked_until || null };
++}
++
++export async function setupOwnerPassword({ currentLoginPassword, newPassword }) {
++  validateOwnerPassword(newPassword);
++  const { data, error } = await supabase.rpc("setup_owner_financial_password", {
++    p_username: OWNER_USERNAME,
++    p_current_login_password: String(currentLoginPassword || ""),
++    p_new_password: newPassword,
++  });
++  if (error) {
++    if (isMissingRpc(error)) throw new Error(missingSecurityMessage);
++    throw error;
++  }
++  return data;
++}
++
++export async function changeOwnerPassword({ currentOwnerPassword, newPassword }) {
++  validateOwnerPassword(newPassword);
++  const { data, error } = await supabase.rpc("change_owner_financial_password", {
++    p_username: OWNER_USERNAME,
++    p_current_password: String(currentOwnerPassword || ""),
++    p_new_password: newPassword,
++  });
++  if (error) {
++    if (isMissingRpc(error)) throw new Error(missingSecurityMessage);
++    throw error;
++  }
++  return data;
++}
+diff --git a/src/services/ownerFinancialSecurity.test.js b/src/services/ownerFinancialSecurity.test.js
+new file mode 100644
+index 0000000..af509f0
+--- /dev/null
++++ b/src/services/ownerFinancialSecurity.test.js
+@@ -0,0 +1,17 @@
++import fs from "node:fs";
++import test from "node:test";
++import assert from "node:assert/strict";
++
++const source = fs.readFileSync(new URL("./ownerFinancialSecurity.js", import.meta.url), "utf8");
++
++test("owner username is fixed and no password is hard coded", () => {
++  assert.match(source, /OWNER_USERNAME = "nisstaj_admin"/);
++  assert.doesNotMatch(source, /adm1n@/i);
++  assert.match(source, /validateOwnerPassword/);
++});
++
++test("owner security uses RPCs rather than direct table writes", () => {
++  assert.match(source, /setup_owner_financial_password/);
++  assert.match(source, /change_owner_financial_password/);
++  assert.doesNotMatch(source, /\.from\("owner_financial_security"\)/);
++});
+diff --git a/supabase/migrations/20260714120000_owner_central_payment_security.sql b/supabase/migrations/20260714120000_owner_central_payment_security.sql
+new file mode 100644
+index 0000000..d7156e5
+--- /dev/null
++++ b/supabase/migrations/20260714120000_owner_central_payment_security.sql
+@@ -0,0 +1,332 @@
++-- Owner-controlled Central Payment security and transaction workflow.
++-- ADDITIVE ONLY. This script does not update, delete, seed or rewrite existing business rows.
++-- Review before applying to production.
++
++create extension if not exists pgcrypto;
++
++create table if not exists public.owner_financial_security (
++  username text primary key,
++  password_hash text not null,
++  failed_attempts integer not null default 0,
++  locked_until timestamptz null,
++  password_changed_at timestamptz not null default now(),
++  created_at timestamptz not null default now(),
++  updated_at timestamptz not null default now(),
++  constraint owner_financial_security_username_check check (username = 'nisstaj_admin')
++);
++
++alter table public.owner_financial_security enable row level security;
++-- No direct table policy is created. Access is only through SECURITY DEFINER functions.
++
++alter table public.customer_payments
++  add column if not exists transaction_type text not null default 'PAYMENT',
++  add column if not exists verification_status text not null default 'CONFIRMED',
++  add column if not exists verified_by text null,
++  add column if not exists verified_at timestamptz null,
++  add column if not exists mandatory_reason text null,
++  add column if not exists collector_role text null;
++
++do $$
++begin
++  if not exists (
++    select 1 from pg_constraint where conname = 'customer_payments_transaction_type_check'
++  ) then
++    alter table public.customer_payments add constraint customer_payments_transaction_type_check
++      check (transaction_type in ('PAYMENT','DISCOUNT'));
++  end if;
++  if not exists (
++    select 1 from pg_constraint where conname = 'customer_payments_verification_status_check'
++  ) then
++    alter table public.customer_payments add constraint customer_payments_verification_status_check
++      check (verification_status in ('PENDING_VERIFICATION','CONFIRMED','REJECTED','VOIDED'));
++  end if;
++end $$;
++
++create sequence if not exists public.central_payment_reference_seq;
++
++create or replace function public.owner_financial_security_status(p_username text)
++returns jsonb
++language sql
++security definer
++set search_path = public
++as $$
++  select jsonb_build_object(
++    'configured', exists(select 1 from public.owner_financial_security where username = lower(trim(p_username))),
++    'locked_until', (select locked_until from public.owner_financial_security where username = lower(trim(p_username)))
++  );
++$$;
++
++create or replace function public.setup_owner_financial_password(
++  p_username text,
++  p_current_login_password text,
++  p_new_password text
++)
++returns jsonb
++language plpgsql
++security definer
++set search_path = public
++as $$
++begin
++  if lower(trim(p_username)) <> 'nisstaj_admin' then raise exception 'Owner username is invalid.' using errcode='42501'; end if;
++  if length(coalesce(p_new_password,'')) < 12 then raise exception 'New password is too short.'; end if;
++  if exists(select 1 from public.owner_financial_security where username='nisstaj_admin') then
++    raise exception 'Owner financial password is already configured.' using errcode='42501';
++  end if;
++  if not exists (
++    select 1 from public.login_users
++    where lower(trim(username))='nisstaj_admin'
++      and password = p_current_login_password
++      and coalesce(active,true)=true
++  ) then
++    raise exception 'Current login password is incorrect.' using errcode='42501';
++  end if;
++  insert into public.owner_financial_security(username,password_hash)
++  values ('nisstaj_admin', crypt(p_new_password, gen_salt('bf', 12)));
++  insert into public.financial_audit_log(action,entity_type,entity_id,reason,after_data,changed_by)
++  values ('OWNER_FINANCIAL_PASSWORD_CONFIGURED','owner_financial_security','nisstaj_admin','Initial secure owner password setup',jsonb_build_object('password_changed_at',now()),'nisstaj_admin');
++  return jsonb_build_object('ok',true);
++end;
++$$;
++
++create or replace function public.verify_owner_financial_password(p_username text,p_password text)
++returns boolean
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare v_row public.owner_financial_security%rowtype;
++begin
++  select * into v_row from public.owner_financial_security where username=lower(trim(p_username)) for update;
++  if not found then return false; end if;
++  if v_row.locked_until is not null and v_row.locked_until > now() then raise exception 'Owner financial access is temporarily locked.' using errcode='42501'; end if;
++  if v_row.password_hash = crypt(p_password,v_row.password_hash) then
++    update public.owner_financial_security set failed_attempts=0,locked_until=null,updated_at=now() where username=v_row.username;
++    return true;
++  end if;
++  update public.owner_financial_security
++  set failed_attempts=failed_attempts+1,
++      locked_until=case when failed_attempts+1>=5 then now()+interval '15 minutes' else locked_until end,
++      updated_at=now()
++  where username=v_row.username;
++  return false;
++end;
++$$;
++
++create or replace function public.change_owner_financial_password(
++  p_username text,p_current_password text,p_new_password text
++)
++returns jsonb
++language plpgsql
++security definer
++set search_path = public
++as $$
++begin
++  if not public.verify_owner_financial_password(p_username,p_current_password) then raise exception 'Current owner password is incorrect.' using errcode='42501'; end if;
++  if length(coalesce(p_new_password,'')) < 12 then raise exception 'New password is too short.'; end if;
++  update public.owner_financial_security set password_hash=crypt(p_new_password,gen_salt('bf',12)),password_changed_at=now(),updated_at=now() where username='nisstaj_admin';
++  insert into public.financial_audit_log(action,entity_type,entity_id,reason,after_data,changed_by)
++  values ('OWNER_FINANCIAL_PASSWORD_CHANGED','owner_financial_security','nisstaj_admin','Owner changed secure financial password',jsonb_build_object('password_changed_at',now()),'nisstaj_admin');
++  return jsonb_build_object('ok',true);
++end;
++$$;
++
++create or replace function public.post_owner_central_transaction(
++  p_owner_username text,
++  p_owner_password text,
++  p_customer_account_id uuid,
++  p_customer_branch_id uuid,
++  p_transaction_type text,
++  p_payment_date timestamptz,
++  p_amount numeric,
++  p_payment_method text,
++  p_paid_by text,
++  p_external_reference text,
++  p_notes text,
++  p_idempotency_key text,
++  p_allocations jsonb default '[]'::jsonb
++)
++returns jsonb
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_payment public.customer_payments%rowtype;
++  v_allocation jsonb;
++  v_status text;
++  v_reference text;
++  v_allocations jsonb := '[]'::jsonb;
++begin
++  if lower(trim(p_owner_username)) <> 'nisstaj_admin' or not public.verify_owner_financial_password(p_owner_username,p_owner_password) then
++    raise exception 'Owner authorisation failed.' using errcode='42501';
++  end if;
++  if p_amount <= 0 then raise exception 'Amount must be greater than zero.'; end if;
++  if upper(p_transaction_type) not in ('PAYMENT','DISCOUNT') then raise exception 'Invalid transaction type.'; end if;
++  if upper(p_transaction_type)='DISCOUNT' and nullif(trim(coalesce(p_notes,'')),'') is null then raise exception 'A detailed discount reason is compulsory.'; end if;
++
++  v_status := case when upper(p_transaction_type)='PAYMENT' and p_payment_method='Bank Transfer' then 'PENDING_VERIFICATION' else 'CONFIRMED' end;
++  v_reference := case when nullif(trim(coalesce(p_external_reference,'')),'') is not null then trim(p_external_reference)
++    else 'PAY-'||to_char(coalesce(p_payment_date,now()),'YYYYMMDD')||'-'||lpad(nextval('public.central_payment_reference_seq')::text,6,'0') end;
++
++  insert into public.customer_payments(
++    customer_account_id,customer_branch_id,payment_reference,payment_date,amount,payment_method,paid_by,notes,
++    source,idempotency_key,status,created_by,transaction_type,verification_status,verified_by,verified_at,mandatory_reason,collector_role
++  ) values (
++    p_customer_account_id,p_customer_branch_id,v_reference,coalesce(p_payment_date,now()),p_amount,
++    case when upper(p_transaction_type)='DISCOUNT' then 'Other' else p_payment_method end,
++    p_paid_by,p_notes,'CENTRAL_PAYMENT',p_idempotency_key,
++    case when v_status='CONFIRMED' then 'POSTED' else 'POSTED' end,
++    'nisstaj_admin',upper(p_transaction_type),v_status,
++    case when v_status='CONFIRMED' then 'nisstaj_admin' else null end,
++    case when v_status='CONFIRMED' then now() else null end,
++    case when upper(p_transaction_type)='DISCOUNT' then p_notes else null end,
++    'OWNER'
++  ) returning * into v_payment;
++
++  if v_status='CONFIRMED' then
++    for v_allocation in select value from jsonb_array_elements(coalesce(p_allocations,'[]'::jsonb)) loop
++      insert into public.customer_payment_allocations(payment_id,customer_account_id,customer_branch_id,invoice_reference,invoice_source_id,allocated_amount,allocation_type,status,created_by)
++      values(v_payment.id,p_customer_account_id,coalesce(nullif(v_allocation->>'customerBranchId','')::uuid,p_customer_branch_id),v_allocation->>'invoiceReference',v_allocation->>'invoiceSourceId',(v_allocation->>'allocatedAmount')::numeric,'automatic','active','nisstaj_admin');
++    end loop;
++  end if;
++
++  select coalesce(jsonb_agg(to_jsonb(a)),'[]'::jsonb) into v_allocations from public.customer_payment_allocations a where a.payment_id=v_payment.id;
++  insert into public.financial_audit_log(action,entity_type,entity_id,customer_account_id,customer_branch_id,reason,after_data,changed_by)
++  values(case when upper(p_transaction_type)='DISCOUNT' then 'OWNER_DISCOUNT_CREATED' when v_status='PENDING_VERIFICATION' then 'BANK_TRANSFER_RECORDED_PENDING' else 'OWNER_PAYMENT_POSTED' end,
++    'customer_payments',v_payment.id::text,p_customer_account_id,p_customer_branch_id,p_notes,jsonb_build_object('payment',to_jsonb(v_payment),'allocations',v_allocations),'nisstaj_admin');
++  return jsonb_build_object('duplicate',false,'payment',to_jsonb(v_payment),'allocations',v_allocations,'verification_status',v_status);
++end;
++$$;
++
++create or replace function public.confirm_owner_bank_transfer(
++  p_owner_username text,
++  p_owner_password text,
++  p_payment_id uuid,
++  p_note text,
++  p_allocations jsonb default '[]'::jsonb
++)
++returns jsonb
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_before public.customer_payments%rowtype;
++  v_after public.customer_payments%rowtype;
++  v_allocation jsonb;
++  v_inserted_allocations jsonb := '[]'::jsonb;
++begin
++  if lower(trim(p_owner_username)) <> 'nisstaj_admin'
++     or not public.verify_owner_financial_password(p_owner_username, p_owner_password) then
++    raise exception 'Owner authorisation failed.' using errcode = '42501';
++  end if;
++
++  if nullif(trim(coalesce(p_note, '')), '') is null then
++    raise exception 'Bank confirmation note is compulsory.';
++  end if;
++
++  select *
++    into v_before
++  from public.customer_payments
++  where id = p_payment_id
++    and payment_method = 'Bank Transfer'
++  for update;
++
++  if not found then
++    raise exception 'Pending bank transfer was not found.';
++  end if;
++
++  if v_before.verification_status <> 'PENDING_VERIFICATION' then
++    raise exception 'Bank transfer is not pending verification.';
++  end if;
++
++  update public.customer_payments
++  set verification_status = 'CONFIRMED',
++      verified_by = 'nisstaj_admin',
++      verified_at = now(),
++      updated_at = now(),
++      notes = concat_ws(E'
++', notes, 'Bank confirmation: ' || trim(p_note))
++  where id = p_payment_id
++  returning * into v_after;
++
++  for v_allocation in
++    select value from jsonb_array_elements(coalesce(p_allocations, '[]'::jsonb))
++  loop
++    insert into public.customer_payment_allocations (
++      payment_id,
++      customer_account_id,
++      customer_branch_id,
++      invoice_reference,
++      invoice_source_id,
++      allocated_amount,
++      allocation_type,
++      status,
++      created_by
++    )
++    values (
++      v_after.id,
++      v_after.customer_account_id,
++      coalesce(
++        nullif(v_allocation->>'customerBranchId', '')::uuid,
++        v_after.customer_branch_id
++      ),
++      v_allocation->>'invoiceReference',
++      v_allocation->>'invoiceSourceId',
++      (v_allocation->>'allocatedAmount')::numeric,
++      'automatic',
++      'active',
++      'nisstaj_admin'
++    )
++    on conflict (payment_id, invoice_reference) do nothing;
++  end loop;
++
++  select coalesce(jsonb_agg(to_jsonb(allocation)), '[]'::jsonb)
++    into v_inserted_allocations
++  from public.customer_payment_allocations allocation
++  where allocation.payment_id = v_after.id;
++
++  insert into public.financial_audit_log (
++    action,
++    entity_type,
++    entity_id,
++    customer_account_id,
++    customer_branch_id,
++    reason,
++    before_data,
++    after_data,
++    changed_by
++  )
++  values (
++    'BANK_TRANSFER_CONFIRMED',
++    'customer_payments',
++    p_payment_id::text,
++    v_after.customer_account_id,
++    v_after.customer_branch_id,
++    trim(p_note),
++    to_jsonb(v_before),
++    jsonb_build_object(
++      'payment', to_jsonb(v_after),
++      'allocations', v_inserted_allocations
++    ),
++    'nisstaj_admin'
++  );
++
++  return jsonb_build_object(
++    'payment', to_jsonb(v_after),
++    'allocations', v_inserted_allocations
++  );
++end;
++$$;
++
++revoke all on table public.owner_financial_security from public, anon, authenticated;
++revoke all on function public.setup_owner_financial_password(text,text,text) from public;
++revoke all on function public.change_owner_financial_password(text,text,text) from public;
++revoke all on function public.post_owner_central_transaction(text,text,uuid,uuid,text,timestamptz,numeric,text,text,text,text,text,jsonb) from public;
++revoke all on function public.confirm_owner_bank_transfer(text,text,uuid,text,jsonb) from public;
++revoke all on function public.owner_financial_security_status(text) from public;
++grant execute on function public.setup_owner_financial_password(text,text,text) to anon, authenticated;
++grant execute on function public.change_owner_financial_password(text,text,text) to anon, authenticated;
++grant execute on function public.post_owner_central_transaction(text,text,uuid,uuid,text,timestamptz,numeric,text,text,text,text,text,jsonb) to anon, authenticated;
++grant execute on function public.confirm_owner_bank_transfer(text,text,uuid,text,jsonb) to anon, authenticated;
++grant execute on function public.owner_financial_security_status(text) to anon, authenticated;

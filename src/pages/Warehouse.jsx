@@ -5,6 +5,7 @@ import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../utils/currency";
 import { getOrderItemQty } from "../utils/orderTotals";
+import { sortPrintItems } from "../utils/printItemSorting";
 
 import {
   calculateDocumentTotals,
@@ -216,7 +217,7 @@ const fetchDrivers = async () => {
     It will not appear on invoice/order form/delivery note.
   */
  const getPrintableItems = (order) =>
-  calculateDocumentTotals(order.items || [], order).invoiceItems;
+  sortPrintItems(calculateDocumentTotals(order.items || [], order).invoiceItems);
 
   /*
     Money format helper.
