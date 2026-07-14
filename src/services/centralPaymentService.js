@@ -16,6 +16,22 @@ import {
 
 const deliveredStatuses = ["delivered", "confirmed", "delivery confirmed", "completed"];
 
+const getCurrentOrderItems = (order = {}) => {
+  const items = order.order_items || order.items || [];
+  return Array.isArray(items) ? items : [];
+};
+
+const getCurrentOrderItemsInvoiceTotal = (order = {}) => {
+  const items = getCurrentOrderItems(order);
+  if (!items.length) return null;
+
+  return calculateDocumentTotals(items, {
+    ...order,
+    items,
+    order_items: items,
+  }).grandTotal;
+};
+
 const getInvoiceReferenceCandidates = (row = {}) =>
   [
     row.invoice_number,
@@ -53,17 +69,20 @@ const withOrderBackedInvoiceTotal = (invoice, orderLookup) => {
 
   if (!matchingOrder) return invoice;
 
+  const correctedTotal = matchingOrder.currentOrderItemsInvoiceTotal ?? matchingOrder.invoice_total;
+
   return {
     ...invoice,
     customer_branch_id: invoice.customer_branch_id || matchingOrder.customer_branch_id,
     branch_name: invoice.branch_name || matchingOrder.branch_name,
     invoice_date: invoice.invoice_date || matchingOrder.invoice_date,
-    invoice_total: matchingOrder.invoice_total,
-    invoice_amount: matchingOrder.invoice_total,
-    amount: matchingOrder.invoice_total,
-    debit: matchingOrder.invoice_total,
+    invoice_total: correctedTotal,
+    invoice_amount: correctedTotal,
+    amount: correctedTotal,
+    debit: correctedTotal,
     source: invoice.source || "customer_invoices",
     orderSourceTotalApplied: true,
+    currentOrderItemsTotalApplied: matchingOrder.currentOrderItemsTotalApplied === true,
   };
 };
 
@@ -143,7 +162,7 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
   if (!customerAccountId && !customerName) return [];
 
   const mapOrderInvoice = (order) => {
-    const totals = calculateDocumentTotals(order.order_items || order.items || [], order);
+    const currentOrderItemsInvoiceTotal = getCurrentOrderItemsInvoiceTotal(order);
     const savedTotal = [
       order.order_total,
       order.orderTotal,
@@ -158,6 +177,9 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
     );
 
     const invoiceReference = order.invoice_number || order.order_number || order.orderId || order.id;
+    const invoiceTotal =
+      currentOrderItemsInvoiceTotal ??
+      (savedTotal !== undefined ? Number(savedTotal) : calculateDocumentTotals([], order).grandTotal);
 
     return {
       id: order.id,
@@ -169,7 +191,12 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
       order_number: order.order_number || order.orderId || invoiceReference,
       order_id: order.id,
       invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
-      invoice_total: savedTotal !== undefined ? Number(savedTotal) : totals.grandTotal,
+      invoice_total: invoiceTotal,
+      invoice_amount: invoiceTotal,
+      amount: invoiceTotal,
+      debit: invoiceTotal,
+      currentOrderItemsInvoiceTotal,
+      currentOrderItemsTotalApplied: currentOrderItemsInvoiceTotal !== null,
       status: "ISSUED",
       source: "orders",
     };
@@ -277,7 +304,9 @@ async function loadLegacyLedgerFallback({
       .map((row) => {
         const matchingInvoice = findInvoiceByReference(row, invoiceLookup);
         const invoiceTotal =
-          matchingInvoice?.invoice_total ?? Number(row.debit || row.amount || row.invoice_amount || 0);
+          matchingInvoice?.currentOrderItemsInvoiceTotal ??
+          matchingInvoice?.invoice_total ??
+          Number(row.debit || row.amount || row.invoice_amount || 0);
 
         return {
           ...row,
@@ -290,6 +319,7 @@ async function loadLegacyLedgerFallback({
           debit: invoiceTotal,
           source: "legacy_customer_ledger",
           orderSourceTotalApplied: Boolean(matchingInvoice?.orderSourceTotalApplied),
+          currentOrderItemsTotalApplied: matchingInvoice?.currentOrderItemsTotalApplied === true,
         };
       });
   const legacyPayments = ledgerRows

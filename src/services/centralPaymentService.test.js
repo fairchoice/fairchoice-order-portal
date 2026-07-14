@@ -67,6 +67,20 @@ test("equivalent legacy and new records do not duplicate", () => {
   assert.deepEqual(result.payments.map((row) => row.id), ["new-payment"]);
 });
 
+test("customer credit invoice rows prefer current order item totals", () => {
+  assert.match(serviceSource, /const getCurrentOrderItemsInvoiceTotal/);
+  assert.match(serviceSource, /currentOrderItemsInvoiceTotal \?\?/);
+  assert.match(serviceSource, /currentOrderItemsTotalApplied/);
+
+  const loadDeliveredInvoicesSource = getFunctionSource("loadDeliveredInvoices");
+  assert.match(loadDeliveredInvoicesSource, /const currentOrderItemsInvoiceTotal = getCurrentOrderItemsInvoiceTotal\(order\)/);
+  assert.match(loadDeliveredInvoicesSource, /invoice_total:\s*invoiceTotal/);
+  assert.doesNotMatch(
+    loadDeliveredInvoicesSource,
+    /invoice_total:\s*savedTotal !== undefined \? Number\(savedTotal\)/
+  );
+});
+
 test("protected owner payment RPC fails closed without direct browser writes", () => {
   const source = getFunctionSource("createCentralPayment");
 
