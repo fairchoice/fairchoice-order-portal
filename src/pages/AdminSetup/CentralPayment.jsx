@@ -12,7 +12,7 @@ import {
   removeCentralPayment,
   restoreCentralPayment,
 } from "../../services/centralPaymentService";
-import { OWNER_USERNAME, isOwnerUser } from "../../services/ownerFinancialSecurity";
+import { isOwnerUser } from "../../services/ownerFinancialSecurity";
 
 const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
 
@@ -188,7 +188,7 @@ function PaymentRecordsPanel({ archived, currentUser, ownerPassword, customer, b
 
 export default function CentralPayment() {
   const currentUser = useMemo(() => getLoggedInUser(), []);
-  const owner = isOwnerUser(currentUser);
+  const isNisstajAdmin = isOwnerUser(currentUser);
   const [activeTab, setActiveTab] = useState("manual");
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState("");
@@ -209,6 +209,13 @@ export default function CentralPayment() {
     notes: "",
     ownerPassword: "",
   });
+
+  useEffect(() => {
+    if (!isNisstajAdmin && activeTab !== "manual") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveTab("manual");
+    }
+  }, [activeTab, isNisstajAdmin]);
 
   useEffect(() => {
     let active = true;
@@ -310,11 +317,11 @@ export default function CentralPayment() {
 
   const savePayment = async () => {
     if (saving) return;
-    if (!owner) {
-      setError("Only nisstaj_admin can create Central Payment transactions.");
-      return;
-    }
-    if (form.transactionType === "DISCOUNT" && !String(form.notes).trim()) {
+
+    if (
+      form.transactionType === "DISCOUNT" &&
+      !String(form.notes).trim()
+    ) {
       setError("A detailed discount reason is compulsory.");
       return;
     }
@@ -402,20 +409,6 @@ export default function CentralPayment() {
     }
   };
 
-  if (!owner) {
-    return (
-      <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
-        <h2 className="text-xl font-extrabold text-red-900">
-          Central Payment restricted
-        </h2>
-        <p className="mt-2 text-red-800">
-          Only the owner account <strong>{OWNER_USERNAME}</strong> can create,
-          confirm, void, reverse, reallocate or discount financial transactions.
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4 p-4">
       <div className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -460,9 +453,29 @@ export default function CentralPayment() {
         </div>
       </div>
 
-      <nav className="flex flex-wrap gap-2" aria-label="Central Payment sections">
-        {[["manual", "Manual Payment"], ["history", "Payment History"], ["archive", "Payment Archive"]].map(([value, label]) => (
-          <button key={value} type="button" onClick={() => setActiveTab(value)} className={`rounded-xl px-4 py-3 font-bold ${activeTab === value ? "bg-blue-800 text-white" : "border bg-white text-slate-700"}`}>
+      <nav
+        className="flex flex-wrap gap-2"
+        aria-label="Central Payment sections"
+      >
+        {[
+          ["manual", "Manual Payment"],
+          ...(isNisstajAdmin
+            ? [
+                ["history", "Payment History"],
+                ["archive", "Payment Archive"],
+              ]
+            : []),
+        ].map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setActiveTab(value)}
+            className={`rounded-xl px-4 py-3 font-bold ${
+              activeTab === value
+                ? "bg-blue-800 text-white"
+                : "border bg-white text-slate-700"
+            }`}
+          >
             {label}
           </button>
         ))}
@@ -672,10 +685,10 @@ export default function CentralPayment() {
       </div>
       )}
 
-      {activeTab === "history" && (
+      {isNisstajAdmin && activeTab === "history" && (
         <PaymentRecordsPanel archived={false} currentUser={currentUser} ownerPassword={form.ownerPassword} customer={selectedCustomer} branchId={selectedBranchId} onChanged={refreshSnapshot} onConfirmBank={confirmBank} />
       )}
-      {activeTab === "archive" && (
+      {isNisstajAdmin && activeTab === "archive" && (
         <PaymentRecordsPanel archived currentUser={currentUser} ownerPassword={form.ownerPassword} customer={selectedCustomer} branchId={selectedBranchId} onChanged={refreshSnapshot} onConfirmBank={confirmBank} />
       )}
     </div>
