@@ -6,7 +6,6 @@ import {
   filterRowsForBranchScope,
   buildCustomerTransactionHistory,
   createPaymentIdempotencyKey,
-  filterInvoicesForAllocation,
   getBranchKey,
   isVoidedPayment,
   money,
@@ -116,8 +115,6 @@ export const isMissingRpcError = (error = {}) => {
   );
 };
 
-const centralPaymentUnavailableMessage =
-  "Central Payment service is unavailable. Apply the required database migrations before recording payments.";
 const paymentVoidUnavailableMessage =
   "Payment void service is unavailable. Apply the required database migrations before voiding payments.";
 const branchSeparationUnavailableMessage =
@@ -510,7 +507,7 @@ export async function createCentralPayment({
   throw error;
 }
 
-export async function deleteOwnerCentralPayment({
+export async function removeCentralPayment({
   payment,
   customer,
   currentUser,
@@ -520,7 +517,7 @@ export async function deleteOwnerCentralPayment({
   const actor = getActor(currentUser).toLowerCase();
 
   if (actor !== "nisstaj_admin") {
-    throw new Error("Only nisstaj_admin can delete Central Payment records.");
+    throw new Error("Only nisstaj_admin can remove Central Payment records.");
   }
   if (!payment?.id) throw new Error("Payment is required.");
   if (!ownerPassword) throw new Error("Owner financial password is required.");
@@ -532,9 +529,9 @@ export async function deleteOwnerCentralPayment({
     throw new Error("This payment is already deleted.");
   }
 
-  const { data, error } = await supabase.rpc("delete_owner_central_payment", {
-    p_owner_username: "nisstaj_admin",
-    p_owner_password: ownerPassword,
+  const { data, error } = await supabase.rpc("remove_central_payment", {
+    p_admin_username: "nisstaj_admin",
+    p_admin_password: ownerPassword,
     p_payment_id: payment.id,
     p_reason: String(reason).trim(),
   });
@@ -550,7 +547,7 @@ export async function deleteOwnerCentralPayment({
   }
   if (isMissingRpcError(error)) {
     throw new Error(
-      "Owner payment deletion is not installed. Apply the required database migration before deleting payments."
+      "Payment archive removal is not installed. Apply the Central Payment final migration."
     );
   }
   throw error;
@@ -559,9 +556,13 @@ export async function deleteOwnerCentralPayment({
 export async function confirmOwnerBankTransfer({
   payment,
   customer,
+  currentUser,
   ownerPassword,
   note,
 } = {}) {
+  if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
+    throw new Error("Only nisstaj_admin can confirm bank transfers.");
+  }
   if (!payment?.id) throw new Error("Pending bank transfer is required.");
   if (!ownerPassword) throw new Error("Owner financial password is required.");
   if (!String(note || "").trim()) {
@@ -603,6 +604,80 @@ export async function confirmOwnerBankTransfer({
   }
   throw error;
 }
+
+const requireAdminLifecycle = (currentUser, ownerPassword) => {
+  if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
+    throw new Error("Only nisstaj_admin can manage the payment lifecycle.");
+  }
+  if (!ownerPassword) throw new Error("Owner financial password is required in Manual Payment.");
+};
+
+export async function listCentralPaymentRecords({
+  currentUser,
+  ownerPassword,
+  customerAccountId,
+  customerBranchId = null,
+  archived = false,
+  search = "",
+  method = "",
+  dateFrom = null,
+  dateTo = null,
+  page = 1,
+} = {}) {
+  requireAdminLifecycle(currentUser, ownerPassword);
+  const { data, error } = await supabase.rpc("list_central_payment_records", {
+    p_admin_username: "nisstaj_admin",
+    p_admin_password: ownerPassword,
+    p_customer_account_id: customerAccountId,
+    p_customer_branch_id: customerBranchId || null,
+    p_archived: archived,
+    p_search: search,
+    p_method: method,
+    p_date_from: dateFrom || null,
+    p_date_to: dateTo || null,
+    p_page: page,
+  });
+  if (error) throw error;
+  return data || { records: [], total: 0, page: 1, page_size: 2, total_pages: 1 };
+}
+
+export async function editCentralPayment({ currentUser, ownerPassword, payment, changes, reason } = {}) {
+  requireAdminLifecycle(currentUser, ownerPassword);
+  if (!payment?.id) throw new Error("Payment is required.");
+  if (!String(reason || "").trim()) throw new Error("Edit reason is required.");
+  const { data, error } = await supabase.rpc("edit_central_payment", {
+    p_admin_username: "nisstaj_admin",
+    p_admin_password: ownerPassword,
+    p_payment_id: payment.id,
+    p_payment_date: changes.paymentDate,
+    p_amount: Number(changes.amount),
+    p_payment_method: changes.paymentMethod,
+    p_paid_by: changes.paidBy,
+    p_external_reference: changes.externalReference,
+    p_notes: changes.notes,
+    p_reason: String(reason).trim(),
+  });
+  if (error) throw error;
+  return data;
+}
+
+async function runLifecycleRpc(name, { currentUser, ownerPassword, payment, reason } = {}) {
+  requireAdminLifecycle(currentUser, ownerPassword);
+  if (!payment?.id) throw new Error("Payment is required.");
+  if (!String(reason || "").trim()) throw new Error("A reason is required.");
+  const { data, error } = await supabase.rpc(name, {
+    p_admin_username: "nisstaj_admin",
+    p_admin_password: ownerPassword,
+    p_payment_id: payment.id,
+    p_reason: String(reason).trim(),
+  });
+  if (error) throw error;
+  return data;
+}
+
+export const restoreCentralPayment = (options) => runLifecycleRpc("restore_central_payment", options);
+export const permanentlyDeleteCentralPayment = (options) =>
+  runLifecycleRpc("permanently_delete_central_payment", options);
 
 export async function voidCentralPayment({ payment, reason } = {}) {
   if (!payment?.id) throw new Error("Payment is required.");

@@ -109,7 +109,11 @@ create table if not exists public.customer_payment_allocations (
 );
 
 create index if not exists customer_payment_allocations_invoice_idx
-  on public.customer_payment_allocations (customer_account_id, customer_branch_id, invoice_reference);
+on public.customer_payment_allocations (
+    customer_account_id,
+    customer_branch_id,
+    invoice_ledger_id
+);
 
 create table if not exists public.customer_branch_opening_balances (
   id uuid primary key default gen_random_uuid(),

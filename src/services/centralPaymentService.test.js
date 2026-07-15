@@ -165,25 +165,26 @@ test("bank confirmation is owner RPC-only and sends allocation preview", () => {
   assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.insert/s);
 });
 
-test("owner can delete a duplicated payment through protected RPC only", () => {
-  const source = getFunctionSource("deleteOwnerCentralPayment");
+test("owner removes an active payment through the archive RPC only", () => {
+  const source = getFunctionSource("removeCentralPayment");
 
   assert.match(source, /actor !== "nisstaj_admin"/);
   assert.match(source, /Owner financial password is required/);
   assert.match(source, /Deletion reason is required/);
-  assert.match(source, /supabase\.rpc\("delete_owner_central_payment"/);
+  assert.match(source, /supabase\.rpc\("remove_central_payment"/);
   assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.delete/s);
   assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.update/s);
   assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.update/s);
 });
 
-test("non-owner cannot see or call payment delete", () => {
-  const source = getFunctionSource("deleteOwnerCentralPayment");
+test("non-owner cannot see or call payment lifecycle actions", () => {
+  const source = getFunctionSource("removeCentralPayment");
 
-  assert.match(source, /Only nisstaj_admin can delete Central Payment records/);
+  assert.match(source, /Only nisstaj_admin can remove Central Payment records/);
   assert.match(centralPaymentComponentSource, /isOwnerUser\(currentUser\)/);
-  assert.match(centralPaymentComponentSource, /owner && \(/);
-  assert.match(centralPaymentComponentSource, /Delete/);
+  assert.match(centralPaymentComponentSource, /Payment History/);
+  assert.match(centralPaymentComponentSource, /Payment Archive/);
+  assert.match(centralPaymentComponentSource, /Permanent delete/);
 });
 
 test("voided payment disappears from active totals and history", () => {

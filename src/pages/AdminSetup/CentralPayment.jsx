@@ -4,17 +4,15 @@ import {
   buildPaymentPreview,
   confirmOwnerBankTransfer,
   createCentralPayment,
-  deleteOwnerCentralPayment,
+  editCentralPayment,
+  listCentralPaymentRecords,
   loadCentralPaymentCustomers,
   loadCentralPaymentSnapshot,
+  permanentlyDeleteCentralPayment,
+  removeCentralPayment,
+  restoreCentralPayment,
 } from "../../services/centralPaymentService";
-import {
-  OWNER_USERNAME,
-  changeOwnerPassword,
-  getOwnerSecurityStatus,
-  isOwnerUser,
-  setupOwnerPassword,
-} from "../../services/ownerFinancialSecurity";
+import { OWNER_USERNAME, isOwnerUser } from "../../services/ownerFinancialSecurity";
 
 const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
 
@@ -36,138 +34,6 @@ const matchesCustomer = (customer, search) =>
     .toLowerCase()
     .includes(String(search || "").toLowerCase());
 
-function OwnerSecurityPanel({ status, onRefresh }) {
-  const [mode, setMode] = useState(status?.configured ? "change" : "setup");
-  const [currentLoginPassword, setCurrentLoginPassword] = useState("");
-  const [currentOwnerPassword, setCurrentOwnerPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-
-  useEffect(() => {
-    setMode(status?.configured ? "change" : "setup");
-  }, [status?.configured]);
-
-  const submit = async () => {
-    if (newPassword !== confirmPassword) {
-      setMessage("New passwords do not match.");
-      return;
-    }
-
-    setBusy(true);
-    setMessage("");
-
-    try {
-      if (mode === "setup") {
-        await setupOwnerPassword({ currentLoginPassword, newPassword });
-      } else {
-        await changeOwnerPassword({ currentOwnerPassword, newPassword });
-      }
-
-      setCurrentLoginPassword("");
-      setCurrentOwnerPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-      setMessage(
-        mode === "setup"
-          ? "Owner financial password configured."
-          : "Owner financial password changed."
-      );
-      await onRefresh();
-    } catch (error) {
-      setMessage(error.message || "Could not update owner security.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="font-extrabold text-blue-950">Owner Financial Security</h3>
-          <p className="text-sm text-blue-800">
-            Protected account: {OWNER_USERNAME}. The financial password is hashed
-            in Supabase and is never stored in browser code.
-          </p>
-        </div>
-        <span
-          className={`rounded-full px-3 py-1 text-xs font-bold ${
-            status?.configured
-              ? "bg-green-100 text-green-800"
-              : "bg-amber-100 text-amber-800"
-          }`}
-        >
-          {status?.configured ? "Configured" : "Setup required"}
-        </span>
-      </div>
-
-      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-        {mode === "setup" ? (
-          <input
-            type="password"
-            value={currentLoginPassword}
-            onChange={(event) => setCurrentLoginPassword(event.target.value)}
-            placeholder="Current login password"
-            className="rounded-xl border p-3"
-            autoComplete="current-password"
-          />
-        ) : (
-          <input
-            type="password"
-            value={currentOwnerPassword}
-            onChange={(event) => setCurrentOwnerPassword(event.target.value)}
-            placeholder="Current financial password"
-            className="rounded-xl border p-3"
-            autoComplete="current-password"
-          />
-        )}
-        <input
-          type="password"
-          value={newPassword}
-          onChange={(event) => setNewPassword(event.target.value)}
-          placeholder="New secure password"
-          className="rounded-xl border p-3"
-          autoComplete="new-password"
-        />
-        <input
-          type="password"
-          value={confirmPassword}
-          onChange={(event) => setConfirmPassword(event.target.value)}
-          placeholder="Confirm new password"
-          className="rounded-xl border p-3"
-          autoComplete="new-password"
-        />
-      </div>
-
-      <button
-        type="button"
-        onClick={submit}
-        disabled={
-          busy ||
-          !newPassword ||
-          !confirmPassword ||
-          (mode === "setup" ? !currentLoginPassword : !currentOwnerPassword)
-        }
-        className="mt-3 rounded-xl bg-blue-800 px-4 py-3 font-bold text-white disabled:bg-slate-300"
-      >
-        {busy
-          ? "Saving..."
-          : mode === "setup"
-            ? "Set owner financial password"
-            : "Change owner financial password"}
-      </button>
-
-      {message && (
-        <div className="mt-3 rounded-lg bg-white p-3 text-sm font-semibold">
-          {message}
-        </div>
-      )}
-    </section>
-  );
-}
-
 function Summary({ label, value, neutral = false }) {
   return (
     <div className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -183,13 +49,147 @@ function Summary({ label, value, neutral = false }) {
   );
 }
 
+function PaymentRecordsPanel({ archived, currentUser, ownerPassword, customer, branchId, onChanged, onConfirmBank }) {
+  const [filters, setFilters] = useState({ search: "", method: "", dateFrom: "", dateTo: "" });
+  const [page, setPage] = useState(1);
+  const [result, setResult] = useState({ records: [], total: 0, total_pages: 1 });
+  const [busyId, setBusyId] = useState("");
+  const [message, setMessage] = useState("");
+
+  const load = async () => {
+    if (!customer?.id || !ownerPassword) {
+      setResult({ records: [], total: 0, total_pages: 1 });
+      return;
+    }
+    try {
+      setMessage("");
+      setResult(await listCentralPaymentRecords({
+        currentUser,
+        ownerPassword,
+        customerAccountId: customer.id,
+        customerBranchId: branchId || null,
+        archived,
+        ...filters,
+        page,
+      }));
+    } catch (loadError) {
+      setMessage(loadError.message || "Could not load payment records.");
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    if (!customer?.id || !ownerPassword) return undefined;
+    listCentralPaymentRecords({
+      currentUser,
+      ownerPassword,
+      customerAccountId: customer.id,
+      customerBranchId: branchId || null,
+      archived,
+      ...filters,
+      page,
+    }).then((data) => {
+      if (active) setResult(data);
+    }).catch((loadError) => {
+      if (active) setMessage(loadError.message || "Could not load payment records.");
+    });
+    return () => { active = false; };
+  }, [archived, branchId, currentUser, customer?.id, filters, ownerPassword, page]);
+
+  const updateFilter = (field, value) => {
+    setFilters((current) => ({ ...current, [field]: value }));
+    setPage(1);
+  };
+
+  const runAction = async (payment, action) => {
+    const labels = { remove: "removal", restore: "restore", permanent: "permanent deletion", edit: "edit" };
+    const reason = window.prompt(`Enter the compulsory ${labels[action]} reason.`);
+    if (!String(reason || "").trim()) return;
+    if (action === "permanent" && !window.confirm("Permanently delete this archived payment? This cannot be undone.")) return;
+    setBusyId(payment.id);
+    setMessage("");
+    try {
+      if (action === "remove") {
+        await removeCentralPayment({ currentUser, ownerPassword, payment, reason });
+      } else if (action === "restore") {
+        await restoreCentralPayment({ currentUser, ownerPassword, payment, reason });
+      } else if (action === "permanent") {
+        await permanentlyDeleteCentralPayment({ currentUser, ownerPassword, payment, reason });
+      } else {
+        const amount = window.prompt("Payment amount", String(payment.amount || ""));
+        if (amount === null) return;
+        const paymentDate = window.prompt("Payment date (YYYY-MM-DD)", String(payment.payment_date || "").slice(0, 10));
+        if (paymentDate === null) return;
+        const paymentMethod = window.prompt("Payment method", payment.payment_method || "Cash");
+        if (paymentMethod === null) return;
+        const paidBy = window.prompt("Paid by", payment.paid_by || "");
+        if (paidBy === null) return;
+        const externalReference = window.prompt("Reference", payment.payment_reference || "");
+        if (externalReference === null) return;
+        const notes = window.prompt("Notes", payment.notes || "");
+        if (notes === null) return;
+        await editCentralPayment({
+          currentUser,
+          ownerPassword,
+          payment,
+          changes: { amount, paymentDate: `${paymentDate}T12:00:00`, paymentMethod, paidBy, externalReference, notes },
+          reason,
+        });
+      }
+      await load();
+      await onChanged();
+    } catch (actionError) {
+      setMessage(actionError.message || "Payment lifecycle action failed.");
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  if (!ownerPassword) {
+    return <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 font-semibold text-amber-900">Enter the Owner Financial Password in Manual Payment to unlock this admin-only tab.</div>;
+  }
+
+  return (
+    <section className="rounded-2xl border bg-white p-4 shadow-sm">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-lg font-extrabold">{archived ? "Payment Archive" : "Payment History"}</h3>
+        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold">{result.total || 0} records</span>
+      </div>
+      <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-4">
+        <input value={filters.search} onChange={(event) => updateFilter("search", event.target.value)} placeholder="Reference, payer or notes" className="rounded-xl border p-3" />
+        <select value={filters.method} onChange={(event) => updateFilter("method", event.target.value)} className="rounded-xl border p-3"><option value="">All methods</option>{paymentMethods.map((method) => <option key={method}>{method}</option>)}</select>
+        <input type="date" value={filters.dateFrom} onChange={(event) => updateFilter("dateFrom", event.target.value)} className="rounded-xl border p-3" aria-label="From date" />
+        <input type="date" value={filters.dateTo} onChange={(event) => updateFilter("dateTo", event.target.value)} className="rounded-xl border p-3" aria-label="To date" />
+      </div>
+      {message && <div className="mb-3 rounded-xl bg-red-50 p-3 font-bold text-red-700">{message}</div>}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[980px] text-sm">
+          <thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Type</th><th className="p-3">Method</th><th className="p-3">Paid by</th><th className="p-3">Status</th><th className="p-3">Notes</th><th className="p-3 text-right">Amount</th><th className="p-3 text-right">Actions</th></tr></thead>
+          <tbody>
+            {(result.records || []).map((payment) => {
+              const pending = payment.payment_method === "Bank Transfer" && payment.verification_status === "PENDING_VERIFICATION";
+              return <tr key={payment.id} className="border-b align-top">
+                <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
+                <td className="p-3 font-bold">{payment.payment_reference || "-"}</td><td className="p-3">{payment.transaction_type || "PAYMENT"}</td><td className="p-3">{payment.payment_method || "-"}</td><td className="p-3">{payment.paid_by || "-"}</td>
+                <td className="p-3">{archived ? "ARCHIVED" : payment.verification_status || payment.status}</td><td className="max-w-[260px] whitespace-pre-wrap p-3">{archived ? payment.removed_reason : payment.notes || "-"}</td><td className="p-3 text-right font-bold">{formatCurrency(payment.amount || 0)}</td>
+                <td className="p-3 text-right">
+                  {archived ? <><button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "restore")} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Restore</button><button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "permanent")} className="ml-2 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Permanent delete</button></> : <><button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "edit")} className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Edit</button><button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "remove")} className="ml-2 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Remove</button>{pending && <button type="button" disabled={busyId === payment.id} onClick={() => onConfirmBank(payment)} className="ml-2 rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Confirm bank</button>}</>}
+                </td>
+              </tr>;
+            })}
+            {!result.records?.length && <tr><td colSpan="9" className="p-5 text-center text-slate-500">No payment records match these filters.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-4 flex items-center justify-end gap-3"><button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)} className="rounded-lg border px-3 py-2 font-bold disabled:text-slate-300">Previous</button><span className="text-sm font-bold">Page {page} of {result.total_pages || 1}</span><button type="button" disabled={page >= (result.total_pages || 1)} onClick={() => setPage((value) => value + 1)} className="rounded-lg border px-3 py-2 font-bold disabled:text-slate-300">Next</button></div>
+    </section>
+  );
+}
+
 export default function CentralPayment() {
-  const currentUser = getLoggedInUser();
+  const currentUser = useMemo(() => getLoggedInUser(), []);
   const owner = isOwnerUser(currentUser);
-  const [securityStatus, setSecurityStatus] = useState({
-    installed: false,
-    configured: false,
-  });
+  const [activeTab, setActiveTab] = useState("manual");
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -197,13 +197,6 @@ export default function CentralPayment() {
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [confirmingId, setConfirmingId] = useState("");
-  const [deletingId, setDeletingId] = useState("");
-  const [deletePayment, setDeletePayment] = useState(null);
-  const [deleteForm, setDeleteForm] = useState({
-    reason: "",
-    ownerPassword: "",
-  });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [form, setForm] = useState({
@@ -216,18 +209,6 @@ export default function CentralPayment() {
     notes: "",
     ownerPassword: "",
   });
-
-  const refreshSecurity = async () => {
-    try {
-      setSecurityStatus(await getOwnerSecurityStatus());
-    } catch (securityError) {
-      setError(securityError.message);
-    }
-  };
-
-  useEffect(() => {
-    refreshSecurity();
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -300,8 +281,26 @@ export default function CentralPayment() {
   };
 
   useEffect(() => {
-    refreshSnapshot();
-  }, [selectedCustomerId, selectedBranchId]);
+    let active = true;
+    if (!selectedCustomer) return undefined;
+    void Promise.resolve().then(async () => {
+      if (active) setLoading(true);
+      try {
+        const nextSnapshot = await loadCentralPaymentSnapshot({
+          customerAccountId: selectedCustomer.id,
+          customerName: selectedCustomer.account_name,
+          customer: selectedCustomer,
+          selectedBranchId,
+        });
+        if (active) setSnapshot(nextSnapshot);
+      } catch (loadError) {
+        if (active) setError(loadError.message);
+      } finally {
+        if (active) setLoading(false);
+      }
+    });
+    return () => { active = false; };
+  }, [selectedBranchId, selectedCustomer]);
 
   const updateForm = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -313,10 +312,6 @@ export default function CentralPayment() {
     if (saving) return;
     if (!owner) {
       setError("Only nisstaj_admin can create Central Payment transactions.");
-      return;
-    }
-    if (!securityStatus.configured) {
-      setError("Set the owner financial password before posting transactions.");
       return;
     }
     if (form.transactionType === "DISCOUNT" && !String(form.notes).trim()) {
@@ -365,7 +360,6 @@ export default function CentralPayment() {
         amount: "",
         externalReference: "",
         notes: "",
-        ownerPassword: "",
       }));
       await refreshSnapshot();
     } catch (saveError) {
@@ -376,10 +370,10 @@ export default function CentralPayment() {
   };
 
   const confirmBank = async (payment) => {
-    const ownerPassword = window.prompt(
-      "Enter the owner financial password to confirm this bank transfer."
-    );
-    if (!ownerPassword) return;
+    if (!form.ownerPassword) {
+      setError("Enter the Owner Financial Password in Manual Payment first.");
+      return;
+    }
 
     const note = window.prompt(
       "Enter the compulsory bank verification note or bank statement reference."
@@ -389,14 +383,14 @@ export default function CentralPayment() {
       return;
     }
 
-    setConfirmingId(payment.id);
     setError("");
     setSuccess("");
     try {
       await confirmOwnerBankTransfer({
         payment,
         customer: selectedCustomer,
-        ownerPassword,
+        currentUser,
+        ownerPassword: form.ownerPassword,
         note,
       });
       setSuccess(
@@ -405,62 +399,6 @@ export default function CentralPayment() {
       await refreshSnapshot();
     } catch (confirmError) {
       setError(confirmError.message || "Could not confirm bank transfer.");
-    } finally {
-      setConfirmingId("");
-    }
-  };
-
-  const openDeletePayment = (payment) => {
-    if (!owner) return;
-    setDeletePayment(payment);
-    setDeleteForm({ reason: "", ownerPassword: "" });
-    setError("");
-    setSuccess("");
-  };
-
-  const closeDeletePayment = () => {
-    if (deletingId) return;
-    setDeletePayment(null);
-    setDeleteForm({ reason: "", ownerPassword: "" });
-  };
-
-  const confirmDeletePayment = async () => {
-    if (!deletePayment || deletingId) return;
-    if (!String(deleteForm.reason || "").trim()) {
-      setError("A deletion reason is compulsory.");
-      return;
-    }
-    if (!deleteForm.ownerPassword) {
-      setError("Owner financial password is required.");
-      return;
-    }
-    if (
-      !window.confirm(
-        `Delete payment ${deletePayment.payment_reference || deletePayment.id}?\n\nThis will increase the customer outstanding balance and recalculate invoice payment statuses.`
-      )
-    ) {
-      return;
-    }
-
-    setDeletingId(deletePayment.id);
-    setError("");
-    setSuccess("");
-    try {
-      await deleteOwnerCentralPayment({
-        payment: deletePayment,
-        customer: selectedCustomer,
-        currentUser,
-        ownerPassword: deleteForm.ownerPassword,
-        reason: deleteForm.reason,
-      });
-      setSuccess("Payment deleted successfully.");
-      setDeletePayment(null);
-      setDeleteForm({ reason: "", ownerPassword: "" });
-      await refreshSnapshot();
-    } catch (deleteError) {
-      setError(deleteError.message || "Could not delete payment.");
-    } finally {
-      setDeletingId("");
     }
   };
 
@@ -480,8 +418,6 @@ export default function CentralPayment() {
 
   return (
     <div className="space-y-4 p-4">
-      <OwnerSecurityPanel status={securityStatus} onRefresh={refreshSecurity} />
-
       <div className="rounded-2xl border bg-white p-4 shadow-sm">
         <h2 className="text-2xl font-extrabold">Central Payment</h2>
         <p className="mt-1 text-sm text-slate-600">
@@ -523,6 +459,14 @@ export default function CentralPayment() {
           </select>
         </div>
       </div>
+
+      <nav className="flex flex-wrap gap-2" aria-label="Central Payment sections">
+        {[["manual", "Manual Payment"], ["history", "Payment History"], ["archive", "Payment Archive"]].map(([value, label]) => (
+          <button key={value} type="button" onClick={() => setActiveTab(value)} className={`rounded-xl px-4 py-3 font-bold ${activeTab === value ? "bg-blue-800 text-white" : "border bg-white text-slate-700"}`}>
+            {label}
+          </button>
+        ))}
+      </nav>
 
       {loading && (
         <div className="rounded-xl bg-slate-50 p-3 font-bold">
@@ -567,6 +511,7 @@ export default function CentralPayment() {
         />
       </div>
 
+      {activeTab === "manual" && (
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <section className="rounded-2xl border bg-white p-4 shadow-sm">
           <h3 className="mb-3 text-lg font-extrabold">Owner Transaction</h3>
@@ -725,236 +670,13 @@ export default function CentralPayment() {
           </div>
         </section>
       </div>
+      )}
 
-      <section className="rounded-2xl border bg-white p-4 shadow-sm">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="text-lg font-extrabold">All Customer Payments</h3>
-            <p className="text-sm text-slate-600">
-              Cash, card, bank, other payments and owner discounts in one place.
-            </p>
-          </div>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold">
-            {payments.length} records
-          </span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-sm">
-            <thead>
-              <tr className="border-b bg-slate-50 text-left">
-                <th className="p-3">Date</th>
-                <th className="p-3">Reference</th>
-                <th className="p-3">Type</th>
-                <th className="p-3">Method</th>
-                <th className="p-3">Paid by</th>
-                <th className="p-3">Status</th>
-                <th className="p-3">Notes</th>
-                <th className="p-3 text-right">Amount</th>
-                <th className="p-3 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payments.map((payment) => {
-                const pending =
-                  payment.payment_method === "Bank Transfer" &&
-                  payment.verification_status === "PENDING_VERIFICATION";
-                return (
-                  <tr key={payment.id} className="border-b align-top">
-                    <td className="p-3">
-                      {new Date(
-                        payment.payment_date || payment.created_at
-                      ).toLocaleDateString("en-GB")}
-                    </td>
-                    <td className="p-3 font-bold">
-                      {payment.payment_reference || "-"}
-                    </td>
-                    <td className="p-3">
-                      {payment.transaction_type || "PAYMENT"}
-                    </td>
-                    <td className="p-3">{payment.payment_method || "-"}</td>
-                    <td className="p-3">{payment.paid_by || "-"}</td>
-                    <td className="p-3">
-                      <span
-                        className={`rounded-full px-2 py-1 text-xs font-bold ${
-                          pending
-                            ? "bg-amber-100 text-amber-800"
-                            : payment.status === "VOIDED"
-                              ? "bg-red-100 text-red-800"
-                              : "bg-green-100 text-green-800"
-                        }`}
-                      >
-                        {payment.verification_status || payment.status || "POSTED"}
-                      </span>
-                    </td>
-                    <td className="max-w-[300px] whitespace-pre-wrap p-3">
-                      {payment.mandatory_reason || payment.notes || "-"}
-                    </td>
-                    <td className="p-3 text-right font-bold">
-                      {formatCurrency(payment.amount || 0)}
-                    </td>
-                    <td className="p-3 text-right">
-                      {pending ? (
-                        <button
-                          type="button"
-                          onClick={() => confirmBank(payment)}
-                          disabled={
-                            confirmingId === payment.id ||
-                            deletingId === payment.id
-                          }
-                          className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300"
-                        >
-                          {confirmingId === payment.id
-                            ? "Confirming..."
-                            : "Confirm bank"}
-                        </button>
-                      ) : (
-                        <span className="text-xs text-slate-400">—</span>
-                      )}
-                      {owner && (
-                        <button
-                          type="button"
-                          onClick={() => openDeletePayment(payment)}
-                          disabled={Boolean(deletingId)}
-                          className="ml-2 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300"
-                        >
-                          {deletingId === payment.id ? "Deleting..." : "Delete"}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {!payments.length && (
-                <tr>
-                  <td colSpan="9" className="p-5 text-center text-slate-500">
-                    No payment records found for this customer.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {deletePayment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-xl font-extrabold text-red-900">
-                  Delete Payment
-                </h3>
-                <p className="mt-1 text-sm font-semibold text-red-700">
-                  Deleting this payment will increase the customer outstanding
-                  balance and recalculate invoice payment statuses.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeDeletePayment}
-                disabled={Boolean(deletingId)}
-                className="rounded-lg border px-3 py-2 text-sm font-bold disabled:text-slate-400"
-              >
-                Cancel
-              </button>
-            </div>
-
-            <dl className="mt-4 grid grid-cols-1 gap-3 rounded-xl bg-slate-50 p-4 text-sm md:grid-cols-2">
-              <div>
-                <dt className="font-bold text-slate-500">Payment reference</dt>
-                <dd className="font-extrabold">
-                  {deletePayment.payment_reference || deletePayment.id}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-bold text-slate-500">Customer</dt>
-                <dd className="font-extrabold">
-                  {selectedCustomer?.account_name || "-"}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-bold text-slate-500">Branch</dt>
-                <dd className="font-extrabold">
-                  {branches.find(
-                    (branch) =>
-                      String(branch.id) ===
-                      String(deletePayment.customer_branch_id)
-                  )?.branch_name || "All branches"}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-bold text-slate-500">Amount</dt>
-                <dd className="font-extrabold">
-                  {formatCurrency(deletePayment.amount || 0)}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-bold text-slate-500">Payment date</dt>
-                <dd className="font-extrabold">
-                  {new Date(
-                    deletePayment.payment_date || deletePayment.created_at
-                  ).toLocaleString("en-GB")}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-bold text-slate-500">Payment method</dt>
-                <dd className="font-extrabold">
-                  {deletePayment.payment_method || "-"}
-                </dd>
-              </div>
-            </dl>
-
-            <div className="mt-4 grid grid-cols-1 gap-3">
-              <textarea
-                value={deleteForm.reason}
-                onChange={(event) =>
-                  setDeleteForm((current) => ({
-                    ...current,
-                    reason: event.target.value,
-                  }))
-                }
-                placeholder="Compulsory deletion reason"
-                className="min-h-28 rounded-xl border p-3"
-              />
-              <input
-                type="password"
-                value={deleteForm.ownerPassword}
-                onChange={(event) =>
-                  setDeleteForm((current) => ({
-                    ...current,
-                    ownerPassword: event.target.value,
-                  }))
-                }
-                placeholder="Owner financial password"
-                className="rounded-xl border border-red-300 p-3"
-                autoComplete="current-password"
-              />
-            </div>
-
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={closeDeletePayment}
-                disabled={Boolean(deletingId)}
-                className="rounded-xl border px-4 py-3 font-bold disabled:text-slate-400"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={confirmDeletePayment}
-                disabled={
-                  Boolean(deletingId) ||
-                  !deleteForm.ownerPassword ||
-                  !String(deleteForm.reason || "").trim()
-                }
-                className="rounded-xl bg-red-700 px-4 py-3 font-bold text-white disabled:bg-slate-300"
-              >
-                {deletingId ? "Deleting..." : "Confirm Delete"}
-              </button>
-            </div>
-          </div>
-        </div>
+      {activeTab === "history" && (
+        <PaymentRecordsPanel archived={false} currentUser={currentUser} ownerPassword={form.ownerPassword} customer={selectedCustomer} branchId={selectedBranchId} onChanged={refreshSnapshot} onConfirmBank={confirmBank} />
+      )}
+      {activeTab === "archive" && (
+        <PaymentRecordsPanel archived currentUser={currentUser} ownerPassword={form.ownerPassword} customer={selectedCustomer} branchId={selectedBranchId} onChanged={refreshSnapshot} onConfirmBank={confirmBank} />
       )}
     </div>
   );

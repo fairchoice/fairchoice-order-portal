@@ -55,7 +55,7 @@ with branch_candidates as (
   select
     b.customer_account_id,
     regexp_replace(lower(trim(coalesce(b.branch_name, ''))), '[^a-z0-9]+', ' ', 'g') as normalized_branch_name,
-    min(b.id) as customer_branch_id,
+    (array_agg(b.id order by b.id))[1] as customer_branch_id,
     count(*) as match_count
   from public.customer_branches b
   where coalesce(trim(b.branch_name), '') <> ''
@@ -74,7 +74,12 @@ from unique_branches u
 where o.customer_branch_id is null
   and o.customer_account_id = u.customer_account_id
   and regexp_replace(
-    lower(trim(coalesce(o.delivery_branch_name, o.branch_name, o.shop_name, ''))),
+    lower(trim(coalesce(
+      to_jsonb(o)->>'delivery_branch_name',
+      to_jsonb(o)->>'branch_name',
+      to_jsonb(o)->>'shop_name',
+      ''
+    ))),
     '[^a-z0-9]+',
     ' ',
     'g'
@@ -84,7 +89,7 @@ with branch_candidates as (
   select
     b.customer_account_id,
     regexp_replace(lower(trim(coalesce(b.branch_name, ''))), '[^a-z0-9]+', ' ', 'g') as normalized_branch_name,
-    min(b.id) as customer_branch_id,
+    (array_agg(b.id order by b.id))[1] as customer_branch_id,
     count(*) as match_count
   from public.customer_branches b
   where coalesce(trim(b.branch_name), '') <> ''
@@ -103,7 +108,12 @@ from unique_branches u
 where l.customer_branch_id is null
   and l.customer_account_id = u.customer_account_id
   and regexp_replace(
-    lower(trim(coalesce(l.branch_name, l.delivery_branch_name, l.shop_name, ''))),
+    lower(trim(coalesce(
+      to_jsonb(l)->>'branch_name',
+      to_jsonb(l)->>'delivery_branch_name',
+      to_jsonb(l)->>'shop_name',
+      ''
+    ))),
     '[^a-z0-9]+',
     ' ',
     'g'
@@ -113,7 +123,7 @@ with branch_candidates as (
   select
     b.customer_account_id,
     regexp_replace(lower(trim(coalesce(b.branch_name, ''))), '[^a-z0-9]+', ' ', 'g') as normalized_branch_name,
-    min(b.id) as customer_branch_id,
+    (array_agg(b.id order by b.id))[1] as customer_branch_id,
     count(*) as match_count
   from public.customer_branches b
   where coalesce(trim(b.branch_name), '') <> ''
@@ -132,7 +142,7 @@ from unique_branches u
 where p.customer_branch_id is null
   and p.customer_account_id = u.customer_account_id
   and regexp_replace(
-    lower(trim(coalesce(p.branch_name, ''))),
+    lower(trim(coalesce(to_jsonb(p)->>'branch_name', ''))),
     '[^a-z0-9]+',
     ' ',
     'g'
@@ -164,7 +174,7 @@ begin
       select
         b.customer_account_id,
         regexp_replace(lower(trim(coalesce(b.branch_name, ''))), '[^a-z0-9]+', ' ', 'g') as normalized_branch_name,
-        min(b.id) as customer_branch_id,
+        (array_agg(b.id order by b.id))[1] as customer_branch_id,
         count(*) as match_count
       from public.customer_branches b
       where coalesce(trim(b.branch_name), '') <> ''
@@ -183,7 +193,7 @@ begin
     where p.customer_branch_id is null
       and p.customer_account_id = u.customer_account_id
       and regexp_replace(
-        lower(trim(coalesce(p.branch_name, ''))),
+        lower(trim(coalesce(to_jsonb(p)->>'branch_name', ''))),
         '[^a-z0-9]+',
         ' ',
         'g'
