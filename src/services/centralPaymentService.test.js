@@ -2,14 +2,20 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import {
+  applyAllocationsToInvoices,
   buildCustomerTransactionHistory,
   filterRowsForBranchScope,
+  summarizeCreditSnapshot,
   resolveLegacyCompatibilityRows,
   withResolvedBranchScope,
 } from "../utils/centralPaymentCalculations.js";
 
 const serviceSource = fs.readFileSync(
   new URL("./centralPaymentService.js", import.meta.url),
+  "utf8"
+);
+const centralPaymentComponentSource = fs.readFileSync(
+  new URL("../pages/AdminSetup/CentralPayment.jsx", import.meta.url),
   "utf8"
 );
 
@@ -157,6 +163,92 @@ test("bank confirmation is owner RPC-only and sends allocation preview", () => {
   assert.match(source, /bank verification note is compulsory/i);
   assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.update/s);
   assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.insert/s);
+});
+
+test("owner can delete a duplicated payment through protected RPC only", () => {
+  const source = getFunctionSource("deleteOwnerCentralPayment");
+
+  assert.match(source, /actor !== "nisstaj_admin"/);
+  assert.match(source, /Owner financial password is required/);
+  assert.match(source, /Deletion reason is required/);
+  assert.match(source, /supabase\.rpc\("delete_owner_central_payment"/);
+  assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.delete/s);
+  assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.update/s);
+  assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.update/s);
+});
+
+test("non-owner cannot see or call payment delete", () => {
+  const source = getFunctionSource("deleteOwnerCentralPayment");
+
+  assert.match(source, /Only nisstaj_admin can delete Central Payment records/);
+  assert.match(centralPaymentComponentSource, /isOwnerUser\(currentUser\)/);
+  assert.match(centralPaymentComponentSource, /owner && \(/);
+  assert.match(centralPaymentComponentSource, /Delete/);
+});
+
+test("voided payment disappears from active totals and history", () => {
+  const payments = [
+    { id: "valid-payment", amount: 100, status: "POSTED", payment_date: "2026-01-02" },
+    { id: "deleted-payment", amount: 50, status: "VOIDED", payment_date: "2026-01-03" },
+    { id: "soft-deleted-payment", amount: 25, status: "DELETED", payment_date: "2026-01-04" },
+  ];
+  const summary = summarizeCreditSnapshot({
+    openingBalance: 0,
+    invoices: [{ invoice_number: "INV-1", invoice_total: 200 }],
+    payments,
+  });
+  const history = buildCustomerTransactionHistory({
+    invoices: [{ invoice_number: "INV-1", invoice_total: 200 }],
+    payments,
+    newestFirst: false,
+  });
+
+  assert.equal(summary.paymentTotal, 100);
+  assert.equal(summary.outstanding, 100);
+  assert.deepEqual(
+    history.filter((row) => row.type === "PAYMENT").map((row) => row.reference),
+    ["valid-payment"]
+  );
+});
+
+test("voided allocation recalculates FIFO status and invoice remains unchanged", () => {
+  const invoices = [{ id: "invoice-1", invoice_number: "INV-1", invoice_total: 100 }];
+  const allocated = applyAllocationsToInvoices(invoices, [
+    {
+      payment_id: "deleted-payment",
+      invoice_reference: "INV-1",
+      allocated_amount: 100,
+      status: "void",
+    },
+  ]);
+
+  assert.equal(allocated[0].invoiceAmount, 100);
+  assert.equal(allocated[0].paidAmount, 0);
+  assert.equal(allocated[0].remainingAmount, 100);
+  assert.equal(allocated[0].paymentStatus, "UNPAID");
+});
+
+test("deleting one duplicate leaves the valid payment", () => {
+  const payments = [
+    { id: "duplicate-valid", amount: 75, status: "POSTED" },
+    { id: "duplicate-deleted", amount: 75, status: "VOIDED" },
+  ];
+  const summary = summarizeCreditSnapshot({
+    invoices: [{ invoice_number: "INV-1", invoice_total: 150 }],
+    payments,
+  });
+
+  assert.equal(summary.paymentTotal, 75);
+  assert.equal(summary.outstanding, 75);
+});
+
+test("double-submit cannot create duplicate owner payments", () => {
+  const source = getFunctionSource("createCentralPayment");
+
+  assert.match(source, /createPaymentIdempotencyKey/);
+  assert.match(source, /activeDuplicate/);
+  assert.match(centralPaymentComponentSource, /if \(saving\) return/);
+  assert.match(centralPaymentComponentSource, /disabled=\{\s*saving/s);
 });
 
 test("Penarth does not show Life Style payments", () => {

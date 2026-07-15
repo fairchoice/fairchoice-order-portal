@@ -4,6 +4,7 @@ import {
   buildPaymentPreview,
   confirmOwnerBankTransfer,
   createCentralPayment,
+  deleteOwnerCentralPayment,
   loadCentralPaymentCustomers,
   loadCentralPaymentSnapshot,
 } from "../../services/centralPaymentService";
@@ -197,6 +198,12 @@ export default function CentralPayment() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmingId, setConfirmingId] = useState("");
+  const [deletingId, setDeletingId] = useState("");
+  const [deletePayment, setDeletePayment] = useState(null);
+  const [deleteForm, setDeleteForm] = useState({
+    reason: "",
+    ownerPassword: "",
+  });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [form, setForm] = useState({
@@ -303,6 +310,7 @@ export default function CentralPayment() {
   };
 
   const savePayment = async () => {
+    if (saving) return;
     if (!owner) {
       setError("Only nisstaj_admin can create Central Payment transactions.");
       return;
@@ -399,6 +407,60 @@ export default function CentralPayment() {
       setError(confirmError.message || "Could not confirm bank transfer.");
     } finally {
       setConfirmingId("");
+    }
+  };
+
+  const openDeletePayment = (payment) => {
+    if (!owner) return;
+    setDeletePayment(payment);
+    setDeleteForm({ reason: "", ownerPassword: "" });
+    setError("");
+    setSuccess("");
+  };
+
+  const closeDeletePayment = () => {
+    if (deletingId) return;
+    setDeletePayment(null);
+    setDeleteForm({ reason: "", ownerPassword: "" });
+  };
+
+  const confirmDeletePayment = async () => {
+    if (!deletePayment || deletingId) return;
+    if (!String(deleteForm.reason || "").trim()) {
+      setError("A deletion reason is compulsory.");
+      return;
+    }
+    if (!deleteForm.ownerPassword) {
+      setError("Owner financial password is required.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete payment ${deletePayment.payment_reference || deletePayment.id}?\n\nThis will increase the customer outstanding balance and recalculate invoice payment statuses.`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingId(deletePayment.id);
+    setError("");
+    setSuccess("");
+    try {
+      await deleteOwnerCentralPayment({
+        payment: deletePayment,
+        customer: selectedCustomer,
+        currentUser,
+        ownerPassword: deleteForm.ownerPassword,
+        reason: deleteForm.reason,
+      });
+      setSuccess("Payment deleted successfully.");
+      setDeletePayment(null);
+      setDeleteForm({ reason: "", ownerPassword: "" });
+      await refreshSnapshot();
+    } catch (deleteError) {
+      setError(deleteError.message || "Could not delete payment.");
+    } finally {
+      setDeletingId("");
     }
   };
 
@@ -735,7 +797,10 @@ export default function CentralPayment() {
                         <button
                           type="button"
                           onClick={() => confirmBank(payment)}
-                          disabled={confirmingId === payment.id}
+                          disabled={
+                            confirmingId === payment.id ||
+                            deletingId === payment.id
+                          }
                           className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300"
                         >
                           {confirmingId === payment.id
@@ -744,6 +809,16 @@ export default function CentralPayment() {
                         </button>
                       ) : (
                         <span className="text-xs text-slate-400">—</span>
+                      )}
+                      {owner && (
+                        <button
+                          type="button"
+                          onClick={() => openDeletePayment(payment)}
+                          disabled={Boolean(deletingId)}
+                          className="ml-2 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300"
+                        >
+                          {deletingId === payment.id ? "Deleting..." : "Delete"}
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -760,6 +835,127 @@ export default function CentralPayment() {
           </table>
         </div>
       </section>
+
+      {deletePayment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-extrabold text-red-900">
+                  Delete Payment
+                </h3>
+                <p className="mt-1 text-sm font-semibold text-red-700">
+                  Deleting this payment will increase the customer outstanding
+                  balance and recalculate invoice payment statuses.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeDeletePayment}
+                disabled={Boolean(deletingId)}
+                className="rounded-lg border px-3 py-2 text-sm font-bold disabled:text-slate-400"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <dl className="mt-4 grid grid-cols-1 gap-3 rounded-xl bg-slate-50 p-4 text-sm md:grid-cols-2">
+              <div>
+                <dt className="font-bold text-slate-500">Payment reference</dt>
+                <dd className="font-extrabold">
+                  {deletePayment.payment_reference || deletePayment.id}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-bold text-slate-500">Customer</dt>
+                <dd className="font-extrabold">
+                  {selectedCustomer?.account_name || "-"}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-bold text-slate-500">Branch</dt>
+                <dd className="font-extrabold">
+                  {branches.find(
+                    (branch) =>
+                      String(branch.id) ===
+                      String(deletePayment.customer_branch_id)
+                  )?.branch_name || "All branches"}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-bold text-slate-500">Amount</dt>
+                <dd className="font-extrabold">
+                  {formatCurrency(deletePayment.amount || 0)}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-bold text-slate-500">Payment date</dt>
+                <dd className="font-extrabold">
+                  {new Date(
+                    deletePayment.payment_date || deletePayment.created_at
+                  ).toLocaleString("en-GB")}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-bold text-slate-500">Payment method</dt>
+                <dd className="font-extrabold">
+                  {deletePayment.payment_method || "-"}
+                </dd>
+              </div>
+            </dl>
+
+            <div className="mt-4 grid grid-cols-1 gap-3">
+              <textarea
+                value={deleteForm.reason}
+                onChange={(event) =>
+                  setDeleteForm((current) => ({
+                    ...current,
+                    reason: event.target.value,
+                  }))
+                }
+                placeholder="Compulsory deletion reason"
+                className="min-h-28 rounded-xl border p-3"
+              />
+              <input
+                type="password"
+                value={deleteForm.ownerPassword}
+                onChange={(event) =>
+                  setDeleteForm((current) => ({
+                    ...current,
+                    ownerPassword: event.target.value,
+                  }))
+                }
+                placeholder="Owner financial password"
+                className="rounded-xl border border-red-300 p-3"
+                autoComplete="current-password"
+              />
+            </div>
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeDeletePayment}
+                disabled={Boolean(deletingId)}
+                className="rounded-xl border px-4 py-3 font-bold disabled:text-slate-400"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeletePayment}
+                disabled={
+                  Boolean(deletingId) ||
+                  !deleteForm.ownerPassword ||
+                  !String(deleteForm.reason || "").trim()
+                }
+                className="rounded-xl bg-red-700 px-4 py-3 font-bold text-white disabled:bg-slate-300"
+              >
+                {deletingId ? "Deleting..." : "Confirm Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

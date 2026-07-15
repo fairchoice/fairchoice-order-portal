@@ -44,7 +44,7 @@ export const isCancelledInvoice = (invoice = {}) =>
   );
 
 export const isVoidedPayment = (payment = {}) =>
-  ["VOIDED", "VOID", "REVERSED", "CANCELLED", "CANCELED"].includes(
+  ["VOIDED", "VOID", "DELETED", "REVERSED", "CANCELLED", "CANCELED"].includes(
     String(payment.status || payment.payment_status || "").trim().toUpperCase()
   );
 

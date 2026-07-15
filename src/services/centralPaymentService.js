@@ -8,6 +8,7 @@ import {
   createPaymentIdempotencyKey,
   filterInvoicesForAllocation,
   getBranchKey,
+  isVoidedPayment,
   money,
   resolveLegacyCompatibilityRows,
   summarizeCreditSnapshot,
@@ -255,7 +256,7 @@ export async function loadPayments(customerAccountId) {
       .order("payment_date", { ascending: true })
   );
   if (error) throw error;
-  return data || [];
+  return (data || []).filter((payment) => !isVoidedPayment(payment));
 }
 
 export async function loadAllocations(customerAccountId) {
@@ -324,6 +325,7 @@ async function loadLegacyLedgerFallback({
       });
   const legacyPayments = ledgerRows
       .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT")
+      .filter((row) => !isVoidedPayment(row))
       .map((row) => ({
         ...row,
         id: `legacy-${row.id}`,
@@ -481,7 +483,8 @@ export async function createCentralPayment({
   const idempotencyKey = createPaymentIdempotencyKey({ customerAccountId: accountId, customerBranchId, amount: paymentAmount, paymentDate, paymentMethod: type === "DISCOUNT" ? "Discount" : paymentMethod, externalReference });
   const duplicate = await safeSelect("customer_payments", (query) => query.select("*").eq("customer_account_id", accountId).eq("idempotency_key", idempotencyKey).limit(1));
   if (duplicate.error) throw duplicate.error;
-  if (duplicate.data?.length) return { duplicate: true, payment: duplicate.data[0], allocations: [] };
+  const activeDuplicate = (duplicate.data || []).find((payment) => !isVoidedPayment(payment));
+  if (activeDuplicate) return { duplicate: true, payment: activeDuplicate, allocations: [] };
 
   const snapshot = await loadCentralPaymentSnapshot({ customerAccountId: accountId, customerName: customer?.account_name, customer, selectedBranchId: customerBranchId || "" });
   const preview = buildPaymentPreview({ invoices: snapshot.invoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
@@ -504,6 +507,52 @@ export async function createCentralPayment({
   });
   if (!error) return { ...(data || {}), preview };
   if (isMissingRpcError(error)) throw new Error("Protected Central Payment is not installed. Review and apply the additive owner-security migration first.");
+  throw error;
+}
+
+export async function deleteOwnerCentralPayment({
+  payment,
+  customer,
+  currentUser,
+  ownerPassword,
+  reason,
+} = {}) {
+  const actor = getActor(currentUser).toLowerCase();
+
+  if (actor !== "nisstaj_admin") {
+    throw new Error("Only nisstaj_admin can delete Central Payment records.");
+  }
+  if (!payment?.id) throw new Error("Payment is required.");
+  if (!ownerPassword) throw new Error("Owner financial password is required.");
+  if (!String(reason || "").trim()) throw new Error("Deletion reason is required.");
+  if (String(payment.transaction_type || "PAYMENT").toUpperCase() === "INVOICE") {
+    throw new Error("Invoices cannot be deleted from Central Payment.");
+  }
+  if (String(payment.status || "").trim().toUpperCase() === "VOIDED") {
+    throw new Error("This payment is already deleted.");
+  }
+
+  const { data, error } = await supabase.rpc("delete_owner_central_payment", {
+    p_owner_username: "nisstaj_admin",
+    p_owner_password: ownerPassword,
+    p_payment_id: payment.id,
+    p_reason: String(reason).trim(),
+  });
+
+  if (!error) {
+    await loadCentralPaymentSnapshot({
+      customerAccountId: payment.customer_account_id,
+      customerName: customer?.account_name,
+      customer,
+      selectedBranchId: payment.customer_branch_id || "",
+    });
+    return data;
+  }
+  if (isMissingRpcError(error)) {
+    throw new Error(
+      "Owner payment deletion is not installed. Apply the required database migration before deleting payments."
+    );
+  }
   throw error;
 }
 
