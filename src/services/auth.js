@@ -1,13 +1,24 @@
 // src/services/auth.js
-import { supabase } from "./supabase";
+import { isSupabaseConfigured, supabase } from "./supabase";
+
+function requireSupabase() {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error(
+      "Supabase is not configured for this deployment. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to the Vercel Preview environment, then redeploy."
+    );
+  }
+  return supabase;
+}
 
 export async function getCurrentUserProfile() {
-  const { data: authData } = await supabase.auth.getUser();
-  const user = authData?.user;
+  const client = requireSupabase();
+  const { data: authData, error: authError } = await client.auth.getUser();
+  if (authError) throw authError;
 
+  const user = authData?.user;
   if (!user) return null;
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from("staff_users")
     .select("*")
     .eq("email", user.email)
@@ -25,9 +36,11 @@ export async function getCurrentUserProfile() {
 }
 
 export async function signIn(email, password) {
-  return await supabase.auth.signInWithPassword({ email, password });
+  const client = requireSupabase();
+  return client.auth.signInWithPassword({ email, password });
 }
 
 export async function signOut() {
-  return await supabase.auth.signOut();
+  const client = requireSupabase();
+  return client.auth.signOut();
 }
