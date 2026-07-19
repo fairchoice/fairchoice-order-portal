@@ -7,7 +7,7 @@ import {
 } from "../../services/centralPaymentService";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
 
-const PAGE_SIZE = 20;
+const TRANSACTIONS_PAGE_SIZE = 20;
 const BRANCH_SELECT = "__select__";
 const MAIN_ACCOUNT = "__main__";
 
@@ -221,7 +221,7 @@ export default function CustomerCredit({ readOnly = false }) {
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [page, setPage] = useState(1);
+  const [transactionsPage, setTransactionsPage] = useState(1);
   const [activeTab, setActiveTab] = useState("summary");
   const [editingOpeningBalance, setEditingOpeningBalance] = useState(false);
   const [openingBalanceInput, setOpeningBalanceInput] = useState("");
@@ -336,12 +336,12 @@ export default function CustomerCredit({ readOnly = false }) {
   }, [selectedCustomer?.id, snapshotBranchId]);
 
   useEffect(() => {
-    setPage(1);
+    setTransactionsPage(1);
     setActiveTab("summary");
   }, [selectedCustomerId]);
 
   useEffect(() => {
-    setPage(1);
+    setTransactionsPage(1);
   }, [selectedBranchId]);
 
   const hasSpecificBranch =
@@ -648,16 +648,25 @@ export default function CustomerCredit({ readOnly = false }) {
     firstValue(sortedPayments[0]?.amount, sortedPayments[0]?.credit, 0)
   );
 
-  const totalPages = Math.max(1, Math.ceil(creditHistory.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const pageRows = creditHistory.slice(
-    (safePage - 1) * PAGE_SIZE,
-    safePage * PAGE_SIZE
+  const transactionRows = creditHistory;
+  const transactionsPageCount = Math.max(
+    1,
+    Math.ceil(transactionRows.length / TRANSACTIONS_PAGE_SIZE)
+  );
+  const currentTransactionsPage = Math.min(
+    transactionsPage,
+    transactionsPageCount
+  );
+  const paginatedTransactionRows = transactionRows.slice(
+    (currentTransactionsPage - 1) * TRANSACTIONS_PAGE_SIZE,
+    currentTransactionsPage * TRANSACTIONS_PAGE_SIZE
   );
 
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+    if (transactionsPage > transactionsPageCount) {
+      setTransactionsPage(transactionsPageCount);
+    }
+  }, [transactionsPage, transactionsPageCount]);
 
   const beginOpeningBalanceEdit = () => {
     if (!canEditOpeningBalance || !selectedCustomer) return;
@@ -938,7 +947,7 @@ export default function CustomerCredit({ readOnly = false }) {
               type="button"
               onClick={() => {
                 setActiveTab(value);
-                setPage(1);
+                setTransactionsPage(1);
               }}
               className={`rounded-xl border px-4 py-2 text-sm font-bold ${
                 activeTab === value
@@ -1044,11 +1053,11 @@ export default function CustomerCredit({ readOnly = false }) {
                 <p className="text-sm text-slate-500">Newest transactions first.</p>
               </div>
               <div className="text-sm font-semibold text-slate-500">
-                {creditHistory.length
-                  ? `Showing ${(safePage - 1) * PAGE_SIZE + 1}-${Math.min(
-                      safePage * PAGE_SIZE,
-                      creditHistory.length
-                    )} of ${creditHistory.length}`
+                {transactionRows.length
+                  ? `Showing ${(currentTransactionsPage - 1) * TRANSACTIONS_PAGE_SIZE + 1}-${Math.min(
+                      currentTransactionsPage * TRANSACTIONS_PAGE_SIZE,
+                      transactionRows.length
+                    )} of ${transactionRows.length}`
                   : "No transactions"}
               </div>
             </div>
@@ -1072,7 +1081,7 @@ export default function CustomerCredit({ readOnly = false }) {
                 </thead>
 
                 <tbody>
-                  {pageRows.map((row) => (
+                  {paginatedTransactionRows.map((row) => (
                     <tr
                       key={`${row.type}-${row.reference}-${row.transactionDate}-${row.sortIndex}`}
                       className="border-b last:border-b-0 hover:bg-slate-50"
@@ -1107,7 +1116,7 @@ export default function CustomerCredit({ readOnly = false }) {
                     </tr>
                   ))}
 
-                  {!pageRows.length && !loading && (
+                  {!paginatedTransactionRows.length && !loading && (
                     <tr>
                       <td
                         colSpan={(historyOnlyRole ? 7 : 8) + (activeTab === "transactions" ? 1 : 0)}
@@ -1124,19 +1133,25 @@ export default function CustomerCredit({ readOnly = false }) {
             <div className="flex items-center justify-between gap-3 border-t bg-white px-4 py-4">
               <button
                 type="button"
-                onClick={() => setPage((value) => Math.max(1, value - 1))}
-                disabled={safePage <= 1}
+                onClick={() =>
+                  setTransactionsPage((value) => Math.max(1, value - 1))
+                }
+                disabled={currentTransactionsPage <= 1}
                 className="rounded-xl border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Previous
               </button>
               <div className="text-sm font-bold text-slate-700">
-                Page {safePage} of {totalPages}
+                Page {currentTransactionsPage} of {transactionsPageCount}
               </div>
               <button
                 type="button"
-                onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
-                disabled={safePage >= totalPages}
+                onClick={() =>
+                  setTransactionsPage((value) =>
+                    Math.min(transactionsPageCount, value + 1)
+                  )
+                }
+                disabled={currentTransactionsPage >= transactionsPageCount}
                 className="rounded-xl border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
               >
                  Next
