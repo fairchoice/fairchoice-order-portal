@@ -315,6 +315,7 @@ export async function getOrders() {
 }
 
 export async function createCustomerOrder({
+  orderNumber: requestedOrderNumber = "",
   companyName,
   priceMode,
   cart,
@@ -330,7 +331,7 @@ export async function createCustomerOrder({
   delivery_postcode = "",
   customer_country = "",
 }) {
-  const orderNumber = "ORD-" + Date.now();
+  const orderNumber = requestedOrderNumber || "ORD-" + Date.now();
  const calculatedTotals = calculateCartTotals(cart || [], {
   priceMode,
   discountPercent: discount_percent,
@@ -369,11 +370,42 @@ const orderPayload = {
   status: "Received",
 };
 
-  let { data: order, error: orderError } = await supabase
-    .from("orders")
-   .insert(orderPayload)
-    .select()
-    .single();
+  let order = null;
+  let orderError = null;
+
+  if (requestedOrderNumber) {
+    const existingOrder = await supabase
+      .from("orders")
+      .select("*")
+      .eq("order_number", orderNumber)
+      .maybeSingle();
+
+    if (existingOrder.error) throw existingOrder.error;
+    order = existingOrder.data;
+
+    if (order) {
+      const existingItems = await supabase
+        .from("order_items")
+        .select("id", { count: "exact", head: true })
+        .eq("order_id", order.id);
+
+      if (existingItems.error) throw existingItems.error;
+      if (Number(existingItems.count || 0) > 0) {
+        return { orderNumber, order, alreadyCreated: true };
+      }
+    }
+  }
+
+  if (!order) {
+    const insertedOrder = await supabase
+      .from("orders")
+      .insert(orderPayload)
+      .select()
+      .single();
+
+    order = insertedOrder.data;
+    orderError = insertedOrder.error;
+  }
 
   if (
     orderError &&
@@ -416,10 +448,6 @@ const orderPayload = {
 
   if (orderError) {
     console.error("ORDER ERROR FULL:", JSON.stringify(orderError, null, 2));
-
-alert(
-  `Order Error:\n\n${orderError.message}\n\n${orderError.details || ""}\n\n${orderError.hint || ""}`
-);
     throw orderError;
   }
 

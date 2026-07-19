@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
+import { buildLegacyStaffProfile } from "../../services/authProfile";
 
 const TRADE_BUSINESS_TYPES = ["Off Licence", "Restaurant"];
 
@@ -82,46 +83,50 @@ export default function LoginPage({ onLogin }) {
       return;
     }
 
-    let staffProfile = null;
+    let loggedInUser;
 
-    if (loginUser.staff_id) {
-      const { data, error } = await supabase
+    if (loginUser.role === "Customer") {
+      if (loginUser.password !== cleanPassword) {
+        alert("Invalid username or password");
+        return;
+      }
+
+      loggedInUser = {
+        ...loginUser,
+        id: loginUser.id,
+        login_user_id: loginUser.id,
+        username: loginUser.username,
+        access_level: loginUser.role,
+        permissions: loginUser.permissions || {},
+        staff_name: loginUser.staff_name || loginUser.username,
+        customer_account_id: loginUser.customer_account_id || null,
+      };
+    } else {
+      if (!loginUser.staff_id) {
+        console.error("[StaffAuth] Login has no staff_users link", {
+          loginUserId: loginUser.id,
+          username: loginUser.username,
+          role: loginUser.role,
+        });
+        alert("This staff login is not linked to an individual staff record. Contact an administrator.");
+        return;
+      }
+
+      const { data: staff, error: staffError } = await supabase
         .from("staff_users")
         .select("*")
         .eq("id", loginUser.staff_id)
         .eq("active", true)
         .maybeSingle();
 
-      if (error) {
-        console.error("Staff profile error:", error);
-        alert(`Could not load staff profile: ${error.message}`);
+      if (staffError) throw staffError;
+      if (!staff) {
+        alert("The linked staff record is inactive or unavailable.");
         return;
       }
 
-      if (!data) {
-        alert("This staff account is inactive or unavailable.");
-        return;
-      }
-
-      staffProfile = data;
+      loggedInUser = buildLegacyStaffProfile(loginUser, staff);
     }
-
-    const loggedInUser = {
-      ...loginUser,
-      ...(staffProfile || {}),
-      id: loginUser.id,
-      login_user_id: loginUser.id,
-      staff_id: loginUser.staff_id || staffProfile?.id || null,
-      username: loginUser.username,
-      role: loginUser.role,
-      access_level: loginUser.role,
-      permissions: loginUser.permissions || {},
-      staff_name:
-        staffProfile?.staff_name ||
-        loginUser.staff_name ||
-        loginUser.username,
-      customer_account_id: loginUser.customer_account_id || null,
-    };
 
     const { error: auditError } = await supabase
       .from("audit_logs")

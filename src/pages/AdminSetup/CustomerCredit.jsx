@@ -5,10 +5,11 @@ import {
   loadCentralPaymentCustomers,
   loadReadOnlyCustomerCreditSnapshot,
 } from "../../services/centralPaymentService";
+import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
 
 const PAGE_SIZE = 20;
 const BRANCH_SELECT = "__select__";
-const ALL_BRANCHES = "__all__";
+const MAIN_ACCOUNT = "__main__";
 
 const getLoggedInUser = () =>
   JSON.parse(
@@ -39,7 +40,6 @@ const firstValue = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== "");
 
 const normalizeReference = (value) => String(value || "").trim().toLowerCase();
-
 
 const getInvoiceAmount = (invoice = {}) =>
   Math.abs(
@@ -217,7 +217,7 @@ export default function CustomerCredit({ readOnly = false }) {
   const [customers, setCustomers] = useState([]);
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
-  const [selectedBranchId, setSelectedBranchId] = useState(ALL_BRANCHES);
+  const [selectedBranchId, setSelectedBranchId] = useState(MAIN_ACCOUNT);
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -285,50 +285,27 @@ export default function CustomerCredit({ readOnly = false }) {
     (customer) => String(customer.id) === String(selectedCustomerId)
   );
 
-  const branches = (selectedCustomer?.customer_branches || []).filter(
-    (branch) => branch.active !== false
-  );
+  const branches = getActiveCustomerBranches(selectedCustomer);
 
   const hasBranches = branches.length > 0;
-  const hasOneBranch = branches.length === 1;
-  const hasMultipleBranches = branches.length > 1;
-  const branchSelectionRequired =
-    hasMultipleBranches && selectedBranchId === BRANCH_SELECT;
-  const isAllBranches = selectedBranchId === ALL_BRANCHES;
+  const branchDetailsRequired =
+    hasBranches && selectedBranchId === MAIN_ACCOUNT;
+  // Active branches mean branch accounting is ON. Without active branches,
+  // Customer Credit uses the main customer account. There is no combined
+  // "all branches" financial scope because that can mix separate balances.
   const snapshotBranchId =
-    selectedBranchId === BRANCH_SELECT || selectedBranchId === ALL_BRANCHES
+    selectedBranchId === BRANCH_SELECT || selectedBranchId === MAIN_ACCOUNT
       ? ""
       : selectedBranchId;
 
   useEffect(() => {
-    if (!selectedCustomer) {
-      setSelectedBranchId(ALL_BRANCHES);
-      return;
-    }
-
-    if (!hasBranches) {
-      setSelectedBranchId(ALL_BRANCHES);
-      return;
-    }
-
-    if (hasOneBranch) {
-      setSelectedBranchId(String(branches[0].id));
-      return;
-    }
-
-    setSelectedBranchId(BRANCH_SELECT);
+    setSelectedBranchId(MAIN_ACCOUNT);
   }, [selectedCustomer?.id]);
 
   useEffect(() => {
-    if (!selectedCustomer) {
+    if (!selectedCustomer?.id) {
       setSnapshot(null);
-      return;
-    }
-
-    if (selectedBranchId === BRANCH_SELECT) {
-      setSnapshot(null);
-      setLoading(false);
-      return;
+      return undefined;
     }
 
     let active = true;
@@ -356,7 +333,7 @@ export default function CustomerCredit({ readOnly = false }) {
     return () => {
       active = false;
     };
-  }, [selectedCustomer, selectedBranchId, snapshotBranchId]);
+  }, [selectedCustomer?.id, snapshotBranchId]);
 
   useEffect(() => {
     setPage(1);
@@ -368,7 +345,7 @@ export default function CustomerCredit({ readOnly = false }) {
   }, [selectedBranchId]);
 
   const hasSpecificBranch =
-    selectedBranchId !== ALL_BRANCHES &&
+    selectedBranchId !== MAIN_ACCOUNT &&
     selectedBranchId !== BRANCH_SELECT &&
     Boolean(selectedBranchId);
 
@@ -417,10 +394,6 @@ export default function CustomerCredit({ readOnly = false }) {
       selectedName && transactionBranchNames.includes(selectedName)
     );
   };
-
-  const summary = hasSpecificBranch
-    ? snapshot?.branchSummary
-    : snapshot?.customerSummary;
 
   const invoices = hasSpecificBranch
     ? snapshot?.selectedInvoices || []
@@ -651,41 +624,12 @@ export default function CustomerCredit({ readOnly = false }) {
     selectedOpeningBalance,
   ]);
 
-  const selectedInvoiceTotal = useMemo(
-    () => invoices.reduce((sum, invoice) => sum + getInvoiceAmount(invoice), 0),
-    [invoices]
-  );
-
-  const selectedPaymentTotal = useMemo(
-    () => payments.reduce((sum, payment) => sum + getPaymentAmount(payment), 0),
-    [payments]
-  );
-
-  const selectedOutstanding = Number(
-    firstValue(
-      hasSpecificBranch ? snapshot?.branchSummary?.outstanding : undefined,
-      hasSpecificBranch ? snapshot?.branchSummary?.balance : undefined,
-      selectedOpeningBalance + selectedInvoiceTotal - selectedPaymentTotal
-    ) || 0
-  );
-
   const accountCreditLimit = Number(
     firstValue(
       snapshot?.customerSummary?.creditLimit,
       snapshot?.customerSummary?.credit_limit,
       selectedCustomer?.credit_limit,
       selectedCustomer?.creditLimit,
-      0
-    ) || 0
-  );
-
-  const selectedAvailableCredit = Number(
-    firstValue(
-      hasSpecificBranch ? snapshot?.branchSummary?.availableCredit : undefined,
-      hasSpecificBranch ? snapshot?.branchSummary?.available_credit : undefined,
-      hasSpecificBranch
-        ? accountCreditLimit - selectedOutstanding
-        : snapshot?.customerSummary?.availableCredit,
       0
     ) || 0
   );
@@ -793,34 +737,28 @@ export default function CustomerCredit({ readOnly = false }) {
 
   const summaryCards = [
     {
-      label: "Outstanding",
-      value: hasSpecificBranch
-        ? selectedOutstanding
-        : snapshot?.customerSummary?.outstanding,
+      label: "Credit limit",
+      value: accountCreditLimit,
     },
     {
-      label: "Available credit",
-      value: hasSpecificBranch
-        ? selectedAvailableCredit
-        : snapshot?.customerSummary?.availableCredit,
+      label: "Total Outstanding",
+      value: snapshot?.customerSummary?.outstanding,
     },
     {
-      label: "Opening balance",
-      value: selectedOpeningBalance,
-      placeholder: branchSelectionRequired ? "Select branch" : "",
+      label: hasSpecificBranch ? "Branch opening balance" : "Opening balance",
+      value: hasSpecificBranch
+        ? selectedOpeningBalance
+        : snapshot?.customerSummary?.openingBalance,
+      placeholder: "",
       isOpeningBalance: true,
     },
     {
-      label: "Total invoices",
-      value: hasSpecificBranch
-        ? selectedInvoiceTotal
-        : snapshot?.customerSummary?.invoiceTotal,
+      label: "Available credit",
+      value: snapshot?.customerSummary?.availableCredit,
     },
     {
-      label: "Total payments",
-      value: hasSpecificBranch
-        ? selectedPaymentTotal
-        : snapshot?.customerSummary?.paymentTotal,
+      label: "Branch Credit",
+      text: hasBranches ? "ON" : "OFF",
     },
     { label: "Last payment", value: lastPayment },
   ];
@@ -845,7 +783,7 @@ export default function CustomerCredit({ readOnly = false }) {
           )}
         </div>
 
-        <div className={`mt-4 grid grid-cols-1 gap-3 ${hasMultipleBranches ? "md:grid-cols-[1fr_1.2fr_1fr]" : "md:grid-cols-[1fr_1.2fr]"}`}>
+        <div className={`mt-4 grid grid-cols-1 gap-3 ${hasBranches ? "md:grid-cols-[1fr_1.2fr_1fr]" : "md:grid-cols-[1fr_1.2fr]"}`}>
           <input
             value={customerSearch}
             onChange={(event) => setCustomerSearch(event.target.value)}
@@ -857,7 +795,7 @@ export default function CustomerCredit({ readOnly = false }) {
             value={selectedCustomerId}
             onChange={(event) => {
               setSelectedCustomerId(event.target.value);
-              setSelectedBranchId(ALL_BRANCHES);
+              setSelectedBranchId(MAIN_ACCOUNT);
             }}
             className="rounded-xl border p-3"
           >
@@ -868,14 +806,14 @@ export default function CustomerCredit({ readOnly = false }) {
             ))}
           </select>
 
-          {hasMultipleBranches && (
+      {hasBranches && (
             <select
               value={selectedBranchId}
               onChange={(event) => setSelectedBranchId(event.target.value)}
               className="rounded-xl border p-3"
             >
-              <option value={BRANCH_SELECT}>Select branch</option>
-              <option value={ALL_BRANCHES}>All branches</option>
+              <option value={MAIN_ACCOUNT}>Main Customer Account</option>
+
               {branches.map((branch) => (
                 <option key={branch.id} value={String(branch.id)}>
                   {branch.branch_name}
@@ -898,25 +836,34 @@ export default function CustomerCredit({ readOnly = false }) {
         </div>
       )}
 
+      <div className="rounded-xl border bg-white p-3 text-sm font-bold text-slate-700">
+        Branch Credit: {hasBranches ? "ON" : "OFF"}
+        <span className="mx-2 text-slate-300">|</span>
+        Financial scope:{" "}
+        {hasSpecificBranch
+          ? selectedBranch?.branch_name || "Selected branch"
+          : "Main Customer Account"}
+      </div>
+
       {snapshot?.legacyFallbackUsed && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
-          Temporary legacy compatibility is active for this account because
-          matching new-table records were not found.
+          Temporary legacy payment compatibility is active for this account
+          because matching new-table payment records were not found.
         </div>
       )}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {summaryCards.map(
-          ({ label, value, placeholder, isOpeningBalance }) => (
+          ({ label, value, text, placeholder, isOpeningBalance }) => (
             <div key={label} className="rounded-2xl border bg-white p-4 shadow-sm">
               <div className="text-xs font-bold uppercase text-slate-500">
                 {label}
               </div>
               <div className="mt-1 text-xl font-extrabold text-slate-900">
-                {placeholder || formatCurrency(Number(value || 0))}
+                {placeholder || text || formatCurrency(Number(value || 0))}
               </div>
 
-              {isOpeningBalance && canEditOpeningBalance && !branchSelectionRequired && (
+              {isOpeningBalance && canEditOpeningBalance && (
                 <button
                   type="button"
                   onClick={beginOpeningBalanceEdit}
@@ -1006,22 +953,76 @@ export default function CustomerCredit({ readOnly = false }) {
       </div>
 
       {activeTab === "summary" && (
-        <section className="rounded-2xl border bg-white p-5 shadow-sm">
-          <h3 className="text-lg font-extrabold text-slate-900">Account Summary</h3>
-          <p className="mt-1 text-sm text-slate-500">
-            {hasSpecificBranch
-              ? "All cards and history below are filtered to the selected branch."
-              : hasMultipleBranches
-              ? "The figures above show the total position across all branches."
-              : hasOneBranch
-              ? "This customer has one branch, which is selected automatically."
-              : "This customer has no separate branches. Credit History and Transactions are available for the main account."}
-          </p>
+        <section className="space-y-4 rounded-2xl border bg-white p-5 shadow-sm">
+          <div>
+            <h3 className="text-lg font-extrabold text-slate-900">Account Summary</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              The customer total is always shown across the full account. Branch
+              summaries show every active branch at the same time.
+            </p>
+          </div>
+
+          <div className="rounded-xl border bg-slate-50 p-4">
+            <div className="text-xs font-bold uppercase text-slate-500">
+              Total Outstanding
+            </div>
+            <div className="mt-1 text-2xl font-extrabold text-slate-900">
+              {formatCurrency(snapshot?.customerSummary?.outstanding || 0)}
+            </div>
+          </div>
+
+          {hasBranches ? (
+            <div>
+              <h4 className="mb-3 text-base font-extrabold text-slate-900">
+                Branch Outstanding
+              </h4>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {(snapshot?.branchSummaries || []).map((branchSummary) => (
+                  <div
+                    key={branchSummary.branchId || "main-unassigned"}
+                    className="rounded-xl border bg-white p-4 shadow-sm"
+                  >
+                    <div className="text-lg font-extrabold text-slate-900">
+                      {branchSummary.branchName || "Branch"}
+                    </div>
+                    <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <dt className="font-bold text-slate-500">Opening</dt>
+                        <dd className="font-extrabold">{formatCurrency(branchSummary.openingBalance || 0)}</dd>
+                      </div>
+                      <div>
+                        <dt className="font-bold text-slate-500">Invoices</dt>
+                        <dd className="font-extrabold">{formatCurrency(branchSummary.invoiceTotal || 0)}</dd>
+                      </div>
+                      <div>
+                        <dt className="font-bold text-slate-500">Payments</dt>
+                        <dd className="font-extrabold">{formatCurrency(branchSummary.paymentTotal || 0)}</dd>
+                      </div>
+                      <div>
+                        <dt className="font-bold text-slate-500">Outstanding</dt>
+                        <dd className="font-extrabold">{formatCurrency(branchSummary.outstanding || 0)}</dd>
+                      </div>
+                      {Number(branchSummary.creditLimit || 0) > 0 && (
+                        <div>
+                          <dt className="font-bold text-slate-500">Available credit</dt>
+                          <dd className="font-extrabold">{formatCurrency(branchSummary.availableCredit || 0)}</dd>
+                        </div>
+                      )}
+                    </dl>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="rounded-xl border bg-slate-50 p-4 text-sm font-semibold text-slate-600">
+              Branch Credit is OFF. This customer uses the Main Customer Account automatically.
+            </p>
+          )}
         </section>
       )}
 
       {(activeTab === "credit" || activeTab === "transactions") &&
-        branchSelectionRequired && (
+         branchDetailsRequired && (
           <section className="rounded-2xl border border-blue-200 bg-blue-50 p-6 text-center shadow-sm">
             <h3 className="font-extrabold text-blue-900">
               Select a branch to view {activeTab === "credit" ? "Credit History" : "Transactions"}
@@ -1033,7 +1034,7 @@ export default function CustomerCredit({ readOnly = false }) {
         )}
 
       {(activeTab === "credit" || activeTab === "transactions") &&
-        !branchSelectionRequired && (
+        !branchDetailsRequired && (
           <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
             <div className="sticky top-0 z-20 flex flex-col gap-2 border-b bg-white/95 px-4 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -1138,7 +1139,7 @@ export default function CustomerCredit({ readOnly = false }) {
                 disabled={safePage >= totalPages}
                 className="rounded-xl border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Next
+                 Next
               </button>
             </div>
           </section>

@@ -6,9 +6,14 @@ import {
   buildCustomerTransactionHistory,
   filterRowsForBranchScope,
   summarizeCreditSnapshot,
+  summarizeCreditSummaryRows,
   resolveLegacyCompatibilityRows,
   withResolvedBranchScope,
 } from "../utils/centralPaymentCalculations.js";
+import {
+  customerUsesBranchCredit,
+  getActiveCustomerBranches,
+} from "../utils/customerBranchScope.js";
 
 const serviceSource = fs.readFileSync(
   new URL("./centralPaymentService.js", import.meta.url),
@@ -16,6 +21,10 @@ const serviceSource = fs.readFileSync(
 );
 const centralPaymentComponentSource = fs.readFileSync(
   new URL("../pages/AdminSetup/CentralPayment.jsx", import.meta.url),
+  "utf8"
+);
+const customerCreditComponentSource = fs.readFileSync(
+  new URL("../pages/AdminSetup/CustomerCredit.jsx", import.meta.url),
   "utf8"
 );
 
@@ -49,16 +58,35 @@ test("legacy payments fill missing history when new invoices exist", () => {
   assert.deepEqual(result.payments.map((row) => row.id), ["legacy-payment"]);
 });
 
-test("legacy invoices fill missing history when new payments exist", () => {
+test("legacy customer_ledger invoice rows are excluded from active Customer Credit", () => {
   const result = resolveLegacyCompatibilityRows({
-    invoices: [],
-    payments: [{ id: "new-payment", payment_reference: "PAY-1" }],
-    legacyInvoices: [{ id: "legacy-invoice", invoice_number: "INV-1" }],
+    invoices: [
+      {
+        id: "current-order-invoice",
+        invoice_number: "ORD-1784197506132",
+        invoice_total: 838.9,
+        source: "orders",
+      },
+    ],
+    payments: [],
+    legacyInvoices: [
+      {
+        id: "legacy-invoice",
+        invoice_number: "ORD-1784197506132",
+        debit: 973.21,
+        amount: 973.21,
+        invoice_amount: 973.21,
+        source: "legacy_customer_ledger",
+      },
+    ],
     legacyPayments: [{ id: "legacy-payment", payment_reference: "PAY-1" }],
   });
 
-  assert.deepEqual(result.invoices.map((row) => row.id), ["legacy-invoice"]);
-  assert.deepEqual(result.payments.map((row) => row.id), ["new-payment"]);
+  assert.equal(result.invoices.length, 1);
+  assert.equal(result.invoices[0].id, "current-order-invoice");
+  assert.equal(result.invoices[0].invoice_total, 838.9);
+  assert.equal(result.invoices[0].source, "orders");
+  assert.deepEqual(result.payments.map((row) => row.id), ["legacy-payment"]);
 });
 
 test("equivalent legacy and new records do not duplicate", () => {
@@ -73,17 +101,45 @@ test("equivalent legacy and new records do not duplicate", () => {
   assert.deepEqual(result.payments.map((row) => row.id), ["new-payment"]);
 });
 
+test("legacy payment fallback remains available when customer_payments are missing", () => {
+  const result = resolveLegacyCompatibilityRows({
+    invoices: [{ id: "current-invoice", invoice_number: "INV-1", invoice_total: 100 }],
+    payments: [],
+    legacyInvoices: [{ id: "legacy-invoice", invoice_number: "INV-2", debit: 999 }],
+    legacyPayments: [{ id: "legacy-payment", payment_reference: "PAY-1", amount: 25 }],
+  });
+
+  assert.deepEqual(result.invoices.map((row) => row.id), ["current-invoice"]);
+  assert.deepEqual(result.payments.map((row) => row.id), ["legacy-payment"]);
+});
+
 test("customer credit invoice rows prefer current order item totals", () => {
   assert.match(serviceSource, /const getCurrentOrderItemsInvoiceTotal/);
   assert.match(serviceSource, /currentOrderItemsInvoiceTotal \?\?/);
   assert.match(serviceSource, /currentOrderItemsTotalApplied/);
+  assert.match(serviceSource, /hydrateOrdersWithFullOrderItems/);
 
   const loadDeliveredInvoicesSource = getFunctionSource("loadDeliveredInvoices");
   assert.match(loadDeliveredInvoicesSource, /const currentOrderItemsInvoiceTotal = getCurrentOrderItemsInvoiceTotal\(order\)/);
+  assert.match(loadDeliveredInvoicesSource, /order_items\(\*\)/);
   assert.match(loadDeliveredInvoicesSource, /invoice_total:\s*invoiceTotal/);
   assert.doesNotMatch(
     loadDeliveredInvoicesSource,
     /invoice_total:\s*savedTotal !== undefined \? Number\(savedTotal\)/
+  );
+});
+
+test("invoice amendments use current order_items before stale saved totals", () => {
+  const loadDeliveredInvoicesSource = getFunctionSource("loadDeliveredInvoices");
+
+  assert.match(
+    loadDeliveredInvoicesSource,
+    /const invoiceTotal =\s*currentOrderItemsInvoiceTotal \?\?/s
+  );
+  assert.match(loadDeliveredInvoicesSource, /savedTotal !== undefined/);
+  assert.doesNotMatch(
+    loadDeliveredInvoicesSource,
+    /customer_ledger[\s\S]*invoice_total/
   );
 });
 
@@ -165,26 +221,58 @@ test("bank confirmation is owner RPC-only and sends allocation preview", () => {
   assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.insert/s);
 });
 
-test("owner removes an active payment through the archive RPC only", () => {
+test("remove archives an active payment without physical deletion", () => {
   const source = getFunctionSource("removeCentralPayment");
 
-  assert.match(source, /actor !== "nisstaj_admin"/);
-  assert.match(source, /Owner financial password is required/);
-  assert.match(source, /Deletion reason is required/);
-  assert.match(source, /supabase\.rpc\("remove_central_payment"/);
-  assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.delete/s);
-  assert.doesNotMatch(source, /\.from\("customer_payments"\).*\.update/s);
-  assert.doesNotMatch(source, /\.from\("customer_payment_allocations"\).*\.update/s);
+  assert.match(source, /Archive reason is required/);
+  assert.match(source, /status:\s*"VOIDED"/);
+  assert.match(source, /removed_at/);
+  assert.doesNotMatch(source, /\.delete\(/);
 });
 
-test("non-owner cannot see or call payment lifecycle actions", () => {
-  const source = getFunctionSource("removeCentralPayment");
+test("only nisstaj_admin sees permanent deletion and history does not require owner password", () => {
+  const permanentSource = getFunctionSource("permanentlyDeleteCentralPayment");
+  const listSource = getFunctionSource("listCentralPaymentRecords");
 
-  assert.match(source, /Only nisstaj_admin can remove Central Payment records/);
-  assert.match(centralPaymentComponentSource, /isOwnerUser\(currentUser\)/);
+  assert.match(permanentSource, /requirePermanentDeleteAdmin/);
+  assert.match(permanentSource, /permanently_delete_central_payment/);
+  assert.doesNotMatch(listSource, /ownerPassword/);
+  assert.match(centralPaymentComponentSource, /isOwnerUser\(currentUser\).*Permanent delete/s);
   assert.match(centralPaymentComponentSource, /Payment History/);
   assert.match(centralPaymentComponentSource, /Payment Archive/);
-  assert.match(centralPaymentComponentSource, /Permanent delete/);
+});
+
+test("payment history uses exact-count server pagination with stable 20-row pages", () => {
+  const source = getFunctionSource("listCentralPaymentRecords");
+
+  assert.match(source, /const pageSize = 20/);
+  assert.match(source, /select\("\*", \{ count: "exact" \}\)/);
+  assert.match(source, /\.range\(from, to\)/);
+  assert.match(source, /order\("payment_date", \{ ascending: false \}\)/);
+  assert.match(source, /order\("created_at", \{ ascending: false \}\)/);
+  assert.match(source, /order\("id", \{ ascending: false \}\)/);
+  assert.match(source, /customer_account_id/);
+  assert.match(source, /customer_branch_id/);
+  assert.match(source, /transaction_type/);
+});
+
+test("Central Payment is one page with shared owner password", () => {
+  assert.match(
+    centralPaymentComponentSource,
+    /const \[ownerPassword, setOwnerPassword\] = useState\(""\)/
+  );
+  assert.match(centralPaymentComponentSource, /function PaymentRecordsPanel/);
+  assert.match(centralPaymentComponentSource, /function GlobalLedgerPanel/);
+  assert.match(centralPaymentComponentSource, /function AllocationPreview/);
+  assert.match(centralPaymentComponentSource, /function ManualPaymentPanel/);
+  assert.match(centralPaymentComponentSource, /export default function CentralPayment/);
+  assert.doesNotMatch(centralPaymentComponentSource, /from "\.\/CentralPaymentCore"/);
+  assert.doesNotMatch(centralPaymentComponentSource, /from "\.\/GlobalFinancialLedger"/);
+  assert.doesNotMatch(centralPaymentComponentSource, /form\.ownerPassword/);
+  assert.doesNotMatch(
+    centralPaymentComponentSource,
+    /ownerPassword:\s*""/
+  );
 });
 
 test("voided payment disappears from active totals and history", () => {
@@ -271,6 +359,100 @@ test("Penarth does not show Life Style payments", () => {
   );
 });
 
+test("no active branches uses main account scope without branch selection", () => {
+  const scopedRows = withResolvedBranchScope(
+    [
+      { id: "main-invoice", invoice_number: "INV-MAIN", invoice_total: 100 },
+      { id: "main-payment", payment_reference: "PAY-MAIN", amount: 40 },
+    ],
+    []
+  );
+
+  assert.deepEqual(
+    filterRowsForBranchScope(scopedRows, "").map((row) => row.id),
+    ["main-invoice", "main-payment"]
+  );
+  assert.match(centralPaymentComponentSource, /const hasBranches = branches\.length > 0/);
+  assert.match(centralPaymentComponentSource, /hasBranches && selectedBranchId === BRANCH_SELECT/);
+  assert.match(centralPaymentComponentSource, /setSelectedBranchId\(""\)/);
+  assert.match(centralPaymentComponentSource, /Manual Payment/);
+  assert.match(centralPaymentComponentSource, /Select branch/);
+  assert.match(customerCreditComponentSource, /Branch Credit: \{hasBranches \? "ON" : "OFF"\}/);
+  assert.match(customerCreditComponentSource, /Financial scope:/);
+  assert.match(customerCreditComponentSource, /Main Customer Account/);
+});
+
+test("active branches require explicit selected-branch scope", () => {
+  const branches = [
+    { id: "penarth", branch_name: "3S Penarth Store" },
+    { id: "life", branch_name: "3S Life Style" },
+  ];
+  const invoices = withResolvedBranchScope(
+    [
+      { id: "inv-penarth", branch_name: "3S Penarth Store", invoice_total: 100 },
+      { id: "inv-life", branch_name: "3S Life Style", invoice_total: 200 },
+    ],
+    branches
+  );
+  const payments = withResolvedBranchScope(
+    [
+      { id: "pay-penarth", branch_name: "3S Penarth Store", amount: 50 },
+      { id: "pay-life", branch_name: "3S Life Style", amount: 75 },
+    ],
+    branches
+  );
+
+  assert.deepEqual(
+    filterRowsForBranchScope(invoices, "penarth").map((row) => row.id),
+    ["inv-penarth"]
+  );
+  assert.deepEqual(
+    filterRowsForBranchScope(payments, "penarth").map((row) => row.id),
+    ["pay-penarth"]
+  );
+  assert.match(centralPaymentComponentSource, /setSelectedBranchId\(BRANCH_SELECT\)/);
+  assert.match(centralPaymentComponentSource, /branchSelectionRequired/);
+  assert.match(centralPaymentComponentSource, /Select branch/);
+  assert.match(customerCreditComponentSource, /hasBranches && selectedBranchId === MAIN_ACCOUNT/);
+  assert.match(customerCreditComponentSource, /setSelectedBranchId\(MAIN_ACCOUNT\)/);
+  assert.match(customerCreditComponentSource, /Main Customer Account/);
+});
+
+test("shared active branch utility excludes inactive branch markers", () => {
+  const customer = {
+    id: "customer-1",
+    customer_branches: [
+      { id: "active", customer_account_id: "customer-1", branch_name: "Active" },
+      { id: "inactive", customer_account_id: "customer-1", branch_name: "Inactive", active: false },
+      { id: "disabled", customer_account_id: "customer-1", branch_name: "Disabled", disabled: true },
+      { id: "archived", customer_account_id: "customer-1", branch_name: "Archived", archived: true },
+      { id: "deleted", customer_account_id: "customer-1", branch_name: "Deleted", deleted: true },
+      { id: "status", customer_account_id: "customer-1", branch_name: "Status", status: "inactive" },
+      { id: "other", customer_account_id: "customer-2", branch_name: "Other customer" },
+    ],
+  };
+
+  assert.deepEqual(
+    getActiveCustomerBranches(customer).map((branch) => branch.id),
+    ["active"]
+  );
+  assert.equal(customerUsesBranchCredit(customer), true);
+  assert.equal(customerUsesBranchCredit({ customer_branches: [] }), false);
+});
+
+test("central snapshot exposes branch summaries for Customer Credit Summary", () => {
+  const source = getFunctionSource("loadCentralPaymentSnapshot");
+
+  assert.match(source, /const branchSummaries = branches\.map/);
+  assert.match(source, /filterRowsForBranchScope\(invoices, branchId\)/);
+  assert.match(source, /summarizeCreditSnapshot\(\{/);
+  assert.match(source, /branchSummaries,/);
+  assert.match(source, /difference:\s*money\(customerSummary\.outstanding - branchOutstandingTotal\)/);
+  assert.match(customerCreditComponentSource, /Total Outstanding/);
+  assert.match(customerCreditComponentSource, /snapshot\?\.branchSummaries/);
+  assert.match(customerCreditComponentSource, /Branch Outstanding/);
+});
+
 test("Life Style does not show Penarth invoices", () => {
   const branches = [
     { id: "penarth", branch_name: "3S Penarth Store" },
@@ -290,7 +472,58 @@ test("Life Style does not show Penarth invoices", () => {
   );
 });
 
-test("All branches contains every unique transaction exactly once", () => {
+test("outstanding uses opening plus current invoices minus posted payments", () => {
+  const summary = summarizeCreditSnapshot({
+    openingBalance: 1529.93,
+    invoices: [
+      { invoice_number: "ORD-CURRENT-1", invoice_total: 2000 },
+      { invoice_number: "ORD-CURRENT-2", invoice_total: 1160.14 },
+    ],
+    payments: [{ payment_reference: "PAY-1", amount: 2928.9 }],
+  });
+
+  assert.equal(summary.invoiceTotal, 3160.14);
+  assert.equal(summary.paymentTotal, 2928.9);
+  assert.equal(summary.outstanding, 1761.17);
+});
+
+test("customer total is exactly the sum of branch and unassigned summaries", () => {
+  const summaries = [
+    summarizeCreditSnapshot({
+      openingBalance: 100,
+      invoices: [{ invoice_total: 250 }],
+      payments: [{ amount: 80 }],
+    }),
+    summarizeCreditSnapshot({
+      openingBalance: -25,
+      invoices: [{ invoice_total: 40 }],
+      payments: [{ amount: -10 }],
+    }),
+    summarizeCreditSnapshot({ openingBalance: 15 }),
+  ];
+  const customer = summarizeCreditSummaryRows({ creditLimit: 1000, summaries });
+
+  assert.equal(customer.outstanding, 290);
+  assert.equal(
+    customer.outstanding,
+    summaries.reduce((sum, branch) => sum + branch.outstanding, 0)
+  );
+  assert.equal(customer.availableCredit, 710);
+});
+
+test("customer order account summaries use the canonical credit snapshot", () => {
+  const customerOrderSource = fs.readFileSync(
+    new URL("../pages/CustomerOrder.jsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.doesNotMatch(customerOrderSource, /loadCustomerOutstandingSnapshot/);
+  assert.match(customerOrderSource, /loadReadOnlyCustomerCreditSnapshot/);
+  assert.match(customerOrderSource, /selectedSnapshot\.branchSummaries/);
+  assert.doesNotMatch(customerOrderSource, /const branchSnapshots = await Promise\.all/);
+});
+
+test("All branches contains current invoices and unique fallback payments exactly once", () => {
   const result = resolveLegacyCompatibilityRows({
     invoices: [{ id: "new-invoice", invoice_number: "INV-1" }],
     payments: [{ id: "new-payment", payment_reference: "PAY-1" }],
@@ -306,7 +539,6 @@ test("All branches contains every unique transaction exactly once", () => {
 
   assert.deepEqual(result.invoices.map((row) => row.id), [
     "new-invoice",
-    "legacy-missing-invoice",
   ]);
   assert.deepEqual(result.payments.map((row) => row.id), [
     "new-payment",

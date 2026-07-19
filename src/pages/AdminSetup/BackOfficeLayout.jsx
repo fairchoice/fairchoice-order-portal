@@ -306,6 +306,7 @@ export default function BackOfficeLayout({
   page,
   setPage,
   fetchOrders,
+  currentUser,
   children,
   isAdmin,
   isSalesRep,
@@ -315,12 +316,11 @@ export default function BackOfficeLayout({
   onLogout,
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
   const allowedSections = useMemo(
-    () => filterSectionsByPermission(loggedInUser),
-    [loggedInUser]
+    () => filterSectionsByPermission(currentUser),
+    [currentUser]
   );
-  const pageAllowed = canAccessPage(loggedInUser, page);
+  const pageAllowed = canAccessPage(currentUser, page);
 
   const roleLabel = useMemo(() => {
     if (isAdmin) return "Admin";
@@ -332,7 +332,7 @@ export default function BackOfficeLayout({
   }, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer]);
 
   const handleNavigate = async (item) => {
-    if (item.permission && !hasPermission(loggedInUser, item.permission)) {
+    if (item.permission && !hasPermission(currentUser, item.permission)) {
       alert("You do not have permission to access this page.");
       return;
     }

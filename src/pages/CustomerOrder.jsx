@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabase.js";
+import {
+  buildLegacyStaffProfile,
+  isAdminStaffRole,
+  normalizeStaffRole,
+  resolveBackOfficeAccess,
+} from "../services/authProfile";
+import { loadReadOnlyCustomerCreditSnapshot } from "../services/centralPaymentService";
 import PricingRule from "./AdminSetup/PricingRule";
 import Suppliers from "./AdminSetup/Suppliers";
 import Staff from "./AdminSetup/Staff";
@@ -7,6 +14,14 @@ import LoginConfig from "./AdminSetup/LoginConfig";
 import PriceManagement from "./AdminSetup/PriceManagement";
 
 import { formatCurrency } from "../utils/currency";
+import {
+  getCustomerCartStorageKey,
+  getCustomerPortalHash,
+  getOrderSubmissionErrorMessage,
+  isCustomerPortalPageAllowed,
+  isOrderAuthError,
+  resolveCustomerPortalPage,
+} from "../utils/customerPortalState";
 import { getDisplayProductImage, isPlaceholderProductImage } from "../utils/productImages";
 import { sortPrintItems } from "../utils/printItemSorting";
 
@@ -90,13 +105,29 @@ import {
   applyInvoicePaymentAllocations,
   createOrUpdateInvoiceForDeliveredOrder,
   fetchInvoiceOrderFromDb,
-  loadCustomerOutstandingSnapshot,
   loadProcessingQueueOrders,
   mergeOperationalOrders,
   downloadInvoice as downloadCentralInvoice,
   previewInvoice as previewCentralInvoice,
   withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
+
+const LEGACY_CART_KEY = "fairchoice_cart";
+
+async function refreshSupabaseSessionIfNeeded() {
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+
+  const session = data.session;
+  if (!session) return null;
+
+  const expiresAt = Number(session.expires_at || 0) * 1000;
+  if (!expiresAt || expiresAt - Date.now() > 60_000) return session;
+
+  const refreshed = await supabase.auth.refreshSession();
+  if (refreshed.error) throw refreshed.error;
+  return refreshed.data.session;
+}
 
 function normalizeProduct(raw) {
   return {
@@ -404,7 +435,7 @@ const getCountryFilteredBranches = (customer, country, shouldFilter) => {
     (branch) => normalizeCountry(branch.country) === selectedCountry
   );
 };
-export default function CustomerOrder({ userProfile }) {
+export default function CustomerOrder({ userProfile, onLogout, onProfileRefresh }) {
 
 const loggedInUser =
   JSON.parse(localStorage.getItem("loggedInUser") || "null") ||
@@ -412,17 +443,13 @@ const loggedInUser =
 
 
   const activeUser = userProfile || loggedInUser || {};
-  const role = activeUser?.role || activeUser?.access_level || "Customer";
+  const role = normalizeStaffRole(activeUser?.role || activeUser?.access_level || "Customer");
   const normalizedRole = String(role || "")
     .replace(/[^a-z0-9]/gi, "")
     .toLowerCase();
   const permissions = activeUser?.permissions || {};
 
-  const isAdmin =
-    normalizedRole === "admin" ||
-    normalizedRole === "superadmin" ||
-    activeUser?.access_level === "Admin" ||
-    activeUser?.access_level === "Super Admin";
+  const isAdmin = isAdminStaffRole(role);
   const isSalesRep =
     normalizedRole === "salesrep" ||
     normalizedRole === "salesrepresentative" ||
@@ -448,23 +475,10 @@ const loggedInUser =
 
   
 
- const [page, setPage] = useState(() => {
-  if (isCustomer) return "order";
-  if (isDriver) return "driver";
-  if (isWarehouse) return "warehouse";
-  if (isAdmin && window.location.hash === "#admin") return "orders";
-
-  if (window.location.hash === "#products") return "products";
-  if (window.location.hash === "#warehouse") return "warehouse";
-  if (window.location.hash === "#driver") return "driver";
-  if (window.location.hash === "#stock-receipts") return "stockreceipts";
-  if (window.location.hash === "#stockhistory") return "stockhistory";
-  if (window.location.hash === "#config") return "config";
-  if (window.location.hash === "#customers") return "customers";
-  if (window.location.hash === "#credit") return "credit";
-
-  return isAdmin ? "orders" : "order";
-});
+ const portalRoleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer };
+ const [page, setPage] = useState(() =>
+  resolveCustomerPortalPage({ hash: window.location.hash, ...portalRoleState })
+ );
 
   const [customerAccounts, setCustomerAccounts] = useState([]);
   const [customerSearchTerm, setCustomerSearchTerm] = useState("");
@@ -483,6 +497,8 @@ const loggedInUser =
   const [paymentHistoryBranchId, setPaymentHistoryBranchId] = useState("");
   const [customerLedger, setCustomerLedger] = useState([]);
   const [customerOpeningBalance, setCustomerOpeningBalance] = useState(0);
+  const [customerCreditSnapshot, setCustomerCreditSnapshot] = useState(null);
+  const [branchOutstandingRows, setBranchOutstandingRows] = useState([]);
 
   const [salesPaymentForm, setSalesPaymentForm] = useState({
   customerId: "",
@@ -544,10 +560,23 @@ useEffect(() => {
     }
 
     try {
-      const snapshot = await loadCustomerOutstandingSnapshot({
+      const creditSnapshot = await loadReadOnlyCustomerCreditSnapshot({
         customerAccountId: selectedSalesPaymentCustomer.id,
         customerName: selectedSalesPaymentCustomer.account_name,
+        customer: selectedSalesPaymentCustomer,
       });
+
+      const branchOutstanding = Object.fromEntries(
+        (creditSnapshot.branchSummaries || []).flatMap((branch) => {
+          const entries = [[String(branch.branchId || ""), branch.outstanding]];
+          if (branch.branchName) entries.push([branch.branchName, branch.outstanding]);
+          return entries;
+        })
+      );
+      const snapshot = {
+        totalOutstanding: creditSnapshot.customerSummary?.outstanding || 0,
+        branchOutstanding,
+      };
 
       if (active) setSalesOutstandingSnapshot(snapshot);
     } catch (error) {
@@ -591,11 +620,13 @@ useEffect(() => {
   const [promotionRules, setPromotionRules] = useState([]);
   const [productDisplayMessages, setProductDisplayMessages] = useState([]);
 
-  const CART_KEY = "fairchoice_cart";
+const cartStorageKey = getCustomerCartStorageKey(activeUser);
+const orderSubmissionStorageKey = `${cartStorageKey}:submission`;
 
 const [cart, setCart] = useState(() => {
   try {
-    const savedCart = localStorage.getItem(CART_KEY);
+    const savedCart =
+      localStorage.getItem(cartStorageKey) || localStorage.getItem(LEGACY_CART_KEY);
     return savedCart ? JSON.parse(savedCart) : [];
   } catch {
     return [];
@@ -604,8 +635,9 @@ const [cart, setCart] = useState(() => {
 
 
 useEffect(() => {
-  localStorage.setItem(CART_KEY, JSON.stringify(cart));
-}, [cart]);
+  localStorage.setItem(cartStorageKey, JSON.stringify(cart));
+  localStorage.removeItem(LEGACY_CART_KEY);
+}, [cart, cartStorageKey]);
 
 useEffect(() => {
   if (!canManualCheckoutDiscount && Number(orderDiscountPercent || 0) > 0) {
@@ -769,77 +801,94 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
   });
 };
 
-const loadCustomerCreditSnapshot = async (customer = selectedCustomerAccount) => {
+const loadCustomerCreditSnapshot = async (
+  customer = selectedCustomerAccount,
+  branchId = paymentHistoryBranchId
+) => {
   const customerName = customer?.account_name || companyName;
 
-  if (!customerName) {
+  if (!customerName || !customer?.id) {
     setCustomerLedger([]);
     setCustomerOpeningBalance(0);
-    return { ledgerRows: [], openingBalance: 0 };
+    setCustomerCreditSnapshot(null);
+    setBranchOutstandingRows([]);
+    return null;
   }
 
-  const ledgerPromise = (async () => {
-    if (customer?.id) {
-      const byId = await supabase
-        .from("customer_ledger")
-        .select("*")
-        .eq("customer_account_id", customer.id)
-        .order("created_at", { ascending: true });
+  try {
+    const selectedSnapshot = await loadReadOnlyCustomerCreditSnapshot({
+      customerAccountId: customer.id,
+      customerName,
+      customer,
+      selectedBranchId: branchId || "",
+    });
 
-      if (byId.error || byId.data?.length) return byId;
-    }
+    const historyRows = (selectedSnapshot.transactionHistory || []).map((row) => ({
+      ...row,
+      created_at: row.date,
+      payment_date: row.date,
+      entry_type: row.type,
+      transaction_type: row.type,
+      reference_no: row.reference,
+      debit: row.amount > 0 ? row.amount : 0,
+      credit: row.amount < 0 ? Math.abs(row.amount) : 0,
+      running_balance: row.runningBalance,
+      branch_id: row.branchId,
+      customer_branch_id: row.branchId,
+      branch_name: row.branchName,
+      payment_type: row.paymentMethod,
+      paid_by: row.paidBy,
+      invoice_status: row.status,
+      payment_status: row.status,
+    }));
 
-    return supabase
-      .from("customer_ledger")
-      .select("*")
-      .eq("customer_name", customerName)
-      .order("created_at", { ascending: true });
-  })();
+    setCustomerLedger(historyRows);
+    setCustomerOpeningBalance(
+      Number(
+        (branchId
+          ? selectedSnapshot.branchSummary?.openingBalance
+          : selectedSnapshot.customerSummary?.openingBalance) || 0
+      )
+    );
+    setCustomerCreditSnapshot(selectedSnapshot);
 
-  const [{ data: ledgerData, error: ledgerError }, { data: balanceRow }] = await Promise.all([
-    ledgerPromise,
-    supabase
-      .from("customer_opening_balances")
-      .select("*")
-      .eq("customer_name", customerName)
-      .maybeSingle(),
-  ]);
-
-  if (ledgerError) {
-    console.error("Customer ledger loading error:", ledgerError);
-
-    alert(
-      `Could not load payment history.\n\n${ledgerError.message}\n\n${ledgerError.details || ""}`
+    setBranchOutstandingRows(
+      (selectedSnapshot.branchSummaries || []).map((branch) => ({
+        id: branch.branchId || "main-unassigned",
+        branchName: branch.branchName,
+        outstanding: Number(branch.outstanding || 0),
+      }))
     );
 
-    return { ledgerRows: [], openingBalance: 0 };
+    return {
+      ...selectedSnapshot,
+      ledgerRows: historyRows,
+      openingBalance: Number(
+        (branchId
+          ? selectedSnapshot.branchSummary?.openingBalance
+          : selectedSnapshot.customerSummary?.openingBalance) || 0
+      ),
+    };
+  } catch (ledgerError) {
+    console.error("Customer credit loading error:", ledgerError);
+    alert(`Could not load payment history.\n\n${ledgerError.message || "Unknown error"}`);
+    setCustomerLedger([]);
+    setCustomerOpeningBalance(0);
+    setCustomerCreditSnapshot(null);
+    setBranchOutstandingRows([]);
+    return null;
   }
-
-  const deliveredOrders = await loadDeliveredOrdersForCustomerLedger(
-    customerName,
-    customer?.id
-  );
-  const ledgerRows = mergeDeliveredOrderInvoicesIntoLedger(
-    ledgerData || [],
-    deliveredOrders
-  );
-  const openingBalance = Number(balanceRow?.opening_balance || 0);
-
-  setCustomerLedger(ledgerRows);
-  setCustomerOpeningBalance(openingBalance);
-
-  return { ledgerRows, openingBalance };
 };
-
-const fetchCustomerLedger = () => loadCustomerCreditSnapshot();
+const fetchCustomerLedger = () => loadCustomerCreditSnapshot(selectedCustomerAccount, paymentHistoryBranchId);
 
 useEffect(() => {
   if (selectedCustomerAccount && (page === "paymentHistory" || page === "order")) {
     fetchCustomerLedger();
   }
-}, [page, selectedCustomerAccount?.id, userProfile?.customer_account_id]);
+}, [page, selectedCustomerAccount?.id, userProfile?.customer_account_id, paymentHistoryBranchId]);
 
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const orderSubmissionLockRef = useRef(false);
   const [orders, setOrders] = useState([]);
   const [expandedOrders, setExpandedOrders] = useState({});
   const [returnOrder, setReturnOrder] = useState(null);
@@ -1280,20 +1329,37 @@ useEffect(() => {
 
 
 useEffect(() => {
-  if (isAdmin && page === "order" && window.location.hash === "#admin") {
-    setPage("orders");
-    fetchOrders();
-    return;
-  }
+  const syncPageFromHash = () => {
+    setPage(
+      resolveCustomerPortalPage({
+        hash: window.location.hash,
+        isAdmin,
+        isSalesRep,
+        isWarehouse,
+        isDriver,
+        isCustomer,
+      })
+    );
+  };
 
-}, [isAdmin, isWarehouse, isDriver, isSalesRep, isCustomer]);
+  window.addEventListener("hashchange", syncPageFromHash);
+  const syncTimer = window.setTimeout(syncPageFromHash, 0);
+  return () => {
+    window.clearTimeout(syncTimer);
+    window.removeEventListener("hashchange", syncPageFromHash);
+  };
+}, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer]);
 
 useEffect(() => {
-  if (!isCustomer) return;
-  if (page === "order" || page === "paymentHistory") return;
+  const roleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer };
 
-  setPage("order");
-}, [isCustomer, page]);
+  if (!isCustomerPortalPageAllowed(page, roleState)) return;
+
+  const nextHash = getCustomerPortalHash(page, roleState);
+  if (nextHash && window.location.hash !== nextHash) {
+    window.history.replaceState(null, "", nextHash);
+  }
+}, [page, isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer]);
 
 
 
@@ -1383,7 +1449,8 @@ useEffect(() => {
       setCompanyName("");
       setPriceMode("vat");
       setCart([]);
-      localStorage.removeItem(CART_KEY);
+      localStorage.removeItem(cartStorageKey);
+      localStorage.removeItem(orderSubmissionStorageKey);
       return;
     }
 
@@ -1394,7 +1461,14 @@ useEffect(() => {
       setSelectedBranchId("");
       setSelectedBranch(null);
     }
-  }, [isSalesRep, orderCountry, selectedCustomerAccount, selectedBranch]);
+  }, [
+    isSalesRep,
+    orderCountry,
+    selectedCustomerAccount,
+    selectedBranch,
+    cartStorageKey,
+    orderSubmissionStorageKey,
+  ]);
 
   const fetchProducts = async () => {
     setProductError("");
@@ -1448,7 +1522,7 @@ useEffect(() => {
     }
   };
 
-const fetchOrders = async () => {
+const fetchOrders = async ({ throwOnError = false } = {}) => {
   try {
     const { data, error } = await supabase
       .from("orders")
@@ -1542,6 +1616,90 @@ const fetchOrders = async () => {
     setOrders(mergeOperationalOrders(mappedOrders, processingQueueOrders));
   } catch (error) {
     console.error("Orders loading error:", error);
+    if (throwOnError) throw error;
+  }
+};
+
+const openBackOffice = async () => {
+  console.info("[BackOfficeNavigation] click", {
+    staffId: activeUser?.staff_id || activeUser?.id || null,
+    loginUserId: activeUser?.login_user_id || activeUser?.id || null,
+    role: activeUser?.role || activeUser?.access_level || null,
+    active: activeUser?.active !== false,
+  });
+
+  if (!isAdminStaffRole(activeUser?.role || activeUser?.access_level)) {
+    console.warn("[BackOfficeNavigation] access denied", {
+      reason: "non_admin_role",
+      role: activeUser?.role || activeUser?.access_level || null,
+    });
+    alert("Back Office access is restricted to active administrators.");
+    return;
+  }
+
+  try {
+    const loginUserId = activeUser?.login_user_id || activeUser?.id;
+    if (!loginUserId) throw new Error("The authenticated staff login ID is missing.");
+
+    const loginResult = await supabase
+      .from("login_users")
+      .select("id, username, role, staff_id, permissions, active")
+      .eq("id", loginUserId)
+      .eq("active", true)
+      .maybeSingle();
+
+    if (loginResult.error) throw loginResult.error;
+    if (!loginResult.data) throw new Error("The staff login is inactive or unavailable.");
+    if (!loginResult.data.staff_id) {
+      throw new Error("This staff login is not linked to an individual staff record.");
+    }
+
+    const staffResult = await supabase
+      .from("staff_users")
+      .select("*")
+      .eq("id", loginResult.data.staff_id)
+      .eq("active", true)
+      .maybeSingle();
+
+    if (staffResult.error) throw staffResult.error;
+    const staffProfile = buildLegacyStaffProfile(loginResult.data, staffResult.data);
+    const access = resolveBackOfficeAccess(staffProfile);
+
+    if (!access.allowed) {
+      console.warn("[BackOfficeNavigation] access denied", {
+        staffId: staffProfile?.staff_id || null,
+        loginUserId,
+        role: staffProfile?.role || null,
+        reason: access.reason,
+      });
+      alert(access.reason);
+      return;
+    }
+
+    onProfileRefresh?.(staffProfile);
+    window.history.replaceState(null, "", "#admin");
+    setPage("orders");
+
+    try {
+      await fetchOrders({ throwOnError: true });
+    } catch (ordersError) {
+      console.error("[BackOfficeNavigation] orders failed to load", {
+        staffId: staffProfile.staff_id,
+        loginUserId,
+        message: ordersError?.message || String(ordersError),
+        code: ordersError?.code || null,
+      });
+      alert(`Back Office opened, but orders could not be loaded.\n\n${ordersError.message || "Unknown error"}`);
+    }
+  } catch (error) {
+    console.error("[BackOfficeNavigation] profile resolution failed", {
+      staffId: activeUser?.staff_id || activeUser?.id || null,
+      loginUserId: activeUser?.login_user_id || activeUser?.id || null,
+      role: activeUser?.role || activeUser?.access_level || null,
+      message: error?.message || String(error),
+      code: error?.code || null,
+    });
+    alert(`Back Office could not be opened.\n\n${error.message || "The staff profile could not be loaded."}`);
   }
 };
 
@@ -1899,86 +2057,113 @@ const getHomepageSubtitle = (item) => {
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
 );
-const filteredCustomerLedger = paymentHistoryBranchId
-  ? customerLedger.filter(
-      (row) =>
-        String(row.branch_id || row.customer_branch_id || "") ===
-          String(paymentHistoryBranchId) ||
-        String(row.branch_name || "") ===
-          String(
-            selectedCustomerBranches.find(
-              (branch) => String(branch.id) === String(paymentHistoryBranchId)
-            )?.branch_name || ""
-          )
-    )
-  : customerLedger;
-const allocatedAllCustomerLedger = applyInvoicePaymentAllocations(customerLedger);
-const allocatedCustomerLedger = applyInvoicePaymentAllocations(filteredCustomerLedger);
-const filteredOpeningBalance = paymentHistoryBranchId
-  ? 0
-  : Number(customerOpeningBalance || 0);
-let customerLedgerRunningBalance = filteredOpeningBalance;
-const customerLedgerRowsWithBalance = allocatedCustomerLedger.map((row) => {
-  const debit = getLedgerDebit(row);
-  const credit = getLedgerCredit(row);
-  customerLedgerRunningBalance += debit - credit;
+const getPaymentHistoryDateKey = (row = {}) => {
+  const value = row.created_at || row.date || row.payment_date || row.invoice_date;
+  const timestamp = new Date(value || 0);
 
-  return {
-    row,
-    debit,
-    credit,
-    balance: customerLedgerRunningBalance,
-  };
-});
-const displayedCustomerLedgerRowsWithBalance = [...customerLedgerRowsWithBalance].sort(
-  (a, b) => {
-    const dateDiff =
-      new Date(b.row.created_at || b.row.payment_date || 0).getTime() -
-      new Date(a.row.created_at || a.row.payment_date || 0).getTime();
+  if (Number.isNaN(timestamp.getTime())) return "";
 
-    if (dateDiff !== 0) return dateDiff;
+  return [
+    timestamp.getFullYear(),
+    String(timestamp.getMonth() + 1).padStart(2, "0"),
+    String(timestamp.getDate()).padStart(2, "0"),
+  ].join("-");
+};
 
-    return String(b.row.id || b.row.reference_no || "").localeCompare(
-      String(a.row.id || a.row.reference_no || ""),
-      undefined,
-      { numeric: true, sensitivity: "base" }
-    );
-  }
-);
-const customerLastPaymentRow = [...allocatedAllCustomerLedger]
-  .filter(
-    (row) =>
-      String(row.entry_type || row.transaction_type || "").toUpperCase() ===
-      "PAYMENT"
-  )
-  .sort(
-    (a, b) =>
-      new Date(b.created_at || b.payment_date || 0).getTime() -
-      new Date(a.created_at || a.payment_date || 0).getTime()
-  )[0];
-const customerLastPayment = getLedgerCredit(customerLastPaymentRow);
-const customerCreditSummary = calculateCustomerCredit(
-  selectedCustomerAccount,
-  allocatedAllCustomerLedger,
-  customerOpeningBalance
-);
-const branchOutstandingRows = selectedCustomerBranches.map((branch) => {
-  const rows = allocatedAllCustomerLedger.filter(
-    (row) =>
-      String(row.branch_id || row.customer_branch_id || "") === String(branch.id) ||
-      String(row.branch_name || "") === String(branch.branch_name)
+const getPaymentHistoryType = (row = {}) =>
+  String(row.entry_type || row.transaction_type || row.type || "")
+    .trim()
+    .toUpperCase();
+
+const getPaymentInvoiceReference = (row = {}) =>
+  String(
+    row.invoice_reference ||
+      row.invoice_number ||
+      row.applies_to_reference ||
+      row.allocated_invoice_reference ||
+      row.allocated_invoice_number ||
+      row.payment_applies_to_reference ||
+      row.order_number ||
+      ""
+  ).trim();
+
+const paymentIsLinkedToInvoice = (payment = {}, invoice = {}) => {
+  const paymentReference = getPaymentInvoiceReference(payment);
+  const invoiceReference = String(
+    invoice.reference_no ||
+      invoice.invoice_reference ||
+      invoice.invoice_number ||
+      invoice.order_number ||
+      ""
+  ).trim();
+
+  return Boolean(
+    paymentReference &&
+      invoiceReference &&
+      paymentReference === invoiceReference
+  );
+};
+
+const sortCustomerPaymentHistory = (rows = []) => {
+  const originalPosition = new Map(
+    rows.map((row, index) => [row, index])
   );
 
-  return {
-    id: branch.id,
-    branchName: branch.branch_name,
-    outstanding: rows.reduce(
-      (total, row) => total + getLedgerDebit(row) - getLedgerCredit(row),
-      0
-    ),
-  };
-});
+  return [...rows].sort((a, b) => {
+    const aDate = new Date(
+      a.created_at || a.date || a.payment_date || a.invoice_date || 0
+    ).getTime();
+    const bDate = new Date(
+      b.created_at || b.date || b.payment_date || b.invoice_date || 0
+    ).getTime();
 
+    const aDay = getPaymentHistoryDateKey(a);
+    const bDay = getPaymentHistoryDateKey(b);
+
+    // Keep the normal newest-first order when the rows are on different days.
+    if (aDay !== bDay) return bDate - aDate;
+
+    const aType = getPaymentHistoryType(a);
+    const bType = getPaymentHistoryType(b);
+
+    if (
+      (aType === "PAYMENT" && bType === "INVOICE") ||
+      (aType === "INVOICE" && bType === "PAYMENT")
+    ) {
+      const payment = aType === "PAYMENT" ? a : b;
+      const invoice = aType === "INVOICE" ? a : b;
+
+      if (paymentIsLinkedToInvoice(payment, invoice)) {
+        // Payment collected for this invoice: payment first, invoice second.
+        return aType === "PAYMENT" ? -1 : 1;
+      }
+
+      // Payment against a previous balance: invoice first, payment second.
+      return aType === "INVOICE" ? -1 : 1;
+    }
+
+    if (aDate !== bDate) return bDate - aDate;
+
+    return originalPosition.get(a) - originalPosition.get(b);
+  });
+};
+
+const displayedCustomerLedgerRowsWithBalance = sortCustomerPaymentHistory(
+  customerLedger
+).map((row) => ({
+  row,
+  debit: Number(row.debit || 0),
+  credit: Number(row.credit || 0),
+  balance: Number(row.running_balance || 0),
+}));
+
+const customerLastPaymentRow = customerLedger.find(
+  (row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT"
+);
+const customerLastPayment = Number(customerLastPaymentRow?.credit || 0);
+const customerCreditSummary = paymentHistoryBranchId
+  ? customerCreditSnapshot?.branchSummary || {}
+  : customerCreditSnapshot?.customerSummary || {};
 const isFinalOrderStatus = (status) =>
   ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
     String(status || "").trim().toLowerCase()
@@ -2233,7 +2418,7 @@ const getCustomerInvoiceWatermark = (status) =>
 
 
 const submitOrder = async () => {
-  if (isSubmittingOrder) return;
+  if (isSubmittingOrder || orderSubmissionLockRef.current) return;
 
   if (!selectedCustomerAccount) {
     alert("Please select customer account.");
@@ -2285,14 +2470,24 @@ const submitOrder = async () => {
     }
   }
 
+  orderSubmissionLockRef.current = true;
+  setIsSubmittingOrder(true);
+  let requiresReauthentication = false;
+  let submissionOrderNumber = "";
+
+  try {
+    await refreshSupabaseSessionIfNeeded();
+
   const accountStatus =
     selectedCustomerAccount?.account_status ||
     selectedCustomerAccount?.status ||
     "Active";
 
-  const { ledgerRows, openingBalance } = await loadCustomerCreditSnapshot(
-    selectedCustomerAccount
-  );
+  const creditSnapshot = await loadCustomerCreditSnapshot(selectedCustomerAccount);
+  if (!creditSnapshot) {
+    throw new Error("FairChoice could not verify the latest account balance. Please try again.");
+  }
+  const { ledgerRows = customerLedger, openingBalance = customerOpeningBalance } = creditSnapshot;
   const creditSummary = calculateCustomerCredit(
     selectedCustomerAccount,
     ledgerRows,
@@ -2325,31 +2520,69 @@ const submitOrder = async () => {
     return;
   }
 
-  setIsSubmittingOrder(true);
+    const submissionFingerprint = JSON.stringify({
+      customerAccountId: selectedCustomerAccount.id,
+      customerBranchId: selectedBranch?.id || null,
+      priceMode,
+      total: orderTotal,
+      discountPercent: Number(effectiveOrderDiscountPercent || 0),
+      cart: paidCartForOrder.map((item) => ({
+        id: item.id,
+        qty: Number(item.qty || 0),
+        price: Number(item.selectedPrice ?? item.price ?? 0),
+      })),
+    });
+    let savedSubmission = null;
 
-  try {
+    try {
+      savedSubmission = JSON.parse(localStorage.getItem(orderSubmissionStorageKey) || "null");
+    } catch {
+      savedSubmission = null;
+    }
 
-    const { orderNumber } = await createCustomerOrder({
-  companyName: selectedCustomerAccount.account_name,
-  priceMode,
-  cart: paidCartForOrder,
-  total: finalTotal,
+    submissionOrderNumber =
+      savedSubmission?.fingerprint === submissionFingerprint && savedSubmission?.orderNumber
+        ? savedSubmission.orderNumber
+        : `ORD-${Date.now()}-${globalThis.crypto?.randomUUID?.().slice(0, 8) || Math.random().toString(36).slice(2, 10)}`;
 
-discount_percent: effectiveOrderDiscountPercent,
-discount_amount: canManualCheckoutDiscount ? Number(discountAmount || 0) : 0,
+    localStorage.setItem(
+      orderSubmissionStorageKey,
+      JSON.stringify({ orderNumber: submissionOrderNumber, fingerprint: submissionFingerprint })
+    );
 
-discount_applied_by: canManualCheckoutDiscount ? userProfile?.id || "" : "",
-discount_applied_by_name:
-  canManualCheckoutDiscount ? userProfile?.full_name || userProfile?.name || "" : "",
+    const orderRequest = {
+      orderNumber: submissionOrderNumber,
+      companyName: selectedCustomerAccount.account_name,
+      priceMode,
+      cart: paidCartForOrder,
+      total: finalTotal,
+      discount_percent: effectiveOrderDiscountPercent,
+      discount_amount: canManualCheckoutDiscount ? Number(discountAmount || 0) : 0,
+      discount_applied_by: canManualCheckoutDiscount ? userProfile?.id || "" : "",
+      discount_applied_by_name: canManualCheckoutDiscount
+        ? userProfile?.full_name || userProfile?.name || ""
+        : "",
+      customer_account_id: selectedCustomerAccount.id,
+      customer_branch_id: selectedBranch?.id || null,
+      delivery_branch_name: selectedBranch?.branch_name || "",
+      delivery_address: selectedBranch?.delivery_address || "",
+      delivery_postcode: selectedBranch?.postcode || "",
+      customer_country: orderCountry,
+      credit_limit: creditLimit,
+    };
 
-  customer_account_id: selectedCustomerAccount.id,
-  customer_branch_id: selectedBranch?.id || null,
-  delivery_branch_name: selectedBranch?.branch_name || "",
-  delivery_address: selectedBranch?.delivery_address || "",
-  delivery_postcode: selectedBranch?.postcode || "",
-  customer_country: orderCountry,
-  credit_limit: creditLimit,
-});
+    let createdOrder;
+    try {
+      createdOrder = await createCustomerOrder(orderRequest);
+    } catch (error) {
+      if (!isOrderAuthError(error)) throw error;
+
+      const refreshed = await supabase.auth.refreshSession();
+      if (refreshed.error || !refreshed.data.session) throw error;
+      createdOrder = await createCustomerOrder(orderRequest);
+    }
+
+    const { orderNumber } = createdOrder;
 
 const newOrder = {
     orderId: orderNumber,
@@ -2372,7 +2605,8 @@ const newOrder = {
 
     setOrders((oldOrders) => [newOrder, ...oldOrders]);
 
-    localStorage.removeItem(CART_KEY);
+    localStorage.removeItem(cartStorageKey);
+    localStorage.removeItem(orderSubmissionStorageKey);
 
     setCart([]);
     setOrderDiscountPercent(0);
@@ -2400,10 +2634,26 @@ Please quote your Order Number if you need assistance.`
 
 );
   } catch (error) {
-    console.error("Order submit error:", error);
-    alert("Order failed. Check Supabase table permissions/RLS policies.");
+    requiresReauthentication = isOrderAuthError(error);
+    console.error("[OrderSubmission] failed", {
+      event: "customer_order_submission_failed",
+      timestamp: new Date().toISOString(),
+      orderNumber: submissionOrderNumber || null,
+      customerAccountId: selectedCustomerAccount?.id || null,
+      customerBranchId: selectedBranch?.id || null,
+      status: error?.status || error?.statusCode || null,
+      code: error?.code || null,
+      message: error?.message || String(error),
+      online: navigator.onLine,
+    });
+    alert(getOrderSubmissionErrorMessage(error));
   } finally {
+    orderSubmissionLockRef.current = false;
     setIsSubmittingOrder(false);
+  }
+
+  if (requiresReauthentication && onLogout) {
+    await onLogout();
   }
 };
 
@@ -3189,6 +3439,8 @@ const backOfficeContent = comingSoonTitle ? (
   </>
 );
 
+const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
+
   return (
     <div className="customer-portal-shell min-h-screen bg-slate-100 p-4 pb-40">
       <div className="customer-portal-container max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
@@ -3218,11 +3470,9 @@ const backOfficeContent = comingSoonTitle ? (
 
     <div className="portal-actions flex flex-col items-end gap-2">
       <button
-        onClick={() => {
+        onClick={async () => {
           if (window.confirm("Log out now?")) {
-            localStorage.removeItem("fairchoice_user");
-            localStorage.removeItem("fairchoice_last_active");
-            window.location.reload();
+            await onLogout?.();
           }
         }}
         className="logout-btn border border-white/30 px-3 py-1 rounded-lg text-xs font-medium hover:bg-white/10 transition whitespace-nowrap"
@@ -3251,13 +3501,10 @@ const backOfficeContent = comingSoonTitle ? (
         </div>
       )}
 
-      {isAdmin && page === "order" && (
+      {(isAdmin || isSalesRep) && page === "order" && (
         <button
           type="button"
-          onClick={async () => {
-            setPage("orders");
-            await fetchOrders();
-          }}
+          onClick={openBackOffice}
           className="back-office-btn mb-4 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-blue-800"
         >
           Back Office
@@ -3303,6 +3550,7 @@ const backOfficeContent = comingSoonTitle ? (
   page={page}
   setPage={setPage}
   fetchOrders={fetchOrders}
+  currentUser={activeUser}
   isAdmin={isAdmin}
   isSalesRep={isSalesRep}
   isWarehouse={isWarehouse}
@@ -3314,6 +3562,13 @@ const backOfficeContent = comingSoonTitle ? (
 )}
 
 </div>
+
+        {!portalPageIsAllowed && (
+          <div className="m-4 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-slate-800">
+            <p className="font-bold">Opening the Order page...</p>
+            <p className="mt-1 text-sm">The requested page is not available for this login.</p>
+          </div>
+        )}
 
         {(isAdmin || isSalesRep || isCustomer) && page === "order" && (
           <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
@@ -3888,11 +4143,11 @@ const backOfficeContent = comingSoonTitle ? (
               return (
                 <tr key={row.id} className="border-b">
                   <td className="p-3">
-                    {new Date(row.created_at).toLocaleDateString("en-GB")}
+                    {row.type === "OPENING" ? "-" : new Date(row.created_at).toLocaleDateString("en-GB")}
                   </td>
 
                   <td className="p-3 font-bold">
-                    {isInvoice ? "Invoice" : "Payment"}
+                    {type === "OPENING" ? "Opening Balance" : isInvoice ? "Invoice" : "Payment"}
 
                     {row.branch_name && (
                       <div className="text-xs text-slate-500 font-normal mt-1">
@@ -3910,14 +4165,14 @@ const backOfficeContent = comingSoonTitle ? (
                   </td>
 
                   <td className="p-3">
-                    {isInvoice ? (
+                    {type === "OPENING" ? (
+                      <span className="font-bold">Opening Balance</span>
+                    ) : isInvoice ? (
                       <span className="bg-red-100 text-red-700 px-2 py-1 rounded-lg text-xs font-bold">
                         {status || "UNPAID"}
                       </span>
                     ) : (
-                      <span className="font-bold">
-                        Payment Received
-                      </span>
+                      <span className="font-bold">Payment Received</span>
                     )}
                   </td>
 
@@ -3957,20 +4212,7 @@ const backOfficeContent = comingSoonTitle ? (
                 </tr>
               );
             })}
-            {!paymentHistoryBranchId && (
-              <tr className="border-b bg-blue-50">
-                <td className="p-3">-</td>
-                <td className="p-3 font-bold">Opening Balance</td>
-                <td className="p-3">Opening Balance</td>
-                <td className="p-3 text-right font-bold text-red-600">
-                  {formatCurrency(customerOpeningBalance)}
-                </td>
-                <td className="p-3 text-right font-bold">
-                  {formatCurrency(customerOpeningBalance)}
-                </td>
-                <td className="p-3 text-center">-</td>
-              </tr>
-            )}
+
           </tbody>
         </table>
       </div>
@@ -4303,7 +4545,8 @@ const backOfficeContent = comingSoonTitle ? (
             <button
               onClick={() => {
                 if (window.confirm("Clear all cart items?")) {
-                  localStorage.removeItem(CART_KEY);
+                  localStorage.removeItem(cartStorageKey);
+                  localStorage.removeItem(orderSubmissionStorageKey);
                   setCart([]);
                 }
               }}

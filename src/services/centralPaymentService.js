@@ -1,5 +1,7 @@
 import { supabase } from "./supabase";
 import { calculateDocumentTotals } from "../utils/documentTotals";
+import { hydrateOrdersWithFullOrderItems } from "./centralInvoiceEngine";
+import { getActiveCustomerBranches } from "../utils/customerBranchScope";
 import {
   allocatePaymentOldestFirst,
   applyAllocationsToInvoices,
@@ -11,6 +13,7 @@ import {
   money,
   resolveLegacyCompatibilityRows,
   summarizeCreditSnapshot,
+  summarizeCreditSummaryRows,
   withResolvedBranchScope,
 } from "../utils/centralPaymentCalculations";
 
@@ -32,6 +35,14 @@ const getCurrentOrderItemsInvoiceTotal = (order = {}) => {
   }).grandTotal;
 };
 
+const normalizeInvoiceReference = (value) =>
+  String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/^ORDER[-_]?/, "ORD-")
+    .replace(/^ORD[-_]?/, "ORD-");
+
 const getInvoiceReferenceCandidates = (row = {}) =>
   [
     row.invoice_number,
@@ -41,7 +52,7 @@ const getInvoiceReferenceCandidates = (row = {}) =>
     row.order_id,
     row.id,
   ]
-    .map((value) => String(value || "").trim())
+    .map(normalizeInvoiceReference)
     .filter(Boolean);
 
 const buildInvoiceReferenceLookup = (rows = []) => {
@@ -182,7 +193,11 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
     return {
       id: order.id,
       customer_account_id: order.customer_account_id || customerAccountId,
-      customer_branch_id: order.customer_branch_id || order.branch_id || null,
+      customer_branch_id:
+        order.customer_branch_id ||
+        order.branch_id ||
+        order.delivery_branch_id ||
+        null,
       branch_name: order.delivery_branch_name || order.branch_name || order.shop_name || "",
       invoice_number: invoiceReference,
       reference_no: order.order_number || order.orderId || invoiceReference,
@@ -212,9 +227,7 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
 
   const { data: orders, error: ordersError } = await safeSelect("orders", (query) => {
     let next = query.select("*, order_items(*)").order("created_at", { ascending: true }).limit(500);
-    if (customerAccountId && customerName) {
-      next = next.or(`customer_account_id.eq.${customerAccountId},company_name.eq.${customerName}`);
-    } else if (customerAccountId) {
+    if (customerAccountId) {
       next = next.eq("customer_account_id", customerAccountId);
     } else if (customerName) {
       next = next.eq("company_name", customerName);
@@ -223,7 +236,10 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
   });
   if (ordersError) throw ordersError;
 
-  const orderInvoiceRows = (orders || [])
+  // The invoice screen recalculates from the complete order_items table. Do the
+  // same here so Customer Credit never falls back to a stale saved order total.
+  const hydratedOrders = await hydrateOrdersWithFullOrderItems(orders || []);
+  const orderInvoiceRows = hydratedOrders
     .filter((order) => deliveredStatuses.includes(String(order.status || "").trim().toLowerCase()))
     .map(mapOrderInvoice);
 
@@ -294,32 +310,11 @@ async function loadLegacyLedgerFallback({
         )
       ).data || [];
 
-  const branches = customer?.customer_branches || [];
-  const invoiceLookup = buildInvoiceReferenceLookup(invoiceRows);
-
-  const legacyInvoices = ledgerRows
-      .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "INVOICE")
-      .map((row) => {
-        const matchingInvoice = findInvoiceByReference(row, invoiceLookup);
-        const invoiceTotal =
-          matchingInvoice?.currentOrderItemsInvoiceTotal ??
-          matchingInvoice?.invoice_total ??
-          Number(row.debit || row.amount || row.invoice_amount || 0);
-
-        return {
-          ...row,
-          id: `legacy-${row.id}`,
-          invoice_number: row.reference_no || row.order_number || row.id,
-          invoice_date: row.created_at,
-          invoice_total: invoiceTotal,
-          invoice_amount: invoiceTotal,
-          amount: invoiceTotal,
-          debit: invoiceTotal,
-          source: "legacy_customer_ledger",
-          orderSourceTotalApplied: Boolean(matchingInvoice?.orderSourceTotalApplied),
-          currentOrderItemsTotalApplied: matchingInvoice?.currentOrderItemsTotalApplied === true,
-        };
-      });
+  const branches = getActiveCustomerBranches(customer);
+  // Do not use customer_ledger as an active invoice source. Ledger invoice
+  // amounts are historical postings and can retain the pre-amendment value.
+  // Current invoice amounts must always come from orders + current order_items.
+  const legacyInvoices = [];
   const legacyPayments = ledgerRows
       .filter((row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT")
       .filter((row) => !isVoidedPayment(row))
@@ -356,6 +351,7 @@ export async function loadCentralPaymentSnapshot({
       transactionHistory: [],
       customerSummary: summarizeCreditSnapshot(),
       branchSummary: summarizeCreditSnapshot(),
+      branchSummaries: [],
       allocationPreview: { allocations: [], unallocatedAmount: 0 },
       legacyFallbackUsed: false,
     };
@@ -368,7 +364,9 @@ export async function loadCentralPaymentSnapshot({
     loadAllocations(customerAccountId),
   ]);
 
-  const branches = customer?.customer_branches || [];
+  // Branch accounting is ON only when the customer has active branches.
+  // Otherwise every financial record belongs to the main customer account.
+  const branches = getActiveCustomerBranches(customer);
   const scopedNewInvoices = withResolvedBranchScope(invoices, branches);
   const scopedNewPayments = withResolvedBranchScope(payments, branches);
   const scopedAllocations = withResolvedBranchScope(allocations, branches);
@@ -381,7 +379,7 @@ export async function loadCentralPaymentSnapshot({
   const compatibilityRows = resolveLegacyCompatibilityRows({
     invoices: scopedNewInvoices,
     payments: scopedNewPayments,
-    legacyInvoices: legacy.invoices,
+    legacyInvoices: [],
     legacyPayments: legacy.payments,
   });
   invoices = compatibilityRows.invoices;
@@ -413,6 +411,82 @@ export async function loadCentralPaymentSnapshot({
   const transactionInvoices = selectedBranchId ? selectedAllocatedInvoices : allocatedInvoices;
   const transactionPayments = selectedBranchId ? selectedPayments : payments;
   const transactionOpeningBalance = selectedBranchId ? selectedOpeningBalance : openingBalance;
+  const activeBranchKeys = new Set(branches.map((branch) => getBranchKey(branch.id)));
+  const branchSummaries = branches.map((branch) => {
+    const branchId = String(branch.id);
+    const branchInvoices = filterRowsForBranchScope(invoices, branchId);
+    const branchPayments = filterRowsForBranchScope(payments, branchId);
+    const branchAllocations = filterRowsForBranchScope(allocations, branchId);
+    const branchAllocatedInvoices = applyAllocationsToInvoices(branchInvoices, branchAllocations);
+    const branchOpeningBalance = money(
+      (openingBalances || [])
+        .filter((row) => getBranchKey(row.customer_branch_id) === getBranchKey(branchId))
+        .reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
+    );
+    const branchCreditLimit = branch.credit_limit ?? branch.creditLimit ?? customer?.credit_limit;
+    const summary = summarizeCreditSnapshot({
+      creditLimit: branchCreditLimit,
+      openingBalance: branchOpeningBalance,
+      invoices: branchAllocatedInvoices,
+      payments: branchPayments,
+    });
+
+    return {
+      branchId,
+      branchName: branch.branch_name || branch.name || "",
+      ...summary,
+    };
+  });
+
+  // Existing accounts can contain opening balances or historical transactions
+  // which pre-date branch assignment. Keep those amounts visible as a separate
+  // reconciliation row instead of dropping them from the branch total.
+  const unassignedOpeningBalance = money(
+    (openingBalances || [])
+      .filter((row) => !activeBranchKeys.has(getBranchKey(row.customer_branch_id)))
+      .reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
+  );
+  const unassignedInvoices = branches.length
+    ? invoices.filter((row) => row._branchMatched !== true)
+    : invoices;
+  const unassignedPayments = branches.length
+    ? payments.filter((row) => row._branchMatched !== true)
+    : payments;
+  const unassignedSummary = summarizeCreditSnapshot({
+    openingBalance: unassignedOpeningBalance,
+    invoices: unassignedInvoices,
+    payments: unassignedPayments,
+  });
+  const hasUnassignedFinancialActivity = [
+    unassignedSummary.openingBalance,
+    unassignedSummary.invoiceTotal,
+    unassignedSummary.paymentTotal,
+  ].some((value) => Number(value || 0) !== 0);
+
+  if (!branches.length || hasUnassignedFinancialActivity) {
+    branchSummaries.push({
+      branchId: null,
+      branchName: branches.length ? "Main / unassigned" : "Main Customer Account",
+      isUnassigned: true,
+      ...unassignedSummary,
+    });
+  }
+
+  const customerSummary = summarizeCreditSummaryRows({
+    creditLimit: customer?.credit_limit,
+    summaries: branchSummaries,
+  });
+  const branchOutstandingTotal = money(
+    branchSummaries.reduce((sum, row) => sum + Number(row.outstanding || 0), 0)
+  );
+  const selectedBranchSummary = selectedBranchId
+    ? summarizeCreditSnapshot({
+        creditLimit: customer?.credit_limit,
+        openingBalance: selectedOpeningBalance,
+        invoices: selectedAllocatedInvoices,
+        payments: selectedPayments,
+      })
+    : customerSummary;
 
   return {
     openingBalances,
@@ -426,20 +500,16 @@ export async function loadCentralPaymentSnapshot({
       payments: transactionPayments,
       newestFirst: true,
     }),
-    customerSummary: summarizeCreditSnapshot({
-      creditLimit: customer?.credit_limit,
-      openingBalance,
-      invoices: allocatedInvoices,
-      payments,
-    }),
-    branchSummary: summarizeCreditSnapshot({
-      creditLimit: customer?.credit_limit,
-      openingBalance: selectedOpeningBalance,
-      invoices: selectedAllocatedInvoices,
-      payments: selectedPayments,
-    }),
+    customerSummary,
+    branchSummary: selectedBranchSummary,
+    branchSummaries,
+    reconciliation: {
+      branchOutstandingTotal,
+      difference: money(customerSummary.outstanding - branchOutstandingTotal),
+    },
     selectedInvoices: selectedAllocatedInvoices,
     selectedPayments,
+    selectedAllocations,
     selectedOpeningBalance,
     branchName: getBranchName(customer, selectedBranchId),
     legacyFallbackUsed,
@@ -507,52 +577,6 @@ export async function createCentralPayment({
   throw error;
 }
 
-export async function removeCentralPayment({
-  payment,
-  customer,
-  currentUser,
-  ownerPassword,
-  reason,
-} = {}) {
-  const actor = getActor(currentUser).toLowerCase();
-
-  if (actor !== "nisstaj_admin") {
-    throw new Error("Only nisstaj_admin can remove Central Payment records.");
-  }
-  if (!payment?.id) throw new Error("Payment is required.");
-  if (!ownerPassword) throw new Error("Owner financial password is required.");
-  if (!String(reason || "").trim()) throw new Error("Deletion reason is required.");
-  if (String(payment.transaction_type || "PAYMENT").toUpperCase() === "INVOICE") {
-    throw new Error("Invoices cannot be deleted from Central Payment.");
-  }
-  if (String(payment.status || "").trim().toUpperCase() === "VOIDED") {
-    throw new Error("This payment is already deleted.");
-  }
-
-  const { data, error } = await supabase.rpc("remove_central_payment", {
-    p_admin_username: "nisstaj_admin",
-    p_admin_password: ownerPassword,
-    p_payment_id: payment.id,
-    p_reason: String(reason).trim(),
-  });
-
-  if (!error) {
-    await loadCentralPaymentSnapshot({
-      customerAccountId: payment.customer_account_id,
-      customerName: customer?.account_name,
-      customer,
-      selectedBranchId: payment.customer_branch_id || "",
-    });
-    return data;
-  }
-  if (isMissingRpcError(error)) {
-    throw new Error(
-      "Payment archive removal is not installed. Apply the Central Payment final migration."
-    );
-  }
-  throw error;
-}
-
 export async function confirmOwnerBankTransfer({
   payment,
   customer,
@@ -605,18 +629,17 @@ export async function confirmOwnerBankTransfer({
   throw error;
 }
 
-const requireAdminLifecycle = (currentUser, ownerPassword) => {
+const requirePermanentDeleteAdmin = (currentUser, ownerPassword) => {
   if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
-    throw new Error("Only nisstaj_admin can manage the payment lifecycle.");
+    throw new Error("Only nisstaj_admin can permanently delete archived payments.");
   }
-  if (!ownerPassword) throw new Error("Owner financial password is required in Manual Payment.");
+  if (!ownerPassword) throw new Error("nisstaj_admin financial password is required.");
 };
 
 export async function listCentralPaymentRecords({
-  currentUser,
-  ownerPassword,
-  customerAccountId,
-  customerBranchId = null,
+  customerAccountId = "",
+  customerBranchId = "",
+  transactionType = "",
   archived = false,
   search = "",
   method = "",
@@ -624,48 +647,178 @@ export async function listCentralPaymentRecords({
   dateTo = null,
   page = 1,
 } = {}) {
-  requireAdminLifecycle(currentUser, ownerPassword);
-  const { data, error } = await supabase.rpc("list_central_payment_records", {
-    p_admin_username: "nisstaj_admin",
-    p_admin_password: ownerPassword,
-    p_customer_account_id: customerAccountId,
-    p_customer_branch_id: customerBranchId || null,
-    p_archived: archived,
-    p_search: search,
-    p_method: method,
-    p_date_from: dateFrom || null,
-    p_date_to: dateTo || null,
-    p_page: page,
-  });
-  if (error) throw error;
-  return data || { records: [], total: 0, page: 1, page_size: 2, total_pages: 1 };
-}
+  const pageSize = 20;
+  const safePage = Math.max(1, Number(page) || 1);
+  const from = (safePage - 1) * pageSize;
+  const to = from + pageSize - 1;
 
-export async function editCentralPayment({ currentUser, ownerPassword, payment, changes, reason } = {}) {
-  requireAdminLifecycle(currentUser, ownerPassword);
+  let query = supabase
+    .from("customer_payments")
+    .select("*", { count: "exact" })
+    .order("payment_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .range(from, to);
+
+  query = archived
+    ? query.eq("status", "VOIDED")
+    : query.eq("status", "POSTED");
+
+  if (customerAccountId) {
+    query = query.eq("customer_account_id", customerAccountId);
+  }
+
+  if (customerBranchId) {
+    query = query.eq("customer_branch_id", customerBranchId);
+  }
+
+  if (transactionType) {
+    query = query.eq("transaction_type", transactionType);
+  }
+
+  if (method) {
+    query = query.eq("payment_method", method);
+  }
+
+  if (dateFrom) {
+    query = query.gte("payment_date", `${dateFrom}T00:00:00`);
+  }
+
+  if (dateTo) {
+    query = query.lte("payment_date", `${dateTo}T23:59:59.999`);
+  }
+
+  if (String(search || "").trim()) {
+    const term = String(search)
+      .trim()
+      .replace(/[%(),]/g, " ");
+
+    query = query.or(
+      `payment_reference.ilike.%${term}%,paid_by.ilike.%${term}%,notes.ilike.%${term}%`
+    );
+  }
+
+  const {
+    data: paymentRows,
+    error: paymentError,
+    count,
+  } = await query;
+
+  if (paymentError) {
+    console.error("Payment History query failed:", paymentError);
+    throw paymentError;
+  }
+
+  const customerIds = [
+    ...new Set(
+      (paymentRows || [])
+        .map((row) => row.customer_account_id)
+        .filter(Boolean)
+    ),
+  ];
+
+  let customerMap = new Map();
+
+  if (customerIds.length) {
+    const {
+      data: customerRows,
+      error: customerError,
+    } = await supabase
+      .from("customer_accounts")
+      .select("id, account_name")
+      .in("id", customerIds);
+
+    if (customerError) {
+      console.error("Customer name query failed:", customerError);
+      throw customerError;
+    }
+
+    customerMap = new Map(
+      (customerRows || []).map((customer) => [
+        String(customer.id),
+        customer.account_name,
+      ])
+    );
+  }
+
+  const total = Number(count || 0);
+
+  return {
+    records: (paymentRows || []).map((row) => ({
+      ...row,
+      customer_name:
+        customerMap.get(String(row.customer_account_id)) ||
+        row.customer_name ||
+        "-",
+    })),
+    total,
+    page: safePage,
+    page_size: pageSize,
+    total_pages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+export async function editCentralPayment({ payment, changes, reason } = {}) {
   if (!payment?.id) throw new Error("Payment is required.");
   if (!String(reason || "").trim()) throw new Error("Edit reason is required.");
-  const { data, error } = await supabase.rpc("edit_central_payment", {
-    p_admin_username: "nisstaj_admin",
-    p_admin_password: ownerPassword,
-    p_payment_id: payment.id,
-    p_payment_date: changes.paymentDate,
-    p_amount: Number(changes.amount),
-    p_payment_method: changes.paymentMethod,
-    p_paid_by: changes.paidBy,
-    p_external_reference: changes.externalReference,
-    p_notes: changes.notes,
-    p_reason: String(reason).trim(),
-  });
+  const { data, error } = await supabase
+    .from("customer_payments")
+    .update({
+      payment_date: changes.paymentDate,
+      amount: Number(changes.amount),
+      payment_method: changes.paymentMethod,
+      paid_by: changes.paidBy,
+      payment_reference: changes.externalReference,
+      notes: changes.notes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", payment.id)
+    .select("*")
+    .single();
   if (error) throw error;
   return data;
 }
 
-async function runLifecycleRpc(name, { currentUser, ownerPassword, payment, reason } = {}) {
-  requireAdminLifecycle(currentUser, ownerPassword);
+export async function removeCentralPayment({ payment, reason } = {}) {
+  if (!payment?.id) throw new Error("Payment is required.");
+  if (!String(reason || "").trim()) throw new Error("Archive reason is required.");
+  const { data, error } = await supabase
+    .from("customer_payments")
+    .update({
+      status: "VOIDED",
+      removed_at: new Date().toISOString(),
+      removed_reason: String(reason).trim(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", payment.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function restoreCentralPayment({ payment, reason } = {}) {
+  if (!payment?.id) throw new Error("Payment is required.");
+  if (!String(reason || "").trim()) throw new Error("Restore reason is required.");
+  const { data, error } = await supabase
+    .from("customer_payments")
+    .update({
+      status: "POSTED",
+      removed_at: null,
+      removed_reason: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", payment.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function permanentlyDeleteCentralPayment({ currentUser, ownerPassword, payment, reason } = {}) {
+  requirePermanentDeleteAdmin(currentUser, ownerPassword);
   if (!payment?.id) throw new Error("Payment is required.");
   if (!String(reason || "").trim()) throw new Error("A reason is required.");
-  const { data, error } = await supabase.rpc(name, {
+  const { data, error } = await supabase.rpc("permanently_delete_central_payment", {
     p_admin_username: "nisstaj_admin",
     p_admin_password: ownerPassword,
     p_payment_id: payment.id,
@@ -674,10 +827,6 @@ async function runLifecycleRpc(name, { currentUser, ownerPassword, payment, reas
   if (error) throw error;
   return data;
 }
-
-export const restoreCentralPayment = (options) => runLifecycleRpc("restore_central_payment", options);
-export const permanentlyDeleteCentralPayment = (options) =>
-  runLifecycleRpc("permanently_delete_central_payment", options);
 
 export async function voidCentralPayment({ payment, reason } = {}) {
   if (!payment?.id) throw new Error("Payment is required.");

@@ -1,4 +1,4 @@
-import { isVatPriceMode } from "./pricing";
+import { isVatPriceMode } from "./pricing.js";
 
 const money2 = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -9,11 +9,23 @@ const hasMoneyValue = (value) =>
 const getQuantity = (item = {}) =>
   Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
 
+const isPrintableDocumentItem = (item = {}) => {
+  const sourceStatus = String(item.sourceStatus || item.source_status || "")
+    .trim()
+    .toLowerCase();
+
+  return item.includeInPicking !== false &&
+    item.include_in_picking !== false &&
+    sourceStatus !== "removed" &&
+    sourceStatus !== "cannot supply";
+};
+
 const getSavedVatRate = (item = {}) => {
   const rawRate =
     item.vat_percent ??
     item.vatPercent ??
     item.vatRate ??
+    item.vat_rate ??
     item.vat_type ??
     item.vatType;
 
@@ -131,7 +143,7 @@ export const getCustomerDocumentType = (priceMode = "") => {
 export function calculateDocumentTotals(items = [], order = {}) {
   const includeVat = isVatPriceMode(order.priceMode || order.price_mode);
   const printableItems = (items || [])
-    .filter((item) => item.includeInPicking !== false)
+    .filter(isPrintableDocumentItem)
     .map((item) => {
       const itemTotals = getDocumentItemTotals(item, { includeVat });
 
