@@ -22,6 +22,7 @@ import {
 
 const DELIVERED_ORDERS_PAGE_SIZE = 3;
 const HISTORY_PAGE_SIZE = 5;
+const TRANSACTIONS_PAGE_SIZE = 20;
 
 export default function CustomerCredit() {
   const [customers, setCustomers] = useState([]);
@@ -32,6 +33,7 @@ export default function CustomerCredit() {
   const [showDeliveredOrders, setShowDeliveredOrders] = useState(true);
   const [deliveredOrdersPage, setDeliveredOrdersPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
+  const [transactionsPage, setTransactionsPage] = useState(1);
   const [selectedBranch, setSelectedBranch] = useState("All Branches");
   const [activeTab, setActiveTab] = useState("summary");
 
@@ -94,6 +96,7 @@ function formatCollectionSource(source) {
   useEffect(() => {
     setDeliveredOrdersPage(1);
     setHistoryPage(1);
+    setTransactionsPage(1);
   }, [selectedCustomer, selectedBranch]);
 
       const loadCustomers = async () => {
@@ -635,6 +638,18 @@ const removePayment = async (row) => {
     };
   });
   const transactionRows = allocatedFilteredRows;
+  const transactionsPageCount = Math.max(
+    1,
+    Math.ceil(transactionRows.length / TRANSACTIONS_PAGE_SIZE)
+  );
+  const currentTransactionsPage = Math.min(
+    transactionsPage,
+    transactionsPageCount
+  );
+  const paginatedTransactionRows = transactionRows.slice(
+    (currentTransactionsPage - 1) * TRANSACTIONS_PAGE_SIZE,
+    currentTransactionsPage * TRANSACTIONS_PAGE_SIZE
+  );
   const getInvoiceLedgerRowForDeliveredOrder = (order = {}) => {
     const orderReference = String(order.orderId || order.order_number || "").trim();
     if (!orderReference) return null;
@@ -1123,7 +1138,7 @@ const removePayment = async (row) => {
             </thead>
 
             <tbody>
-              {transactionRows.map((row) => {
+              {paginatedTransactionRows.map((row) => {
                 const type = String(row.entry_type || row.transaction_type || "")
                   .trim()
                   .toUpperCase();
@@ -1205,6 +1220,34 @@ const removePayment = async (row) => {
               )}
             </tbody>
           </table>
+
+          <div className="flex items-center justify-end gap-2 p-3 text-sm border-t">
+            <button
+              type="button"
+              onClick={() =>
+                setTransactionsPage((page) => Math.max(1, page - 1))
+              }
+              disabled={currentTransactionsPage === 1}
+              className="px-3 py-1 rounded-lg border font-bold disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="font-bold">
+              Page {currentTransactionsPage} of {transactionsPageCount}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                setTransactionsPage((page) =>
+                  Math.min(transactionsPageCount, page + 1)
+                )
+              }
+              disabled={currentTransactionsPage === transactionsPageCount}
+              className="px-3 py-1 rounded-lg border font-bold disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
         </div>
         </div>
       )}
