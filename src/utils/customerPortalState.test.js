@@ -14,6 +14,27 @@ test("sales rep credit hash restores the sales credit page", () => {
   assert.equal(getCustomerPortalHash("salesCreditHistory", { isSalesRep: true }), "#credit");
 });
 
+test("admin credit hash takes precedence over overlapping staff permissions", () => {
+  assert.equal(
+    resolveCustomerPortalPage({
+      hash: "#credit",
+      isAdmin: true,
+      isSalesRep: true,
+      isWarehouse: true,
+      isDriver: true,
+    }),
+    "credit"
+  );
+
+  assert.equal(
+    getCustomerPortalHash("credit", {
+      isAdmin: true,
+      isSalesRep: true,
+    }),
+    "#credit"
+  );
+});
+
 test("unknown customer and sales routes safely default to Order", () => {
   assert.equal(resolveCustomerPortalPage({ hash: "#admin", isCustomer: true }), "order");
   assert.equal(resolveCustomerPortalPage({ hash: "#unknown", isSalesRep: true }), "order");

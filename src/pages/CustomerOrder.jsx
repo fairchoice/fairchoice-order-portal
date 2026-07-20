@@ -3441,6 +3441,25 @@ const backOfficeContent = comingSoonTitle ? (
 
 const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 
+  if ((isAdmin || isWarehouse || isDriver) && page !== "order") {
+    return (
+      <BackOfficeLayout
+        page={page}
+        setPage={setPage}
+        fetchOrders={fetchOrders}
+        currentUser={activeUser}
+        isAdmin={isAdmin}
+        isSalesRep={isSalesRep}
+        isWarehouse={isWarehouse}
+        isDriver={isDriver}
+        isCustomer={isCustomer}
+        onLogout={onLogout}
+      >
+        {backOfficeContent}
+      </BackOfficeLayout>
+    );
+  }
+
   return (
     <div className="customer-portal-shell min-h-screen bg-slate-100 p-4 pb-40">
       <div className="customer-portal-container max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
@@ -3544,22 +3563,6 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
       )}
     </div>
   </div>
-
-{(isAdmin || isWarehouse || isDriver) && page !== "order" && (
-<BackOfficeLayout
-  page={page}
-  setPage={setPage}
-  fetchOrders={fetchOrders}
-  currentUser={activeUser}
-  isAdmin={isAdmin}
-  isSalesRep={isSalesRep}
-  isWarehouse={isWarehouse}
-  isDriver={isDriver}
-  isCustomer={isCustomer}
->
-  {backOfficeContent}
-</BackOfficeLayout>
-)}
 
 </div>
 

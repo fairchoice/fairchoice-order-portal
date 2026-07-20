@@ -342,7 +342,7 @@ export default function BackOfficeLayout({
     }
 
     if (item.hash) {
-      window.location.hash = item.hash;
+      window.history.replaceState(null, "", item.hash);
     }
 
     setPage(item.page);

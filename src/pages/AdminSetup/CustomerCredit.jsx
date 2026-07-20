@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
 import { supabase } from "../../services/supabase";
 import {
@@ -6,6 +6,11 @@ import {
   loadReadOnlyCustomerCreditSnapshot,
 } from "../../services/centralPaymentService";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
+import {
+  canSelectCustomerForCredit,
+  hasConfiguredCreditAccount,
+  hasCreditSnapshotActivity,
+} from "../../utils/customerCreditSelection";
 
 const PAGE_SIZE = 20;
 const BRANCH_SELECT = "__select__";
@@ -221,11 +226,15 @@ export default function CustomerCredit({ readOnly = false }) {
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [selectionMessage, setSelectionMessage] = useState("");
   const [page, setPage] = useState(1);
   const [activeTab, setActiveTab] = useState("summary");
   const [editingOpeningBalance, setEditingOpeningBalance] = useState(false);
   const [openingBalanceInput, setOpeningBalanceInput] = useState("");
   const [savingOpeningBalance, setSavingOpeningBalance] = useState(false);
+  const selectionRequestRef = useRef(0);
+  const snapshotRequestRef = useRef(0);
+  const prefetchedSnapshotRef = useRef(null);
 
   const currentUser = getLoggedInUser();
   const userRole = String(
@@ -264,12 +273,17 @@ export default function CustomerCredit({ readOnly = false }) {
         if (!active) return;
         setCustomers(rows);
         if (rows.length) {
-          setSelectedCustomerId((value) => value || rows[0].id);
+          const initialCustomer =
+            rows.find((customer) => hasConfiguredCreditAccount(customer)) || rows[0];
+          setSelectedCustomerId((value) => value || initialCustomer.id);
         }
       })
-      .catch((loadError) =>
-        setError(loadError.message || "Could not load customers.")
-      );
+      .catch((loadError) => {
+        if (active) {
+          setError(loadError.message || "Could not load customers.");
+          setLoading(false);
+        }
+      });
 
     return () => {
       active = false;
@@ -284,6 +298,18 @@ export default function CustomerCredit({ readOnly = false }) {
   const selectedCustomer = customers.find(
     (customer) => String(customer.id) === String(selectedCustomerId)
   );
+
+  const displayedCustomers = useMemo(() => {
+    if (!selectedCustomer) return filteredCustomers;
+    if (
+      filteredCustomers.some(
+        (customer) => String(customer.id) === String(selectedCustomer.id)
+      )
+    ) {
+      return filteredCustomers;
+    }
+    return [selectedCustomer, ...filteredCustomers];
+  }, [filteredCustomers, selectedCustomer]);
 
   const branches = getActiveCustomerBranches(selectedCustomer);
 
@@ -303,12 +329,30 @@ export default function CustomerCredit({ readOnly = false }) {
   }, [selectedCustomer?.id]);
 
   useEffect(() => {
+    const requestId = snapshotRequestRef.current + 1;
+    snapshotRequestRef.current = requestId;
+
     if (!selectedCustomer?.id) {
       setSnapshot(null);
+      setLoading(false);
+      return undefined;
+    }
+
+    const prefetchedSnapshot = prefetchedSnapshotRef.current;
+    if (
+      !snapshotBranchId &&
+      prefetchedSnapshot &&
+      String(prefetchedSnapshot.customerId) === String(selectedCustomer.id)
+    ) {
+      prefetchedSnapshotRef.current = null;
+      setSnapshot(prefetchedSnapshot.snapshot);
+      setLoading(false);
+      setError("");
       return undefined;
     }
 
     let active = true;
+    setSnapshot(null);
     setLoading(true);
     setError("");
 
@@ -319,15 +363,19 @@ export default function CustomerCredit({ readOnly = false }) {
       selectedBranchId: snapshotBranchId,
     })
       .then((data) => {
-        if (active) setSnapshot(data);
+        if (active && snapshotRequestRef.current === requestId) {
+          setSnapshot(data);
+        }
       })
       .catch((loadError) => {
-        if (active) {
+        if (active && snapshotRequestRef.current === requestId) {
           setError(loadError.message || "Could not load customer credit.");
         }
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (active && snapshotRequestRef.current === requestId) {
+          setLoading(false);
+        }
       });
 
     return () => {
@@ -338,11 +386,67 @@ export default function CustomerCredit({ readOnly = false }) {
   useEffect(() => {
     setPage(1);
     setActiveTab("summary");
+    setSelectionMessage("");
   }, [selectedCustomerId]);
 
   useEffect(() => {
     setPage(1);
   }, [selectedBranchId]);
+
+  const selectCreditCustomer = async (customerId) => {
+    const candidate = customers.find(
+      (customer) => String(customer.id) === String(customerId)
+    );
+    if (!candidate || String(candidate.id) === String(selectedCustomerId)) return;
+
+    const requestId = selectionRequestRef.current + 1;
+    selectionRequestRef.current = requestId;
+    snapshotRequestRef.current += 1;
+    const previousSnapshot = snapshot;
+    setSnapshot(null);
+    setPage(1);
+    setLoading(true);
+    setError("");
+    setSelectionMessage("");
+
+    try {
+      const candidateSnapshot = await loadReadOnlyCustomerCreditSnapshot({
+        customerAccountId: candidate.id,
+        customerName: candidate.account_name,
+        customer: candidate,
+        selectedBranchId: "",
+      });
+
+      if (selectionRequestRef.current !== requestId) return;
+
+      if (!canSelectCustomerForCredit(candidate, candidateSnapshot)) {
+        setSnapshot(previousSnapshot);
+        setSelectionMessage(
+          "No credit account or credit transactions found for this customer."
+        );
+        return;
+      }
+
+      prefetchedSnapshotRef.current = {
+        customerId: candidate.id,
+        snapshot: candidateSnapshot,
+      };
+      setSnapshot(null);
+      setPage(1);
+      setActiveTab("summary");
+      setSelectedBranchId(MAIN_ACCOUNT);
+      setSelectedCustomerId(candidate.id);
+    } catch (loadError) {
+      if (selectionRequestRef.current === requestId) {
+        setSnapshot(previousSnapshot);
+        setError(loadError.message || "Could not load customer credit.");
+      }
+    } finally {
+      if (selectionRequestRef.current === requestId) {
+        setLoading(false);
+      }
+    }
+  };
 
   const hasSpecificBranch =
     selectedBranchId !== MAIN_ACCOUNT &&
@@ -763,8 +867,14 @@ export default function CustomerCredit({ readOnly = false }) {
     { label: "Last payment", value: lastPayment },
   ];
 
+  const hasNoCreditTransactions =
+    !loading &&
+    Boolean(selectedCustomer) &&
+    Boolean(snapshot) &&
+    !hasCreditSnapshotActivity(snapshot);
+
   return (
-    <div className="space-y-4 p-4">
+    <div className="w-full min-w-0 space-y-3 overflow-x-hidden p-2 sm:space-y-4 sm:p-4">
       <div className="rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
@@ -783,23 +893,26 @@ export default function CustomerCredit({ readOnly = false }) {
           )}
         </div>
 
-        <div className={`mt-4 grid grid-cols-1 gap-3 ${hasBranches ? "md:grid-cols-[1fr_1.2fr_1fr]" : "md:grid-cols-[1fr_1.2fr]"}`}>
+        <div className={`mt-4 grid min-w-0 grid-cols-1 gap-3 ${hasBranches ? "md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)]" : "md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"}`}>
           <input
             value={customerSearch}
-            onChange={(event) => setCustomerSearch(event.target.value)}
+            onChange={(event) => {
+              setCustomerSearch(event.target.value);
+              setSelectionMessage("");
+              setPage(1);
+            }}
             placeholder="Search customer"
-            className="rounded-xl border p-3"
+            className="min-h-11 w-full min-w-0 rounded-xl border p-3"
           />
 
           <select
             value={selectedCustomerId}
             onChange={(event) => {
-              setSelectedCustomerId(event.target.value);
-              setSelectedBranchId(MAIN_ACCOUNT);
+              selectCreditCustomer(event.target.value);
             }}
-            className="rounded-xl border p-3"
+            className="min-h-11 w-full min-w-0 rounded-xl border p-3"
           >
-            {filteredCustomers.map((customer) => (
+            {displayedCustomers.map((customer) => (
               <option key={customer.id} value={customer.id}>
                 {customer.account_name}
               </option>
@@ -810,7 +923,7 @@ export default function CustomerCredit({ readOnly = false }) {
             <select
               value={selectedBranchId}
               onChange={(event) => setSelectedBranchId(event.target.value)}
-              className="rounded-xl border p-3"
+              className="min-h-11 w-full min-w-0 rounded-xl border p-3"
             >
               <option value={MAIN_ACCOUNT}>Main Customer Account</option>
 
@@ -830,9 +943,21 @@ export default function CustomerCredit({ readOnly = false }) {
         </div>
       )}
 
+      {selectionMessage && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 font-bold text-amber-800">
+          {selectionMessage}
+        </div>
+      )}
+
       {loading && (
         <div className="rounded-xl bg-slate-50 p-3 font-bold">
           Loading credit history...
+        </div>
+      )}
+
+      {hasNoCreditTransactions && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 font-bold text-slate-700">
+          No credit account or credit transactions found for this customer.
         </div>
       )}
 
@@ -852,7 +977,7 @@ export default function CustomerCredit({ readOnly = false }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-1 gap-3 min-[430px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {summaryCards.map(
           ({ label, value, text, placeholder, isOpeningBalance }) => (
             <div key={label} className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -926,8 +1051,8 @@ export default function CustomerCredit({ readOnly = false }) {
         </section>
       )}
 
-      <div className="rounded-2xl border bg-white p-2 shadow-sm">
-        <div className="flex flex-wrap gap-2">
+      <div className="min-w-0 overflow-x-auto rounded-2xl border bg-white p-2 shadow-sm">
+        <div className="flex min-w-max gap-2">
           {[
             ["summary", "Summary"],
             ["credit", "Credit History"],
@@ -940,7 +1065,7 @@ export default function CustomerCredit({ readOnly = false }) {
                 setActiveTab(value);
                 setPage(1);
               }}
-              className={`rounded-xl border px-4 py-2 text-sm font-bold ${
+              className={`min-h-11 whitespace-nowrap rounded-xl border px-4 py-2 text-sm font-bold ${
                 activeTab === value
                   ? "border-blue-600 bg-blue-600 text-white"
                   : "bg-white text-slate-700"
@@ -980,7 +1105,7 @@ export default function CustomerCredit({ readOnly = false }) {
                 {(snapshot?.branchSummaries || []).map((branchSummary) => (
                   <div
                     key={branchSummary.branchId || "main-unassigned"}
-                    className="rounded-xl border bg-white p-4 shadow-sm"
+                    className="min-w-0 rounded-xl border bg-white p-4 shadow-sm"
                   >
                     <div className="text-lg font-extrabold text-slate-900">
                       {branchSummary.branchName || "Branch"}
@@ -1053,7 +1178,7 @@ export default function CustomerCredit({ readOnly = false }) {
               </div>
             </div>
 
-            <div className="max-h-[62vh] overflow-auto">
+            <div className="max-h-[62vh] w-full overflow-auto overscroll-contain">
               <table className="w-full min-w-[1080px] text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
                   <tr className="border-b text-left text-xs uppercase tracking-wide text-slate-500">
@@ -1121,23 +1246,23 @@ export default function CustomerCredit({ readOnly = false }) {
               </table>
             </div>
 
-            <div className="flex items-center justify-between gap-3 border-t bg-white px-4 py-4">
+            <div className="flex items-center justify-between gap-2 border-t bg-white px-3 py-4 sm:gap-3 sm:px-4">
               <button
                 type="button"
                 onClick={() => setPage((value) => Math.max(1, value - 1))}
                 disabled={safePage <= 1}
-                className="rounded-xl border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
+                className="min-h-11 rounded-xl border px-3 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40 sm:px-4"
               >
                 Previous
               </button>
-              <div className="text-sm font-bold text-slate-700">
+              <div className="whitespace-nowrap text-center text-sm font-bold text-slate-700">
                 Page {safePage} of {totalPages}
               </div>
               <button
                 type="button"
                 onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
                 disabled={safePage >= totalPages}
-                className="rounded-xl border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
+                className="min-h-11 rounded-xl border px-3 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40 sm:px-4"
               >
                  Next
               </button>

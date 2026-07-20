@@ -56,6 +56,8 @@ export function resolveCustomerPortalPage({
 } = {}) {
   const normalizedHash = String(hash || "").trim().toLowerCase();
 
+  if (isAdmin) return BACK_OFFICE_HASH_ROUTES[normalizedHash] || "orders";
+
   if (isCustomer) {
     return ["#credit", "#payment-history"].includes(normalizedHash)
       ? "paymentHistory"
@@ -75,12 +77,19 @@ export function resolveCustomerPortalPage({
 
   if (isDriver) return normalizedHash === "#driver" ? "driver" : "driver";
   if (isWarehouse) return normalizedHash === "#stockhistory" ? "stockhistory" : "warehouse";
-  if (isAdmin) return BACK_OFFICE_HASH_ROUTES[normalizedHash] || "orders";
-
   return "order";
 }
 
-export function getCustomerPortalHash(page, { isCustomer = false, isSalesRep = false } = {}) {
+export function getCustomerPortalHash(
+  page,
+  { isAdmin = false, isCustomer = false, isSalesRep = false } = {}
+) {
+  if (isAdmin) {
+    return Object.entries(BACK_OFFICE_HASH_ROUTES).find(
+      ([, routePage]) => routePage === page
+    )?.[0] || "";
+  }
+
   if (isCustomer) {
     return page === "paymentHistory" ? "#credit" : "#order";
   }
