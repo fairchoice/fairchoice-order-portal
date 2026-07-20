@@ -78,7 +78,13 @@ export const buildBranchResolution = (branches = []) => {
 
 export const resolveRowBranchId = (row = {}, branchResolution = buildBranchResolution()) => {
   const directId = String(
-    row.customer_branch_id || row.customerBranchId || row.branch_id || row.branchId || ""
+    row.customer_branch_id ||
+      row.customerBranchId ||
+      row.branch_id ||
+      row.branchId ||
+      row.delivery_branch_id ||
+      row.deliveryBranchId ||
+      ""
   ).trim();
 
   if (directId && (!branchResolution.branchIds.size || branchResolution.branchIds.has(directId))) {
@@ -124,7 +130,13 @@ export const filterRowsForBranchScope = (rows = [], selectedBranchId = "") => {
 
   const selectedKey = getBranchKey(selectedBranchId);
   return (rows || []).filter((row) => {
-    const branchId = row.customer_branch_id ?? row.customerBranchId ?? row.branch_id;
+    const branchId =
+      row.customer_branch_id ??
+      row.customerBranchId ??
+      row.branch_id ??
+      row.branchId ??
+      row.delivery_branch_id ??
+      row.deliveryBranchId;
     return row._branchMatched === true && getBranchKey(branchId) === selectedKey;
   });
 };
@@ -146,7 +158,14 @@ export function filterInvoicesForAllocation(invoices = [], branchId = "") {
   return (invoices || []).filter((invoice) => {
     if (isCancelledInvoice(invoice)) return false;
     if (!branchId) return true;
-    return getBranchKey(invoice.customer_branch_id ?? invoice.customerBranchId ?? invoice.branch_id) === branchKey;
+    return getBranchKey(
+      invoice.customer_branch_id ??
+        invoice.customerBranchId ??
+        invoice.branch_id ??
+        invoice.branchId ??
+        invoice.delivery_branch_id ??
+        invoice.deliveryBranchId
+    ) === branchKey;
   });
 }
 
@@ -175,7 +194,13 @@ export function allocatePaymentOldestFirst(invoices = [], amount = 0, options = 
       invoiceReference: getInvoiceReference(invoice),
       invoiceSourceId: invoice.id ? String(invoice.id) : null,
       customerBranchId:
-        invoice.customer_branch_id ?? invoice.customerBranchId ?? invoice.branch_id ?? null,
+        invoice.customer_branch_id ??
+          invoice.customerBranchId ??
+          invoice.branch_id ??
+          invoice.branchId ??
+          invoice.delivery_branch_id ??
+          invoice.deliveryBranchId ??
+          null,
       allocatedAmount,
     });
     remaining = money(remaining - allocatedAmount);
@@ -264,7 +289,14 @@ export function buildCustomerTransactionHistory({
         amount: getInvoiceAmount(invoice),
         paymentMethod: null,
         paidBy: null,
-        branchId: invoice.customer_branch_id ?? invoice.customerBranchId ?? invoice.branch_id ?? null,
+        branchId:
+          invoice.customer_branch_id ??
+          invoice.customerBranchId ??
+          invoice.branch_id ??
+          invoice.branchId ??
+          invoice.delivery_branch_id ??
+          invoice.deliveryBranchId ??
+          null,
         branchName: invoice.branch_name || invoice.delivery_branch_name || "",
         status:
           invoice.paymentStatus ||
@@ -282,7 +314,14 @@ export function buildCustomerTransactionHistory({
         amount: money(-Math.abs(Number(payment.amount || payment.credit || 0))),
         paymentMethod: payment.payment_method || payment.payment_type || "Other",
         paidBy: payment.paid_by || payment.who_paid || payment.collected_by || "",
-        branchId: payment.customer_branch_id ?? payment.customerBranchId ?? payment.branch_id ?? null,
+        branchId:
+          payment.customer_branch_id ??
+          payment.customerBranchId ??
+          payment.branch_id ??
+          payment.branchId ??
+          payment.delivery_branch_id ??
+          payment.deliveryBranchId ??
+          null,
         branchName: payment.branch_name || "",
         status: "POSTED",
       })),
@@ -339,17 +378,40 @@ export function resolveLegacyCompatibilityRows({
   legacyPayments = [],
 } = {}) {
   return {
-    invoices: mergeMissingByReference(
-      invoices,
-      legacyInvoices,
-      (row) => row.invoice_number || row.reference_no || row.order_number || row.orderId || row.order_id || row.id
-    ),
+    invoices,
     payments: mergeMissingByReference(
       payments,
       legacyPayments,
       (row) => row.payment_reference || row.reference_no || row.id
     ),
-    legacyFallbackUsed: legacyInvoices.length > 0 || legacyPayments.length > 0,
+    legacyFallbackUsed: legacyPayments.length > 0,
+  };
+}
+
+export function summarizeCreditSummaryRows({
+  creditLimit = 0,
+  summaries = [],
+} = {}) {
+  const openingBalance = money(
+    summaries.reduce((sum, row) => sum + Number(row.openingBalance || 0), 0)
+  );
+  const invoiceTotal = money(
+    summaries.reduce((sum, row) => sum + Number(row.invoiceTotal || 0), 0)
+  );
+  const paymentTotal = money(
+    summaries.reduce((sum, row) => sum + Number(row.paymentTotal || 0), 0)
+  );
+  const outstanding = money(
+    summaries.reduce((sum, row) => sum + Number(row.outstanding || 0), 0)
+  );
+
+  return {
+    openingBalance,
+    invoiceTotal,
+    paymentTotal,
+    outstanding,
+    creditLimit: money(creditLimit),
+    availableCredit: money(Number(creditLimit || 0) - outstanding),
   };
 }
 

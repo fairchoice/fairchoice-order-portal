@@ -442,7 +442,7 @@ export default function LoginConfig() {
       return null;
     }
 
-    if (isStaff && loginForm.role !== "Super Admin") {
+    if (isStaff) {
       if (!loginForm.staff_id) {
         alert("Staff login must be linked to an active staff record.");
         return null;
@@ -454,6 +454,7 @@ export default function LoginConfig() {
         alert("Staff login must be linked to an active staff record.");
         return null;
       }
+
     }
 
     return {

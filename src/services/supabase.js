@@ -1,7 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.trim() || "";
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() || "";
+const env = import.meta.env || {};
+const SUPABASE_URL = env.VITE_SUPABASE_URL?.trim() || "";
+const SUPABASE_ANON_KEY = env.VITE_SUPABASE_ANON_KEY?.trim() || "";
 
 export const isSupabaseConfigured =
   SUPABASE_URL.startsWith("https://") &&
@@ -15,7 +16,7 @@ export const supabase = isSupabaseConfigured
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
-        storage: window.localStorage,
+        storage: typeof window === "undefined" ? undefined : window.localStorage,
       },
     })
   : null;

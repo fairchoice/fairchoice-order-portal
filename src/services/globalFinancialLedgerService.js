@@ -1,5 +1,5 @@
-import { supabase } from "./supabase";
-import { isOwnerUser } from "./ownerFinancialSecurity";
+import { supabase } from "./supabase.js";
+import { isOwnerUser } from "./ownerFinancialSecurity.js";
 
 const PAGE_SIZE = 20;
 

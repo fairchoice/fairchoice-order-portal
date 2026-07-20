@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
+import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
 import {
   amendInvoice,
   createManualInvoice,
@@ -307,8 +308,7 @@ export default function InvoicesPortal() {
   const selectedCustomer = customers.find(
     (customer) => String(customer.id) === String(form.customerId)
   );
-  const selectedBranches =
-    selectedCustomer?.customer_branches?.filter((branch) => branch.active !== false) || [];
+  const selectedBranches = getActiveCustomerBranches(selectedCustomer);
   const selectedBranch = selectedBranches.find(
     (branch) => String(branch.id) === String(form.branchId)
   );

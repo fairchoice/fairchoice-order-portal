@@ -37,6 +37,7 @@ export default function Staff() {
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingStaffId, setEditingStaffId] = useState(null);
+  const [roleError, setRoleError] = useState("");
 
   useEffect(() => {
     fetchStaff();
@@ -70,6 +71,10 @@ export default function Staff() {
   }, [search, staff]);
 
   function updateField(field, value) {
+    if (field === "job_role" && value.trim()) {
+      setRoleError("");
+    }
+
     setForm((current) => {
       const next = { ...current, [field]: value };
 
@@ -84,12 +89,14 @@ export default function Staff() {
   function openNewStaffModal() {
     setEditingStaffId(null);
     setForm(emptyStaffForm);
+    setRoleError("");
     setActiveTab("personal");
     setShowModal(true);
   }
 
   function openEditStaffModal(row) {
     setEditingStaffId(row.id);
+    setRoleError("");
     setForm({
       first_name: row.first_name || "",
       middle_name: row.middle_name || "",
@@ -118,6 +125,7 @@ export default function Staff() {
     setShowModal(false);
     setActiveTab("personal");
     setForm(emptyStaffForm);
+    setRoleError("");
     setEditingStaffId(null);
     setSaving(false);
   }
@@ -128,6 +136,13 @@ export default function Staff() {
     const displayName = buildDisplayName(form) || form.staff_name.trim();
     if (!displayName) {
       alert("First name or staff display name is required.");
+      return;
+    }
+
+    const role = form.job_role.trim();
+    if (!role) {
+      setRoleError("Role is required.");
+      setActiveTab("full");
       return;
     }
 
@@ -148,7 +163,8 @@ export default function Staff() {
       emergency_contact: form.emergency_contact.trim(),
       next_of_kin: form.next_of_kin.trim(),
       job_position: form.job_position.trim(),
-      job_role: form.job_role.trim(),
+      role,
+      job_role: role,
       job_access: form.job_access.trim(),
       portal_access: form.portal_access.trim(),
       notes: form.notes.trim(),
@@ -406,9 +422,11 @@ export default function Staff() {
                       onChange={(value) => updateField("username", value)}
                     />
                     <Field
-                      label="Job Role"
+                      label="Role"
                       value={form.job_role}
                       onChange={(value) => updateField("job_role", value)}
+                      required
+                      error={roleError}
                     />
                     <Field
                       label="Job Access"
@@ -469,16 +487,28 @@ export default function Staff() {
   );
 }
 
-function Field({ label, value, onChange, type = "text" }) {
+function Field({ label, value, onChange, type = "text", required = false, error = "" }) {
   return (
     <label className="grid grid-cols-1 gap-2 text-sm font-bold text-slate-900 sm:grid-cols-[130px_1fr] sm:items-center">
-      <span className="sm:text-right">{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-xl border border-slate-300 px-3 py-3 text-sm font-normal outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
-      />
+      <span className="sm:text-right">
+        {label}
+        {required ? " *" : ""}
+      </span>
+      <span>
+        <input
+          type={type}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          required={required}
+          aria-invalid={Boolean(error)}
+          className={`w-full rounded-xl border px-3 py-3 text-sm font-normal outline-none focus:ring-2 ${
+            error
+              ? "border-red-600 focus:border-red-600 focus:ring-red-100"
+              : "border-slate-300 focus:border-blue-600 focus:ring-blue-100"
+          }`}
+        />
+        {error && <span className="mt-1 block text-xs font-semibold text-red-700">{error}</span>}
+      </span>
     </label>
   );
 }

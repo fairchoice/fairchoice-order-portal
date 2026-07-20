@@ -25,6 +25,27 @@ function storeCompatibleProfile(profile) {
   localStorage.setItem(LAST_ACTIVE_KEY, Date.now().toString());
 }
 
+function loadCompatibleProfile() {
+  try {
+    const savedProfile = JSON.parse(
+      localStorage.getItem(SESSION_KEY) || localStorage.getItem("loggedInUser") || "null"
+    );
+    const lastActive = Number(localStorage.getItem(LAST_ACTIVE_KEY) || 0);
+
+    if (
+      !savedProfile ||
+      !lastActive ||
+      Date.now() - lastActive > SESSION_TIMEOUT
+    ) {
+      return null;
+    }
+
+    return savedProfile;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -32,8 +53,18 @@ export default function App() {
   useEffect(() => {
     let active = true;
 
-    const applySession = async (session) => {
+    const applySession = async (session, { allowCompatibleProfile = true } = {}) => {
       if (!session) {
+        const compatibleProfile = allowCompatibleProfile ? loadCompatibleProfile() : null;
+
+        if (compatibleProfile) {
+          if (active) {
+            setProfile(compatibleProfile);
+            setAuthLoading(false);
+          }
+          return;
+        }
+
         clearLegacyProfileStorage();
         if (active) {
           setProfile(null);
@@ -77,13 +108,13 @@ export default function App() {
         return;
       }
 
-      applySession(data.session);
+      applySession(data.session, { allowCompatibleProfile: true });
     });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      applySession(session);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      applySession(session, { allowCompatibleProfile: event !== "SIGNED_OUT" });
     });
 
     return () => {
@@ -95,6 +126,12 @@ export default function App() {
   const handleLogin = (userProfile) => {
     storeCompatibleProfile(userProfile);
     setProfile(userProfile);
+  };
+
+  const handleLogout = async () => {
+    clearLegacyProfileStorage();
+    setProfile(null);
+    await supabase.auth.signOut();
   };
 
   useEffect(() => {
@@ -141,5 +178,11 @@ export default function App() {
     return <LoginPage onLogin={handleLogin} />;
   }
 
-  return <CustomerOrder userProfile={profile} />;
+  return (
+    <CustomerOrder
+      userProfile={profile}
+      onLogout={handleLogout}
+      onProfileRefresh={handleLogin}
+    />
+  );
 }
