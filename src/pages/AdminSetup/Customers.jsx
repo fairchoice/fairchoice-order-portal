@@ -8,6 +8,8 @@ import {
 import { supabase } from "../../services/supabase";
 import CustomerForm from "./CustomerForm";
 import { formatCurrency } from "../../utils/currency";
+import { getCustomerStatusLabel } from "../../utils/customerStatus";
+import { getPriceModeLabel } from "../../utils/pricing";
 
 const inputClass =
   "h-9 rounded border border-slate-400 px-2 text-sm outline-none focus:border-green-700";
@@ -15,11 +17,10 @@ const buttonClass =
   "h-9 rounded-full border border-slate-500 bg-white px-4 text-sm font-bold hover:bg-slate-100";
 
 const displayPriceMode = (mode) => {
-  if (mode === "Super" || mode === "super") return "Admin Offer";
-  return mode || "VAT";
+  return getPriceModeLabel(mode);
 };
 
-const displayStatus = (status) => (status === "Stopped" ? "Closed" : status || "Active");
+const displayStatus = getCustomerStatusLabel;
 const COUNTRY_VALUES = new Set(["wales", "england"]);
 const DEFAULT_PRICE_MODES = new Set(["vat", "server"]);
 
@@ -57,18 +58,19 @@ const getRowValue = (row, keys) => {
 const normalizePriceMode = (value) => {
   const mode = normalize(value);
   if (mode.toLowerCase() === "ex. vat" || mode.toLowerCase() === "ex vat") return "VAT";
+  if (mode.toLowerCase() === "inc.vat" || mode.toLowerCase() === "inc vat") return "Server";
   return mode || "VAT";
 };
 
 const parseAllowedModes = (value) => {
   const modes = normalize(value)
-    .split(/[,\|/]+/)
+    .split(/[,|/]+/)
     .map((mode) => mode.trim().toLowerCase())
     .filter(Boolean);
 
   return {
     allow_vat: modes.length ? modes.includes("vat") || modes.includes("ex vat") || modes.includes("ex. vat") : true,
-    allow_server: modes.includes("server"),
+    allow_server: modes.includes("server") || modes.includes("inc.vat") || modes.includes("inc vat"),
     allow_manager: false,
     allow_super: false,
   };
@@ -254,8 +256,8 @@ export default function Customers() {
       "Credit Limit": Number(customer.credit_limit || 0),
       "Default Price Mode": displayPriceMode(customer.default_price_mode),
       "Allowed Price Modes": [
-        customer.allow_vat ? "VAT" : "",
-        customer.allow_server ? "Server" : "",
+        customer.allow_vat ? "Ex.VAT" : "",
+        customer.allow_server ? "Inc.VAT" : "",
       ].filter(Boolean).join(", "),
       "Opening Balance": Number(customer.opening_balance || 0),
       Active: customer.active !== false,
@@ -299,8 +301,8 @@ export default function Customers() {
           Postcode: "",
           Country: "Wales",
           "Credit Limit": 0,
-          "Default Price Mode": "VAT",
-          "Allowed Price Modes": "VAT, Server",
+          "Default Price Mode": "Ex.VAT",
+          "Allowed Price Modes": "Ex.VAT, Inc.VAT",
           "Opening Balance": 0,
           Active: true,
         },
@@ -345,7 +347,7 @@ export default function Customers() {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Country", message: "Country must be Wales or England" });
     }
     if (!DEFAULT_PRICE_MODES.has(defaultPriceMode.toLowerCase())) {
-      errors.push({ rowNumber, sheet: "Customer Accounts", field: "Default Price Mode", message: "Default Price Mode must be VAT or Server" });
+      errors.push({ rowNumber, sheet: "Customer Accounts", field: "Default Price Mode", message: "Default Price Mode must be Ex.VAT or Inc.VAT" });
     }
     if (creditLimit === null) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Credit Limit", message: "Credit Limit must be numeric" });
@@ -1067,7 +1069,7 @@ export default function Customers() {
             <option value="All">All Status</option>
             <option value="Active">Active</option>
             <option value="On Hold">On Hold</option>
-            <option value="Closed">Closed</option>
+            <option value="Inactive">Inactive</option>
           </select>
         </div>
 

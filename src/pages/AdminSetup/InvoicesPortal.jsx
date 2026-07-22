@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
   amendInvoice,
   createManualInvoice,
@@ -1478,9 +1479,9 @@ const runInvoiceAction = async (row, action) => {
                   }
                   className="w-full min-w-0 border border-slate-300 rounded-xl p-3 bg-white"
                 >
-                  <option value="VAT">VAT</option>
+                  <option value="VAT">Ex.VAT</option>
                   <option value="CASH">Cash</option>
-                  <option value="SERVER">Server</option>
+                  <option value="SERVER">Inc.VAT</option>
                   <option value="MANAGER">Manager</option>
                 </select>
               ) : (
@@ -1503,7 +1504,7 @@ const runInvoiceAction = async (row, action) => {
 
           {workbenchMode === "amend" && amendOrder && (
             <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm font-bold text-amber-800">
-              Amending {amendOrder.orderId || amendOrder.order_number} for{" "}
+              Amending {formatDisplayOrderId(amendOrder.orderId || amendOrder.order_number)} for{" "}
               {amendOrder.companyName || amendOrder.company_name}
             </div>
           )}
@@ -1770,7 +1771,7 @@ const runInvoiceAction = async (row, action) => {
 
                   return (
                     <tr key={row.id || getReference(row)} className="border-t border-slate-100">
-                      <td className="p-3 font-bold text-slate-900">{getReference(row)}</td>
+                      <td className="p-3 font-bold text-slate-900">{formatDisplayOrderId(getReference(row))}</td>
                       <td className="p-3">{getCustomer(row)}</td>
                       <td className="p-3">{getCreatedDate(row) ? new Date(getCreatedDate(row)).toLocaleDateString() : "-"}</td>
                       <td className="p-3 text-right font-bold">{formatCurrency(amount)}</td>

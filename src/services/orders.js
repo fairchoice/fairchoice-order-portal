@@ -330,6 +330,7 @@ export async function createCustomerOrder({
   delivery_address = "",
   delivery_postcode = "",
   customer_country = "",
+  notes = "",
 }) {
   const orderNumber = requestedOrderNumber || "ORD-" + Date.now();
  const calculatedTotals = calculateCartTotals(cart || [], {
@@ -366,6 +367,7 @@ const orderPayload = {
   discount_amount: calculatedTotals.discountAmount.toFixed(2),
   discount_applied_by: discount_applied_by || null,
   discount_applied_by_name: discount_applied_by_name || "",
+  notes: notes || "",
 
   status: "Received",
 };

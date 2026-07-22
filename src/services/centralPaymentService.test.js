@@ -230,16 +230,23 @@ test("remove archives an active payment without physical deletion", () => {
   assert.doesNotMatch(source, /\.delete\(/);
 });
 
-test("only nisstaj_admin sees permanent deletion and history does not require owner password", () => {
+test("payment history is read-only and does not require owner password", () => {
   const permanentSource = getFunctionSource("permanentlyDeleteCentralPayment");
   const listSource = getFunctionSource("listCentralPaymentRecords");
+  const paymentPanelSource = centralPaymentComponentSource.match(
+    /function PaymentRecordsPanel[\s\S]*?function GlobalLedgerPanel/
+  )?.[0] || "";
 
   assert.match(permanentSource, /requirePermanentDeleteAdmin/);
   assert.match(permanentSource, /permanently_delete_central_payment/);
   assert.doesNotMatch(listSource, /ownerPassword/);
-  assert.match(centralPaymentComponentSource, /isOwnerUser\(currentUser\).*Permanent delete/s);
-  assert.match(centralPaymentComponentSource, /Payment History/);
-  assert.match(centralPaymentComponentSource, /Payment Archive/);
+  assert.match(paymentPanelSource, /Payment History/);
+  assert.match(paymentPanelSource, /Payment Archive/);
+  assert.doesNotMatch(paymentPanelSource, />Action</);
+  assert.doesNotMatch(paymentPanelSource, />Edit</);
+  assert.doesNotMatch(paymentPanelSource, />Remove</);
+  assert.doesNotMatch(paymentPanelSource, />Restore</);
+  assert.doesNotMatch(paymentPanelSource, /Permanent delete/);
 });
 
 test("Central Payment is one page with shared owner password", () => {
@@ -530,6 +537,25 @@ test("All branches contains current invoices and unique fallback payments exactl
     "new-payment",
     "legacy-missing-payment",
   ]);
+});
+
+test("Customer Credit suppresses a legacy row linked to its canonical payment", () => {
+  const result = resolveLegacyCompatibilityRows({
+    payments: [{
+      id: "canonical-221",
+      payment_reference: "PBC-20260722-L221",
+      idempotency_key: "legacy-customer-ledger:221",
+    }],
+    legacyPayments: [{
+      id: "legacy-221",
+      legacy_ledger_id: 221,
+      payment_reference: "PREVIOUS_BALANCE",
+    }],
+  });
+
+  assert.equal(result.payments.length, 1);
+  assert.equal(result.payments[0].id, "canonical-221");
+  assert.equal(result.legacyFallbackUsed, false);
 });
 
 test("branch opening balances save and reload independently", () => {

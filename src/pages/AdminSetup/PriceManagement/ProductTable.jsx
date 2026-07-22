@@ -32,8 +32,8 @@ export default function ProductTable({
               <th className="border p-3 text-left">Code</th>
               <th className="border p-3 text-left">Product Name</th>
               <th className="border p-3">Cost</th>
-              <th className="border p-3">Current Price VAT</th>
-              <th className="border p-3">Current Server</th>
+              <th className="border p-3">Current Ex.VAT</th>
+              <th className="border p-3">Current Inc.VAT</th>
               <th className="border p-3">Current Margin</th>
             </tr>
           </thead>

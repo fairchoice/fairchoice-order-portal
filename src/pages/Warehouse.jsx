@@ -6,6 +6,7 @@ import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../utils/currency";
 import { getOrderItemQty } from "../utils/orderTotals";
 import { sortPrintItems } from "../utils/printItemSorting";
+import { formatDisplayOrderId } from "../utils/orderDisplay";
 
 import {
   calculateDocumentTotals,
@@ -1067,7 +1068,7 @@ const printCustomerDocumentForMode =
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
             <h3 className="font-bold text-base">
-              {orderId} | {order.companyName || order.company_name || "No company"}
+              {formatDisplayOrderId(orderId)} | {order.companyName || order.company_name || "No company"}
               {branchName ? ` | ${branchName}` : ""}
             </h3>
           </div>

@@ -3,6 +3,8 @@ import { supabase } from "../../services/supabase";
 import { fetchInvoiceOrderFromDb } from "../../services/centralInvoiceEngine";
 import { formatCurrency } from "../../utils/currency";
 import { sortPrintItems } from "../../utils/printItemSorting";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
+import { getPriceModeLabel } from "../../utils/pricing";
 
 const VAT_RATE = 0.2;
 const VAT_DIVISOR = 1 + VAT_RATE;
@@ -339,7 +341,7 @@ function printVatInvoice(invoice) {
           </div>
           <div class="title">
             <h1>SALES INVOICE</h1>
-            <div class="muted">Server/Manager VAT View</div>
+            <div class="muted">Inc.VAT/Manager VAT View</div>
           </div>
         </div>
 
@@ -356,7 +358,7 @@ function printVatInvoice(invoice) {
             <div class="panel-body">
               <strong>Invoice No:</strong> ${escapeHtml(invoice.orderNumber)}<br />
               <strong>Date:</strong> ${escapeHtml(formatDate(invoice.confirmedAt))}<br />
-              <strong>Price Mode:</strong> ${escapeHtml(String(invoice.priceMode).toUpperCase())}
+              <strong>Price Mode:</strong> ${escapeHtml(getPriceModeLabel(invoice.priceMode))}
             </div>
           </div>
         </div>
@@ -635,7 +637,7 @@ export default function OrderSalesInvoices() {
     return (
       <div className="p-5">
         <div className="bg-white border rounded-lg p-5 text-slate-700">
-          Admin access is required to view Server/Manager sales invoices.
+          Admin access is required to view Inc.VAT/Manager sales invoices.
         </div>
       </div>
     );
@@ -647,7 +649,7 @@ export default function OrderSalesInvoices() {
         <div>
           <h1 className="text-2xl font-bold">Sales Invoices</h1>
           <p className="text-sm text-slate-500">
-            Server and Manager price mode VAT view from ProcessingQueue.
+            Inc.VAT and Manager price mode VAT view from ProcessingQueue.
           </p>
         </div>
         <input
@@ -690,10 +692,10 @@ export default function OrderSalesInvoices() {
                 return (
                   <Fragment key={row.id}>
                     <tr key={row.id} className="border-b last:border-b-0">
-                      <td className="p-3 font-semibold">{row.orderNumber}</td>
+                      <td className="p-3 font-semibold">{formatDisplayOrderId(row.orderNumber)}</td>
                       <td className="p-3">{row.customerName}</td>
                       <td className="p-3">{row.branchName || "-"}</td>
-                      <td className="p-3">{String(row.priceMode || "").toUpperCase()}</td>
+                      <td className="p-3">{getPriceModeLabel(row.priceMode)}</td>
                       <td className="p-3">{formatDate(row.confirmedAt || row.queuedAt)}</td>
                       <td className="p-3 text-right">{formatCurrency(row.netTotal)}</td>
                       <td className="p-3 text-right">{formatCurrency(row.vatTotal)}</td>
@@ -854,7 +856,7 @@ export default function OrderSalesInvoices() {
             ) : (
               <tr>
                 <td colSpan={9} className="p-5 text-center text-slate-500">
-                  No Server/Manager sales invoices found.
+                  No Inc.VAT/Manager sales invoices found.
                 </td>
               </tr>
             )}

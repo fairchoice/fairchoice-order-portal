@@ -1,17 +1,29 @@
 import { supabase } from "./supabase";
+import { getStoredCustomerStatus } from "../utils/customerStatus";
 
-const normaliseStatus = (status) => status || "Active";
-const normalisePriceMode = (mode) =>
-  mode === "Super" || mode === "super" ? "Admin Offer" : mode || "VAT";
+const normaliseStatus = getStoredCustomerStatus;
+const normalisePriceMode = (mode) => {
+  const normalizedMode = String(mode || "VAT").trim().toLowerCase();
+  if (["server", "inc.vat", "inc vat"].includes(normalizedMode)) return "Server";
+  if (["super", "admin", "admin offer"].includes(normalizedMode)) return "Admin Offer";
+  return "VAT";
+};
 
-export async function getCustomerAccounts() {
-  const { data, error } = await supabase
+export async function getCustomerAccounts({ operationalOnly = false } = {}) {
+  let query = supabase
     .from("customer_accounts")
     .select(`
       *,
       customer_branches (*)
-    `)
-    .order("account_name", { ascending: true });
+    `);
+
+  if (operationalOnly) {
+    query = query
+      .eq("active", true)
+      .or("status.is.null,status.ilike.Active");
+  }
+
+  const { data, error } = await query.order("account_name", { ascending: true });
 
   if (error) throw error;
   return data || [];

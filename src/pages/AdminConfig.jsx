@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
 import * as XLSX from "xlsx";
 import { formatCurrency } from "../utils/currency";
+import { getPriceModeLabel } from "../utils/pricing";
 
 import ProductSetupOptions from "../components/ProductSetupOptions";
 
@@ -567,9 +568,13 @@ const processCustomerImport = async () => {
           getImportValue(row, ["Default Price Mode", "default_price_mode"]) || "VAT",
         active: getImportBool(row, ["Active", "active"], true),
         allow_vat: true,
-        allow_server: String(
-          getImportValue(row, ["Allowed Price Modes", "allowed_price_modes"])
-        ).toLowerCase().includes("server"),
+        allow_server: ["server", "inc.vat", "inc vat"].some((label) =>
+          String(
+            getImportValue(row, ["Allowed Price Modes", "allowed_price_modes"])
+          )
+            .toLowerCase()
+            .includes(label)
+        ),
         allow_manager: false,
         allow_super: false,
       });
@@ -660,7 +665,7 @@ const filteredStaff = staffUsers.filter((staff) =>
             [
               "pricing",
               "Pricing Settings",
-              "Manage Server, Manager and Super Offer discounts.",
+              "Manage Inc.VAT, Manager and Super Offer discounts.",
             ],
             ["drivers", "Drivers", "Manage delivery drivers."],
             [
@@ -713,7 +718,7 @@ const filteredStaff = staffUsers.filter((staff) =>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {[
-              ["server_discount_percent", "Server Discount %"],
+              ["server_discount_percent", "Inc.VAT Discount %"],
               ["manager_discount_percent", "Manager Discount %"],
               ["super_discount_percent", "Super Offer Discount %"],
             ].map(([field, label]) => (
@@ -863,7 +868,7 @@ const filteredStaff = staffUsers.filter((staff) =>
               >
                 <strong>{customer.account_name}</strong>
                 <div className="text-xs text-slate-500">
-                  {customer.country} | {customer.default_price_mode} | Credit {formatCurrency(customer.credit_limit)}
+                  {customer.country} | {getPriceModeLabel(customer.default_price_mode)} | Credit {formatCurrency(customer.credit_limit)}
                 </div>
               </button>
             ))}
@@ -948,8 +953,8 @@ const filteredStaff = staffUsers.filter((staff) =>
             })
           }
         >
-          <option value="VAT">Ex. VAT</option>
-          <option value="Server">Server</option>
+          <option value="VAT">Ex.VAT</option>
+          <option value="Server">Inc.VAT</option>
           <option value="Manager">Manager Offer</option>
           <option value="Super">Super Offer</option>
         </select>
@@ -969,7 +974,7 @@ const filteredStaff = staffUsers.filter((staff) =>
           })
         }
       />
-      Ex. VAT
+      Ex.VAT
     </label>
 
     <label className="flex items-center gap-2 font-semibold text-sm">
@@ -983,7 +988,7 @@ const filteredStaff = staffUsers.filter((staff) =>
           })
         }
       />
-      Server
+      Inc.VAT
     </label>
 
     <label className="flex items-center gap-2 font-semibold text-sm">

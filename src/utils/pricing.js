@@ -29,6 +29,19 @@ export const normalizePriceMode = (priceMode) =>
     .replace(/[._-]+/g, " ")
     .replace(/\s+/g, " ");
 
+export const getPriceModeLabel = (priceMode) => {
+  const mode = normalizePriceMode(priceMode);
+
+  if (mode === "vat" || mode === "ex vat" || mode === "exvat") return "Ex.VAT";
+  if (mode === "server") return "Inc.VAT";
+  if (mode === "super" || mode === "admin" || mode === "admin offer") {
+    return "Admin Offer";
+  }
+  if (mode === "manager" || mode === "manager offer") return "Manager Offer";
+
+  return priceMode || "Ex.VAT";
+};
+
 export const isServerManagerPriceMode = (priceMode) => {
   const mode = normalizePriceMode(priceMode);
   return mode === "server" || mode === "manager";

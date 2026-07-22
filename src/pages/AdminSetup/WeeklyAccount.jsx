@@ -7,6 +7,11 @@ import {
   mergeDeliveredOrderInvoicesIntoLedgerRows,
 } from "../../services/centralInvoiceEngine";
 import { formatCurrency } from "../../utils/currency";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
+import {
+  getWeeklyPaymentDateKey,
+  loadWeeklyAccountPayments,
+} from "../../services/weeklyAccountPayments";
 
  import { saveHandover, getHandoverHistory } from "../../services/handovers";
 
@@ -73,15 +78,6 @@ const [handoverHistoryStartDate, setHandoverHistoryStartDate] = useState("");
 
     if (unpaidError) console.error("Unpaid report error:", unpaidError);
 
-    const { data: paymentData, error: paymentError } = await supabase
-  .from("orders")
-  .select("*")
-  .eq("payment_collected", "Yes")
-  .gt("payment_amount", 0)
-  .order("created_at", { ascending: false });
-
-    if (paymentError) console.error("Payment report error:", paymentError);
-
     const { data: driverData, error: driverError } = await supabase
     .from("drivers")
     .select("*");
@@ -92,52 +88,7 @@ const [handoverHistoryStartDate, setHandoverHistoryStartDate] = useState("");
 
    
 
-const { data: ledgerPaymentData, error: ledgerPaymentError } =
-  await supabase
-    .from("customer_ledger")
-    .select("*")
-    .eq("entry_type", "PAYMENT")
-    .in("collection_source", ["SALES_REP","Sales Rep Collection","DRIVER","Driver Collection"])
-    .order("created_at", { ascending: false });
-if (ledgerPaymentError) {
-  console.error("Sales Rep ledger payment error:", ledgerPaymentError);
-}
-
-
-const orderPayments = (paymentData || []).map((o) => ({
-  id: o.id,
-  customer_name: o.company_name,
-  invoice_no: o.order_number,
-  order_number: o.order_number,
-  invoice_total: Number(o.final_total || o.order_total || 0),
-  amount: Number(o.payment_amount || 0),
-  payment_amount: Number(o.payment_amount || 0),
-  payment_type: o.payment_type || "",
-  paid_by: o.paid_by || "",
-  received_by: o.received_by || "",
-  collected_by: o.driver_name || o.received_by || "",
-  driver_name: o.driver_name || "",
-  collection_type: o.driver_name ? "Driver" : "Office",
-  created_at: o.created_at,
-}));
-
-const salesRepLedgerPayments = (ledgerPaymentData || []).map((p) => ({
-  id: p.id,
-  customer_name: p.customer_name,
-  invoice_no: p.reference_no || "Sales Rep Collection",
-  order_number: p.reference_no || "Sales Rep Collection",
-  invoice_total: 0,
-  amount: Number(p.credit || 0),
-  payment_amount: Number(p.credit || 0),
-  payment_type: p.payment_type || "",
-  paid_by: p.paid_by || "",
-  received_by: p.received_by || "",
-  collected_by: p.collected_by_name || "",
-  sales_rep_name: p.collected_by_name || "",
-  collected_by_role: p.collected_by_role || "Sales Rep",
-  collection_type: "Sales Rep Collection",
-  created_at: p.created_at,
-}));
+const loadedPayments = await loadWeeklyAccountPayments(supabase);
 
 const processingQueueOrders = (await loadProcessingQueueOrders()).filter((order) => {
   const invoiceDate = new Date(order.deliveredAt || order.createdAt || order.created_at || 0);
@@ -153,7 +104,7 @@ const unpaidWithQueuedOrders = mergeDeliveredOrderInvoicesIntoLedgerRows(
 );
 
 setUnpaidInvoices(unpaidWithQueuedOrders);
-setPayments([...orderPayments, ...salesRepLedgerPayments]);
+setPayments(loadedPayments);
     
  
         setDrivers(driverData || []);
@@ -341,7 +292,7 @@ async function updatePayment(row, amount) {
   );
 
   const filteredPayments = payments.filter((p) => {
-  const paymentDate = p.created_at?.slice(0, 10);
+  const paymentDate = getWeeklyPaymentDateKey(p);
 
   if (startDate && paymentDate < startDate) return false;
   if (endDate && paymentDate > endDate) return false;
@@ -349,7 +300,7 @@ async function updatePayment(row, amount) {
   return true;
 });
 
-const totalCollectionValue = payments.reduce(
+const totalCollectionValue = filteredPayments.reduce(
   (sum, p) => sum + paidAmount(p),
   0
 );
@@ -1023,7 +974,7 @@ const cashHoldingRows = [
                   <tr key={invoice.id} className="border-t">
                     <td className="p-2">{invoice.customer_name}</td>
                     <td className="p-2">
-                      {invoice.invoice_no || invoice.order_number}
+                      {formatDisplayOrderId(invoice.invoice_no || invoice.order_number)}
                     </td>
                     <td className="p-2">{formatDate(invoice.created_at)}</td>
                     <td className="p-2">{money(invoice.amount)}</td>
@@ -1106,21 +1057,25 @@ function PaymentTable({
           {rows.map((row) => (
             <tr key={row.id} className="border-t">
               <td className="p-2">{row.customer_name}</td>
-              <td className="p-2">{row.invoice_no || row.order_number}</td>
+              <td className="p-2">{formatDisplayOrderId(row.invoice_no || row.order_number)}</td>
               <td className="p-2">{money(invoiceTotal(row))}</td>
               <td className="p-2">{money(paidAmount(row))}</td>
               <td className="p-2">{money(balance(row))}</td>
-              <td className="p-2">{formatDate(row.created_at)}</td>
+              <td className="p-2">{formatDate(row.payment_date || row.created_at)}</td>
               <td className="p-2">{row.payment_type || "-"}</td>
               <td className="p-2">{collectedBy(row)}</td>
               <td className="p-2">{collectionType(row)}</td>
               <td className="p-2">
-                <button
-                  onClick={() => editPayment(row)}
-                  className="bg-blue-600 text-white px-3 py-2 rounded-lg font-bold"
-                >
-                  Edit Payment
-                </button>
+                {row.read_only ? (
+                  <span className="text-xs font-bold text-slate-500">Read only</span>
+                ) : (
+                  <button
+                    onClick={() => editPayment(row)}
+                    className="bg-blue-600 text-white px-3 py-2 rounded-lg font-bold"
+                  >
+                    Edit Payment
+                  </button>
+                )}
               </td>
             </tr>
           ))}

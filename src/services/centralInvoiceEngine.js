@@ -8,6 +8,7 @@ import {
 import { isServerManagerPriceMode, roundMoney } from "../utils/pricing";
 import { formatCurrency } from "../utils/currency";
 import { sortPrintItems } from "../utils/printItemSorting";
+import { formatDisplayOrderId } from "../utils/orderDisplay";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
 const getOrderReference = (order = {}) => order.orderId || order.order_number || order.id;
@@ -759,6 +760,26 @@ const getThermalReceiptRows = (order = {}) => {
 const getThermalLineAmount = (item = {}) =>
   item.gross_total ?? item.grossTotal ?? item.line_total ?? item.lineTotal ?? item.net_total ?? 0;
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const getThermalOrderNumber = (order = {}) => {
+  const orderNumber = [order.order_number, order.orderNumber, order.orderId]
+    .map((value) => String(value || "").trim())
+    .find((value) => value && !UUID_PATTERN.test(value));
+
+  return orderNumber ? formatDisplayOrderId(orderNumber) : "Not available";
+};
+
+const getThermalUnitAmount = (item = {}) => {
+  const savedUnitAmount = item.price ?? item.unit_price ?? item.unitPrice;
+  if (savedUnitAmount !== null && savedUnitAmount !== undefined && savedUnitAmount !== "") {
+    return Number(savedUnitAmount || 0);
+  }
+
+  const quantity = Number(getInvoiceLineQuantity(item) || 0);
+  return quantity > 0 ? Number(getThermalLineAmount(item) || 0) / quantity : 0;
+};
+
 const wrapText = (text, maxLength = 28) => {
   const words = String(text || "").split(/\s+/).filter(Boolean);
   const lines = [];
@@ -790,119 +811,140 @@ export function buildThermalReceiptHtml(order = {}) {
     : receipt.isInvoice
     ? "SALES RECEIPT"
     : "ORDER RECEIPT";
-  const referenceLabel = receipt.isInvoice ? "Invoice No" : "Order No";
+  const orderNumber = getThermalOrderNumber(order);
 
   return `
-    <html>
+    <html lang="en">
       <head>
-        <title>${escapeHtml(title)} - ${escapeHtml(receipt.reference)}</title>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>${escapeHtml(title)} - ${escapeHtml(orderNumber)}</title>
         <style>
-          @page { size: 80mm auto; margin: 0; }
+          @page { margin: 2mm; }
           * { box-sizing: border-box; }
+          html, body { margin: 0; padding: 0; }
           body {
-            width: 80mm;
-            margin: 0;
-            padding: 4mm;
+            width: 100%;
+            max-width: 80mm;
+            margin: 0 auto;
             color: #111;
-            font-family: Arial, sans-serif;
-            font-size: 11px;
-            line-height: 1.28;
+            background: #fff;
+            font-family: "Courier New", Courier, monospace;
+            font-size: 10px;
+            line-height: 1.22;
+          }
+          .receipt {
+            width: 100%;
+            padding: 1.5mm;
           }
           .center { text-align: center; }
-          .brand { font-size: 14px; font-weight: 800; }
-          .title { font-size: 13px; font-weight: 800; margin: 4px 0 8px; }
-          .line { border-top: 1px dashed #111; margin: 7px 0; }
-          .meta div { overflow-wrap: anywhere; }
-          .row {
+          .logo {
+            display: block;
+            width: auto;
+            max-width: 30mm;
+            max-height: 14mm;
+            margin: 0 auto 1mm;
+            object-fit: contain;
+            filter: grayscale(1) contrast(1.25);
+          }
+          .brand { font-size: 13px; font-weight: 900; line-height: 1.1; }
+          .title { font-size: 12px; font-weight: 900; margin: 1.5mm 0 2mm; letter-spacing: .4px; }
+          .rule { border-top: 1px dashed #111; margin: 2mm 0; }
+          .meta { display: grid; gap: .7mm; }
+          .meta-row {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 9mm 20mm;
-            column-gap: 2mm;
+            grid-template-columns: 18mm minmax(0, 1fr);
+            gap: 1.5mm;
             align-items: start;
           }
-          .product { overflow-wrap: anywhere; word-break: break-word; }
-          .qty { text-align: right; }
-          .amount { text-align: right; white-space: nowrap; }
+          .meta-label { font-weight: 900; }
+          .meta-value { overflow-wrap: anywhere; word-break: break-word; }
+          .payment-status {
+            display: inline-block;
+            border: 1px solid #111;
+            padding: .4mm 1.4mm;
+            font-weight: 900;
+          }
+          .column-head,
+          .item-detail {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 17mm 18mm;
+            gap: 1.5mm;
+            align-items: baseline;
+          }
+          .column-head { font-weight: 900; }
+          .product-item { padding: 1.2mm 0; border-bottom: 1px dotted #999; }
+          .product-name { margin-bottom: .5mm; font-weight: 700; overflow-wrap: anywhere; }
+          .item-detail { color: #222; }
+          .right { text-align: right; white-space: nowrap; }
+          .totals { margin-top: 1mm; }
           .total-row {
             display: flex;
             justify-content: space-between;
-            gap: 4mm;
-            font-weight: 800;
+            gap: 3mm;
+            padding: .5mm 0;
           }
-          .grand { font-size: 13px; }
-          .unpaid-watermark {
-            margin: 5mm 0 3mm;
-            padding: 3mm 0;
-            border: 2px solid #d00;
-            color: #d00;
-            text-align: center;
-            font-size: 22px;
+          .total-row span:last-child { text-align: right; white-space: nowrap; }
+          .grand {
+            margin-top: 1mm;
+            padding-top: 1.5mm;
+            border-top: 2px solid #111;
+            font-size: 13px;
             font-weight: 900;
-            letter-spacing: 0;
           }
+          .footer { margin-top: 3mm; font-size: 9px; }
           @media print {
-            html, body { width: 80mm; }
+            html, body { width: 100%; max-width: none; }
+            .receipt { padding: 0; }
           }
         </style>
       </head>
       <body>
-        ${receipt.isServerManager ? "" : `<div class="center brand">Fair Choice Cash &amp; Carry</div>`}
-        <div class="center title">${escapeHtml(title)}</div>
-        ${!receipt.isServerManager && receipt.paymentStatus === "UNPAID" ? `<div class="unpaid-watermark">UNPAID</div>` : ""}
-        <div class="meta">
-          <div>${escapeHtml(referenceLabel)}: ${escapeHtml(receipt.reference)}</div>
-          <div>Customer: ${escapeHtml(receipt.customerName)}</div>
-          ${!receipt.isServerManager && receipt.branchName ? `<div>Branch: ${escapeHtml(receipt.branchName)}</div>` : ""}
-          <div><strong>Deliver To</strong></div>
-          ${receipt.deliveryAddressLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
-          <div>Date/Time: ${escapeHtml(receipt.dateTime)}</div>
-          ${!receipt.isServerManager && receipt.driverName ? `<div>Driver: ${escapeHtml(receipt.driverName)}</div>` : ""}
-        </div>
-        <div class="line"></div>
-        <div class="row"><strong class="product">Product</strong><strong class="qty">Qty</strong><strong class="amount">Amount</strong></div>
-        <div class="line"></div>
+        <main class="receipt">
+        <header class="center">
+          <img class="logo" src="${escapeHtml(fairchoiceLogo)}" alt="Fair Choice" />
+          <div class="brand">Fair Choice Cash &amp; Carry</div>
+          <div class="title">${escapeHtml(title)}</div>
+        </header>
+        <div class="rule"></div>
+        <section class="meta">
+          <div class="meta-row"><span class="meta-label">Order No</span><span class="meta-value">${escapeHtml(orderNumber)}</span></div>
+          <div class="meta-row"><span class="meta-label">Customer</span><span class="meta-value">${escapeHtml(receipt.customerName || "Not available")}</span></div>
+          <div class="meta-row"><span class="meta-label">Branch</span><span class="meta-value">${escapeHtml(receipt.branchName || "Main account")}</span></div>
+          <div class="meta-row"><span class="meta-label">Deliver To</span><span class="meta-value">${
+            receipt.deliveryAddressLines.length
+              ? receipt.deliveryAddressLines.map((line) => escapeHtml(line)).join("<br />")
+              : "Not available"
+          }</span></div>
+          <div class="meta-row"><span class="meta-label">Date/Time</span><span class="meta-value">${escapeHtml(receipt.dateTime)}</span></div>
+          <div class="meta-row"><span class="meta-label">Driver</span><span class="meta-value">${escapeHtml(receipt.driverName || "Not assigned")}</span></div>
+          <div class="meta-row"><span class="meta-label">Payment Status</span><span class="meta-value"><span class="payment-status">${escapeHtml(receipt.paymentStatus || "Not available")}</span></span></div>
+        </section>
+        <div class="rule"></div>
+        <div class="column-head"><span>Product / Qty</span><span class="right">Unit</span><span class="right">Line</span></div>
+        <div class="rule"></div>
+        <section>
         ${receipt.items
           .map((item) => {
             const quantity = getInvoiceLineQuantity(item);
-            return `<div class="row"><span class="product">${escapeHtml(
-              item.name || item.productName || item.product_name || ""
-            )}</span><span class="qty">${escapeHtml(quantity)}</span><span class="amount">${escapeHtml(
-              formatCurrency(getThermalLineAmount(item))
-            )}</span></div>`;
+            return `<div class="product-item">
+              <div class="product-name">${escapeHtml(item.name || item.productName || item.product_name || "Product")}</div>
+              <div class="item-detail"><span>Qty ${escapeHtml(quantity)}</span><span class="right">${escapeHtml(
+                formatCurrency(getThermalUnitAmount(item))
+              )}</span><strong class="right">${escapeHtml(formatCurrency(getThermalLineAmount(item)))}</strong></div>
+            </div>`;
           })
           .join("")}
-        <div class="line"></div>
-        ${
-          receipt.isServerManager
-            ? `
-              <div class="total-row"><span>Total Qty</span><span>${escapeHtml(receipt.totalQuantity)}</span></div>
-              <div class="total-row"><span>Total Lines</span><span>${escapeHtml(receipt.totalLines)}</span></div>
-              <div class="total-row"><span>Net Total</span><span>${escapeHtml(
-                formatCurrency(receipt.totals.netTotal)
-              )}</span></div>
-              <div class="total-row grand"><span>Grand Total</span><span>${escapeHtml(
-                formatCurrency(receipt.totals.grandTotal)
-              )}</span></div>
-            `
-            : receipt.hasVat
-            ? `
-              <div class="total-row"><span>Total Qty</span><span>${escapeHtml(receipt.totalQuantity)}</span></div>
-              <div class="total-row"><span>Total Lines</span><span>${escapeHtml(receipt.totalLines)}</span></div>
-              <div class="total-row"><span>Net Total</span><span>${escapeHtml(
-                formatCurrency(receipt.totals.netTotal)
-              )}</span></div>
-              <div class="total-row"><span>VAT</span><span>${escapeHtml(
-                formatCurrency(receipt.totals.vatTotal)
-              )}</span></div>
-              <div class="total-row grand"><span>Grand Total</span><span>${escapeHtml(
-                formatCurrency(receipt.totals.grandTotal)
-              )}</span></div>
-            `
-            : `<div class="total-row grand"><span>Total</span><span>${escapeHtml(
-                formatCurrency(receipt.totals.grandTotal)
-              )}</span></div>
-              <div class="total-row"><span>Total Qty</span><span>${escapeHtml(receipt.totalQuantity)}</span></div>
-              <div class="total-row"><span>Total Lines</span><span>${escapeHtml(receipt.totalLines)}</span></div>`
-        }
+        </section>
+        <div class="rule"></div>
+        <section class="totals">
+          <div class="total-row"><span>Item Count</span><span>${escapeHtml(receipt.totalQuantity)}</span></div>
+          <div class="total-row"><span>Subtotal</span><span>${escapeHtml(formatCurrency(receipt.totals.netTotal))}</span></div>
+          ${receipt.hasVat ? `<div class="total-row"><span>VAT</span><span>${escapeHtml(formatCurrency(receipt.totals.vatTotal))}</span></div>` : ""}
+          <div class="total-row grand"><span>Total</span><span>${escapeHtml(formatCurrency(receipt.totals.grandTotal))}</span></div>
+        </section>
+        <footer class="center footer">Thank you for your order</footer>
+        </main>
       </body>
     </html>
   `;
@@ -915,58 +957,47 @@ const buildThermalReceiptPdf = (order = {}) => {
     : receipt.isInvoice
     ? "SALES RECEIPT"
     : "ORDER RECEIPT";
-  const referenceLabel = receipt.isInvoice ? "Invoice No" : "Order No";
+  const orderNumber = getThermalOrderNumber(order);
   const lines = [
-    ...(!receipt.isServerManager
-      ? [{ text: "Fair Choice Cash & Carry", size: 11, bold: true }]
-      : []),
+    { text: "Fair Choice Cash & Carry", size: 11, bold: true },
     { text: title, size: 11, bold: true },
-    ...(!receipt.isServerManager && receipt.paymentStatus === "UNPAID"
-      ? [{ text: "UNPAID", size: 18, bold: true }]
-      : []),
-    { text: `${referenceLabel}: ${receipt.reference}` },
+    { text: `Order No: ${orderNumber}` },
     { text: `Customer: ${receipt.customerName}` },
+    { text: `Branch: ${receipt.branchName || "Main account"}` },
   ];
 
-  if (!receipt.isServerManager && receipt.branchName) lines.push({ text: `Branch: ${receipt.branchName}` });
-  lines.push({ text: "Deliver To", bold: true });
-  receipt.deliveryAddressLines.forEach((line) => {
-    wrapText(line, 32).forEach((text) => lines.push({ text }));
-  });
+  lines.push({ text: "Delivery Address:", bold: true });
+  if (receipt.deliveryAddressLines.length) {
+    receipt.deliveryAddressLines.forEach((line) => {
+      wrapText(line, 32).forEach((text) => lines.push({ text }));
+    });
+  } else {
+    lines.push({ text: "Not available" });
+  }
   lines.push({ text: `Date/Time: ${receipt.dateTime}` });
-  if (!receipt.isServerManager && receipt.driverName) lines.push({ text: `Driver: ${receipt.driverName}` });
+  lines.push({ text: `Driver: ${receipt.driverName || "Not assigned"}` });
+  lines.push({ text: `Payment Status: ${receipt.paymentStatus || "Not available"}`, bold: true });
   lines.push({ text: "--------------------------------" });
-  lines.push({ text: "Product                 Qty Amount", bold: true });
+  lines.push({ text: "Product / Qty       Unit     Line", bold: true });
   lines.push({ text: "--------------------------------" });
 
   receipt.items.forEach((item) => {
     const quantity = String(getInvoiceLineQuantity(item));
-    const amount = formatCurrency(getThermalLineAmount(item));
-    const nameLines = wrapText(item.name || item.productName || item.product_name || "", 21);
-    nameLines.forEach((text, index) => {
-      if (index === 0) {
-        lines.push({
-          text: `${text.padEnd(21, " ")} ${quantity.padStart(3, " ")} ${amount.padStart(8, " ")}`,
-        });
-      } else {
-        lines.push({ text });
-      }
-    });
+    const unitAmount = formatCurrency(getThermalUnitAmount(item));
+    const lineAmount = formatCurrency(getThermalLineAmount(item));
+    wrapText(item.name || item.productName || item.product_name || "Product", 32)
+      .forEach((text) => lines.push({ text, bold: true }));
+    lines.push({ text: `Qty ${quantity.padEnd(6, " ")} ${unitAmount.padStart(8, " ")} ${lineAmount.padStart(8, " ")}` });
   });
 
   lines.push({ text: "--------------------------------" });
-  lines.push({ text: `Total Qty ${receipt.totalQuantity}`, bold: true });
-  lines.push({ text: `Total Lines ${receipt.totalLines}`, bold: true });
-  if (receipt.isServerManager) {
-    lines.push({ text: `Net Total ${formatCurrency(receipt.totals.netTotal)}`, bold: true });
-    lines.push({ text: `Grand Total ${formatCurrency(receipt.totals.grandTotal)}`, bold: true });
-  } else if (receipt.hasVat) {
-    lines.push({ text: `Net Total ${formatCurrency(receipt.totals.netTotal)}`, bold: true });
+  lines.push({ text: `Item Count ${receipt.totalQuantity}`, bold: true });
+  lines.push({ text: `Subtotal ${formatCurrency(receipt.totals.netTotal)}`, bold: true });
+  if (receipt.hasVat) {
     lines.push({ text: `VAT ${formatCurrency(receipt.totals.vatTotal)}`, bold: true });
-    lines.push({ text: `Grand Total ${formatCurrency(receipt.totals.grandTotal)}`, bold: true });
-  } else {
-    lines.push({ text: `Total ${formatCurrency(receipt.totals.grandTotal)}`, bold: true });
   }
+  lines.push({ text: `TOTAL ${formatCurrency(receipt.totals.grandTotal)}`, size: 11, bold: true });
+  lines.push({ text: "Thank you for your order" });
 
   const width = 226.77;
   const height = Math.max(280, 28 + lines.length * 13);
@@ -1023,7 +1054,7 @@ export function printThermalReceipt(order = {}) {
 }
 
 export function downloadThermalReceipt(order = {}) {
-  const orderNumber = getOrderReference(order) || "receipt";
+  const orderNumber = getThermalOrderNumber(order).replace(/[^a-z0-9-]+/gi, "-") || "receipt";
   const blob = new Blob([buildThermalReceiptPdf(order)], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

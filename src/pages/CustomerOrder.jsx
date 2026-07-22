@@ -14,10 +14,10 @@ import LoginConfig from "./AdminSetup/LoginConfig";
 import PriceManagement from "./AdminSetup/PriceManagement";
 
 import { formatCurrency } from "../utils/currency";
+import { formatDisplayOrderId } from "../utils/orderDisplay";
 import {
   getCustomerCartStorageKey,
   getCustomerPortalHash,
-  getOrderSubmissionErrorMessage,
   isCustomerPortalPageAllowed,
   isOrderAuthError,
   resolveCustomerPortalPage,
@@ -46,9 +46,15 @@ import InvoicesPortal from "./AdminSetup/InvoicesPortal";
 import OrderSalesInvoices from "./AdminSetup/OrderSalesInvoices";
 import ReturnsPortal from "./AdminSetup/ReturnsPortal";
 import Customers from "./AdminSetup/Customers";
+import HomePageImages from "./AdminSetup/HomePageImages";
 
 import ProductCard, { ProductListRow } from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
+import {
+  getCustomerStatusLabel,
+  isOperationalCustomer,
+} from "../utils/customerStatus";
+import HomeCategoryGrid from "../components/HomeCategoryGrid";
 import Cart from "../components/Cart.jsx";
 import ReturnRequestModal from "../components/ReturnRequestModal";
 
@@ -77,6 +83,7 @@ import {
   getProductPriceForMode,
   getProductPriceDetailsForMode,
   getHomepagePriceForMode,
+  getPriceModeLabel,
   getVatRate,
   isVatPriceMode,
 } from "../utils/pricing";
@@ -365,16 +372,7 @@ const getCustomerBranchCountry = (customer) => {
 };
 
 const isOrderSelectableCustomer = (customer) => {
-  const status = String(
-    customer?.account_status || customer?.status || ""
-  )
-    .trim()
-    .toLowerCase();
-
-  return (
-    customer?.active !== false &&
-    !["hold", "on hold", "stopped", "stop", "closed", "inactive"].includes(status)
-  );
+  return isOperationalCustomer(customer);
 };
 
 const customerMatchesSearch = (customer, searchTerm) => {
@@ -616,9 +614,18 @@ useEffect(() => {
   const [homepageLoading, setHomepageLoading] = useState(false);
   const [showHomepage, setShowHomepage] = useState(true);
   const [homepageSelectionType, setHomepageSelectionType] = useState("");
+  const [homepageBrowseTitle, setHomepageBrowseTitle] = useState("");
   const [homepagePromotionTarget, setHomepagePromotionTarget] = useState("");
   const [promotionRules, setPromotionRules] = useState([]);
   const [productDisplayMessages, setProductDisplayMessages] = useState([]);
+  const [customerDetailsExpanded, setCustomerDetailsExpanded] = useState(false);
+  const [isCartEditing, setIsCartEditing] = useState(false);
+  const [cartNotice, setCartNotice] = useState("");
+  const [submissionFeedback, setSubmissionFeedback] = useState("");
+  const [orderPaymentChoice, setOrderPaymentChoice] = useState("no_payment");
+  const lastCartProductIdRef = useRef("");
+  const browseScrollPositionRef = useRef(0);
+  const productHighlightTimerRef = useRef(null);
 
 const cartStorageKey = getCustomerCartStorageKey(activeUser);
 const orderSubmissionStorageKey = `${cartStorageKey}:submission`;
@@ -632,6 +639,21 @@ const [cart, setCart] = useState(() => {
     return [];
   }
 });
+
+useEffect(
+  () => () => {
+    if (productHighlightTimerRef.current) {
+      clearTimeout(productHighlightTimerRef.current);
+    }
+  },
+  []
+);
+
+useEffect(() => {
+  if (!cartNotice) return undefined;
+  const noticeTimer = setTimeout(() => setCartNotice(""), 2500);
+  return () => clearTimeout(noticeTimer);
+}, [cartNotice]);
 
 
 useEffect(() => {
@@ -889,6 +911,18 @@ useEffect(() => {
 
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const orderSubmissionLockRef = useRef(false);
+
+  useEffect(() => {
+    if (!isSubmittingOrder) return undefined;
+
+    const warnBeforeLeaving = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [isSubmittingOrder]);
   const [orders, setOrders] = useState([]);
   const [expandedOrders, setExpandedOrders] = useState({});
   const [returnOrder, setReturnOrder] = useState(null);
@@ -899,7 +933,9 @@ useEffect(() => {
     useState("All Sub Categories");
   const [selectedBrand, setSelectedBrand] = useState("All Brands");
   const [selectedSeries, setSelectedSeries] = useState("All Series");
-  const [productView, setProductView] = useState("grid");
+  const [productView, setProductView] = useState(() =>
+    globalThis.matchMedia?.("(max-width: 639px)")?.matches ? "list" : "grid"
+  );
   const [productPage, setProductPage] = useState(1);
 
   const [selectedImage, setSelectedImage] = useState(null);
@@ -1234,9 +1270,34 @@ const getHomepageDisplayPrice = (item) => {
   return getHomepagePriceForMode(item.price, priceMode, pricingSettings);
 };
 
+const getHomepageCardProducts = (item) => {
+  const categoryType = normalizeHomepageCategoryType(item.categoryType);
+  return products.filter((product) => {
+    if (!product.active) return false;
+    if (orderCountry === "England" && !product.availableInEngland) return false;
+    if (orderCountry === "Wales" && !product.availableInWales) return false;
+    if (categoryType === "sub_category") return product.subCategory === item.targetValue;
+    if (categoryType === "promotion") return productMatchesHomepagePromotion(product, item.targetValue);
+    return product.category === item.targetValue;
+  });
+};
+
+const homepageCategoryCards = homepageItems.map((item) => {
+  const matchingProducts = getHomepageCardProducts(item);
+  const brandNames = new Set(
+    matchingProducts.map((product) => String(product.brand || "").trim()).filter(Boolean)
+  );
+  return {
+    ...item,
+    productCount: matchingProducts.length,
+    brandCount: brandNames.size,
+  };
+});
+
 const showHome = () => {
   setShowHomepage(true);
   setHomepageSelectionType("");
+  setHomepageBrowseTitle("");
   setHomepagePromotionTarget("");
   setSelectedCategory("All Products");
   setSelectedSubCategory("All Sub Categories");
@@ -1250,6 +1311,7 @@ const openHomepageItem = (item) => {
 
   setShowHomepage(false);
   setHomepageSelectionType(categoryType);
+  setHomepageBrowseTitle(item.description || item.targetValue || "Products");
   setHomepagePromotionTarget("");
   setSearch("");
   setSelectedBrand("All Brands");
@@ -1396,7 +1458,7 @@ useEffect(() => {
   useEffect(() => {
     async function loadCustomerAccounts() {
       try {
-        const data = await getCustomerAccounts();
+        const data = await getCustomerAccounts({ operationalOnly: !isCustomer });
         setCustomerAccounts(data || []);
       } catch (error) {
         console.error("Customer loading error:", error);
@@ -1404,7 +1466,7 @@ useEffect(() => {
     }
 
     loadCustomerAccounts();
-  }, []);
+  }, [isCustomer]);
 
   useEffect(() => {
     if (!isCustomer) return;
@@ -1422,6 +1484,7 @@ useEffect(() => {
 
     setSelectedCustomerId(customer.id);
     setSelectedCustomerAccount(customer);
+    setCustomerDetailsExpanded(getCustomerBranches(customer).length > 0);
     setCompanyName(customer.account_name);
     setPriceMode(String(customer.default_price_mode || "vat").toLowerCase());
   }, [isCustomer, userProfile?.customer_account_id, customerAccounts]);
@@ -1432,6 +1495,7 @@ useEffect(() => {
     if (filteredBranchesForSelectedCustomer.length === 1) {
       setSelectedBranchId(filteredBranchesForSelectedCustomer[0].id);
       setSelectedBranch(filteredBranchesForSelectedCustomer[0]);
+      setCustomerDetailsExpanded(false);
     }
   }, [selectedCustomerAccount, filteredBranchesForSelectedCustomer]);
 
@@ -1446,6 +1510,7 @@ useEffect(() => {
       setSelectedCustomerAccount(null);
       setSelectedBranchId("");
       setSelectedBranch(null);
+      setCustomerDetailsExpanded(true);
       setCompanyName("");
       setPriceMode("vat");
       setCart([]);
@@ -1762,11 +1827,6 @@ const openBackOffice = async () => {
     }
   };
 
-  const categories = [
-    "All Products",
-    ...new Set(products.map((p) => p.category).filter(Boolean)),
-  ];
-
   const effectiveSelectedCategory =
     selectedCategory !== "All Products"
       ? selectedCategory
@@ -1804,7 +1864,6 @@ const brands = [
       .filter(Boolean)
   ),
 ];
-
 
 const seriesList = [
   "All Series",
@@ -1884,6 +1943,35 @@ const visibleProducts = filteredProducts.slice(
   productPage * PRODUCTS_PER_PAGE
 );
 
+const homepageSearchKeyword = search.trim().toLowerCase();
+const homepageSearchProducts = useMemo(() => {
+  if (!homepageSearchKeyword) return [];
+
+  return sortOrderProductsByAvailability(
+    products.filter((product) => {
+      if (!product.active) return false;
+      if (orderCountry === "England" && !product.availableInEngland) return false;
+      if (orderCountry === "Wales" && !product.availableInWales) return false;
+
+      return [
+        product.name,
+        product.productCode,
+        product.brand,
+        product.series,
+        product.flavour,
+      ].some((value) => String(value || "").toLowerCase().includes(homepageSearchKeyword));
+    })
+  );
+}, [homepageSearchKeyword, orderCountry, products]);
+const homepageTotalProductPages = Math.max(
+  1,
+  Math.ceil(homepageSearchProducts.length / PRODUCTS_PER_PAGE)
+);
+const homepageVisibleSearchProducts = homepageSearchProducts.slice(
+  (productPage - 1) * PRODUCTS_PER_PAGE,
+  productPage * PRODUCTS_PER_PAGE
+);
+
 useEffect(() => {
   setProductPage(1);
 }, [
@@ -1917,8 +2005,54 @@ const getHomepageSubtitle = (item) => {
   }
 };
 
+  const rememberCartProduct = (productId) => {
+    lastCartProductIdRef.current = String(productId || "");
+  };
+
+  const returnToProductBrowsing = () => {
+    const productId = lastCartProductIdRef.current;
+    const productCard = [...document.querySelectorAll("[data-product-id]")].find(
+      (element) => String(element.dataset.productId || "") === productId
+    );
+
+    if (!productCard) {
+      window.scrollTo({ top: browseScrollPositionRef.current, behavior: "smooth" });
+      setCartNotice("Cart updated");
+      return;
+    }
+
+    productCard.scrollIntoView({ behavior: "smooth", block: "start" });
+    productCard.classList.add("ring-4", "ring-orange-400", "ring-offset-2");
+    if (productHighlightTimerRef.current) {
+      clearTimeout(productHighlightTimerRef.current);
+    }
+    productHighlightTimerRef.current = setTimeout(() => {
+      productCard.classList.remove("ring-4", "ring-orange-400", "ring-offset-2");
+    }, 1800);
+  };
+
+  const changeCartEditing = (nextEditing) => {
+    if (nextEditing) {
+      browseScrollPositionRef.current = window.scrollY;
+      setIsCartEditing(true);
+      requestAnimationFrame(() => {
+        document.querySelector(".cart-panel")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+      return;
+    }
+
+    setIsCartEditing(false);
+    requestAnimationFrame(returnToProductBrowsing);
+  };
+
   const addToCart = (product, qty = 1) => {
   const quantity = Math.max(1, Number(qty || 1));
+  rememberCartProduct(product.id);
+  browseScrollPositionRef.current = window.scrollY;
+  setCartNotice("");
 
   setCart((oldCart) => {
     const normalCart = oldCart.filter((item) => !item.isPromotionFree);
@@ -2053,6 +2187,7 @@ const getHomepageSubtitle = (item) => {
   });
   const discountAmount = cartTotals.discountAmount;
   const finalTotal = cartTotals.totalAmount;
+  const orderPaymentChoiceValid = orderPaymentChoice === "no_payment";
 
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
@@ -2438,6 +2573,11 @@ const submitOrder = async () => {
     return;
   }
 
+  if (!orderPaymentChoiceValid) {
+    alert("Please continue with No Payment Now. Card payment is not available in this checkout.");
+    return;
+  }
+
   const belowCostSpecialLines = paidCartForOrder.filter((item) => {
     if (!item.specialPriceApplied && !item.special_price_applied) return false;
     const unitPrice = Number(
@@ -2472,16 +2612,18 @@ const submitOrder = async () => {
 
   orderSubmissionLockRef.current = true;
   setIsSubmittingOrder(true);
+  setSubmissionFeedback("sending");
   let requiresReauthentication = false;
   let submissionOrderNumber = "";
 
   try {
     await refreshSupabaseSessionIfNeeded();
 
-  const accountStatus =
+  const accountStatus = getCustomerStatusLabel(
     selectedCustomerAccount?.account_status ||
-    selectedCustomerAccount?.status ||
-    "Active";
+      selectedCustomerAccount?.status ||
+      "Active"
+  );
 
   const creditSnapshot = await loadCustomerCreditSnapshot(selectedCustomerAccount);
   if (!creditSnapshot) {
@@ -2500,16 +2642,19 @@ const submitOrder = async () => {
   const projectedBalance = outstandingBalance + orderTotal;
 
   if (accountStatus === "On Hold") {
+    setSubmissionFeedback("");
     alert("Customer account is On Hold. Order cannot be submitted.");
     return;
   }
 
-  if (accountStatus === "Stopped") {
-    alert("Customer account is Stopped. Please contact Accounts.");
+  if (accountStatus === "Inactive") {
+    setSubmissionFeedback("");
+    alert("Customer account is Inactive. Please contact Accounts.");
     return;
   }
 
   if (creditLimit > 0 && projectedBalance > creditLimit) {
+    setSubmissionFeedback("");
     alert(
       `Credit limit exceeded.\n\n` +
         `Credit Limit: ${formatCurrency(creditLimit)}\n` +
@@ -2524,6 +2669,7 @@ const submitOrder = async () => {
       customerAccountId: selectedCustomerAccount.id,
       customerBranchId: selectedBranch?.id || null,
       priceMode,
+      paymentChoice: orderPaymentChoice,
       total: orderTotal,
       discountPercent: Number(effectiveOrderDiscountPercent || 0),
       cart: paidCartForOrder.map((item) => ({
@@ -2569,6 +2715,7 @@ const submitOrder = async () => {
       delivery_postcode: selectedBranch?.postcode || "",
       customer_country: orderCountry,
       credit_limit: creditLimit,
+      notes: "Payment status: UNPAID. No Payment Now selected.",
     };
 
     let createdOrder;
@@ -2600,6 +2747,8 @@ const newOrder = {
     canManualCheckoutDiscount ? userProfile?.full_name || userProfile?.name || "" : "",
    createdAt: new Date().toLocaleString(),
    status: "Received",
+   paymentStatus: "UNPAID",
+   paymentChoice: orderPaymentChoice,
    items: paidCartForOrder,
     };
 
@@ -2609,6 +2758,8 @@ const newOrder = {
     localStorage.removeItem(orderSubmissionStorageKey);
 
     setCart([]);
+    setIsCartEditing(false);
+    setOrderPaymentChoice("no_payment");
     setOrderDiscountPercent(0);
 
     if (!isCustomer) {
@@ -2621,10 +2772,12 @@ const newOrder = {
 
     await fetchProducts();
 
+    setSubmissionFeedback("success");
+
     alert(
   `âœ… Order Submitted Successfully
 
-Order Number: ${orderNumber}
+Order Number: ${formatDisplayOrderId(orderNumber)}
 
 Thank you for your order.
 
@@ -2635,6 +2788,7 @@ Please quote your Order Number if you need assistance.`
 );
   } catch (error) {
     requiresReauthentication = isOrderAuthError(error);
+    setSubmissionFeedback("error");
     console.error("[OrderSubmission] failed", {
       event: "customer_order_submission_failed",
       timestamp: new Date().toISOString(),
@@ -2646,7 +2800,7 @@ Please quote your Order Number if you need assistance.`
       message: error?.message || String(error),
       online: navigator.onLine,
     });
-    alert(getOrderSubmissionErrorMessage(error));
+    alert("We could not submit the order.\nPlease check your connection and try again.");
   } finally {
     orderSubmissionLockRef.current = false;
     setIsSubmittingOrder(false);
@@ -3286,7 +3440,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
           <div><b>Order:</b> ${order.orderId}</div>
           <div><b>Date:</b> ${order.createdAt}</div>
           <div><b>Company:</b> ${order.companyName || "-"}</div>
-          <div><b>Price:</b> ${String(order.priceMode).toUpperCase()}</div>
+          <div><b>Price:</b> ${getPriceModeLabel(order.priceMode)}</div>
           <div class="line"></div>
           <table>${rows}</table>
           <div class="line"></div>
@@ -3376,6 +3530,7 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {page === "customers" && <Customers />}
+    {page === "homePageImages" && <HomePageImages currentUser={activeUser} />}
 
     {page === "products" && (
       <AdminProducts
@@ -3577,6 +3732,38 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
           <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
             
  <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
+  {selectedCustomerAccount && (
+    <div className="mb-3 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="grid min-w-0 flex-1 grid-cols-1 gap-1 text-sm sm:grid-cols-3 sm:gap-3">
+        <p className="truncate"><span className="font-bold">Customer:</span> {selectedCustomerAccount.account_name}</p>
+        <p className="truncate"><span className="font-bold">Branch:</span> {selectedBranch?.branch_name || "Main account"}</p>
+        <p className="truncate"><span className="font-bold">Country:</span> {orderCountry}</p>
+      </div>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        <button
+          type="button"
+          aria-expanded={customerDetailsExpanded}
+          aria-controls="order-customer-details"
+          onClick={() => setCustomerDetailsExpanded((expanded) => !expanded)}
+          className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700"
+        >
+          {customerDetailsExpanded ? "Hide details" : "View details"}
+        </button>
+        {!isCustomer && (
+          <button
+            type="button"
+            onClick={() => setCustomerDetailsExpanded(true)}
+            className="min-h-11 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
+          >
+            Change customer
+          </button>
+        )}
+      </div>
+    </div>
+  )}
+
+  {(!selectedCustomerAccount || customerDetailsExpanded) && (
+  <div id="order-customer-details" className="transition-all duration-200">
   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3 text-sm font-bold">
 
     {isCustomer && (() => {
@@ -3600,6 +3787,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 
           setSelectedBranchId(e.target.value);
           setSelectedBranch(branch || null);
+          setCustomerDetailsExpanded(!branch);
         }}
       >
         <option value="">Select Branch / Shop</option>
@@ -3629,8 +3817,8 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
           onChange={(e) => setPriceMode(e.target.value)}
           className="border rounded-xl px-3 py-2 font-bold bg-white text-slate-700"
         >
-          {allowedPriceModes.includes("vat") && <option value="vat">Ex. VAT</option>}
-          {allowedPriceModes.includes("server") && <option value="server">Server</option>}
+          {allowedPriceModes.includes("vat") && <option value="vat">Ex.VAT</option>}
+          {allowedPriceModes.includes("server") && <option value="server">Inc.VAT</option>}
           {allowedPriceModes.includes("manager") && <option value="manager">Manager Offer</option>}
           {allowedPriceModes.includes("super") && <option value="super">Admin Offer</option>}
         </select>
@@ -3674,6 +3862,10 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
         setSelectedCustomerAccount(customer || null);
         setSelectedBranchId("");
         setSelectedBranch(null);
+        setOrderPaymentChoice("no_payment");
+        setCustomerDetailsExpanded(
+          !customer || getCustomerBranches(customer).length > 0
+        );
 
         if (customer) {
           setCompanyName(customer.account_name);
@@ -3734,6 +3926,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 
           setSelectedBranchId(branchId);
           setSelectedBranch(branch || null);
+          setCustomerDetailsExpanded(!branch);
         }}
       >
         <option value="">Select Branch / Shop</option>
@@ -3767,25 +3960,22 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 )}
       
   </div>
+  </div>
+  )}
 
+{!showHomepage && (
+<>
 <ProductFilters
   search={search}
   setSearch={setSearch}
-  categories={categories}
   selectedCategory={selectedCategory}
+  browseTitle={homepageBrowseTitle}
   brands={brands}
   selectedBrand={selectedBrand}
   seriesList={seriesList}
   selectedSeries={selectedSeries}
   subCategories={subCategories}
   selectedSubCategory={selectedSubCategory}
-
-  setSelectedCategory={(value) => {
-    setSelectedCategory(value);
-    setSelectedSubCategory("All Sub Categories");
-    setSelectedBrand("All Brands");
-    setSelectedSeries("All Series");
-  }}
 
   setSelectedSubCategory={(value) => {
     setSelectedSubCategory(value);
@@ -3799,22 +3989,12 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
   }}
 
   setSelectedSeries={setSelectedSeries}
-
-  showHomeLink={!showHomepage}
-  onHomeClick={showHome}
-
-  showCategoryFilter={false}
-  showSubCategoryFilter={!showHomepage}
-  showBrandFilter={!showHomepage}
-  showSeriesFilter={!showHomepage}
-  showSearch={!showHomepage}
+  resultCount={filteredProducts.length}
+  onBackToCategories={showHome}
+  onClearAll={() => setProductPage(1)}
 />
 
-{!showHomepage && (
-  <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-    <span className="rounded-xl bg-orange-100 px-3 py-2 text-sm font-extrabold text-orange-700">
-      🔁 Change View
-    </span>
+<div className="mt-3 flex flex-wrap items-center justify-end gap-2">
     {["grid", "list"].map((view) => (
       <button
         key={view}
@@ -3826,71 +4006,61 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
             : "rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700"
         }
       >
-        {view === "grid" ? "▦ Grid View" : "☰ List View"}
+        {view === "grid" ? "Grid View" : "List View"}
       </button>
     ))}
   </div>
+</>
 )}
 
 </div>
 
             <div className="lg:col-span-3">
               {showHomepage ? (
-                <div>
-                  {homepageLoading && (
-                    <div className="bg-slate-50 border rounded-3xl p-5 mb-4">
-                      Loading homepage...
+                <HomeCategoryGrid
+                  items={homepageCategoryCards}
+                  loading={homepageLoading || productsLoading}
+                  search={search}
+                  productResultCount={homepageSearchProducts.length}
+                  onSearchChange={setSearch}
+                  onBrowse={openHomepageItem}
+                  onHome={showHome}
+                  cartItemCount={cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + Number(item.qty || 0), 0)}
+                  onCartClick={() => document.querySelector(".cart-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                >
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 md:gap-3">
+                    {homepageVisibleSearchProducts.map((product) => {
+                      const activePromotionPriceRule = getActivePromotionPriceRule(product);
+                      return (
+                        <ProductCard
+                          key={product.id}
+                          product={{
+                            ...product,
+                            isPromotion: product.isPromotion || Boolean(activePromotionPriceRule),
+                            promotionName: activePromotionPriceRule?.promotion_name || product.promotionName,
+                            displayMessage: getProductDisplayMessage(product),
+                          }}
+                          addToCart={addToCart}
+                          onImageClick={setSelectedImage}
+                          price={getPrice(product)}
+                          cartQty={cart.find((item) => item.id === product.id)?.qty || 0}
+                          onAdd={addToCart}
+                        />
+                      );
+                    })}
+                  </div>
+                  {homepageSearchProducts.length > 0 && (
+                    <div className="mt-4 flex items-center justify-center gap-3">
+                      <button type="button" onClick={() => setProductPage((pageNumber) => Math.max(1, pageNumber - 1))} disabled={productPage <= 1} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
+                      <span className="text-sm font-bold text-slate-600">Page {productPage} of {homepageTotalProductPages}</span>
+                      <button type="button" onClick={() => setProductPage((pageNumber) => Math.min(homepageTotalProductPages, pageNumber + 1))} disabled={productPage >= homepageTotalProductPages} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Next</button>
                     </div>
                   )}
-
-                  {!homepageLoading && homepageItems.length === 0 && (
-                    <div className="bg-slate-50 border rounded-3xl p-5 mb-4">
-                      No homepage items found.
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-5">
-                  {homepageItems
-                    .filter((item) => {
-                      const keyword = search.trim().toLowerCase();
-                      if (!keyword) return true;
-                      return String(item.description || "").toLowerCase().includes(keyword);
-                    })
-                    .map((item) => (
-                      <div
-                        key={item.id}
-                        onClick={() => openHomepageItem(item)}
-                        className="bg-white border rounded-xl shadow-sm hover:shadow-lg cursor-pointer overflow-hidden transition"
-                      >
-                        <div className="h-40 flex items-center justify-center p-2 bg-white border-b">
-                          <img
-                            src={item.image}
-                            alt={item.description}
-                            className="w-full h-full object-contain"
-                          />
-                        </div>
-
-                      <div className="p-3">
-  <h3 className="font-bold text-lg leading-6 text-slate-900">
-    {item.description}
-  </h3>
-
- <p className="text-sm text-slate-500 mt-1">
- {item.subDescription}
-</p>
-
-  <div className="mt-3 text-blue-700 font-semibold text-sm">
-    Click to browse →
-  </div>
-</div>
-                      </div>
-                    ))}
-                </div>
-                </div>
+                </HomeCategoryGrid>
               ) : (
                 <>
               {productsLoading && products.length === 0 && (
-                <div className="bg-slate-50 border rounded-3xl p-5 mb-4">
+                <div className="bg-slate-50 border rounded-3xl p-5 mb-4" role="status" aria-live="polite">
                   Loading products from Supabase...
                 </div>
               )}
@@ -4026,6 +4196,14 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
             onDecrease={decreaseQty}
             onRemove={removeItem}
             onChangeQty={changeQty}
+            editing={isCartEditing}
+            onEditingChange={changeCartEditing}
+            onItemEdited={rememberCartProduct}
+            paymentChoice={orderPaymentChoice}
+            onPaymentChoiceChange={(choice) => {
+              setOrderPaymentChoice(choice);
+            }}
+            paymentChoiceValid={orderPaymentChoiceValid}
             submitOrder={submitOrder}
           />
           </div>
@@ -4533,9 +4711,9 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
         )}
 
       {page === "order" && (isAdmin || isSalesRep || isCustomer) && (
-  <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-xl p-3">
-    <div className="max-w-7xl mx-auto flex items-center justify-between">
-      <div>
+  <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-xl">
+    <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
+      <div className="min-w-0 shrink">
         <div className="text-xs text-slate-500">
           {cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + item.qty, 0)} Items
         </div>
@@ -4551,6 +4729,8 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                   localStorage.removeItem(cartStorageKey);
                   localStorage.removeItem(orderSubmissionStorageKey);
                   setCart([]);
+                  setIsCartEditing(false);
+                  setOrderPaymentChoice("no_payment");
                 }
               }}
               className="text-xs text-red-600 underline mt-1"
@@ -4560,27 +4740,84 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
           )}
            </div>
 
+      <div className="flex shrink-0 items-center gap-2">
+        {cart.length > 0 && (
+          <button
+            type="button"
+            onClick={() => changeCartEditing(!isCartEditing)}
+            className="min-h-12 rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 sm:px-5"
+          >
+            {isCartEditing ? "Done" : "Edit Cart"}
+          </button>
+        )}
       <button
+        type="button"
         onClick={() => {
           document.querySelector(".checkout-section")?.scrollIntoView({
             behavior: "smooth",
             block: "start",
           });
         }}
-        className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-bold"
+        className="min-h-12 rounded-xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700 sm:px-6"
       >
         Checkout
       </button>
+      </div>
     </div>
   </div>
 )}
 
-<button
-  onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-  className="fixed bottom-20 right-4 z-50 bg-slate-800 text-white text-sm font-bold px-5 py-3 rounded-full shadow-lg opacity-95 hover:opacity-100"
->
-  ↑ Top
-</button>
+{page === "order" && (isAdmin || isSalesRep || isCustomer) && (
+  <div className="fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] right-3 z-50 flex gap-2 sm:right-4">
+    {showHomepage && <button
+      type="button"
+      aria-label="Go to home"
+      onClick={showHome}
+      className="inline-flex min-h-12 items-center gap-2 rounded-full border border-orange-500 bg-white px-4 py-3 text-sm font-bold text-orange-700 shadow-lg sm:hidden"
+    >
+      <span aria-hidden="true">⌂</span> Home
+    </button>}
+    <button
+      type="button"
+      aria-label="Scroll to top"
+      onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+      className="min-h-12 rounded-full bg-orange-500 px-4 py-3 text-sm font-bold text-white shadow-lg hover:bg-orange-600 sm:px-5"
+    >
+      <span aria-hidden="true">↑</span> Top
+    </button>
+  </div>
+)}
+
+<div className="sr-only" aria-live="polite">{cartNotice}</div>
+{cartNotice && (
+  <div className="fixed bottom-40 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-bold text-white shadow-lg">
+    {cartNotice}
+  </div>
+)}
+
+{isSubmittingOrder && (
+  <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4" role="status" aria-live="assertive">
+    <div className="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
+      <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-orange-200 border-t-orange-600" aria-hidden="true" />
+      <h2 className="text-xl font-extrabold text-slate-900">Sending your order.</h2>
+      <p className="mt-2 text-slate-700">This may take a few seconds.</p>
+      <p className="mt-1 font-bold text-slate-900">Please do not close or refresh this page.</p>
+    </div>
+  </div>
+)}
+
+{submissionFeedback === "success" && (
+  <div className="fixed left-1/2 top-4 z-[85] flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-emerald-700 px-4 py-3 font-bold text-white shadow-xl" role="status" aria-live="polite">
+    <span>Order submitted successfully.</span>
+    <button type="button" onClick={() => setSubmissionFeedback("")} className="min-h-10 rounded-lg border border-white/50 px-3">Close</button>
+  </div>
+)}
+{submissionFeedback === "error" && (
+  <div className="fixed left-1/2 top-4 z-[85] flex w-[calc(100%_-_2rem)] max-w-lg -translate-x-1/2 items-center gap-3 rounded-2xl bg-red-700 px-4 py-3 font-bold text-white shadow-xl" role="alert" aria-live="assertive">
+    <span>We could not submit the order. Please check your connection and try again.</span>
+    <button type="button" onClick={() => setSubmissionFeedback("")} className="min-h-10 shrink-0 rounded-lg border border-white/50 px-3">Close</button>
+  </div>
+)}
 
       </div>
 

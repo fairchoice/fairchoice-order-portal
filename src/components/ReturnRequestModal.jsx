@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { createReturnRequest, RETURN_REASONS, RETURN_TYPES } from "../services/centralReturnEngine";
 import { formatCurrency } from "../utils/currency";
 import { getOrderItemQty } from "../utils/orderTotals";
+import { formatDisplayOrderId } from "../utils/orderDisplay";
 
 const getOrderItems = (order = {}) => order.items || order.order_items || [];
 const getItemName = (item = {}) => item.name || item.productName || item.product_name || "Unnamed Product";
@@ -120,7 +121,7 @@ export default function ReturnRequestModal({
           <div>
             <h3 className="text-xl font-extrabold">Create Return</h3>
             <p className="text-sm text-slate-500">
-              {order.orderId || order.order_number || "Order"} | {order.companyName || order.company_name || "Customer"}
+              {formatDisplayOrderId(order.orderId || order.order_number) || "Order"} | {order.companyName || order.company_name || "Customer"}
             </p>
           </div>
           {!embedded && (

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
   buildPaymentPreview,
   confirmOwnerBankTransfer,
@@ -170,7 +171,7 @@ function PaymentRecordsPanel({ archived, currentUser, ownerPassword, customer, b
               const pending = payment.payment_method === "Bank Transfer" && payment.verification_status === "PENDING_VERIFICATION";
               return <tr key={payment.id} className="border-b align-top">
                 <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
-                <td className="p-3 font-bold">{payment.payment_reference || "-"}</td><td className="p-3">{payment.transaction_type || "PAYMENT"}</td><td className="p-3">{payment.payment_method || "-"}</td><td className="p-3">{payment.paid_by || "-"}</td>
+                <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td><td className="p-3">{payment.transaction_type || "PAYMENT"}</td><td className="p-3">{payment.payment_method || "-"}</td><td className="p-3">{payment.paid_by || "-"}</td>
                 <td className="p-3">{archived ? "ARCHIVED" : payment.verification_status || payment.status}</td><td className="max-w-[260px] whitespace-pre-wrap p-3">{archived ? payment.removed_reason : payment.notes || "-"}</td><td className="p-3 text-right font-bold">{formatCurrency(payment.amount || 0)}</td>
                 <td className="p-3 text-right">
                   {archived ? <><button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "restore")} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Restore</button><button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "permanent")} className="ml-2 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Permanent delete</button></> : <><button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "edit")} className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Edit</button><button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "remove")} className="ml-2 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Remove</button>{pending && <button type="button" disabled={busyId === payment.id} onClick={() => onConfirmBank(payment)} className="ml-2 rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Confirm bank</button>}</>}
@@ -657,7 +658,7 @@ export default function CentralPayment() {
                 {preview.allocations.map((allocation) => (
                   <tr key={allocation.invoiceReference} className="border-b">
                     <td className="p-3 font-bold">
-                      {allocation.invoiceReference}
+                      {formatDisplayOrderId(allocation.invoiceReference)}
                     </td>
                     <td className="p-3">
                       {branches.find(
