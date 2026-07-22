@@ -4,6 +4,11 @@ import {
   getCustomerBranches,
   saveCustomerBranch,
 } from "../../services/customerManagement";
+import {
+  getCustomerStatusLabel,
+  getStoredCustomerStatus,
+} from "../../utils/customerStatus";
+import { getPriceModeLabel } from "../../utils/pricing";
 
 const inputClass =
   "h-9 w-full rounded border border-slate-400 px-2 text-sm outline-none focus:border-green-700";
@@ -15,9 +20,12 @@ const primaryButtonClass =
 const secondaryButtonClass =
   "h-9 rounded-full border border-slate-500 bg-white px-4 text-sm font-bold hover:bg-slate-100";
 
-const normaliseStatus = (status) => (status === "Stopped" ? "Closed" : status || "Active");
-const normalisePriceMode = (mode) =>
-  mode === "Super" || mode === "super" ? "Admin Offer" : mode || "VAT";
+const normalisePriceMode = (mode) => {
+  const normalizedMode = String(mode || "VAT").trim().toLowerCase();
+  if (["server", "inc.vat", "inc vat"].includes(normalizedMode)) return "Server";
+  if (["super", "admin", "admin offer"].includes(normalizedMode)) return "Admin Offer";
+  return "VAT";
+};
 
 export default function CustomerForm({
   editingCustomer,
@@ -32,7 +40,7 @@ export default function CustomerForm({
     mobile: editingCustomer?.mobile || "",
     email: editingCustomer?.email || "",
     vat_number: editingCustomer?.vat_number || "",
-    status: normaliseStatus(editingCustomer?.status),
+    status: getCustomerStatusLabel(editingCustomer?.status),
 
     address_line_1: editingCustomer?.address_line_1 || "",
     address_line_2: editingCustomer?.address_line_2 || "",
@@ -145,15 +153,29 @@ export default function CustomerForm({
       return;
     }
 
+    const previousStatus = getCustomerStatusLabel(editingCustomer?.status);
+    const nextStatus = getCustomerStatusLabel(form.status);
+    if (
+      previousStatus !== "Inactive" &&
+      nextStatus === "Inactive" &&
+      !window.confirm(
+        "Mark this customer as inactive? They will no longer appear in customer selection, but their history will remain available."
+      )
+    ) {
+      return;
+    }
+
     setSaving(true);
     try {
       await saveCustomerAccount({
         ...form,
-        status: normaliseStatus(form.status),
+        status: getStoredCustomerStatus(form.status),
+        active: nextStatus !== "Inactive",
         default_price_mode: normalisePriceMode(form.default_price_mode),
         allow_manager: false,
         allow_super: false,
       });
+      alert("Customer saved successfully.");
       onSaved?.();
     } catch (error) {
       console.error("Customer save error:", error);
@@ -296,7 +318,7 @@ export default function CustomerForm({
                 >
                   <option value="Active">Active</option>
                   <option value="On Hold">On Hold</option>
-                  <option value="Stopped">Stopped</option>
+                  <option value="Inactive">Inactive</option>
                 </select>
               </div>
             </div>
@@ -537,8 +559,8 @@ export default function CustomerForm({
                   value={form.default_price_mode}
                   onChange={(e) => updateField("default_price_mode", e.target.value)}
                 >
-                  <option value="VAT">VAT</option>
-                  <option value="Server">Server</option>
+                  <option value="VAT">{getPriceModeLabel("VAT")}</option>
+                  <option value="Server">{getPriceModeLabel("Server")}</option>
                 </select>
               </div>
 
@@ -551,7 +573,7 @@ export default function CustomerForm({
                     checked={form.allow_vat}
                     onChange={(e) => updateField("allow_vat", e.target.checked)}
                   />
-                  VAT
+                  Ex.VAT
                 </label>
 
                 <label className="flex items-center gap-2 text-sm">
@@ -560,7 +582,7 @@ export default function CustomerForm({
                     checked={form.allow_server}
                     onChange={(e) => updateField("allow_server", e.target.checked)}
                   />
-                  Server
+                  Inc.VAT
                 </label>
               </div>
             </div>

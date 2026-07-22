@@ -2,7 +2,8 @@ import { useState } from "react";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../utils/currency";
-import { getProductPriceForMode } from "../utils/pricing";
+import { getPriceModeLabel, getProductPriceForMode } from "../utils/pricing";
+import { formatDisplayOrderId } from "../utils/orderDisplay";
 import { supabase } from "../services/supabase";
 
 import { calculateDocumentTotals } from "../utils/documentTotals";
@@ -205,7 +206,7 @@ visibleOrders = visibleOrders.filter((order) => {
   const archiveOrder = async (orderId) => {
     if (!requirePermission(loggedInUser, "can_archive_order", "You cannot archive orders.")) return;
 
-    const ok = window.confirm(`Archive order ${orderId}?`);
+    const ok = window.confirm(`Archive order ${formatDisplayOrderId(orderId)}?`);
     if (!ok) return;
 
     const order = findOrder(orderId);
@@ -264,7 +265,7 @@ visibleOrders = visibleOrders.filter((order) => {
     }
 
     const ok = window.confirm(
-      `Permanently delete archived order ${orderId}? This cannot be undone.`
+      `Permanently delete archived order ${formatDisplayOrderId(orderId)}? This cannot be undone.`
     );
     if (!ok) return;
 
@@ -726,14 +727,14 @@ const bulkRefreshOrderPrices = async (order) => {
               <div className="received-card-header grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-2 items-start">
                 <div className="order-header-left min-w-0">
                   <div className="order-title font-bold text-lg leading-tight">
-                    {orderNumber} | {customerName}
+                    {formatDisplayOrderId(orderNumber)} | {customerName}
                     {branchName ? ` | ${branchName}` : ""}
                   </div>
                   <div
                     className="order-summary-line mt-1 text-xs leading-tight break-words"
                     style={{ color: "#475569", display: "block" }}
                   >
-                    Received: {orderDateTime} | {String(priceMode).toUpperCase()} |{" "}
+                    Received: {orderDateTime} | {getPriceModeLabel(priceMode)} |{" "}
                     {formatCurrency(orderTotal)} | Total Qty: {totalQty}
                   </div>
                 </div>

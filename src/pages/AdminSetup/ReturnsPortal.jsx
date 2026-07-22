@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
 
 const getReference = (row) => row.return_number || row.reference_no || row.id || "-";
 const getCustomer = (row) => row.customer_name || row.company_name || "-";
@@ -126,8 +127,8 @@ export default function ReturnsPortal() {
               ) : (
                 filteredReturns.map((row) => (
                   <tr key={row.id || getReference(row)} className="border-t border-slate-100">
-                    <td className="p-3 font-bold text-slate-900">{getReference(row)}</td>
-                    <td className="p-3">{row.order_number || "-"}</td>
+                    <td className="p-3 font-bold text-slate-900">{formatDisplayOrderId(getReference(row))}</td>
+                    <td className="p-3">{formatDisplayOrderId(row.order_number) || "-"}</td>
                     <td className="p-3">{getCustomer(row)}</td>
                     <td className="p-3">{row.return_type || "-"}</td>
                     <td className="p-3 text-right">{Number(row.total_qty || 0)}</td>

@@ -6,6 +6,7 @@ import {
   loadReadOnlyCustomerCreditSnapshot,
 } from "../../services/centralPaymentService";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
   canSelectCustomerForCredit,
   hasConfiguredCreditAccount,
@@ -1210,7 +1211,7 @@ export default function CustomerCredit({ readOnly = false }) {
                       {activeTab === "transactions" && (
                         <td className="p-3 font-bold">{row.type}</td>
                       )}
-                      <td className="p-3 font-semibold">{row.reference}</td>
+                      <td className="p-3 font-semibold">{formatDisplayOrderId(row.reference)}</td>
                       <td className="p-3 text-slate-600">{row.description}</td>
                       <td className="p-3 text-right font-bold text-red-700">
                         {row.debit ? formatCurrency(row.debit) : "-"}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatCurrency } from "../utils/currency";
 import { getDisplayProductImage } from "../utils/productImages";
 
@@ -76,27 +76,102 @@ function ProductDisplayMessage({ message }) {
   );
 }
 
-function QuantityAddControls({ quantity, setQuantity, onAdd }) {
+function QuantityAddControls({ productId, quantity, setQuantity, onAdd }) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [addMessage, setAddMessage] = useState("");
+  const addLockRef = useRef(false);
+  const addReleaseTimerRef = useRef(null);
+  const inputId = `product-quantity-${productId}`;
+
+  useEffect(
+    () => () => {
+      if (addReleaseTimerRef.current) clearTimeout(addReleaseTimerRef.current);
+    },
+    []
+  );
+
+  const getValidQuantity = (value = quantity) => {
+    const text = String(value ?? "").trim();
+    if (!/^\d+$/.test(text)) return 1;
+    const number = Number(text);
+    return Number.isSafeInteger(number) && number >= 1 ? number : 1;
+  };
+
   const handleQuantityChange = (value) => {
-    setQuantity(Math.max(1, Number(value || 1)));
+    if (value === "") {
+      setQuantity("");
+      return;
+    }
+    if (!/^\d+$/.test(value)) return;
+    const nextQuantity = Number(value);
+    if (Number.isSafeInteger(nextQuantity) && nextQuantity >= 1) {
+      setQuantity(nextQuantity);
+    }
+  };
+
+  const handleAdd = async () => {
+    if (addLockRef.current) return;
+    const quantityToAdd = getValidQuantity();
+    addLockRef.current = true;
+    setIsAdding(true);
+    setAddMessage("");
+    try {
+      await Promise.resolve(onAdd?.(quantityToAdd));
+      setAddMessage(`Added ${quantityToAdd} to cart.`);
+    } catch (error) {
+      console.error("Product add failed:", error);
+      setAddMessage("Could not add this product. Please try again.");
+    } finally {
+      addReleaseTimerRef.current = setTimeout(() => {
+        addLockRef.current = false;
+        setIsAdding(false);
+      }, 350);
+    }
   };
 
   return (
-    <div className="flex items-center gap-2 pt-1">
-      <input
-        type="number"
-        min="1"
-        value={quantity}
-        onChange={(event) => handleQuantityChange(event.target.value)}
-        className="h-9 w-16 rounded-md border border-slate-300 px-2 text-center text-sm font-bold"
-      />
+    <div className="pt-1">
+      <label htmlFor={inputId} className="mb-1 block text-[11px] font-bold text-slate-600">
+        Quantity
+      </label>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          aria-label="Decrease quantity"
+          onClick={() => setQuantity(Math.max(1, getValidQuantity() - 1))}
+          className="h-10 w-10 shrink-0 rounded-md border border-slate-300 bg-white text-lg font-black text-slate-800"
+        >
+          −
+        </button>
+        <input
+          id={inputId}
+          type="number"
+          inputMode="numeric"
+          min="1"
+          step="1"
+          value={quantity}
+          onChange={(event) => handleQuantityChange(event.target.value)}
+          onBlur={() => setQuantity(getValidQuantity())}
+          className="h-10 min-w-0 flex-1 rounded-md border border-slate-300 px-1 text-center text-sm font-bold"
+        />
+        <button
+          type="button"
+          aria-label="Increase quantity"
+          onClick={() => setQuantity(getValidQuantity() + 1)}
+          className="h-10 w-10 shrink-0 rounded-md border border-slate-300 bg-white text-lg font-black text-slate-800"
+        >
+          +
+        </button>
+      </div>
       <button
         type="button"
-        onClick={onAdd}
-        className="product-add-btn h-9 w-20 rounded-md bg-blue-600 px-3 text-xs font-bold text-white hover:bg-blue-700"
+        onClick={handleAdd}
+        disabled={isAdding}
+        className="product-add-btn mt-1 min-h-10 w-full rounded-md bg-blue-600 px-2 text-xs font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        Add
+        {isAdding ? "Adding..." : `Add ${getValidQuantity()} to Cart`}
       </button>
+      <div className={`min-h-4 text-center text-[10px] font-bold ${addMessage.startsWith("Could") ? "text-red-700" : "text-emerald-700"}`} aria-live="polite">{addMessage}</div>
     </div>
   );
 }
@@ -121,7 +196,7 @@ export function ProductListRow({ product, addToCart, onImageClick, price, cartQt
     "";
 
   return (
-    <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+    <div data-product-id={product.id} className="relative overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm transition-shadow">
       {ribbonLabel && <div className="product-card-ribbon z-10" aria-label={ribbonLabel}>{ribbonLabel}</div>}
       <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-3 min-[560px]:grid-cols-[70px_minmax(0,1fr)_150px]">
         <button
@@ -160,9 +235,10 @@ export function ProductListRow({ product, addToCart, onImageClick, price, cartQt
 
         <div className="col-span-2 flex w-[150px] flex-shrink-0 flex-col items-end gap-1 justify-self-end min-[560px]:col-span-1">
           <QuantityAddControls
+            productId={product.id}
             quantity={quantity}
             setQuantity={setQuantity}
-            onAdd={() => handleAdd?.(product, quantity)}
+            onAdd={(amount) => handleAdd?.(product, amount)}
           />
         </div>
       </div>
@@ -192,7 +268,7 @@ export default function ProductCard({ product, addToCart, onImageClick, price, c
   const productImage = getDisplayProductImage(product);
 
   return (
-    <div className="product-card relative flex h-full flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+    <div data-product-id={product.id} className="product-card relative flex h-full flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm transition-shadow">
       {ribbonLabel && <div className="product-card-ribbon z-10" aria-label={ribbonLabel}>{ribbonLabel}</div>}
       <button
         type="button"
@@ -227,9 +303,10 @@ export default function ProductCard({ product, addToCart, onImageClick, price, c
         <div className="mt-auto">
           <div className="text-[11px] leading-snug text-slate-600">Carton: {product?.cartonSize || "-"}</div>
           <QuantityAddControls
+            productId={product.id}
             quantity={quantity}
             setQuantity={setQuantity}
-            onAdd={() => handleAdd?.(product, quantity)}
+            onAdd={(amount) => handleAdd?.(product, amount)}
           />
           {cartQty > 0 && <div className="text-center text-[11px] font-bold text-blue-700">{cartQty} in cart</div>}
           <ProductDisplayMessage message={displayMessage} />

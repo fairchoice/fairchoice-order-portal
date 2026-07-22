@@ -4,13 +4,9 @@ import {
   buildPaymentPreview,
   confirmOwnerBankTransfer,
   createCentralPayment,
-  editCentralPayment,
   listCentralPaymentRecords,
   loadCentralPaymentCustomers,
   loadCentralPaymentSnapshot,
-  permanentlyDeleteCentralPayment,
-  removeCentralPayment,
-  restoreCentralPayment,
 } from "../../services/centralPaymentService";
 import {
   bulkArchiveFinancialTransactions,
@@ -20,6 +16,7 @@ import {
 } from "../../services/globalFinancialLedgerService";
 import { isOwnerUser } from "../../services/ownerFinancialSecurity";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
 
 const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
 const ledgerTypes = ["PAYMENT", "DISCOUNT", "INVOICE", "CREDIT", "REFUND", "ADJUSTMENT"];
@@ -58,11 +55,10 @@ function SummaryCard({ label, value, neutral = false }) {
   );
 }
 
-function PaymentRecordsPanel({ archived, currentUser, onChanged }) {
+function PaymentRecordsPanel({ archived }) {
   const [filters, setFilters] = useState({ search: "", method: "", dateFrom: "", dateTo: "" });
   const [page, setPage] = useState(1);
   const [result, setResult] = useState({ records: [], total: 0, total_pages: 1 });
-  const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
 
   const load = async () => {
@@ -81,55 +77,6 @@ function PaymentRecordsPanel({ archived, currentUser, onChanged }) {
     setPage(1);
   };
 
-  const runAction = async (payment, action) => {
-    const labels = { remove: "archive", restore: "restore", permanent: "permanent deletion", edit: "edit" };
-    const reason = window.prompt(`Enter the compulsory ${labels[action]} reason.`);
-    if (!String(reason || "").trim()) return;
-
-    let permanentPassword = "";
-    if (action === "permanent") {
-      if (!window.confirm("Permanently delete this archived payment? This cannot be undone.")) return;
-      permanentPassword = window.prompt("Enter the nisstaj_admin financial password.") || "";
-      if (!permanentPassword) return;
-    }
-
-    setBusyId(payment.id);
-    setMessage("");
-    try {
-      if (action === "remove") {
-        await removeCentralPayment({ payment, reason });
-      } else if (action === "restore") {
-        await restoreCentralPayment({ payment, reason });
-      } else if (action === "permanent") {
-        await permanentlyDeleteCentralPayment({ currentUser, ownerPassword: permanentPassword, payment, reason });
-      } else {
-        const amount = window.prompt("Payment amount", String(payment.amount || ""));
-        if (amount === null) return;
-        const paymentDate = window.prompt("Payment date (YYYY-MM-DD)", String(payment.payment_date || "").slice(0, 10));
-        if (paymentDate === null) return;
-        const paymentMethod = window.prompt("Payment method", payment.payment_method || "Cash");
-        if (paymentMethod === null) return;
-        const paidBy = window.prompt("Paid By", payment.paid_by || "");
-        if (paidBy === null) return;
-        const externalReference = window.prompt("Reference", payment.payment_reference || "");
-        if (externalReference === null) return;
-        const notes = window.prompt("Notes", payment.notes || "");
-        if (notes === null) return;
-        await editCentralPayment({
-          payment,
-          changes: { amount, paymentDate: `${paymentDate}T12:00:00`, paymentMethod, paidBy, externalReference, notes },
-          reason,
-        });
-      }
-      await load();
-      if (typeof onChanged === "function") await onChanged();
-    } catch (actionError) {
-      setMessage(actionError.message || "Payment action failed.");
-    } finally {
-      setBusyId("");
-    }
-  };
-
   return (
     <section className="rounded-2xl border bg-white p-4 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -144,33 +91,20 @@ function PaymentRecordsPanel({ archived, currentUser, onChanged }) {
       </div>
       {message && <div className="mb-3 rounded-xl bg-red-50 p-3 font-bold text-red-700">{message}</div>}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] text-sm">
-          <thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Date</th><th className="p-3">Customer</th><th className="p-3">Reference</th><th className="p-3">Method</th><th className="p-3">Paid By</th><th className="p-3 text-right">Amount</th><th className="p-3 text-right">Action</th></tr></thead>
+        <table className="w-full min-w-[760px] text-sm">
+          <thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Date</th><th className="p-3">Customer</th><th className="p-3">Reference</th><th className="p-3">Method</th><th className="p-3">Paid By</th><th className="p-3 text-right">Amount</th></tr></thead>
           <tbody>
             {(result.records || []).map((payment) => (
               <tr key={payment.id} className="border-b align-middle">
                 <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
                 <td className="p-3 font-semibold">{payment.customer_name || "-"}</td>
-                <td className="p-3 font-bold">{payment.payment_reference || "-"}</td>
+                <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td>
                 <td className="p-3">{payment.payment_method || "-"}</td>
                 <td className="p-3">{payment.paid_by || "-"}</td>
                 <td className="p-3 text-right font-bold">{formatCurrency(payment.amount || 0)}</td>
-                <td className="p-3 text-right whitespace-nowrap">
-                  {archived ? (
-                    <>
-                      <button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "restore")} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Restore</button>
-                      {isOwnerUser(currentUser) && <button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "permanent")} className="ml-2 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Permanent delete</button>}
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "edit")} className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Edit</button>
-                      <button type="button" disabled={busyId === payment.id} onClick={() => runAction(payment, "remove")} className="ml-2 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">Remove</button>
-                    </>
-                  )}
-                </td>
               </tr>
             ))}
-            {!result.records?.length && <tr><td colSpan="7" className="p-8 text-center text-slate-500">No payment records match these filters.</td></tr>}
+            {!result.records?.length && <tr><td colSpan="6" className="p-8 text-center text-slate-500">No payment records match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -271,8 +205,8 @@ function GlobalLedgerPanel({ currentUser, ownerPassword }) {
         <th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Type</th><th className="p-3">Source</th><th className="p-3">Method</th><th className="p-3">Staff</th><th className="p-3">Status</th><th className="p-3 text-right">Debit</th><th className="p-3 text-right">Credit</th><th className="p-3">Description</th><th className="p-3 text-right">Actions</th>
       </tr></thead><tbody>
         {result.records.map((row) => <tr key={`${row.archiveId || "active"}-${row.recordId}`} className="border-b align-top">
-          <td className="p-3">{row.status === "ACTIVE" && <input type="checkbox" checked={selected.includes(row.recordId)} onChange={() => toggle(row.recordId)} aria-label={`Select ${row.reference || row.recordId}`} />}</td>
-          <td className="p-3">{new Date(row.transactionDate).toLocaleDateString("en-GB")}</td><td className="p-3 font-bold">{row.reference || "-"}</td><td className="p-3">{row.transactionType || "-"}</td><td className="p-3">{row.sourceType || "-"}</td><td className="p-3">{row.paymentMethod || "-"}</td><td className="p-3">{row.staffName || "-"}</td><td className="p-3 font-bold">{row.status}</td><td className="p-3 text-right">{formatCurrency(row.debitAmount)}</td><td className="p-3 text-right">{formatCurrency(row.creditAmount)}</td><td className="max-w-[280px] whitespace-pre-wrap p-3">{row.description || "-"}</td>
+          <td className="p-3">{row.status === "ACTIVE" && <input type="checkbox" checked={selected.includes(row.recordId)} onChange={() => toggle(row.recordId)} aria-label={`Select ${formatDisplayOrderId(row.reference) || row.recordId}`} />}</td>
+          <td className="p-3">{new Date(row.transactionDate).toLocaleDateString("en-GB")}</td><td className="p-3 font-bold">{formatDisplayOrderId(row.reference) || "-"}</td><td className="p-3">{row.transactionType || "-"}</td><td className="p-3">{row.sourceType || "-"}</td><td className="p-3">{row.paymentMethod || "-"}</td><td className="p-3">{row.staffName || "-"}</td><td className="p-3 font-bold">{row.status}</td><td className="p-3 text-right">{formatCurrency(row.debitAmount)}</td><td className="p-3 text-right">{formatCurrency(row.creditAmount)}</td><td className="max-w-[280px] whitespace-pre-wrap p-3">{row.description || "-"}</td>
           <td className="p-3 text-right">{row.status === "ARCHIVED" && row.archiveId && <><button type="button" onClick={() => archiveAction(row, "restore")} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Restore</button><button type="button" onClick={() => archiveAction(row, "delete")} className="ml-2 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white">Delete permanently</button></>}</td>
         </tr>)}
         {!result.records.length && <tr><td colSpan="12" className="p-6 text-center text-slate-500">No ledger records match these filters.</td></tr>}
@@ -344,7 +278,7 @@ function AllocationPreview({ branches, preview }) {
           <tbody>
             {preview.allocations.map((allocation) => (
               <tr key={allocation.invoiceReference} className="border-b">
-                <td className="p-3 font-bold">{allocation.invoiceReference}</td>
+                <td className="p-3 font-bold">{formatDisplayOrderId(allocation.invoiceReference)}</td>
                 <td className="p-3">{branches.find((branch) => String(branch.id) === String(allocation.customerBranchId))?.branch_name || "-"}</td>
                 <td className="p-3 text-right font-bold">{formatCurrency(allocation.allocatedAmount)}</td>
               </tr>
@@ -655,10 +589,10 @@ export default function CentralPayment() {
       )}
 
       {activeTab === "history" && (
-        <PaymentRecordsPanel archived={false} currentUser={currentUser} onChanged={refreshSnapshot} />
+        <PaymentRecordsPanel archived={false} />
       )}
       {activeTab === "archive" && (
-        <PaymentRecordsPanel archived currentUser={currentUser} onChanged={refreshSnapshot} />
+        <PaymentRecordsPanel archived />
       )}
       {isNisstajAdmin && activeTab === "ledger" && (
         <GlobalLedgerPanel currentUser={currentUser} ownerPassword={ownerPassword} />

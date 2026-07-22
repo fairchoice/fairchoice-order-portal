@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
   bulkArchiveFinancialTransactions,
   listGlobalFinancialHistory,
@@ -90,8 +91,8 @@ export default function GlobalFinancialLedger({ currentUser, ownerPassword }) {
       <th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Type</th><th className="p-3">Source</th><th className="p-3">Method</th><th className="p-3">Staff</th><th className="p-3">Status</th><th className="p-3 text-right">Debit</th><th className="p-3 text-right">Credit</th><th className="p-3">Description</th><th className="p-3 text-right">Actions</th>
     </tr></thead><tbody>
       {result.records.map((row) => <tr key={`${row.archiveId || "active"}-${row.recordId}`} className="border-b align-top">
-        <td className="p-3">{row.status === "ACTIVE" && <input type="checkbox" checked={selected.includes(row.recordId)} onChange={() => toggle(row.recordId)} aria-label={`Select ${row.reference || row.recordId}`} />}</td>
-        <td className="p-3">{new Date(row.transactionDate).toLocaleDateString("en-GB")}</td><td className="p-3 font-bold">{row.reference || "-"}</td><td className="p-3">{row.transactionType || "-"}</td><td className="p-3">{row.sourceType || "-"}</td><td className="p-3">{row.paymentMethod || "-"}</td><td className="p-3">{row.staffName || "-"}</td><td className="p-3 font-bold">{row.status}</td><td className="p-3 text-right">{formatCurrency(row.debitAmount)}</td><td className="p-3 text-right">{formatCurrency(row.creditAmount)}</td><td className="max-w-[280px] whitespace-pre-wrap p-3">{row.description || "-"}</td>
+        <td className="p-3">{row.status === "ACTIVE" && <input type="checkbox" checked={selected.includes(row.recordId)} onChange={() => toggle(row.recordId)} aria-label={`Select ${formatDisplayOrderId(row.reference) || row.recordId}`} />}</td>
+        <td className="p-3">{new Date(row.transactionDate).toLocaleDateString("en-GB")}</td><td className="p-3 font-bold">{formatDisplayOrderId(row.reference) || "-"}</td><td className="p-3">{row.transactionType || "-"}</td><td className="p-3">{row.sourceType || "-"}</td><td className="p-3">{row.paymentMethod || "-"}</td><td className="p-3">{row.staffName || "-"}</td><td className="p-3 font-bold">{row.status}</td><td className="p-3 text-right">{formatCurrency(row.debitAmount)}</td><td className="p-3 text-right">{formatCurrency(row.creditAmount)}</td><td className="max-w-[280px] whitespace-pre-wrap p-3">{row.description || "-"}</td>
         <td className="p-3 text-right">{row.status === "ARCHIVED" && row.archiveId && <><button type="button" onClick={() => archiveAction(row, "restore")} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Restore</button><button type="button" onClick={() => archiveAction(row, "delete")} className="ml-2 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white">Delete permanently</button></>}</td>
       </tr>)}
       {!result.records.length && <tr><td colSpan="12" className="p-6 text-center text-slate-500">No ledger records match these filters.</td></tr>}

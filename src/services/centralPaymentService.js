@@ -321,6 +321,7 @@ async function loadLegacyLedgerFallback({
       .map((row) => ({
         ...row,
         id: `legacy-${row.id}`,
+        legacy_ledger_id: row.id,
         payment_reference: row.payment_reference || row.reference_no || row.id,
         payment_date: row.payment_date || row.created_at,
         amount: Number(row.credit || row.amount || 0),

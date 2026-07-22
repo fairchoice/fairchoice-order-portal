@@ -25,7 +25,7 @@ export default function CustomerSelector({
               priceMode === "vat" ? "bg-blue-600 text-white" : "text-slate-700"
             }`}
           >
-            VAT
+            Ex.VAT
           </button>
         </div>
       </div>

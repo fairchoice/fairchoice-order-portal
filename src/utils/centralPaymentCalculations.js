@@ -377,14 +377,31 @@ export function resolveLegacyCompatibilityRows({
   legacyInvoices = [],
   legacyPayments = [],
 } = {}) {
+  const migratedLegacyIds = new Set(
+    payments.flatMap((payment) => {
+      const idempotencyMatch = String(payment.idempotency_key || "").match(
+        /^legacy-customer-ledger:(\d+)$/i
+      );
+      const metadataId =
+        payment.metadata?.legacy_source === "customer_ledger"
+          ? payment.metadata?.legacy_source_id
+          : null;
+      return [idempotencyMatch?.[1], metadataId].filter(Boolean).map(String);
+    })
+  );
+  const unmatchedLegacyPayments = legacyPayments.filter((payment) => {
+    const legacyId = payment.legacy_ledger_id;
+    return !legacyId || !migratedLegacyIds.has(String(legacyId));
+  });
+
   return {
     invoices,
     payments: mergeMissingByReference(
       payments,
-      legacyPayments,
+      unmatchedLegacyPayments,
       (row) => row.payment_reference || row.reference_no || row.id
     ),
-    legacyFallbackUsed: legacyPayments.length > 0,
+    legacyFallbackUsed: unmatchedLegacyPayments.length > 0,
   };
 }
 

@@ -158,13 +158,13 @@ export default function Pricing() {
     <div>
       <h1 className="text-2xl font-bold mb-1">Pricing</h1>
       <p className="text-sm text-slate-600 mb-6">
-        Manage VAT, Server, Manager Offer and Admin Offer percentage rules.
+        Manage Ex.VAT, Inc.VAT, Manager Offer and Admin Offer percentage rules.
       </p>
 
       <div className="bg-white rounded-2xl border p-5 max-w-3xl">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <PriceInput
-            label="Ex. VAT / VAT %"
+            label="Ex.VAT / VAT %"
             help="Default VAT calculation. Example: GBP 10 + 20% = GBP 12"
             value={form.vat_percent}
             disabled={!pricingUnlocked}
@@ -172,7 +172,7 @@ export default function Pricing() {
           />
 
           <PriceInput
-            label="Server Discount %"
+            label="Inc.VAT Discount %"
             help="Applied after VAT, then fair-quarter rounded. Example: GBP 10 + 20% VAT = GBP 12, then 2% off = GBP 11.76"
             value={form.server_discount_percent}
             disabled={!pricingUnlocked}
@@ -181,7 +181,7 @@ export default function Pricing() {
 
           <PriceInput
             label="Manager Discount %"
-            help="Applied after VAT, then fair-quarter rounded, same as Server."
+            help="Applied after VAT, then fair-quarter rounded, same as Inc.VAT."
             value={form.manager_discount_percent}
             disabled={!pricingUnlocked}
             onChange={(v) => updateField("manager_discount_percent", v)}

@@ -66,6 +66,7 @@ const navSections = [
         permission: "access_product_setup",
         children: [
           { label: "Categories", page: "categories", permission: "access_product_setup" },
+          { label: "Home Page Images", page: "homePageImages", permission: "access_product_setup" },
           { label: "Products", page: "products", permission: "access_product_setup" },
           { label: "Stock Taking", page: "stockTaking", permission: "access_product_setup" },
           { label: "Product Import / Export", page: "productImportExport", permission: "access_product_setup" },
@@ -121,6 +122,7 @@ const pagePermissions = {
   customerPortal: "access_customer_portal",
   customers: "access_customer_setup",
   categories: "access_product_setup",
+  homePageImages: "access_product_setup",
   products: "access_product_setup",
   stockTaking: "access_product_setup",
   productImportExport: "access_product_setup",

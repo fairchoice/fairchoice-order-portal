@@ -89,7 +89,7 @@ export default function BulkToDatabase({
         />
 
         <div className="font-bold text-slate-700">
-          New Server Price: £{Number(bulkPreview.server || 0).toFixed(2)}
+          New Inc.VAT Price: £{Number(bulkPreview.server || 0).toFixed(2)}
         </div>
 
         <div className="font-bold text-slate-700">

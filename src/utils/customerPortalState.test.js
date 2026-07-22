@@ -35,6 +35,13 @@ test("admin credit hash takes precedence over overlapping staff permissions", ()
   );
 });
 
+test("admin Payment History hash no longer resolves to a separate Back Office route", () => {
+  assert.equal(
+    resolveCustomerPortalPage({ hash: "#payment-history", isAdmin: true }),
+    "orders"
+  );
+});
+
 test("unknown customer and sales routes safely default to Order", () => {
   assert.equal(resolveCustomerPortalPage({ hash: "#admin", isCustomer: true }), "order");
   assert.equal(resolveCustomerPortalPage({ hash: "#unknown", isSalesRep: true }), "order");

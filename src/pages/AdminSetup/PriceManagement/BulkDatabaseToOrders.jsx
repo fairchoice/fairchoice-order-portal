@@ -1,3 +1,5 @@
+import { formatDisplayOrderId } from "../../../utils/orderDisplay";
+
 export default function BulkDatabaseToOrders({
   brand,
   setBrand,
@@ -175,7 +177,7 @@ export default function BulkDatabaseToOrders({
                 const diff = Number(row.newPrice || 0) - Number(row.oldPrice || 0);
                 return (
                   <tr key={row.itemId}>
-                    <td className="border p-3 font-bold">{row.orderNumber}</td>
+                    <td className="border p-3 font-bold">{formatDisplayOrderId(row.orderNumber)}</td>
                     <td className="border p-3">{row.productName}</td>
                     <td className="border p-3 text-right">{row.qty}</td>
                     <td className="border p-3 text-right">£{Number(row.oldPrice || 0).toFixed(2)}</td>

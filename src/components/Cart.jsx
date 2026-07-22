@@ -1,7 +1,7 @@
-import { useState } from "react";
 import { formatCurrency } from "../utils/currency";
 import { calculateCartTotals } from "../utils/orderTotals";
 import { isVatPriceMode } from "../utils/pricing";
+import PaymentChoiceSelector from "./PaymentChoiceSelector";
 
 export default function Cart({
   cart,
@@ -17,9 +17,13 @@ export default function Cart({
   onDecrease,
   onRemove,
   onChangeQty,
+  editing = false,
+  onEditingChange,
+  onItemEdited,
+  paymentChoice,
+  onPaymentChoiceChange,
+  paymentChoiceValid = false,
 }) {
-  const [editing, setEditing] = useState(false);
-
   const paidCart = cart.filter((item) => !item.isPromotionFree);
   const promotionLines = cart.filter((item) => item.isPromotionFree);
 
@@ -39,10 +43,11 @@ export default function Cart({
 
         {paidCart.length > 0 && (
           <button
-            onClick={() => setEditing(!editing)}
+            type="button"
+            onClick={() => onEditingChange?.(!editing)}
             className="btn-secondary bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold text-sm"
           >
-            {editing ? "Done" : "Edit Cart"}
+            {editing ? "Done - Return to products" : "Edit Cart"}
           </button>
         )}
       </div>
@@ -70,19 +75,19 @@ export default function Cart({
               </div>
 
               <div className="flex items-center gap-2 mt-3">
-                <button onClick={() => onDecrease(item.id)} className="w-8 h-8 bg-slate-100 rounded-lg font-bold">-</button>
+                <button type="button" aria-label={`Decrease ${item.name} quantity`} onClick={() => { onItemEdited?.(item.id); onDecrease(item.id); }} className="w-10 h-10 bg-slate-100 rounded-lg font-bold">-</button>
 
                 <input
                   type="number"
                   min="1"
                   value={item.qty}
-                  onChange={(e) => onChangeQty(item.id, e.target.value)}
-                  className="w-16 border rounded-lg p-1 text-center font-bold"
+                  onChange={(e) => { onItemEdited?.(item.id); onChangeQty(item.id, e.target.value); }}
+                  className="h-10 w-16 border rounded-lg p-1 text-center font-bold"
                 />
 
-                <button onClick={() => onIncrease(item.id)} className="btn-primary w-8 h-8 bg-blue-600 text-white rounded-lg font-bold">+</button>
+                <button type="button" aria-label={`Increase ${item.name} quantity`} onClick={() => { onItemEdited?.(item.id); onIncrease(item.id); }} className="btn-primary w-10 h-10 bg-blue-600 text-white rounded-lg font-bold">+</button>
 
-                <button onClick={() => onRemove(item.id)} className="ml-auto text-red-600 text-sm font-bold">Remove</button>
+                <button type="button" onClick={() => { onItemEdited?.(item.id); onRemove(item.id); }} className="min-h-10 ml-auto text-red-600 text-sm font-bold">Remove</button>
               </div>
             </div>
           ))}
@@ -150,17 +155,26 @@ export default function Cart({
           </div>
         )}
 
+        <PaymentChoiceSelector
+          choice={paymentChoice}
+          onChoiceChange={onPaymentChoiceChange}
+        />
+
         <button
+          type="button"
           onClick={() => {
             if (window.confirm("Submit this order?")) {
               onSubmit();
             }
           }}
-          disabled={paidCart.length === 0 || isSubmitting}
+          disabled={paidCart.length === 0 || isSubmitting || !paymentChoiceValid}
           className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isSubmitting ? "Submitting..." : "Submit Order"}
         </button>
+        {!paymentChoiceValid && paidCart.length > 0 && (
+          <p className="mt-2 text-center text-xs font-bold text-amber-700">Select how you would like to continue before submitting.</p>
+        )}
       </div>
     </div>
   );
