@@ -215,63 +215,6 @@ if (!confirmed) {
     );
   }
 
-function editPayment(row) {
-  const newAmount = window.prompt(
-    "Enter new payment amount:",
-    row.payment_amount || row.amount || ""
-  );
-
-  if (newAmount === null) return;
-
-  const amount = Number(newAmount);
-
-  if (!amount || amount <= 0) {
-    alert("Please enter a valid amount.");
-    return;
-  }
-
-  const confirmed = window.confirm(
-    `Update payment to ${money(amount)}?`
-  );
-
-  if (!confirmed) return;
-
-  updatePayment(row, amount);
-}
-
-async function updatePayment(row, amount) {
-  try {
-        if (
-        row.collection_type === "Sales Rep" ||
-        row.collection_type === "Sales Rep Collection"
-      ) {
-        const { error } = await supabase
-          .from("customer_ledger")
-          .update({
-            credit: amount,
-          })
-          .eq("id", row.id);
-
-        if (error) throw error;
-    } else {
-      const { error } = await supabase
-        .from("orders")
-        .update({
-          payment_amount: amount,
-        })
-        .eq("id", row.id);
-
-      if (error) throw error;
-    }
-
-    alert("Payment updated successfully.");
-    await loadWeeklyAccountData();
-  } catch (error) {
-    console.error("Update payment error:", error);
-    alert("Could not update payment: " + error.message);
-  }
-}
-
   function getDriverName(driver) {
   return (
     driver.name ||
@@ -625,7 +568,6 @@ const cashHoldingRows = [
 
           <PaymentTable
             rows={filteredPayments}
-            editPayment={editPayment}
             money={money}
             formatDate={formatDate}
             invoiceTotal={invoiceTotal}
@@ -647,7 +589,6 @@ const cashHoldingRows = [
 
           <PaymentTable
             rows={driverPayments}
-            editPayment={editPayment}
             money={money}
             formatDate={formatDate}
             invoiceTotal={invoiceTotal}
@@ -669,7 +610,6 @@ const cashHoldingRows = [
 
           <PaymentTable
             rows={salesRepPayments}
-            editPayment={editPayment}
             money={money}
             formatDate={formatDate}
             invoiceTotal={invoiceTotal}
@@ -965,7 +905,6 @@ const cashHoldingRows = [
                   <th className="p-2">Driver / Sales Rep</th>
                   <th className="p-2">Confirmed By</th>
                   <th className="p-2">Days</th>
-                  <th className="p-2">Action</th>
                 </tr>
               </thead>
 
@@ -988,20 +927,12 @@ const cashHoldingRows = [
                     <td className="p-2">
                       {daysOutstanding(invoice.created_at)} Days
                     </td>
-                    <td className="p-2">
-                      <button
-                        onClick={() => editPayment(invoice)}
-                        className="bg-blue-600 text-white px-3 py-2 rounded-lg font-bold"
-                      >
-                        Edit Payment
-                      </button>
-                    </td>
                   </tr>
                 ))}
 
                 {unpaidInvoices.length === 0 && (
                   <tr>
-                    <td className="p-4 text-center text-gray-500" colSpan="8">
+                    <td className="p-4 text-center text-gray-500" colSpan="7">
                       No unpaid customers this week.
                     </td>
                   </tr>
@@ -1026,7 +957,6 @@ function SummaryCard({ title, value }) {
 
 function PaymentTable({
   rows,
-  editPayment,
   money,
   formatDate,
   invoiceTotal,
@@ -1049,7 +979,6 @@ function PaymentTable({
             <th className="p-2">Payment Type</th>
             <th className="p-2">Collected By</th>
             <th className="p-2">Collection Type</th>
-            <th className="p-2">Action</th>
           </tr>
         </thead>
 
@@ -1065,24 +994,12 @@ function PaymentTable({
               <td className="p-2">{row.payment_type || "-"}</td>
               <td className="p-2">{collectedBy(row)}</td>
               <td className="p-2">{collectionType(row)}</td>
-              <td className="p-2">
-                {row.read_only ? (
-                  <span className="text-xs font-bold text-slate-500">Read only</span>
-                ) : (
-                  <button
-                    onClick={() => editPayment(row)}
-                    className="bg-blue-600 text-white px-3 py-2 rounded-lg font-bold"
-                  >
-                    Edit Payment
-                  </button>
-                )}
-              </td>
             </tr>
           ))}
 
           {rows.length === 0 && (
             <tr>
-              <td className="p-4 text-center text-gray-500" colSpan="10">
+              <td className="p-4 text-center text-gray-500" colSpan="9">
                 No records found for this week.
               </td>
             </tr>

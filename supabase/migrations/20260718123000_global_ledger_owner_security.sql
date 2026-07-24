@@ -1,12 +1,15 @@
 -- Owner-only access and password-protected global ledger lifecycle RPCs.
 
-revoke all on public.financial_transactions from authenticated;
-revoke all on public.financial_transaction_archive from authenticated;
-revoke all on public.financial_ledger_events from authenticated;
-revoke all on public.global_financial_history from authenticated;
-revoke execute on function public.archive_financial_transactions(uuid[],text,text) from authenticated;
-revoke execute on function public.restore_financial_transaction(uuid,text,text) from authenticated;
-revoke execute on function public.permanently_delete_financial_archive(uuid,text,text) from authenticated;
+revoke all on public.financial_transactions from public, anon, authenticated;
+revoke all on public.financial_transaction_archive from public, anon, authenticated;
+revoke all on public.financial_ledger_events from public, anon, authenticated;
+revoke all on public.global_financial_history from public, anon, authenticated;
+revoke execute on function public.archive_financial_transactions(uuid[],text,text)
+  from public, anon, authenticated;
+revoke execute on function public.restore_financial_transaction(uuid,text,text)
+  from public, anon, authenticated;
+revoke execute on function public.permanently_delete_financial_archive(uuid,text,text)
+  from public, anon, authenticated;
 
 drop policy if exists global_ledger_owner_select on public.financial_transactions;
 create policy global_ledger_owner_select on public.financial_transactions
@@ -49,6 +52,15 @@ begin
   return public.permanently_delete_financial_archive(p_archive_id,'nisstaj_admin',p_reason);
 end $$;
 
-grant execute on function public.owner_archive_financial_transactions(text,text,uuid[],text) to authenticated;
-grant execute on function public.owner_restore_financial_transaction(text,text,uuid,text) to authenticated;
-grant execute on function public.owner_delete_financial_archive(text,text,uuid,text) to authenticated;
+revoke execute on function public.owner_archive_financial_transactions(text,text,uuid[],text)
+  from public;
+revoke execute on function public.owner_restore_financial_transaction(text,text,uuid,text)
+  from public;
+revoke execute on function public.owner_delete_financial_archive(text,text,uuid,text)
+  from public;
+grant execute on function public.owner_archive_financial_transactions(text,text,uuid[],text)
+  to anon, authenticated;
+grant execute on function public.owner_restore_financial_transaction(text,text,uuid,text)
+  to anon, authenticated;
+grant execute on function public.owner_delete_financial_archive(text,text,uuid,text)
+  to anon, authenticated;

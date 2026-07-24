@@ -42,14 +42,18 @@ const fingerprint = (row) =>
   ].join("|");
 
 const importedLegacyId = (payment) => {
-  const match = String(payment?.idempotency_key || "").match(/^legacy-customer-ledger:(\d+)$/i);
+  const match = String(payment?.idempotency_key || "").match(
+    /^legacy-customer-ledger:(\d+)$/i
+  );
   return match?.[1] || "";
 };
 
 const isActiveLegacyRow = (row) => {
   const lifecycle = upper(row.payment_status || row.status);
   const verification = upper(row.verification_status);
-  if (INACTIVE_MARKERS.has(lifecycle) || INACTIVE_MARKERS.has(verification)) return false;
+  if (INACTIVE_MARKERS.has(lifecycle) || INACTIVE_MARKERS.has(verification)) {
+    return false;
+  }
   return upper(row.entry_type || row.transaction_type) === "PAYMENT";
 };
 
@@ -76,17 +80,24 @@ export function mergeWeeklyAccountPaymentRows({
       ACTIVE_VERIFICATION_STATUSES.has(upper(row.verification_status))
   );
   const canonicalFingerprints = new Set(activeCanonical.map(fingerprint));
-  const migratedLegacyIds = new Set(activeCanonical.map(importedLegacyId).filter(Boolean));
+  const migratedLegacyIds = new Set(
+    activeCanonical.map(importedLegacyId).filter(Boolean)
+  );
 
   const canonicalRows = activeCanonical.map((row) => {
     const branchId = row.customer_branch_id || row.branch_id || null;
-    const collectionType = collectionTypeFromSource(row.source, row.collector_role);
+    const collectionType = collectionTypeFromSource(
+      row.source,
+      row.collector_role
+    );
     return {
       ...row,
       id: `canonical:${row.id}`,
       canonical_payment_id: row.id,
       customer_name: branchId
-        ? branchNames.get(String(branchId)) || accountNames.get(String(row.customer_account_id)) || "Not available"
+        ? branchNames.get(String(branchId)) ||
+          accountNames.get(String(row.customer_account_id)) ||
+          "Not available"
         : accountNames.get(String(row.customer_account_id)) || "Not available",
       invoice_no: row.payment_reference || "Not available",
       order_number: row.payment_reference || "Not available",
@@ -94,8 +105,14 @@ export function mergeWeeklyAccountPaymentRows({
       payment_amount: Number(row.amount || 0),
       payment_type: row.payment_method || "",
       collected_by: row.paid_by || row.created_by || "",
-      sales_rep_name: collectionType === "Sales Rep Collection" ? row.paid_by || row.created_by || "" : "",
-      driver_name: collectionType === "Driver" ? row.paid_by || row.created_by || "" : "",
+      sales_rep_name:
+        collectionType === "Sales Rep Collection"
+          ? row.paid_by || row.created_by || ""
+          : "",
+      driver_name:
+        collectionType === "Driver"
+          ? row.paid_by || row.created_by || ""
+          : "",
       collection_type: collectionType,
       created_at: getWeeklyPaymentDate(row),
       source_kind: "canonical",
@@ -108,28 +125,46 @@ export function mergeWeeklyAccountPaymentRows({
     .filter((row) => !migratedLegacyIds.has(String(row.id)))
     .filter((row) => !canonicalFingerprints.has(fingerprint(row)))
     .map((row) => {
-      const collectionType = collectionTypeFromSource(row.collection_source || row.source, row.collected_by_role);
+      const collectionType = collectionTypeFromSource(
+        row.collection_source || row.source,
+        row.collected_by_role
+      );
       return {
         ...row,
         id: `ledger:${row.id}`,
         legacy_ledger_id: row.id,
         customer_name: row.branch_name || row.customer_name || "Not available",
-        invoice_no: row.payment_reference || row.reference_no || "Not available",
-        order_number: row.payment_reference || row.reference_no || "Not available",
+        invoice_no:
+          row.payment_reference || row.reference_no || "Not available",
+        order_number:
+          row.payment_reference || row.reference_no || "Not available",
         invoice_total: 0,
         amount: Number(row.credit ?? row.amount ?? row.payment_amount ?? 0),
-        payment_amount: Number(row.credit ?? row.amount ?? row.payment_amount ?? 0),
+        payment_amount: Number(
+          row.credit ?? row.amount ?? row.payment_amount ?? 0
+        ),
         payment_type: row.payment_type || "",
-        collected_by: row.collected_by_name || row.paid_by || row.received_by || "",
-        sales_rep_name: collectionType === "Sales Rep Collection" ? row.collected_by_name || row.paid_by || "" : "",
-        driver_name: collectionType === "Driver" ? row.collected_by_name || row.paid_by || "" : "",
+        collected_by:
+          row.collected_by_name || row.paid_by || row.received_by || "",
+        sales_rep_name:
+          collectionType === "Sales Rep Collection"
+            ? row.collected_by_name || row.paid_by || ""
+            : "",
+        driver_name:
+          collectionType === "Driver"
+            ? row.collected_by_name || row.paid_by || ""
+            : "",
         collection_type: collectionType,
         created_at: getWeeklyPaymentDate(row),
         source_kind: "legacy",
+        read_only: true,
       };
     });
 
-  const seen = new Set([...canonicalFingerprints, ...legacyPayments.filter(isActiveLegacyRow).map(fingerprint)]);
+  const seen = new Set([
+    ...canonicalFingerprints,
+    ...legacyPayments.filter(isActiveLegacyRow).map(fingerprint),
+  ]);
   const unmatchedOrderRows = orderPayments
     .filter((row) => Number(row.payment_amount || 0) > 0)
     .filter((row) => {
@@ -153,20 +188,27 @@ export function mergeWeeklyAccountPaymentRows({
       collection_type: row.driver_name ? "Driver" : "Office",
       created_at: getWeeklyPaymentDate(row),
       source_kind: "order",
+      read_only: true,
     }));
 
-  return [...canonicalRows, ...legacyRows, ...unmatchedOrderRows].sort((a, b) => {
-    const paymentDifference = new Date(getWeeklyPaymentDate(b) || 0) - new Date(getWeeklyPaymentDate(a) || 0);
-    if (paymentDifference) return paymentDifference;
-    return new Date(b.created_at || 0) - new Date(a.created_at || 0);
-  });
+  return [...canonicalRows, ...legacyRows, ...unmatchedOrderRows].sort(
+    (a, b) => {
+      const paymentDifference =
+        new Date(getWeeklyPaymentDate(b) || 0) -
+        new Date(getWeeklyPaymentDate(a) || 0);
+      if (paymentDifference) return paymentDifference;
+      return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    }
+  );
 }
 
 export async function loadWeeklyAccountPayments(supabase) {
   const [canonicalResult, legacyResult, ordersResult] = await Promise.all([
     supabase
       .from("customer_payments")
-      .select("id,customer_account_id,customer_branch_id,branch_id,amount,payment_date,created_at,status,verification_status,source,idempotency_key,payment_reference,payment_method,paid_by,created_by,collector_role")
+      .select(
+        "id,customer_account_id,customer_branch_id,branch_id,amount,payment_date,created_at,status,verification_status,source,idempotency_key,payment_reference,payment_method,paid_by,created_by,collector_role"
+      )
       .in("status", ["POSTED", "ACTIVE"])
       .in("verification_status", ["CONFIRMED", "NOT_REQUIRED"])
       .order("payment_date", { ascending: false })
@@ -188,8 +230,20 @@ export async function loadWeeklyAccountPayments(supabase) {
   if (legacyResult.error) throw legacyResult.error;
   if (ordersResult.error) throw ordersResult.error;
 
-  const accountIds = [...new Set((canonicalResult.data || []).map((row) => row.customer_account_id).filter(Boolean))];
-  const branchIds = [...new Set((canonicalResult.data || []).map((row) => row.customer_branch_id || row.branch_id).filter(Boolean))];
+  const accountIds = [
+    ...new Set(
+      (canonicalResult.data || [])
+        .map((row) => row.customer_account_id)
+        .filter(Boolean)
+    ),
+  ];
+  const branchIds = [
+    ...new Set(
+      (canonicalResult.data || [])
+        .map((row) => row.customer_branch_id || row.branch_id)
+        .filter(Boolean)
+    ),
+  ];
   const [accountsResult, branchesResult] = await Promise.all([
     accountIds.length
       ? supabase.from("customer_accounts").select("id,account_name").in("id", accountIds)
@@ -199,8 +253,18 @@ export async function loadWeeklyAccountPayments(supabase) {
       : Promise.resolve({ data: [], error: null }),
   ]);
 
-  const accountNames = new Map((accountsResult.error ? [] : accountsResult.data || []).map((row) => [String(row.id), row.account_name]));
-  const branchNames = new Map((branchesResult.error ? [] : branchesResult.data || []).map((row) => [String(row.id), row.branch_name]));
+  const accountNames = new Map(
+    (accountsResult.error ? [] : accountsResult.data || []).map((row) => [
+      String(row.id),
+      row.account_name,
+    ])
+  );
+  const branchNames = new Map(
+    (branchesResult.error ? [] : branchesResult.data || []).map((row) => [
+      String(row.id),
+      row.branch_name,
+    ])
+  );
 
   return mergeWeeklyAccountPaymentRows({
     canonicalPayments: canonicalResult.data || [],

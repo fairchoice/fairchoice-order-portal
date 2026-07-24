@@ -5,6 +5,7 @@ import {
   loadCentralPaymentCustomers,
   loadReadOnlyCustomerCreditSnapshot,
 } from "../../services/centralPaymentService";
+import { PAYMENT_POSTED_EVENT } from "../../services/canonicalPaymentService";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
@@ -233,6 +234,7 @@ export default function CustomerCredit({ readOnly = false }) {
   const [editingOpeningBalance, setEditingOpeningBalance] = useState(false);
   const [openingBalanceInput, setOpeningBalanceInput] = useState("");
   const [savingOpeningBalance, setSavingOpeningBalance] = useState(false);
+  const [paymentRefreshVersion, setPaymentRefreshVersion] = useState(0);
   const selectionRequestRef = useRef(0);
   const snapshotRequestRef = useRef(0);
   const prefetchedSnapshotRef = useRef(null);
@@ -330,6 +332,19 @@ export default function CustomerCredit({ readOnly = false }) {
   }, [selectedCustomer?.id]);
 
   useEffect(() => {
+    const handlePaymentPosted = (event) => {
+      if (
+        String(event?.detail?.customerAccountId || "") ===
+        String(selectedCustomer?.id || "")
+      ) {
+        setPaymentRefreshVersion((value) => value + 1);
+      }
+    };
+    window.addEventListener(PAYMENT_POSTED_EVENT, handlePaymentPosted);
+    return () => window.removeEventListener(PAYMENT_POSTED_EVENT, handlePaymentPosted);
+  }, [selectedCustomer?.id]);
+
+  useEffect(() => {
     const requestId = snapshotRequestRef.current + 1;
     snapshotRequestRef.current = requestId;
 
@@ -382,7 +397,7 @@ export default function CustomerCredit({ readOnly = false }) {
     return () => {
       active = false;
     };
-  }, [selectedCustomer?.id, snapshotBranchId]);
+  }, [selectedCustomer?.id, snapshotBranchId, paymentRefreshVersion]);
 
   useEffect(() => {
     setPage(1);

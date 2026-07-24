@@ -10,6 +10,9 @@ const migrationFiles = [
   "supabase/migrations/20260711125500_central_payment_rpc_security_and_consistency.sql",
   "supabase/migrations/20260714120000_owner_central_payment_security.sql",
   "supabase/migrations/20260715120000_central_payment_final_requirements.sql",
+  "supabase/migrations/20260723120000_canonical_payment_writer_and_ledger_sync.sql",
+  "supabase/migrations/20260723121000_block_direct_customer_ledger_payment_writes.sql",
+  "supabase/migrations/20260723122000_legacy_customer_payment_reconciliation.sql",
 ];
 
 const requiredAllocationColumns = [
@@ -105,6 +108,14 @@ function assertStaticMigrationContract() {
     "restore_central_payment",
     "permanently_delete_central_payment",
     "limit 2 offset v_offset",
+    "post_canonical_customer_payment_v1",
+    "sync_canonical_payment_to_customer_ledger_v1",
+    "reject_direct_customer_ledger_payment_write_v1",
+    "reconcile_customer_ledger_payments_v2",
+    "apply_reviewed_customer_ledger_payment_migration_v1",
+    "customer_payment_legacy_migrations",
+    "legacy-customer-ledger:",
+    "PREVIOUS_BALANCE_COLLECTION",
   ]) {
     assert.ok(
       combinedSql.includes(requiredSnippet),

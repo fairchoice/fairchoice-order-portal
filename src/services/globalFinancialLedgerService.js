@@ -59,33 +59,29 @@ export async function listGlobalFinancialHistory({
   const clean = buildLedgerFilters(filters);
   const currentPage = Math.max(1, Number(page || 1));
   const size = Math.min(100, Math.max(1, Number(pageSize || PAGE_SIZE)));
-  const from = (currentPage - 1) * size;
-  const to = from + size - 1;
 
-  let query = supabase.from("global_financial_history")
-    .select("*", { count: "exact" })
-    .order("transaction_date", { ascending: false })
-    .range(from, to);
-
-  if (clean.status) query = query.eq("status", clean.status);
-  if (clean.method) query = query.eq("payment_method", clean.method);
-  if (clean.transactionType) query = query.eq("transaction_type", clean.transactionType);
-  if (clean.customerAccountId) query = query.eq("customer_account_id", clean.customerAccountId);
-  if (clean.customerBranchId) query = query.eq("customer_branch_id", clean.customerBranchId);
-  if (clean.dateFrom) query = query.gte("transaction_date", `${clean.dateFrom}T00:00:00`);
-  if (clean.dateTo) query = query.lte("transaction_date", `${clean.dateTo}T23:59:59.999`);
-  if (clean.search) {
-    const escaped = clean.search.replace(/[,%]/g, " ").trim();
-    if (escaped) query = query.or(`reference.ilike.%${escaped}%,description.ilike.%${escaped}%,staff_name.ilike.%${escaped}%,source_id.ilike.%${escaped}%`);
-  }
-
-  const { data, error, count } = await query;
+  const { data, error } = await supabase.rpc("list_global_financial_history_v1", {
+    p_owner_username: currentUser.username,
+    p_owner_password: ownerPassword,
+    p_search: clean.search || null,
+    p_payment_method: clean.method || null,
+    p_status: clean.status || null,
+    p_transaction_type: clean.transactionType || null,
+    p_date_from: clean.dateFrom || null,
+    p_date_to: clean.dateTo || null,
+    p_customer_account_id: clean.customerAccountId || null,
+    p_customer_branch_id: clean.customerBranchId || null,
+    p_page: currentPage,
+    p_page_size: size,
+  });
   if (error) throw new Error(`Could not load global financial history: ${error.message}`);
-  const total = Number(count || 0);
+  const total = Number(data?.total || 0);
   return {
-    records: (data || []).map(normalizeLedgerRecord), total,
-    page: currentPage, pageSize: size,
-    totalPages: Math.max(1, Math.ceil(total / size)),
+    records: (Array.isArray(data?.records) ? data.records : []).map(normalizeLedgerRecord),
+    total,
+    page: Number(data?.page || currentPage),
+    pageSize: Number(data?.page_size || size),
+    totalPages: Number(data?.total_pages || Math.max(1, Math.ceil(total / size))),
   };
 }
 

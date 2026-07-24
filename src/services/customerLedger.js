@@ -1,7 +1,10 @@
-import { supabase } from "./supabase";
+import {
+  postPreviousBalanceCollection,
+} from "./previousBalanceCollectionService";
 
 export async function createPreviousBalancePayment({
   customerAccountId,
+  customerBranchId,
   customerName,
   amount,
   paymentType,
@@ -11,45 +14,28 @@ export async function createPreviousBalancePayment({
   currentUser,
   role,
   source,
+  ownerPassword,
+  paymentIntentId,
 }) {
   const paymentAmount = Number(amount || 0);
 
   if (!customerAccountId) throw new Error("Customer is required");
   if (!paymentAmount || paymentAmount <= 0) throw new Error("Amount is required");
   if (!paymentType) throw new Error("Payment type is required");
+  if (!paymentIntentId) throw new Error("A stable payment intent is required");
 
-  const { data, error } = await supabase
-    .from("customer_ledger")
-    .insert([
-      {
-        customer_account_id: customerAccountId,
-        customer_name: customerName || null,
-
-        transaction_type: "PAYMENT",
-        description: "Previous Balance Payment",
-
-        debit: 0,
-        credit: paymentAmount,
-        amount: paymentAmount,
-
-        payment_type: paymentType,
-        payment_applies_to: "PREVIOUS_BALANCE",
-
-        collected_by: currentUser?.id || null,
-        collected_by_name: currentUser?.name || receivedBy || null,
-        collected_by_role: role,
-
-        collection_source: source,
-
-        who_paid: whoPaid || null,
-        received_by: receivedBy || currentUser?.name || null,
-        notes: notes || null,
-      },
-    ])
-    .select()
-    .single();
-
-  if (error) throw error;
-
-  return data;
+  return postPreviousBalanceCollection({
+    customerAccountId,
+    customerBranchId,
+    amount: paymentAmount,
+    paymentMethod: paymentType,
+    payerName: whoPaid,
+    collectorName:
+      currentUser?.staff_name || currentUser?.name || receivedBy || currentUser?.username,
+    collectorStaffId: currentUser?.staff_id || currentUser?.id || null,
+    collectorRole: role || currentUser?.role,
+    notes: [source ? `Original collection source: ${source}` : "", notes].filter(Boolean).join("\n"),
+    ownerPassword,
+    paymentIntentId,
+  });
 }
