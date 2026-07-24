@@ -3,6 +3,10 @@ import { calculateDocumentTotals } from "../utils/documentTotals";
 import { hydrateOrdersWithFullOrderItems } from "./centralInvoiceEngine";
 import { getActiveCustomerBranches } from "../utils/customerBranchScope";
 import {
+  CANONICAL_PAYMENT_SOURCES,
+  postCanonicalCustomerPayment,
+} from "./canonicalPaymentService";
+import {
   allocatePaymentOldestFirst,
   applyAllocationsToInvoices,
   filterRowsForBranchScope,
@@ -272,6 +276,70 @@ export async function loadPayments(customerAccountId) {
   return (data || []).filter((payment) => !isVoidedPayment(payment));
 }
 
+const inactiveLedgerPaymentStatuses = new Set([
+  "PENDING",
+  "PENDING_VERIFICATION",
+  "REJECTED",
+  "VOIDED",
+  "REVERSED",
+  "ARCHIVED",
+  "INACTIVE",
+  "CANCELLED",
+]);
+
+async function loadCustomerLedgerPayments({ customerAccountId, customerName } = {}) {
+  if (!customerAccountId && !customerName) return [];
+  const result = customerAccountId
+    ? await safeSelect("customer_ledger", (query) =>
+        query
+          .select("*")
+          .eq("customer_account_id", customerAccountId)
+          .order("payment_date", { ascending: true })
+          .order("created_at", { ascending: true })
+      )
+    : await safeSelect("customer_ledger", (query) =>
+        query
+          .select("*")
+          .eq("customer_name", customerName)
+          .order("payment_date", { ascending: true })
+          .order("created_at", { ascending: true })
+      );
+  if (result.error) throw result.error;
+
+  const uniqueRows = new Map();
+  for (const row of result.data || []) {
+    if (String(row.entry_type || row.transaction_type || "").toUpperCase() !== "PAYMENT") {
+      continue;
+    }
+    const lifecycle = String(row.payment_status || "").trim().toUpperCase();
+    if (
+      inactiveLedgerPaymentStatuses.has(lifecycle) ||
+      row.voided_at ||
+      row.reversed_at
+    ) {
+      continue;
+    }
+    const uniqueKey = row.central_payment_id
+      ? `canonical:${row.central_payment_id}`
+      : `legacy:${row.id}`;
+    if (uniqueRows.has(uniqueKey)) continue;
+    uniqueRows.set(uniqueKey, {
+      ...row,
+      id: uniqueKey,
+      ledger_id: row.id,
+      payment_reference:
+        row.payment_reference || row.reference_no || row.order_number || "—",
+      payment_date: row.payment_date || row.collection_date || row.created_at,
+      amount: Number(row.credit ?? row.payment_amount ?? row.amount ?? 0),
+      payment_method: row.payment_method || row.payment_type || "Other",
+      source: row.source || row.collection_source || "CUSTOMER_LEDGER",
+      status: lifecycle || "POSTED",
+      transaction_type: "PAYMENT",
+    });
+  }
+  return [...uniqueRows.values()];
+}
+
 export async function loadAllocations(customerAccountId) {
   if (!customerAccountId) return [];
   const { data, error } = await safeSelect("customer_payment_allocations", (query) =>
@@ -341,6 +409,7 @@ export async function loadCentralPaymentSnapshot({
   customerName,
   customer,
   selectedBranchId = "",
+  paymentSource = "canonical",
 } = {}) {
   if (!customerAccountId && !customerName) {
     return {
@@ -361,7 +430,9 @@ export async function loadCentralPaymentSnapshot({
   let [openingBalances, invoices, payments, allocations] = await Promise.all([
     loadBranchOpeningBalances(customerAccountId),
     loadDeliveredInvoices({ customerAccountId, customerName }),
-    loadPayments(customerAccountId),
+    paymentSource === "customer_ledger"
+      ? loadCustomerLedgerPayments({ customerAccountId, customerName })
+      : loadPayments(customerAccountId),
     loadAllocations(customerAccountId),
   ]);
 
@@ -371,18 +442,26 @@ export async function loadCentralPaymentSnapshot({
   const scopedNewInvoices = withResolvedBranchScope(invoices, branches);
   const scopedNewPayments = withResolvedBranchScope(payments, branches);
   const scopedAllocations = withResolvedBranchScope(allocations, branches);
-  const legacy = await loadLegacyLedgerFallback({
-    customerAccountId,
-    customerName,
-    customer,
-    invoiceRows: scopedNewInvoices,
-  });
-  const compatibilityRows = resolveLegacyCompatibilityRows({
-    invoices: scopedNewInvoices,
-    payments: scopedNewPayments,
-    legacyInvoices: [],
-    legacyPayments: legacy.payments,
-  });
+  const compatibilityRows =
+    paymentSource === "customer_ledger"
+      ? {
+          invoices: scopedNewInvoices,
+          payments: scopedNewPayments,
+          legacyFallbackUsed: false,
+        }
+      : resolveLegacyCompatibilityRows({
+          invoices: scopedNewInvoices,
+          payments: scopedNewPayments,
+          legacyInvoices: [],
+          legacyPayments: (
+            await loadLegacyLedgerFallback({
+              customerAccountId,
+              customerName,
+              customer,
+              invoiceRows: scopedNewInvoices,
+            })
+          ).payments,
+        });
   invoices = compatibilityRows.invoices;
   payments = compatibilityRows.payments;
   allocations = scopedAllocations;
@@ -517,7 +596,11 @@ export async function loadCentralPaymentSnapshot({
   };
 }
 
-export const loadReadOnlyCustomerCreditSnapshot = loadCentralPaymentSnapshot;
+export const loadReadOnlyCustomerCreditSnapshot = (options = {}) =>
+  loadCentralPaymentSnapshot({
+    ...options,
+    paymentSource: "customer_ledger",
+  });
 
 export function buildPaymentPreview({ invoices = [], allocations = [], amount = 0, branchId = "" } = {}) {
   const allocatedInvoices = applyAllocationsToInvoices(invoices, allocations);
@@ -558,6 +641,42 @@ export async function createCentralPayment({
   const preview = buildPaymentPreview({ invoices: snapshot.invoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
   const isPendingBank = type === "PAYMENT" && paymentMethod === "Bank Transfer";
 
+  if (type === "PAYMENT") {
+    try {
+      const data = await postCanonicalCustomerPayment({
+        customerAccountId: accountId,
+        customerBranchId,
+        amount: paymentAmount,
+        paymentDate: paymentDate || new Date().toISOString(),
+        paymentMethod: paymentMethod || "Cash",
+        paymentSource: CANONICAL_PAYMENT_SOURCES.CENTRAL_PAYMENT,
+        paymentReference: externalReference,
+        paidBy,
+        collectorName:
+          currentUser?.staff_name ||
+          currentUser?.name ||
+          currentUser?.username ||
+          actor,
+        collectorStaffId: currentUser?.staff_id || currentUser?.id || null,
+        collectorRole: currentUser?.role || currentUser?.access_level || "OWNER",
+        idempotencyKey,
+        notes,
+        metadata: { entry_point: "CENTRAL_PAYMENT" },
+        allocations: isPendingBank ? [] : preview.allocations,
+        ownerUsername: "nisstaj_admin",
+        ownerPassword,
+      });
+      return { ...(data || {}), preview };
+    } catch (error) {
+      if (isMissingRpcError(error)) {
+        throw new Error(
+          "Canonical Central Payment is not installed. Review and apply the additive payment architecture migration first."
+        );
+      }
+      throw error;
+    }
+  }
+
   const { data, error } = await supabase.rpc("post_owner_central_transaction", {
     p_owner_username: "nisstaj_admin",
     p_owner_password: ownerPassword,
@@ -566,12 +685,12 @@ export async function createCentralPayment({
     p_transaction_type: type,
     p_payment_date: paymentDate || new Date().toISOString(),
     p_amount: paymentAmount,
-    p_payment_method: type === "DISCOUNT" ? "Other" : paymentMethod || "Cash",
+    p_payment_method: "Other",
     p_paid_by: paidBy || "",
     p_external_reference: String(externalReference || "").trim() || null,
     p_notes: notes || "",
     p_idempotency_key: idempotencyKey,
-    p_allocations: isPendingBank ? [] : preview.allocations,
+    p_allocations: [],
   });
   if (!error) return { ...(data || {}), preview };
   if (isMissingRpcError(error)) throw new Error("Protected Central Payment is not installed. Review and apply the additive owner-security migration first.");
@@ -714,15 +833,14 @@ export async function listCentralPaymentRecords({
 
     if (customerError) {
       console.error("Customer name query failed:", customerError);
-      throw customerError;
+    } else {
+      customerMap = new Map(
+        (customerRows || []).map((customer) => [
+          String(customer.id),
+          customer.account_name,
+        ])
+      );
     }
-
-    customerMap = new Map(
-      (customerRows || []).map((customer) => [
-        String(customer.id),
-        customer.account_name,
-      ])
-    );
   }
 
   const total = Number(count || 0);

@@ -3,14 +3,28 @@ import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { calculateDocumentTotals } from "../../utils/documentTotals";
 import { sortPrintItems } from "../../utils/printItemSorting";
+import { formatDisplayOrderId } from "../../utils/orderDisplay";
+import { isOperationalCustomer } from "../../utils/customerStatus";
 import {
-  allocateCustomerPaymentToInvoices,
   createOrUpdateInvoiceForDeliveredOrder,
   loadCustomerOutstandingSnapshot,
   printThermalReceipt,
   withResolvedInvoicePaymentStatus,
 } from "../../services/centralInvoiceEngine";
+import {
+  buildPaymentPreview,
+  loadCentralPaymentSnapshot,
+} from "../../services/centralPaymentService";
 import { saveConfirmedServerManagerOrderToProcessingQueue } from "../../services/orders";
+import {
+  CANONICAL_PAYMENT_SOURCES,
+  postCanonicalCustomerPayment,
+  shouldCreateCanonicalDeliveryPayment,
+} from "../../services/canonicalPaymentService";
+import {
+  createPreviousBalancePaymentIntentId,
+  postPreviousBalanceCollection,
+} from "../../services/previousBalanceCollectionService";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
 
 export default function Driver({
@@ -30,6 +44,7 @@ export default function Driver({
 
 
 const [savingPayment, setSavingPayment] = useState(false);
+const [savingPreviousBalance, setSavingPreviousBalance] = useState(false);
 const [previousBalanceOutstanding, setPreviousBalanceOutstanding] = useState({
   totalOutstanding: 0,
   branchOutstanding: {},
@@ -67,6 +82,7 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   paymentType: "Cash",
   whoPaid: "",
   notes: "",
+  paymentIntentId: createPreviousBalancePaymentIntentId(),
   });
 
   const printResolvedThermalReceipt = async (order) => {
@@ -94,7 +110,9 @@ useEffect(() => {
 const loadCreditCustomers = async () => {
   const { data, error } = await supabase
     .from("customer_accounts")
-  .select("id, account_name, customer_branches(*)")
+    .select("id, account_name, status, active, customer_branches(*)")
+    .eq("active", true)
+    .or("status.is.null,status.ilike.Active")
     .order("account_name");
 
   if (error) {
@@ -103,7 +121,7 @@ const loadCreditCustomers = async () => {
     return;
   }
 
-  setCreditCustomers(data || []);
+  setCreditCustomers((data || []).filter(isOperationalCustomer));
 };
 
 const selectedCreditCustomer = creditCustomers.find(
@@ -254,47 +272,30 @@ useEffect(() => {
     return;
   }
 
-  const { error } = await supabase.from("customer_ledger").insert({
-    customer_account_id: selectedCreditCustomer.id,
-    customer_branch_id: selectedCreditBranch?.id || null,
-    branch_id: selectedCreditBranch?.id || null,
-    branch_name: selectedCreditBranch?.branch_name || null,
-    customer_name: selectedCreditCustomer.account_name,
-    entry_type: "PAYMENT",
-    transaction_type: "PAYMENT",
-    description: "Payment",
-    reference_no: "PREVIOUS_BALANCE",
-
-    debit: 0,
-    credit: paymentAmount,
-    amount: paymentAmount,
-    payment_amount: paymentAmount,
-
-    payment_type: previousBalanceForm.paymentType,
-    payment_applies_to: "PREVIOUS_BALANCE",
-    paid_by: previousBalanceForm.whoPaid || null,
-    who_paid: previousBalanceForm.whoPaid || null,
-       collection_source: "DRIVER_PREVIOUS_BALANCE",
-
-    received_by: loggedInUser.name || loggedInUser.username || null,
-    received_by_username: loggedInUser.username || null,
-    received_by_role: loggedInUser.role || null,
-    received_by_staff_id: loggedInUser.id || loggedInUser.staff_id || null,
-
-    notes:
-      previousBalanceForm.notes ||
-      `Driver previous balance collection - ${previousBalanceForm.paymentType}`,
-  });
-
-  if (error) {
+  setSavingPreviousBalance(true);
+  try {
+    await postPreviousBalanceCollection({
+      customerAccountId: selectedCreditCustomer.id,
+      customerBranchId: selectedCreditBranch?.id || null,
+      amount: paymentAmount,
+      paymentMethod: previousBalanceForm.paymentType,
+      paymentDate: new Date().toISOString(),
+      payerName: previousBalanceForm.whoPaid,
+      collectorName:
+        loggedInUser.staff_name || loggedInUser.name || loggedInUser.username || "",
+      collectorStaffId: loggedInUser.staff_id || loggedInUser.id || null,
+      collectorRole: loggedInUser.role || loggedInUser.access_level || "",
+      notes:
+        previousBalanceForm.notes ||
+        `Driver previous balance collection - ${previousBalanceForm.paymentType}`,
+      paymentIntentId: previousBalanceForm.paymentIntentId,
+    });
+  } catch (error) {
     alert("Could not save previous balance payment: " + error.message);
     return;
+  } finally {
+    setSavingPreviousBalance(false);
   }
-
-  await allocateCustomerPaymentToInvoices({
-    customerAccountId: selectedCreditCustomer.id,
-    customerName: selectedCreditCustomer.account_name,
-  });
 
   alert("Previous Balance Payment saved successfully.");
 
@@ -303,6 +304,7 @@ useEffect(() => {
     paymentType: "Cash",
     whoPaid: "",
     notes: "",
+    paymentIntentId: createPreviousBalancePaymentIntentId(),
   });
 
   setSelectedCreditCustomerId("");
@@ -452,20 +454,20 @@ const printDeliveryNoteDocument = (order) => {
       payment_type: paymentType,
 
       payment_amount:
-        paymentType === "Credit" || paymentCollected === "No"
+        ["Credit", "Account"].includes(paymentType) || paymentCollected === "No"
           ? 0
           : paymentAmount,
 
       payment_collected:
-        paymentType === "Credit" ? "No" : paymentCollected,
+        ["Credit", "Account"].includes(paymentType) ? "No" : paymentCollected,
 
       paid_by:
-        paymentType === "Credit" || paymentCollected === "No"
+        ["Credit", "Account"].includes(paymentType) || paymentCollected === "No"
           ? ""
           : paymentForm.paidBy,
 
       received_by:
-        paymentType === "Credit" || paymentCollected === "No"
+        ["Credit", "Account"].includes(paymentType) || paymentCollected === "No"
           ? ""
           : paymentForm.receivedBy,
     };
@@ -508,56 +510,62 @@ const printDeliveryNoteDocument = (order) => {
       result: processingQueueResult,
     });
 
-    // Ledger payment only if money collected
-    if (paymentCollected === "Yes" && paymentAmount > 0) {
-      
+    // Payment is canonical first; the database creates exactly one linked
+    // customer_ledger PAYMENT row in the same transaction.
+    if (
+      shouldCreateCanonicalDeliveryPayment({
+        paymentCollected,
+        paymentType,
+        amount: paymentAmount,
+      })
+    ) {
+      const customerAccountId =
+        order.customerAccountId || order.customer_account_id || null;
+      const customerBranchId =
+        order.customerBranchId || order.customer_branch_id || null;
+      const paymentReference =
+        order.order_number || order.orderId || order.id || "";
+      const snapshot = await loadCentralPaymentSnapshot({
+        customerAccountId,
+        customerName:
+          order.companyName || order.company_name || "Unknown Customer",
+        selectedBranchId: customerBranchId || "",
+      });
+      const allocationPreview = buildPaymentPreview({
+        invoices: snapshot.invoices,
+        allocations: snapshot.allocations,
+        amount: paymentAmount,
+        branchId: customerBranchId || "",
+      });
 
-  const { error: ledgerError } = await supabase
-  .from("customer_ledger")
-  .insert({
-    customer_account_id: order.customerAccountId || order.customer_account_id || null,
-    customer_branch_id: order.customerBranchId || order.customer_branch_id || null,
-    branch_id: order.customerBranchId || order.customer_branch_id || null,
-    branch_name: order.branchName || order.branch_name || null,
-    customer_name: order.companyName || "Unknown Customer",
-
-    entry_type: "PAYMENT",
-    transaction_type: "PAYMENT",
-    description: "Payment",
-    created_at: new Date().toISOString(),
-
-    reference_no: order.orderId,
-
-    debit: 0,
-    credit: paymentAmount,
-    amount: paymentAmount,
-    payment_amount: paymentAmount,
-
-    payment_type: paymentType,
-    payment_applies_to: paymentForm.paymentAppliesTo,
-   
-    collection_source: "DRIVER_DELIVERY_COLLECTION",
-    who_paid: paymentForm.paidBy || null,
-    paid_by: paymentForm.paidBy || null,
-    received_by: paymentForm.receivedBy || loggedInUser.name || loggedInUser.username || null,
-    received_by_username: loggedInUser.username || null,
-    received_by_role: loggedInUser.role || null,
-    received_by_staff_id: loggedInUser.id || null,
-    collected_by: loggedInUser.id || loggedInUser.staff_id || null,
-    collected_by_name: loggedInUser.name || loggedInUser.username || null,
-    collected_by_username: loggedInUser.username || null,
-    collected_by_role: loggedInUser.role || null,
-
-    notes: `Driver cash collection - ${paymentType}`,
-  });
-
-
-if (ledgerError) throw ledgerError;
-
-await allocateCustomerPaymentToInvoices({
-  customerAccountId: order.customerAccountId || order.customer_account_id,
-  customerName: order.companyName || order.company_name || "Unknown Customer",
-});
+      await postCanonicalCustomerPayment({
+        customerAccountId,
+        customerBranchId,
+        amount: paymentAmount,
+        paymentDate: new Date().toISOString(),
+        paymentMethod: paymentType,
+        paymentSource: CANONICAL_PAYMENT_SOURCES.DRIVER_DELIVERY,
+        paymentReference,
+        paidBy: paymentForm.paidBy,
+        collectorName:
+          loggedInUser.staff_name ||
+          loggedInUser.name ||
+          loggedInUser.username ||
+          paymentForm.receivedBy ||
+          "",
+        collectorStaffId:
+          loggedInUser.staff_id || loggedInUser.id || null,
+        collectorRole:
+          loggedInUser.role || loggedInUser.access_level || "Driver",
+        orderId: order.id || null,
+        paymentIntentId: `delivery:${order.id || order.orderId || order.order_number}`,
+        notes: `Driver delivery collection - ${paymentType}`,
+        metadata: {
+          payment_applies_to: paymentForm.paymentAppliesTo,
+          delivery_collection: true,
+        },
+        allocations: allocationPreview.allocations,
+      });
     }
 
         alert("Cash collection saved.");
@@ -708,9 +716,10 @@ await allocateCustomerPaymentToInvoices({
       <button
         type="button"
         onClick={savePreviousBalancePayment}
+        disabled={savingPreviousBalance}
         className="w-full bg-green-700 text-white py-3 rounded-xl font-bold"
       >
-        Save Previous Balance Payment
+        {savingPreviousBalance ? "Saving securely..." : "Save Previous Balance Payment"}
       </button>
           </div>
         )}
@@ -745,7 +754,7 @@ await allocateCustomerPaymentToInvoices({
             <div className="flex flex-col gap-3">
               <div className="text-center">
                 <h3 className="font-bold">
-                  {order.orderId || order.order_number} |{" "}
+                  {formatDisplayOrderId(order.orderId || order.order_number)} |{" "}
                   {order.companyName || order.company_name || "No company"}
                 </h3>
 

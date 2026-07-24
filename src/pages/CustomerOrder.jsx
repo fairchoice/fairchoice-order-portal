@@ -6,7 +6,16 @@ import {
   normalizeStaffRole,
   resolveBackOfficeAccess,
 } from "../services/authProfile";
-import { loadReadOnlyCustomerCreditSnapshot } from "../services/centralPaymentService";
+import {
+  buildPaymentPreview,
+  loadCentralPaymentSnapshot,
+  loadReadOnlyCustomerCreditSnapshot,
+} from "../services/centralPaymentService";
+import {
+  CANONICAL_PAYMENT_SOURCES,
+  createPaymentIntentId,
+  postCanonicalCustomerPayment,
+} from "../services/canonicalPaymentService";
 import PricingRule from "./AdminSetup/PricingRule";
 import Suppliers from "./AdminSetup/Suppliers";
 import Staff from "./AdminSetup/Staff";
@@ -108,7 +117,6 @@ import {
   updateOrderFields,
 } from "../services/orders";
 import {
-  allocateCustomerPaymentToInvoices,
   applyInvoicePaymentAllocations,
   createOrUpdateInvoiceForDeliveredOrder,
   fetchInvoiceOrderFromDb,
@@ -506,6 +514,7 @@ const loggedInUser =
   whoPaid: "",
   collectionDate: new Date().toISOString().split("T")[0],
   notes: "",
+  paymentIntentId: createPaymentIntentId(),
 });
 const [salesOutstandingSnapshot, setSalesOutstandingSnapshot] = useState({
   totalOutstanding: 0,
@@ -2470,61 +2479,54 @@ const getCustomerInvoiceWatermark = (status) =>
   setSavingSalesPayment(true);
 
   try {
-   const { error } = await supabase
-  .from("customer_ledger")
-  .insert({
-    customer_account_id: customer.id,
-    customer_branch_id: selectedSalesBranch?.id || null,
-    branch_id: selectedSalesBranch?.id || null,
-    branch_name: selectedSalesBranch?.branch_name || null,
-    customer_name: customer.account_name,
-    entry_type: "PAYMENT",
-    transaction_type: "PAYMENT",
-    description: "Payment",
-    created_at: salesPaymentForm.collectionDate
+    const paymentDate = salesPaymentForm.collectionDate
       ? `${salesPaymentForm.collectionDate}T12:00:00`
-      : new Date().toISOString(),
-
-    reference_no: "SALES_REP_COLLECTION",
-
-    debit: 0,
-    credit: paymentAmount,
-    amount: paymentAmount,
-    payment_amount: paymentAmount,
-
-    payment_type: salesPaymentForm.paymentType,
-    payment_applies_to: "SALES_REP_COLLECTION",
-    collection_source: "SALES_REP_COLLECTION",
-
-    paid_by: salesPaymentForm.whoPaid,
-    who_paid: salesPaymentForm.whoPaid,
-
-   received_by: loggedInUser.staff_name || loggedInUser.username || null,
-  received_by_username: loggedInUser.username || null,
-  received_by_role: loggedInUser.role || null,
-  received_by_staff_id: loggedInUser.staff_id || null,
-
-  collected_by: loggedInUser.staff_id || loggedInUser.id || null,
-  collected_by_name: loggedInUser.staff_name || loggedInUser.username || null,
-  collected_by_username: loggedInUser.username || null,
-  collected_by_role: loggedInUser.role || null,
-
-    notes: [
-      selectedSalesBranch ? `Branch: ${selectedSalesBranch.branch_name}` : "",
-      salesPaymentForm.collectionDate
-        ? `Collection date: ${salesPaymentForm.collectionDate}`
-        : "",
-      salesPaymentForm.notes || "",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  });
-
-    if (error) throw error;
-
-    await allocateCustomerPaymentToInvoices({
+      : new Date().toISOString();
+    const snapshot = await loadCentralPaymentSnapshot({
       customerAccountId: customer.id,
       customerName: customer.account_name,
+      customer,
+      selectedBranchId: selectedSalesBranch?.id || "",
+    });
+    const allocationPreview = buildPaymentPreview({
+      invoices: snapshot.invoices,
+      allocations: snapshot.allocations,
+      amount: paymentAmount,
+      branchId: selectedSalesBranch?.id || "",
+    });
+
+    await postCanonicalCustomerPayment({
+      customerAccountId: customer.id,
+      customerBranchId: selectedSalesBranch?.id || null,
+      amount: paymentAmount,
+      paymentDate,
+      paymentMethod: salesPaymentForm.paymentType,
+      paymentSource: CANONICAL_PAYMENT_SOURCES.SALES_REP,
+      paymentReference: "SALES_REP_COLLECTION",
+      paidBy: salesPaymentForm.whoPaid,
+      collectorName:
+        loggedInUser.staff_name ||
+        loggedInUser.name ||
+        loggedInUser.username ||
+        "",
+      collectorStaffId:
+        loggedInUser.staff_id || loggedInUser.id || null,
+      collectorRole:
+        loggedInUser.role || loggedInUser.access_level || "Sales Rep",
+      paymentIntentId: salesPaymentForm.paymentIntentId,
+      notes: [
+        selectedSalesBranch ? `Branch: ${selectedSalesBranch.branch_name}` : "",
+        salesPaymentForm.collectionDate
+          ? `Collection date: ${salesPaymentForm.collectionDate}`
+          : "",
+        salesPaymentForm.notes || "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      metadata: {
+        payment_applies_to: "SALES_REP_COLLECTION",
+      },
+      allocations: allocationPreview.allocations,
     });
 
     alert("Collection saved successfully.");
@@ -2543,6 +2545,7 @@ const getCustomerInvoiceWatermark = (status) =>
         .toISOString()
         .split("T")[0],
       notes: "",
+      paymentIntentId: createPaymentIntentId(),
     });
   } catch (error) {
     alert(error.message);
@@ -4522,7 +4525,6 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
         <option value="Bank Transfer">
           Bank Transfer
         </option>
-        <option value="Account">Account</option>
         <option value="Cheque">Cheque</option>
       </select>
 

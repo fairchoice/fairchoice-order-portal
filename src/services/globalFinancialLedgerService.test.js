@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import {
@@ -56,4 +57,23 @@ test("normalizeLedgerRecord provides stable UI fields and numeric amounts", () =
   assert.equal(record.debitAmount, 0);
   assert.equal(record.status, "ARCHIVED");
   assert.equal(record.paymentMethod, "Cash");
+});
+
+test("global ledger reads through the password-validated paginated RPC", () => {
+  const service = fs.readFileSync(
+    new URL("./globalFinancialLedgerService.js", import.meta.url),
+    "utf8",
+  );
+  const migration = fs.readFileSync(
+    new URL(
+      "../../supabase/migrations/20260723123000_global_financial_ledger_owner_read.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(service, /\.rpc\("list_global_financial_history_v1"/);
+  assert.doesNotMatch(service, /\.from\("global_financial_history"\)/);
+  assert.match(migration, /central_payment_require_admin_credentials/);
+  assert.match(migration, /order by transaction_date desc, created_at desc, record_id desc/);
 });

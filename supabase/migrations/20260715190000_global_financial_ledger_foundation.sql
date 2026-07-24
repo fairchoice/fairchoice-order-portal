@@ -90,6 +90,9 @@ create table if not exists public.financial_ledger_events (
 
 create index if not exists financial_ledger_events_transaction_idx
   on public.financial_ledger_events (transaction_id, created_at desc);
+create unique index if not exists financial_ledger_events_create_unique_idx
+  on public.financial_ledger_events (transaction_id)
+  where event_type = 'CREATE';
 
 create or replace function public.touch_financial_transaction_updated_at()
 returns trigger
@@ -257,7 +260,8 @@ begin
 end;
 $$;
 
-create or replace view public.global_financial_history as
+create or replace view public.global_financial_history
+with (security_invoker = true) as
 select
   ft.id as record_id,
   null::uuid as archive_id,
@@ -314,29 +318,72 @@ insert into public.financial_transactions (
   source_type, source_id, transaction_type, customer_account_id,
   customer_branch_id, transaction_date, amount, debit_amount, credit_amount,
   payment_method, reference, description, staff_name, metadata,
-  created_by, created_at
+  status, created_by, created_at
 )
 select
   'CUSTOMER_PAYMENT', cp.id::text, 'PAYMENT', cp.customer_account_id,
-  cp.customer_branch_id, cp.payment_date, cp.amount, 0, cp.amount,
+  cp.customer_branch_id, cp.payment_date, cp.amount, 0,
+  case
+    when upper(coalesce(to_jsonb(cp)->>'verification_status', 'CONFIRMED'))
+      in ('PENDING', 'PENDING_VERIFICATION', 'REJECTED')
+      then 0
+    when upper(coalesce(cp.status, 'POSTED'))
+      in ('VOIDED', 'REVERSED', 'ARCHIVED', 'INACTIVE', 'CANCELLED')
+      then 0
+    else cp.amount
+  end,
   cp.payment_method, cp.payment_reference, cp.notes,
   coalesce(cp.paid_by, cp.created_by),
-  jsonb_build_object('legacy_status', cp.status, 'legacy_source', cp.source),
+  jsonb_build_object(
+    'source_status', cp.status,
+    'verification_status', to_jsonb(cp)->>'verification_status',
+    'payment_source', cp.source
+  ),
+  case
+    when upper(coalesce(cp.status, 'POSTED'))
+      in ('VOIDED', 'REVERSED', 'ARCHIVED', 'INACTIVE', 'CANCELLED')
+      then 'VOIDED'
+    else 'ACTIVE'
+  end,
   cp.created_by, cp.created_at
 from public.customer_payments cp
 on conflict (source_type, source_id) do nothing;
+
+insert into public.financial_ledger_events (
+  transaction_id, event_type, actor, event_data
+)
+select
+  ft.id,
+  'CREATE',
+  coalesce(nullif(ft.created_by, ''), nullif(ft.staff_name, ''), 'SYSTEM'),
+  jsonb_build_object(
+    'source_type', ft.source_type,
+    'source_id', ft.source_id,
+    'backfilled', true
+  )
+from public.financial_transactions ft
+where ft.source_type = 'CUSTOMER_PAYMENT'
+on conflict (transaction_id) where event_type = 'CREATE' do nothing;
 
 alter table public.financial_transactions enable row level security;
 alter table public.financial_transaction_archive enable row level security;
 alter table public.financial_ledger_events enable row level security;
 
-grant select, insert, update on public.financial_transactions to authenticated;
+revoke all on public.financial_transactions from public, anon, authenticated;
+revoke all on public.financial_transaction_archive from public, anon, authenticated;
+revoke all on public.financial_ledger_events from public, anon, authenticated;
+revoke all on public.global_financial_history from public, anon, authenticated;
+revoke execute on function public.archive_financial_transactions(uuid[], text, text)
+  from public, anon, authenticated;
+revoke execute on function public.restore_financial_transaction(uuid, text, text)
+  from public, anon, authenticated;
+revoke execute on function public.permanently_delete_financial_archive(uuid, text, text)
+  from public, anon, authenticated;
+
+grant select on public.financial_transactions to authenticated;
 grant select on public.financial_transaction_archive to authenticated;
 grant select on public.financial_ledger_events to authenticated;
 grant select on public.global_financial_history to authenticated;
-grant execute on function public.archive_financial_transactions(uuid[], text, text) to authenticated;
-grant execute on function public.restore_financial_transaction(uuid, text, text) to authenticated;
-grant execute on function public.permanently_delete_financial_archive(uuid, text, text) to authenticated;
 
 comment on table public.financial_transactions is 'Canonical active FairChoice financial ledger. Existing source records remain untouched.';
 comment on table public.financial_transaction_archive is 'Soft-deleted ledger snapshots retained for restore or audited permanent deletion.';

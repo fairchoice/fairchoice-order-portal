@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import { mergeWeeklyAccountPaymentRows } from "./weeklyAccountPayments.js";
 
@@ -78,19 +79,70 @@ test("row 221 appears exactly once after canonical migration", () => {
       collection_source: "DRIVER_PREVIOUS_BALANCE",
     }],
   });
-
   assert.equal(rows.length, 1);
   assert.equal(rows[0].canonical_payment_id, "canonical-221");
   assert.equal(rows[0].payment_amount, 43);
 });
 
 test("pending and voided canonical payments do not contribute", () => {
-  const base = { customer_account_id: "account-1", amount: 20, payment_date: "2026-07-22T10:00:00Z" };
+  const base = {
+    customer_account_id: "account-1",
+    amount: 20,
+    payment_date: "2026-07-22T10:00:00Z",
+  };
   const rows = mergeWeeklyAccountPaymentRows({
     canonicalPayments: [
-      { ...base, id: "pending", status: "POSTED", verification_status: "PENDING_VERIFICATION" },
-      { ...base, id: "voided", status: "VOIDED", verification_status: "CONFIRMED" },
+      {
+        ...base,
+        id: "pending",
+        status: "POSTED",
+        verification_status: "PENDING_VERIFICATION",
+      },
+      {
+        ...base,
+        id: "voided",
+        status: "VOIDED",
+        verification_status: "CONFIRMED",
+      },
     ],
   });
   assert.equal(rows.length, 0);
+});
+
+test("Weekly Account payment tables remain read-only", () => {
+  const source = fs.readFileSync(
+    new URL("../pages/AdminSetup/WeeklyAccount.jsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const forbidden of [
+    "editPayment",
+    "onEditPayment",
+    "handleEditPayment",
+    "editingPayment",
+    "setEditingPayment",
+    "Edit Payment",
+  ]) {
+    assert.doesNotMatch(source, new RegExp(forbidden, "i"));
+  }
+
+  assert.doesNotMatch(source, /<th[^>]*>\s*Action\s*<\/th>/i);
+  assert.doesNotMatch(
+    source,
+    /\.from\(["'](?:customer_ledger|customer_payments|financial_transactions)["']\)[\s\S]{0,200}\.update\(/,
+  );
+
+  for (const column of [
+    "Customer",
+    "Order No",
+    "Invoice Total",
+    "Paid Amount",
+    "Balance",
+    "Payment Date",
+    "Payment Type",
+    "Collected By",
+    "Collection Type",
+  ]) {
+    assert.match(source, new RegExp(`>${column}<`));
+  }
 });

@@ -5,6 +5,7 @@ const files = [
   "supabase/migrations/20260715190000_global_financial_ledger_foundation.sql",
   "supabase/migrations/20260718120000_global_ledger_auto_capture.sql",
   "supabase/migrations/20260718123000_global_ledger_owner_security.sql",
+  "supabase/migrations/20260723123000_global_financial_ledger_owner_read.sql",
 ];
 
 const sql = files.map((file) => {
@@ -24,8 +25,11 @@ for (const required of [
   "owner_archive_financial_transactions",
   "owner_restore_financial_transaction",
   "owner_delete_financial_archive",
+  "list_global_financial_history_v1",
   "central_payment_require_admin_credentials",
   "revoke execute on function public.archive_financial_transactions",
+  "with (security_invoker = true)",
+  "pending_verification",
 ]) {
   assert.ok(sql.includes(required), `Expected global ledger SQL to include: ${required}`);
 }
