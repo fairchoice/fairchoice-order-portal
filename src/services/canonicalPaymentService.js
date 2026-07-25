@@ -1,14 +1,17 @@
 import { supabase } from "./supabase.js";
 
-export const PAYMENT_POSTED_EVENT = "fairchoice:canonical-payment-posted";
+export const PAYMENT_POSTED_EVENT = "fairchoice:fc-payment-posted";
 
-export const CANONICAL_PAYMENT_SOURCES = Object.freeze({
+export const FC_PAYMENT_SOURCES = Object.freeze({
   CENTRAL_PAYMENT: "CENTRAL_PAYMENT",
   DRIVER_DELIVERY: "DRIVER_DELIVERY_COLLECTION",
   PREVIOUS_BALANCE: "PREVIOUS_BALANCE_COLLECTION",
   SALES_REP: "SALES_REP_COLLECTION",
   CUSTOMER_PORTAL: "CUSTOMER_PORTAL_PAYMENT",
 });
+
+// Backward-compatible export while existing pages are migrated to FC naming.
+export const CANONICAL_PAYMENT_SOURCES = FC_PAYMENT_SOURCES;
 
 export function createPaymentIntentId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -118,12 +121,44 @@ export async function postCanonicalCustomerPayment(input = {}) {
     throw new Error("A stable payment intent is required.");
   }
 
+  let storedUser = null;
+  if (typeof window !== "undefined") {
+    try {
+      storedUser = JSON.parse(
+        localStorage.getItem("loggedInUser") ||
+          localStorage.getItem("fairchoice_user") ||
+          "null"
+      );
+    } catch {
+      storedUser = null;
+    }
+  }
+
+  const securedInput = {
+    ...input,
+    ownerUsername: input.ownerUsername || storedUser?.username || null,
+    ownerPassword:
+      input.ownerPassword || storedUser?.fc_session_token || null,
+    metadata: {
+      ...(input.metadata || {}),
+      fc_staff_code: storedUser?.staff_code || null,
+      fc_login_code: storedUser?.login_code || null,
+      fc_username: storedUser?.username || null,
+    },
+  };
+
+  if (!securedInput.ownerUsername || !securedInput.ownerPassword) {
+    throw new Error("FC login session is missing. Sign out and sign in again.");
+  }
+
   const { data, error } = await supabase.rpc(
     "post_canonical_customer_payment_v1",
-    buildCanonicalPaymentRpcParams(input)
+    buildCanonicalPaymentRpcParams(securedInput)
   );
 
   if (error) throw error;
   notifyCanonicalPaymentPosted(data);
   return data;
 }
+
+export const postFcCustomerPayment = postCanonicalCustomerPayment;

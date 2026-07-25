@@ -301,6 +301,14 @@ export async function getOrders() {
 
       sourceStatus: item.source_status || "In Stock",
       includeInPicking: item.include_in_picking !== false,
+      pickingAction: item.picking_action || null,
+      picking_action: item.picking_action || null,
+      replacementProductId: item.replacement_product_id || null,
+      replacement_product_id: item.replacement_product_id || null,
+      replacementProductCode: item.replacement_product_code || null,
+      replacement_product_code: item.replacement_product_code || null,
+      replacementProductName: item.replacement_product_name || null,
+      replacement_product_name: item.replacement_product_name || null,
 
       net_total: item.net_total,
       gross_total: item.gross_total,

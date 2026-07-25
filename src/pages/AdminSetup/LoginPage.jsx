@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
-import { buildLegacyStaffProfile } from "../../services/authProfile";
 
 const TRADE_BUSINESS_TYPES = ["Off Licence", "Restaurant"];
 
@@ -54,7 +53,7 @@ export default function LoginPage({ onLogin }) {
 
     const submitLogin = async () => {
   const username = login.trim().toLowerCase();
-  const cleanPassword = password.trim();
+  const cleanPassword = password;
 
   if (!username || !cleanPassword) {
     alert("Username and password are required");
@@ -64,69 +63,29 @@ export default function LoginPage({ onLogin }) {
   setSubmittingLogin(true);
 
   try {
-    const { data: loginUser, error: loginError } = await supabase
-      .from("login_users")
-      .select("*")
-      .ilike("username", username)
-      .eq("password", cleanPassword)
-      .eq("active", true)
-      .maybeSingle();
+    const { data, error } = await supabase.rpc("fc_login_v1", {
+      p_username: username,
+      p_password: cleanPassword,
+    });
 
-    if (loginError) {
-      console.error("Login error:", loginError);
-      alert(`Login failed: ${loginError.message}`);
+    if (error) {
+      console.error("FC login error:", error);
+      alert(error.message || "Invalid username or password");
       return;
     }
 
-    if (!loginUser) {
-      alert("Invalid username or password");
-      return;
+    const profile = data?.profile;
+    const sessionToken = data?.session_token;
+
+    if (!profile || !sessionToken) {
+      throw new Error("FC Security did not return a valid login session.");
     }
 
-    let loggedInUser;
-
-    if (loginUser.role === "Customer") {
-      if (loginUser.password !== cleanPassword) {
-        alert("Invalid username or password");
-        return;
-      }
-
-      loggedInUser = {
-        ...loginUser,
-        id: loginUser.id,
-        login_user_id: loginUser.id,
-        username: loginUser.username,
-        access_level: loginUser.role,
-        permissions: loginUser.permissions || {},
-        staff_name: loginUser.staff_name || loginUser.username,
-        customer_account_id: loginUser.customer_account_id || null,
-      };
-    } else {
-      if (!loginUser.staff_id) {
-        console.error("[StaffAuth] Login has no staff_users link", {
-          loginUserId: loginUser.id,
-          username: loginUser.username,
-          role: loginUser.role,
-        });
-        alert("This staff login is not linked to an individual staff record. Contact an administrator.");
-        return;
-      }
-
-      const { data: staff, error: staffError } = await supabase
-        .from("staff_users")
-        .select("*")
-        .eq("id", loginUser.staff_id)
-        .eq("active", true)
-        .maybeSingle();
-
-      if (staffError) throw staffError;
-      if (!staff) {
-        alert("The linked staff record is inactive or unavailable.");
-        return;
-      }
-
-      loggedInUser = buildLegacyStaffProfile(loginUser, staff);
-    }
+    const loggedInUser = {
+      ...profile,
+      fc_session_token: sessionToken,
+      fc_session_expires_at: data?.expires_at || null,
+    };
 
     const { error: auditError } = await supabase
       .from("audit_logs")
@@ -136,11 +95,14 @@ export default function LoginPage({ onLogin }) {
         staff_name: loggedInUser.staff_name,
         role_access_level: loggedInUser.access_level,
         action_type: "Login",
-        page_module: "Login",
+        page_module: "FC Security",
         order_id: null,
         product_id: null,
         old_value: null,
-        new_value: null,
+        new_value: JSON.stringify({
+          staff_code: loggedInUser.staff_code || null,
+          login_code: loggedInUser.login_code || null,
+        }),
         created_at: new Date().toISOString(),
       });
 
@@ -148,19 +110,14 @@ export default function LoginPage({ onLogin }) {
       console.warn("Could not write login audit:", auditError);
     }
 
-    localStorage.setItem(
-      "fairchoice_user",
-      JSON.stringify(loggedInUser)
-    );
-    localStorage.setItem(
-      "loggedInUser",
-      JSON.stringify(loggedInUser)
-    );
+    localStorage.setItem("fairchoice_user", JSON.stringify(loggedInUser));
+    localStorage.setItem("loggedInUser", JSON.stringify(loggedInUser));
     localStorage.setItem("loginPortal", "staff");
 
+    setPassword("");
     onLogin(loggedInUser);
   } catch (error) {
-    console.error("Unexpected login error:", error);
+    console.error("Unexpected FC login error:", error);
     alert(`Login failed: ${error.message}`);
   } finally {
     setSubmittingLogin(false);
@@ -169,26 +126,9 @@ export default function LoginPage({ onLogin }) {
 
 
   const resetPassword = async () => {
-    const email = login.trim().toLowerCase();
-
-    if (!email || !email.includes("@")) {
-      alert("Enter your email address first, then click Reset Password.");
-      return;
-    }
-
     setSendingReset(true);
     try {
-      const redirectTo = `${window.location.origin}/`;
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo,
-      });
-
-      if (error) {
-        alert(`Could not send reset email: ${error.message}`);
-        return;
-      }
-
-      alert("Password reset email sent. Open the link in that email to choose a new password.");
+      alert("FC logins use username and password. Contact an administrator to reset this login password.");
     } finally {
       setSendingReset(false);
     }
@@ -364,7 +304,7 @@ export default function LoginPage({ onLogin }) {
               disabled={sendingReset}
               className="w-full mt-3 text-sm font-bold text-blue-700 disabled:text-slate-400"
             >
-              {sendingReset ? "Sending reset email..." : "Reset Password"}
+              {sendingReset ? "Opening help..." : "Password Help"}
             </button>
 
             <button

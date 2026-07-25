@@ -1,0 +1,33 @@
+export const FC_PERMISSIONS = Object.freeze({
+  ALL_ACCESS: "all_access",
+  PAGE_SALES_REP: "page.sales_rep",
+  PAGE_WAREHOUSE: "page.warehouse",
+  PAGE_PRODUCT_SETUP: "page.product_setup",
+  PAGE_CUSTOMER_CREDIT: "page.customer_credit",
+  PAGE_SUPPLIER_ACCOUNTS: "page.supplier_accounts",
+  ORDERS_TAKE: "orders.take",
+  ORDERS_VIEW_ALL: "orders.view_all",
+  ORDERS_EDIT: "orders.edit",
+  ORDERS_CANCEL: "orders.cancel",
+  WAREHOUSE_PICK: "warehouse.pick",
+  WAREHOUSE_PACK: "warehouse.pack",
+  WAREHOUSE_COMPLETE: "warehouse.complete",
+  DELIVERY_COMPLETE: "delivery.complete",
+  CUSTOMERS_CREDIT_CHECK: "customers.credit_check",
+  CUSTOMERS_CREATE_LOGIN: "customers.create_login",
+  CUSTOMERS_EDIT: "customers.edit",
+  PRODUCTS_SETUP: "products.setup",
+  PAYMENTS_COLLECT_CASH: "payments.collect_cash",
+  PAYMENTS_COLLECT_CARD: "payments.collect_card",
+  PAYMENTS_VIEW: "payments.view",
+  PAYMENTS_VOID: "payments.void",
+  SUPPLIERS_VIEW: "suppliers.view",
+  SUPPLIERS_PAY: "suppliers.pay",
+  STAFF_MANAGE: "staff.manage",
+  PERMISSIONS_MANAGE: "permissions.manage",
+});
+
+export function hasFcPermission(user, permissionKey) {
+  const permissions = user?.effective_permissions || user?.permissions || {};
+  return permissions.all_access === true || permissions[permissionKey] === true;
+}

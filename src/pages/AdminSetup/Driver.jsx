@@ -472,105 +472,105 @@ const printDeliveryNoteDocument = (order) => {
           : paymentForm.receivedBy,
     };
 
-    console.log("[Driver] saveCashCollection updateOrderExtraFields", {
-      orderNumber: order.orderId || order.order_number,
-      priceMode: order.priceMode || order.price_mode,
-      status: order.status,
-      payload: cashCollectionPayload,
-    });
+    
+   // Create the financial payment BEFORE marking the order as paid.
+// If this fails, the delivered order remains visible for retry.
+if (
+  shouldCreateCanonicalDeliveryPayment({
+    paymentCollected,
+    paymentType,
+    amount: paymentAmount,
+  })
+) {
+  const customerAccountId =
+    order.customerAccountId || order.customer_account_id || null;
 
-    await updateOrderExtraFields(order.orderId, cashCollectionPayload);
+  const customerBranchId =
+    order.customerBranchId || order.customer_branch_id || null;
 
-    console.log("[Driver] saveCashCollection calling ProcessingQueue save", {
-      orderNumber: order.orderId || order.order_number,
-      priceMode: order.priceMode || order.price_mode,
-      itemCount: (order.items || order.order_items || []).length,
-    });
+  const paymentReference =
+    order.order_number || order.orderId || order.id || "";
 
-    const processingQueueResult =
-      await saveConfirmedServerManagerOrderToProcessingQueue({
-        orderNumber: order.orderId || order.order_number,
-        confirmedAt:
-          order.deliveredAt ||
-          order.delivered_at ||
-          order.delivery_confirmed_at ||
-          order.confirmed_at ||
-          new Date().toISOString(),
-        fallbackOrder: {
-          ...order,
-          ...cashCollectionPayload,
-          order_number: order.order_number || order.orderId,
-          price_mode: order.price_mode || order.priceMode,
-          order_items: order.order_items || order.items || [],
-        },
-      });
+  const snapshot = await loadCentralPaymentSnapshot({
+    customerAccountId,
+    customerName:
+      order.companyName || order.company_name || "Unknown Customer",
+    selectedBranchId: customerBranchId || "",
+  });
 
-    console.log("[Driver] ProcessingQueue save result", {
-      orderNumber: order.orderId || order.order_number,
-      result: processingQueueResult,
-    });
+  const allocationPreview = buildPaymentPreview({
+    invoices: snapshot.invoices,
+    allocations: snapshot.allocations,
+    amount: paymentAmount,
+    branchId: customerBranchId || "",
+  });
 
-    // Payment is canonical first; the database creates exactly one linked
-    // customer_ledger PAYMENT row in the same transaction.
-    if (
-      shouldCreateCanonicalDeliveryPayment({
-        paymentCollected,
-        paymentType,
-        amount: paymentAmount,
-      })
-    ) {
-      const customerAccountId =
-        order.customerAccountId || order.customer_account_id || null;
-      const customerBranchId =
-        order.customerBranchId || order.customer_branch_id || null;
-      const paymentReference =
-        order.order_number || order.orderId || order.id || "";
-      const snapshot = await loadCentralPaymentSnapshot({
-        customerAccountId,
-        customerName:
-          order.companyName || order.company_name || "Unknown Customer",
-        selectedBranchId: customerBranchId || "",
-      });
-      const allocationPreview = buildPaymentPreview({
-        invoices: snapshot.invoices,
-        allocations: snapshot.allocations,
-        amount: paymentAmount,
-        branchId: customerBranchId || "",
-      });
+await postCanonicalCustomerPayment({
+  customerAccountId,
+  customerBranchId,
+  amount: paymentAmount,
+  paymentDate: new Date().toISOString(),
+  paymentMethod: paymentType,
+  paymentSource: CANONICAL_PAYMENT_SOURCES.DRIVER_DELIVERY,
+  paymentReference,
+  paidBy: paymentForm.paidBy,
+  collectorName:
+    loggedInUser.staff_name ||
+    loggedInUser.name ||
+    loggedInUser.username ||
+    paymentForm.receivedBy ||
+    "",
+  collectorStaffId:
+    loggedInUser.staff_id || loggedInUser.id || null,
+  collectorRole:
+    loggedInUser.role || loggedInUser.access_level || "Driver",
 
-      await postCanonicalCustomerPayment({
-        customerAccountId,
-        customerBranchId,
-        amount: paymentAmount,
-        paymentDate: new Date().toISOString(),
-        paymentMethod: paymentType,
-        paymentSource: CANONICAL_PAYMENT_SOURCES.DRIVER_DELIVERY,
-        paymentReference,
-        paidBy: paymentForm.paidBy,
-        collectorName:
-          loggedInUser.staff_name ||
-          loggedInUser.name ||
-          loggedInUser.username ||
-          paymentForm.receivedBy ||
-          "",
-        collectorStaffId:
-          loggedInUser.staff_id || loggedInUser.id || null,
-        collectorRole:
-          loggedInUser.role || loggedInUser.access_level || "Driver",
-        orderId: order.id || null,
-        paymentIntentId: `delivery:${order.id || order.orderId || order.order_number}`,
-        notes: `Driver delivery collection - ${paymentType}`,
-        metadata: {
-          payment_applies_to: paymentForm.paymentAppliesTo,
-          delivery_collection: true,
-        },
-        allocations: allocationPreview.allocations,
-      });
-    }
+  // Temporary until customer_payments.order_id is redesigned.
+  orderId: null,
 
-        alert("Cash collection saved.");
-    setCashCollectionOrder(null);
-    await refreshOrders();
+  paymentIntentId:
+    `delivery:${order.id || order.orderId || order.order_number}`,
+
+  notes: `Driver delivery collection - ${paymentType}`,
+
+  metadata: {
+    order_uuid: order.id || null,
+    order_number: order.order_number || order.orderId || null,
+    payment_applies_to: paymentForm.paymentAppliesTo,
+    delivery_collection: true,
+  },
+
+  allocations: allocationPreview.allocations,
+});
+}
+
+// Only mark the order as paid after the canonical payment succeeded.
+await updateOrderExtraFields(
+  order.orderId,
+  cashCollectionPayload
+);
+
+// Save the confirmed delivered order afterwards.
+await saveConfirmedServerManagerOrderToProcessingQueue({
+  orderNumber: order.orderId || order.order_number,
+  confirmedAt:
+    order.deliveredAt ||
+    order.delivered_at ||
+    order.delivery_confirmed_at ||
+    order.confirmed_at ||
+    new Date().toISOString(),
+  fallbackOrder: {
+    ...order,
+    ...cashCollectionPayload,
+    order_number: order.order_number || order.orderId,
+    price_mode: order.price_mode || order.priceMode,
+    order_items: order.order_items || order.items || [],
+  },
+});
+
+alert("Cash collection saved.");
+setCashCollectionOrder(null);
+await refreshOrders();
   } catch (error) {
     console.error("Cash collection error:", error);
     alert("Could not save cash collection: " + error.message);
