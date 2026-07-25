@@ -106,6 +106,8 @@ import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
 import ProductPromotions from "./AdminSetup/ProductPromotions";
 import AdminOrders from "./AdminOrders";
+import OrderPicking from "./OrderPicking";
+import { claimOrderForPicking } from "../services/picking";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
 
@@ -485,6 +487,7 @@ const loggedInUser =
  const [page, setPage] = useState(() =>
   resolveCustomerPortalPage({ hash: window.location.hash, ...portalRoleState })
  );
+ const [pickingOrderId, setPickingOrderId] = useState(null);
 
   const [customerAccounts, setCustomerAccounts] = useState([]);
   const [customerSearchTerm, setCustomerSearchTerm] = useState("");
@@ -1646,6 +1649,10 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       discount_applied_by_name: order.discount_applied_by_name || "",
       createdAt: new Date(order.created_at).toLocaleString(),
       status: order.status,
+      picking_status: order.picking_status || "Not Started",
+      picking_locked_by: order.picking_locked_by || null,
+      picking_locked_by_name: order.picking_locked_by_name || null,
+      picking_locked_at: order.picking_locked_at || null,
 
       driverName: order.driver_name || "",
       deliveredAt: order.delivered_at || "",
@@ -1677,6 +1684,14 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
         sourceStatus: item.source_status || "In Stock",
         pickedQty: Number(item.picked_qty || item.qty || 0),
         includeInPicking: item.include_in_picking !== false,
+        pickingAction: item.picking_action || null,
+        picking_action: item.picking_action || null,
+        replacementProductId: item.replacement_product_id || null,
+        replacement_product_id: item.replacement_product_id || null,
+        replacementProductCode: item.replacement_product_code || null,
+        replacement_product_code: item.replacement_product_code || null,
+        replacementProductName: item.replacement_product_name || null,
+        replacement_product_name: item.replacement_product_name || null,
       })),
     }));
 
@@ -3481,6 +3496,26 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     }
   };
 
+  const openPickingOrder = async (order) => {
+    try {
+      await claimOrderForPicking(order.orderId, loggedInUser);
+      await fetchOrders();
+      setPickingOrderId(order.orderId);
+      setPage("picking");
+    } catch (error) {
+      alert(error.message || "This order cannot be opened for picking.");
+    }
+  };
+
+  const closePickingOrder = () => {
+    setPickingOrderId(null);
+    setPage("orders");
+  };
+
+  const activePickingOrder = orders.find(
+    (order) => String(order.orderId) === String(pickingOrderId)
+  );
+
   const comingSoonTitle = getComingSoonTitle(page);
 
 const backOfficeContent = comingSoonTitle ? (
@@ -3499,6 +3534,17 @@ const backOfficeContent = comingSoonTitle ? (
         changeOrderStatus={changeOrderStatus}
         fetchOrders={fetchOrders}
         pricingSettings={pricingSettings}
+        openPickingOrder={openPickingOrder}
+      />
+    )}
+
+    {page === "picking" && activePickingOrder && (
+      <OrderPicking
+        order={activePickingOrder}
+        products={products}
+        currentUser={loggedInUser}
+        onExit={closePickingOrder}
+        onRefresh={fetchOrders}
       />
     )}
 

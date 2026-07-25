@@ -1198,7 +1198,11 @@ function buildLegacyStandardInvoiceHtml(
       ? false
       : shouldShowInvoiceHeaderFooter(settings, invoiceOrder);
   const referenceLabel = isOrderForm || isDeliveryNote ? "Order Number" : "Invoice Number";
-  const reference = getOrderReference(invoiceOrder) || "-";
+  const rawReference = getOrderReference(invoiceOrder) || "-";
+  const reference =
+    isOrderForm || isDeliveryNote
+      ? formatDisplayOrderId(rawReference)
+      : rawReference;
   const customerName = getCustomerName(invoiceOrder);
   const branchName = getBranchName(invoiceOrder);
   const deliveryAddress = getDeliveryAddress(invoiceOrder);
@@ -1531,7 +1535,11 @@ export function buildStandardInvoiceHtml(
     : !isOrderForm;
   const showInvoiceTotals = showPrices && !isOrderForm;
   const referenceLabel = isOrderForm || isDeliveryNote ? "Order Number" : "Invoice Number";
-  const reference = getOrderReference(invoiceOrder) || "-";
+  const rawReference = getOrderReference(invoiceOrder) || "-";
+  const reference =
+    isOrderForm || isDeliveryNote
+      ? formatDisplayOrderId(rawReference)
+      : rawReference;
   const customerName = getCustomerName(invoiceOrder);
   const branchName = getBranchName(invoiceOrder);
   const billingAddress = getBillingAddress(invoiceOrder) || getDeliveryAddress(invoiceOrder);
@@ -1816,7 +1824,10 @@ export function buildStandardInvoiceHtml(
             overflow: hidden;
             text-overflow: ellipsis;
           }
-          .description { font-weight: 700; }
+          .description {
+            font-weight: 700;
+            font-size: 11.8px;
+          }
           .summary-area {
             display: grid;
             grid-template-columns: minmax(0, 1fr) 78mm;
@@ -1971,11 +1982,8 @@ export function buildStandardInvoiceHtml(
                 <div class="panel-title">Customer</div>
                 <div class="panel-body">
                   <div class="customer-name">${escapeHtml(customerName)}</div>
-                  <div><span class="muted-label">Customer Code</span><br />${escapeHtml(customerCode)}</div>
+                  ${isOrderForm ? "" : `<div><span class="muted-label">Customer Code</span><br />${escapeHtml(customerCode)}</div>`}
                   ${billingAddress ? `<div class="address-block"><span class="muted-label">Billing Address</span><br />${escapeHtml(billingAddress)}</div>` : ""}
-                  <div class="address-block"><span class="muted-label">Deliver To</span><br />${escapeHtml(
-                    [branchName, deliveryAddress].filter(Boolean).join(", ")
-                  )}</div>
                 </div>
               </div>
               <div class="panel">

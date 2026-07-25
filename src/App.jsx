@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 import CustomerOrder from "./pages/CustomerOrder";
 import LoginPage from "./pages/AdminSetup/LoginPage";
-import { supabase } from "./services/supabase";
-import { loadAuthenticatedStaffProfile } from "./services/authProfile";
 
 import PriceManagement from "./pages/AdminSetup/PriceManagement";
 import PricingRule from "./pages/AdminSetup/PricingRule";
@@ -51,76 +49,9 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
-    let active = true;
-
-    const applySession = async (session, { allowCompatibleProfile = true } = {}) => {
-      if (!session) {
-        const compatibleProfile = allowCompatibleProfile ? loadCompatibleProfile() : null;
-
-        if (compatibleProfile) {
-          if (active) {
-            setProfile(compatibleProfile);
-            setAuthLoading(false);
-          }
-          return;
-        }
-
-        clearLegacyProfileStorage();
-        if (active) {
-          setProfile(null);
-          setAuthLoading(false);
-        }
-        return;
-      }
-
-      try {
-        const authenticatedProfile = await loadAuthenticatedStaffProfile(
-          supabase,
-          session
-        );
-
-        storeCompatibleProfile(authenticatedProfile);
-        if (active) {
-          setProfile(authenticatedProfile);
-        }
-      } catch (error) {
-        clearLegacyProfileStorage();
-        await supabase.auth.signOut();
-        if (active) {
-          setProfile(null);
-        }
-        console.error(error);
-      } finally {
-        if (active) {
-          setAuthLoading(false);
-        }
-      }
-    };
-
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (error) {
-        console.error("Could not restore Supabase Auth session", error);
-        clearLegacyProfileStorage();
-        if (active) {
-          setProfile(null);
-          setAuthLoading(false);
-        }
-        return;
-      }
-
-      applySession(data.session, { allowCompatibleProfile: true });
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      applySession(session, { allowCompatibleProfile: event !== "SIGNED_OUT" });
-    });
-
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
+    const compatibleProfile = loadCompatibleProfile();
+    setProfile(compatibleProfile);
+    setAuthLoading(false);
   }, []);
 
   const handleLogin = (userProfile) => {
@@ -128,10 +59,9 @@ export default function App() {
     setProfile(userProfile);
   };
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
     clearLegacyProfileStorage();
     setProfile(null);
-    await supabase.auth.signOut();
   };
 
   useEffect(() => {
@@ -141,13 +71,12 @@ export default function App() {
       localStorage.setItem(LAST_ACTIVE_KEY, Date.now().toString());
     };
 
-    const checkTimeout = async () => {
+    const checkTimeout = () => {
       const lastActive = Number(localStorage.getItem(LAST_ACTIVE_KEY) || 0);
 
       if (Date.now() - lastActive > SESSION_TIMEOUT) {
         clearLegacyProfileStorage();
         setProfile(null);
-        await supabase.auth.signOut();
         alert("You have been logged out after 10 minutes of inactivity.");
       }
     };

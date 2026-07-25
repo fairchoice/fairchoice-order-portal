@@ -20,6 +20,7 @@ export default function AdminOrders({
   changeOrderStatus = () => {},
   fetchOrders = async () => {},
   pricingSettings = {},
+  openPickingOrder = async () => {},
 } = {}) {
   const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
   
@@ -146,21 +147,6 @@ visibleOrders = visibleOrders.filter((order) => {
 
       return aGroup.localeCompare(bGroup);
     });
-
-  const startPicking = async (orderId) => {
-    if (!requirePermission(loggedInUser, "can_receive_order", "You cannot receive orders.")) return;
-
-    const order = findOrder(orderId);
-    await changeOrderStatus(orderId, "In Progress");
-    await logAction({
-      user: loggedInUser,
-      action_type: "Order received",
-      page_module: "Received Orders",
-      order_id: orderId,
-      old_value: order?.status,
-      new_value: "In Progress",
-    });
-  };
 
   const putBackToReceived = async (orderId) => {
     if (
@@ -747,6 +733,21 @@ const bulkRefreshOrderPrices = async (order) => {
                     {expandedOrders[order.orderId] ? "Hide" : "View / Prepare"}
                   </button>
 
+                  {!showArchive && hasPermission(loggedInUser, "can_receive_order") && (
+                    <button
+                      onClick={() => openPickingOrder(order)}
+                      disabled={
+                        order.status === "In Progress" &&
+                        order.picking_locked_by &&
+                        String(order.picking_locked_by) !== String(loggedInUser?.staff_id || loggedInUser?.id || loggedInUser?.username)
+                      }
+                      className={`bg-orange-600 text-white disabled:cursor-not-allowed disabled:bg-slate-300 ${btn}`}
+                      title={order.picking_locked_by_name ? `Picker: ${order.picking_locked_by_name}` : ""}
+                    >
+                      {order.picking_status === "Pending" ? "Continue Picking" : "Picking"}
+                    </button>
+                  )}
+
                   {!showArchive && hasPermission(loggedInUser, "can_add_product_to_order") && (
                     <button
                       onClick={() => openAddItemModal(order)}
@@ -921,17 +922,6 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
     })}
 
                   <div className="flex flex-wrap justify-end gap-2 pt-3">
-                    {!showArchive &&
-                      order.status === "Received" &&
-                      hasPermission(loggedInUser, "can_receive_order") && (
-                      <button
-                        onClick={() => startPicking(order.orderId)}
-                        className={`bg-orange-600 text-white ${btn}`}
-                      >
-                        Start Picking
-                      </button>
-                    )}
-
                     {!showArchive &&
                       order.status === "In Progress" &&
                       hasPermission(loggedInUser, "can_change_order_status_in_progress") && (
