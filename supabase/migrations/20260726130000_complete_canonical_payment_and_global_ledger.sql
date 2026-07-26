@@ -289,11 +289,12 @@ with approved as (
     coalesce(a.received_by_staff_id, a.collected_by),
     coalesce(a.collected_by_name, a.received_by, a.collector),
     coalesce(a.collected_by_role, a.received_by_role),
-    a.ledger_order_id,
+    null::uuid,
     jsonb_build_object(
       'legacy_source', 'customer_ledger',
       'legacy_source_id', a.ledger_id::text,
       'legacy_reference', a.reference,
+      'legacy_order_id', a.ledger_order_id,
       'legacy_payment_method', a.payment_method,
       'legacy_collection_source', a.collection_source,
       'migration_batch', '20260726130000_complete_canonical_payment_and_global_ledger',
