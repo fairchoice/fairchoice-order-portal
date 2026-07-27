@@ -3,6 +3,7 @@ import { formatCurrency } from "../../utils/currency";
 import {
   buildPaymentPreview,
   confirmOwnerBankTransfer,
+  rejectOwnerBankTransfer,
   createCentralPayment,
   listCentralPaymentRecords,
   loadCentralPaymentCustomers,
@@ -92,7 +93,7 @@ function PaymentRecordsPanel({ archived }) {
       {message && <div className="mb-3 rounded-xl bg-red-50 p-3 font-bold text-red-700">{message}</div>}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] text-sm">
-          <thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Date</th><th className="p-3">Customer</th><th className="p-3">Reference</th><th className="p-3">Method</th><th className="p-3">Paid By</th><th className="p-3 text-right">Amount</th></tr></thead>
+          <thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Date</th><th className="p-3">Customer</th><th className="p-3">Reference</th><th className="p-3">Method</th><th className="p-3">Paid By</th><th className="p-3">Status</th><th className="p-3 text-right">Amount</th></tr></thead>
           <tbody>
             {(result.records || []).map((payment) => (
               <tr key={payment.id} className="border-b align-middle">
@@ -101,10 +102,11 @@ function PaymentRecordsPanel({ archived }) {
                 <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td>
                 <td className="p-3">{payment.payment_method || "-"}</td>
                 <td className="p-3">{payment.paid_by || "-"}</td>
+                <td className="p-3 font-bold">{payment.verification_status === "REJECTED" ? "REJECTED" : payment.verification_status === "PENDING_VERIFICATION" ? "UNAPPROVED" : "APPROVED"}</td>
                 <td className="p-3 text-right font-bold">{formatCurrency(payment.amount || 0)}</td>
               </tr>
             ))}
-            {!result.records?.length && <tr><td colSpan="6" className="p-8 text-center text-slate-500">No payment records match these filters.</td></tr>}
+            {!result.records?.length && <tr><td colSpan="7" className="p-8 text-center text-slate-500">No payment records match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -513,6 +515,37 @@ export default function CentralPayment() {
     }
   };
 
+  const rejectBank = async (payment) => {
+    if (!ownerPassword) {
+      setError("Enter the Owner Financial Password in Manual Payment first.");
+      return;
+    }
+
+    const reason = window.prompt(
+      "Enter the compulsory rejection reason. The customer will not see this rejected payment."
+    );
+    if (!String(reason || "").trim()) {
+      setError("A rejection reason is compulsory.");
+      return;
+    }
+    if (!window.confirm("Reject this bank transfer? It will remain in Payment History and Global History but will be hidden from the customer statement.")) return;
+
+    setError("");
+    setSuccess("");
+    try {
+      await rejectOwnerBankTransfer({
+        payment,
+        currentUser,
+        ownerPassword,
+        reason,
+      });
+      setSuccess("Bank transfer rejected. It remains in internal history and has been removed from the customer display.");
+      await refreshSnapshot();
+    } catch (rejectError) {
+      setError(rejectError.message || "Could not reject bank transfer.");
+    }
+  };
+
   return (
     <div className="space-y-4 p-4">
       {isNisstajAdmin && (
@@ -571,6 +604,35 @@ export default function CentralPayment() {
         <SummaryCard label="Opening balance" value={snapshot?.selectedOpeningBalance ?? snapshot?.customerSummary?.openingBalance} neutral />
         <SummaryCard label="Pending bank transfers" value={pendingBankTransfers.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)} neutral />
       </div>
+      )}
+
+      {activeTab === "manual" && pendingBankTransfers.length > 0 && (
+        <section className="rounded-2xl border border-amber-200 bg-white p-4 shadow-sm">
+          <div className="mb-3">
+            <h3 className="text-lg font-extrabold">Bank Transfers Awaiting Approval</h3>
+            <p className="text-sm text-slate-600">Pending transfers do not affect the customer balance. Approve or reject each transfer here.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[860px] text-sm">
+              <thead><tr className="border-b bg-amber-50 text-left"><th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Paid By</th><th className="p-3 text-right">Amount</th><th className="p-3">Status</th><th className="p-3 text-right">Action</th></tr></thead>
+              <tbody>
+                {pendingBankTransfers.map((payment) => (
+                  <tr key={payment.id} className="border-b">
+                    <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
+                    <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td>
+                    <td className="p-3">{payment.paid_by || "-"}</td>
+                    <td className="p-3 text-right font-extrabold">{formatCurrency(payment.amount || 0)}</td>
+                    <td className="p-3"><span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-extrabold text-amber-800">UNAPPROVED</span></td>
+                    <td className="p-3 text-right">
+                      <button type="button" onClick={() => confirmBank(payment)} className="rounded-lg bg-green-700 px-3 py-2 text-xs font-bold text-white">Approve</button>
+                      <button type="button" onClick={() => rejectBank(payment)} className="ml-2 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white">Reject</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
       {activeTab === "manual" && (

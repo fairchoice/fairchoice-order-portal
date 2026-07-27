@@ -159,8 +159,11 @@ export default function Suppliers() {
       supplier_name: supplierForm.supplier_name.trim(),
       contact_name: supplierForm.contact_name.trim(),
       phone: supplierForm.telephone.trim() || supplierForm.mobile.trim(),
+      contact_number: supplierForm.telephone.trim() || supplierForm.mobile.trim(),
+      contact_person: supplierForm.contact_name.trim(),
       email: supplierForm.email.trim(),
       address: buildAddress(supplierForm),
+      vat_number: supplierForm.vat_number.trim() || null,
       payment_terms: buildPaymentTerms(supplierForm),
       vat_registered: supplierForm.vat_registered,
       notes: buildNotes(supplierForm),
@@ -244,6 +247,14 @@ export default function Suppliers() {
                     Phone
                   </div>
                   <div className="text-sm text-slate-700">{supplier.phone || "-"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">VAT Number</div>
+                  <div className="text-sm text-slate-700">{supplier.vat_number || "-"}</div>
+                </div>
+                <div className="md:col-span-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Address</div>
+                  <div className="text-sm text-slate-700">{supplier.address || "-"}</div>
                 </div>
               </div>
             </article>

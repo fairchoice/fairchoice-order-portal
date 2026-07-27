@@ -196,24 +196,27 @@ begin
     end if;
 
     select *
-    into v_staff
-    from public.staff_users s
-    where s.id = v_login.staff_id
-      and s.active is true
-    limit 1;
+into v_staff
+from public.staff_users s
+where s.id = v_login.staff_id
+  and s.active is true
+limit 1;
 
-    if not found then
-      raise exception 'The linked FC Staff Identity is inactive or missing.'
-        using errcode = '28000';
-    end if;
+if not found then
+  raise exception 'The linked FC Staff Identity is inactive or missing.'
+    using errcode = '28000';
+end if;
 
-    select coalesce(
-      jsonb_object_agg(permission_key, to_jsonb(allowed)),
-      '{}'::jsonb
-    )
-    into v_direct_permissions
-    from public.fc_staff_permissions
-    where staff_id = v_staff.id;
+select coalesce(
+  jsonb_object_agg(
+    fsp.permission_key,
+    to_jsonb(fsp.allowed)
+  ),
+  '{}'::jsonb
+)
+into v_direct
+from public.fc_staff_permissions as fsp
+where fsp.staff_id = v_staff.id;
 
     v_permissions := '{}'::jsonb;
 
@@ -279,13 +282,11 @@ begin
         end,
       'username', v_login.username,
       'staff_name',
-        coalesce(
-          case
-            when v_is_customer then v_login.staff_name
-            else v_staff.staff_name
-          end,
-          v_login.username
-        ),
+        case
+          when v_is_customer then v_login.username
+          else coalesce(v_staff.staff_name, v_login.username)
+        end,
+       
       'role', v_role,
       'access_level', v_role,
       'permissions', v_permissions,
@@ -400,15 +401,23 @@ begin
     if p_permission_key <> 'customer.portal.payment' then
       raise exception 'FC permission denied: %',p_permission_key using errcode='42501';
     end if;
-    return query select v_login.id,v_login.login_code,null::uuid,null::text,v_login.username,
-      coalesce(v_login.staff_name,v_login.username),v_role,v_login.customer_account_id,'{}'::jsonb;
-    return;
-  end if;
+  return query select
+  v_login.id,
+  v_login.login_code,
+  null::uuid,
+  null::text,
+  v_login.username,
+  v_login.username,
+  v_role,
+  v_login.customer_account_id,
+  '{}'::jsonb;
+return;
+end if;
 
   select * into v_staff from public.staff_users where id=v_login.staff_id and active is true limit 1;
   if not found then raise exception 'The linked FC Staff Identity is inactive or missing.' using errcode='28000'; end if;
   select coalesce(jsonb_object_agg(permission_key,to_jsonb(allowed)),'{}'::jsonb)
-    into v_direct from public.fc_staff_permissions where staff_id=v_staff.id;
+    into v_direct from public.fc_staff_permissions fsp where fsp.staff_id=v_staff.id;
     
  v_effective := '{}'::jsonb;
 
@@ -708,8 +717,8 @@ begin
         nullif(v_allocation->>'invoiceSourceId', ''),
         (v_allocation->>'allocatedAmount')::numeric,
         'automatic',
-        'active',
-        v_actor_name
+       'active',
+        coalesce(v_actor.staff_id, p_collector_staff_id)
       );
     end loop;
 

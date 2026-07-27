@@ -176,6 +176,13 @@ const getDocumentUrl = (record, kind) => {
   );
 };
 
+const isCustomerVisiblePayment = (payment = {}) => {
+  const method = String(payment.payment_method || payment.paymentMethod || "").toUpperCase();
+  const verification = String(payment.verification_status || payment.verificationStatus || "").toUpperCase();
+  if (method !== "BANK TRANSFER") return true;
+  return !["PENDING_VERIFICATION", "REJECTED"].includes(verification);
+};
+
 function StatusBadge({ status }) {
   const normalized = String(status || "UNPAID").replaceAll("_", " ").toUpperCase();
   const className =
@@ -205,7 +212,10 @@ function DocumentActions({ row, restricted }) {
   const isInvoice = row.type === "INVOICE";
   const isPaidInvoice =
     isInvoice && String(row.status || "").toUpperCase() === "PAID";
-  const label = isInvoice ? (isPaidInvoice ? "Download" : "View") : "Receipt";
+ const label =
+    isInvoice
+        ? "Download Invoice"
+        : "Receipt";
 
   return (
     <a
@@ -519,9 +529,10 @@ export default function CustomerCredit({ readOnly = false }) {
     ? snapshot?.selectedInvoices || []
     : snapshot?.allocatedInvoices || [];
 
-  const payments = hasSpecificBranch
+  const payments = (hasSpecificBranch
     ? snapshot?.selectedPayments || []
-    : snapshot?.payments || [];
+    : snapshot?.payments || []
+  ).filter(isCustomerVisiblePayment);
 
 
   const selectedOpeningBalance = Number(
@@ -593,6 +604,10 @@ export default function CustomerCredit({ readOnly = false }) {
             ? paymentByReference.get(lookupKey)
             : invoiceByReference.get(lookupKey);
 
+        if (type === "PAYMENT") {
+          const paymentRecord = source || transaction;
+          if (!isCustomerVisiblePayment(paymentRecord)) return false;
+        }
         return transactionMatchesSelectedBranch(transaction, source);
       })
       .map((transaction, index) => {
@@ -720,19 +735,47 @@ export default function CustomerCredit({ readOnly = false }) {
       };
     });
 
-    return rowsWithBranchBalance.sort((a, b) => {
-      const dateDifference =
-        asTimestamp(b.transactionDate) - asTimestamp(a.transactionDate);
+   return rowsWithBranchBalance.sort((a, b) => {
 
-      if (dateDifference !== 0) return dateDifference;
+  const dateDiff =
+    asTimestamp(b.transactionDate) -
+    asTimestamp(a.transactionDate);
 
-      const createdDifference =
-        asTimestamp(b.createdAt) - asTimestamp(a.createdAt);
+  if (dateDiff !== 0) return dateDiff;
 
-      if (createdDifference !== 0) return createdDifference;
+  const aInvoice = a.type === "INVOICE";
+  const bInvoice = b.type === "INVOICE";
 
-      return b.sortIndex - a.sortIndex;
-    });
+  const aPayment = a.type === "PAYMENT";
+  const bPayment = b.type === "PAYMENT";
+
+  // Same invoice
+// A payment allocated to an invoice must appear after that invoice.
+if (
+  aPayment &&
+  bInvoice &&
+  isPaymentLinkedToInvoice(a, b)
+) {
+  return 1;
+}
+
+if (
+  aInvoice &&
+  bPayment &&
+  isPaymentLinkedToInvoice(b, a)
+) {
+  return -1;
+}
+
+  const createdDiff =
+    asTimestamp(b.createdAt) -
+    asTimestamp(a.createdAt);
+
+  if (createdDiff !== 0) return createdDiff;
+
+  return b.sortIndex - a.sortIndex;
+});
+
   }, [
     snapshot,
     invoiceByReference,

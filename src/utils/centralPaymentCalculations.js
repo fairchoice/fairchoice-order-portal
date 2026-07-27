@@ -243,17 +243,74 @@ export function applyAllocationsToInvoices(invoices = [], allocations = []) {
     });
 }
 
+const hasTimeComponent = (value) => {
+  if (!value) return false;
+  const text = String(value).trim();
+  return text.includes("T") || /\d{2}:\d{2}/.test(text);
+};
+
+const firstValidTimestamp = (...values) => {
+  for (const value of values) {
+    if (!value) continue;
+    const timestamp = new Date(value).getTime();
+    if (!Number.isNaN(timestamp)) return new Date(timestamp).toISOString();
+  }
+
+  return new Date(0).toISOString();
+};
+
+const getInvoiceOrderingTimestamp = (invoice = {}) => {
+  const preciseInvoiceDate = hasTimeComponent(invoice.invoice_date)
+    ? invoice.invoice_date
+    : null;
+
+  return firstValidTimestamp(
+    invoice.delivered_at,
+    invoice.delivery_confirmed_at,
+    preciseInvoiceDate,
+    invoice.created_at,
+    invoice.updated_at,
+    invoice.invoice_date
+  );
+};
+
+const getPaymentOrderingTimestamp = (payment = {}) => {
+  const precisePaymentDate = hasTimeComponent(payment.payment_date)
+    ? payment.payment_date
+    : null;
+
+  return firstValidTimestamp(
+    payment.posted_at,
+    payment.received_at,
+    payment.collected_at,
+    payment.payment_timestamp,
+    precisePaymentDate,
+    payment.created_at,
+    payment.payment_date
+  );
+};
+
 const transactionSort = (a, b) => {
   const dateDiff =
-    new Date(normalizeDateValue(a.date)).getTime() -
-    new Date(normalizeDateValue(b.date)).getTime();
+    new Date(normalizeDateValue(a.orderingTimestamp)).getTime() -
+    new Date(normalizeDateValue(b.orderingTimestamp)).getTime();
   if (dateDiff !== 0) return dateDiff;
 
-  const typeRank = { OPENING: 0, INVOICE: 1, PAYMENT: 2 };
+  const typeRank = { OPENING: 0, PAYMENT: 1, INVOICE: 2 };
   const rankDiff = (typeRank[a.type] ?? 9) - (typeRank[b.type] ?? 9);
   if (rankDiff !== 0) return rankDiff;
 
-  return String(a.reference || "").localeCompare(String(b.reference || ""), undefined, {
+  const referenceDiff = String(a.reference || "").localeCompare(
+    String(b.reference || ""),
+    undefined,
+    {
+      numeric: true,
+      sensitivity: "base",
+    }
+  );
+  if (referenceDiff !== 0) return referenceDiff;
+
+  return String(a.id || "").localeCompare(String(b.id || ""), undefined, {
     numeric: true,
     sensitivity: "base",
   });
@@ -271,6 +328,7 @@ export function buildCustomerTransactionHistory({
       id: "opening-balance",
       type: "OPENING",
       date: openingDate,
+      orderingTimestamp: firstValidTimestamp(openingDate),
       reference: "Opening Balance",
       amount: money(openingBalance),
       paymentMethod: null,
@@ -285,6 +343,7 @@ export function buildCustomerTransactionHistory({
         id: `invoice-${getInvoiceReference(invoice)}`,
         type: "INVOICE",
         date: getInvoiceDate(invoice),
+        orderingTimestamp: getInvoiceOrderingTimestamp(invoice),
         reference: getInvoiceReference(invoice),
         amount: getInvoiceAmount(invoice),
         paymentMethod: null,
@@ -310,10 +369,22 @@ export function buildCustomerTransactionHistory({
         id: `payment-${payment.id || payment.payment_reference}`,
         type: "PAYMENT",
         date: payment.payment_date || payment.created_at,
+        orderingTimestamp: getPaymentOrderingTimestamp(payment),
         reference: payment.payment_reference || payment.reference_no || payment.id,
         amount: money(-Math.abs(Number(payment.amount || payment.credit || 0))),
         paymentMethod: payment.payment_method || payment.payment_type || "Other",
         paidBy: payment.paid_by || payment.who_paid || payment.collected_by || "",
+        collection_type: payment.collection_type || payment.collectionType || null,
+        resolved_collection_type:
+          payment.resolved_collection_type || payment.resolvedCollectionType || null,
+        transaction_reason: payment.transaction_reason || payment.transactionReason || null,
+        payment_applies_to: payment.payment_applies_to || payment.paymentAppliesTo || null,
+        invoice_reference:
+          payment.invoice_reference ||
+          payment.applies_to_reference ||
+          payment.allocated_invoice_reference ||
+          null,
+        metadata: payment.metadata || payment.payment_metadata || null,
         branchId:
           payment.customer_branch_id ??
           payment.customerBranchId ??
@@ -332,6 +403,31 @@ export function buildCustomerTransactionHistory({
     runningBalance = money(runningBalance + row.amount);
     return { ...row, runningBalance };
   });
+
+  console.table(
+    withBalances.map((row) => ({
+      id: row.id,
+      type: row.type,
+      reference: row.reference,
+      date: row.date,
+      orderingTimestamp: row.orderingTimestamp,
+      amount: row.amount,
+      runningBalance: row.runningBalance,
+    }))
+  );
+  console.log(
+    "[CustomerCreditPaymentTimestampCandidates]",
+    JSON.stringify(
+      payments.map((payment) => ({
+        id: payment.id,
+        payment_date: payment.payment_date,
+        posted_at: payment.posted_at,
+        received_at: payment.received_at,
+        collected_at: payment.collected_at,
+        created_at: payment.created_at,
+      }))
+    )
+  );
 
   return newestFirst ? [...withBalances].reverse() : withBalances;
 }
