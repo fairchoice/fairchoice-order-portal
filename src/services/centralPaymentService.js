@@ -749,6 +749,43 @@ export async function confirmOwnerBankTransfer({
   throw error;
 }
 
+export async function rejectOwnerBankTransfer({
+  payment,
+  currentUser,
+  ownerPassword,
+  reason,
+} = {}) {
+  if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
+    throw new Error("Only nisstaj_admin can reject bank transfers.");
+  }
+  if (!payment?.id) throw new Error("Pending bank transfer is required.");
+  if (!ownerPassword) throw new Error("Owner financial password is required.");
+  if (!String(reason || "").trim()) {
+    throw new Error("A bank rejection reason is compulsory.");
+  }
+  if (payment.payment_method !== "Bank Transfer") {
+    throw new Error("Only bank transfers can be rejected here.");
+  }
+  if (payment.verification_status !== "PENDING_VERIFICATION") {
+    throw new Error("This bank transfer is not pending verification.");
+  }
+
+  const { data, error } = await supabase.rpc("reject_owner_bank_transfer", {
+    p_owner_username: "nisstaj_admin",
+    p_owner_password: ownerPassword,
+    p_payment_id: payment.id,
+    p_reason: String(reason).trim(),
+  });
+
+  if (!error) return { payment: data };
+  if (isMissingRpcError(error)) {
+    throw new Error(
+      "Bank rejection is not installed. Apply the supplied bank-transfer rejection migration first."
+    );
+  }
+  throw error;
+}
+
 const requirePermanentDeleteAdmin = (currentUser, ownerPassword) => {
   if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
     throw new Error("Only nisstaj_admin can permanently delete archived payments.");

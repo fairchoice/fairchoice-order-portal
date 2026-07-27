@@ -55,6 +55,109 @@ test("calculates chronological running balance before newest-first display", () 
   );
 });
 
+test("payment clears previous balance before later same-day invoice", () => {
+  const input = {
+    openingBalance: 0,
+    openingDate: "2026-07-04T00:00:00Z",
+    invoices: [
+      {
+        id: "invoice-old",
+        invoice_number: "INV-537",
+        invoice_date: "2026-07-04",
+        delivered_at: "2026-07-04T09:00:00Z",
+        created_at: "2026-07-04T09:00:00Z",
+        invoice_total: 537.3,
+      },
+      {
+        id: "invoice-new",
+        invoice_number: "INV-375",
+        invoice_date: "2026-07-11",
+        delivered_at: "2026-07-11T15:00:00Z",
+        created_at: "2026-07-11T15:00:00Z",
+        invoice_total: 375.72,
+      },
+    ],
+    payments: [
+      {
+        id: "payment-237",
+        payment_reference: "PAY-237",
+        payment_date: "2026-07-10",
+        created_at: "2026-07-10T10:00:00Z",
+        amount: 237.3,
+        status: "POSTED",
+      },
+      {
+        id: "payment-300",
+        payment_reference: "PAY-300",
+        payment_date: "2026-07-11",
+        created_at: "2026-07-11T09:00:00Z",
+        amount: 300,
+        status: "POSTED",
+      },
+    ],
+  };
+  const rows = buildCustomerTransactionHistory({ ...input, newestFirst: false });
+
+  assert.deepEqual(
+    rows.map((row) => ({
+      type: row.type,
+      reference: row.reference,
+      balance: row.runningBalance,
+    })),
+    [
+      { type: "OPENING", reference: "Opening Balance", balance: 0 },
+      { type: "INVOICE", reference: "INV-537", balance: 537.3 },
+      { type: "PAYMENT", reference: "PAY-237", balance: 300 },
+      { type: "PAYMENT", reference: "PAY-300", balance: 0 },
+      { type: "INVOICE", reference: "INV-375", balance: 375.72 },
+    ]
+  );
+  assert.equal(rows.at(-1).runningBalance, 375.72);
+
+  const newestFirstRows = buildCustomerTransactionHistory(input);
+  assert.deepEqual(
+    newestFirstRows.map((row) => [row.reference, row.runningBalance]),
+    [
+      ["INV-375", 375.72],
+      ["PAY-300", 0],
+      ["PAY-237", 300],
+      ["INV-537", 537.3],
+      ["Opening Balance", 0],
+    ]
+  );
+});
+
+test("uses precise created_at to order a date-only payment before a later same-day invoice", () => {
+  const rows = buildCustomerTransactionHistory({
+    invoices: [
+      {
+        id: "later-invoice",
+        invoice_number: "INV-LATER",
+        invoice_date: "2026-07-11",
+        created_at: "2026-07-11T15:00:00Z",
+        invoice_total: 375.72,
+      },
+    ],
+    payments: [
+      {
+        id: "earlier-payment",
+        payment_reference: "PAY-EARLIER",
+        payment_date: "2026-07-11",
+        created_at: "2026-07-11T12:00:00Z",
+        amount: 300,
+      },
+    ],
+    newestFirst: false,
+  });
+
+  assert.deepEqual(
+    rows.map((row) => row.reference),
+    ["Opening Balance", "PAY-EARLIER", "INV-LATER"]
+  );
+  assert.equal(rows[1].date, "2026-07-11");
+  assert.equal(rows[1].orderingTimestamp, "2026-07-11T12:00:00.000Z");
+});
+
 test("marks invoices paid on full payment", () => {
   const result = allocatePaymentOldestFirst(invoices.slice(0, 1), 100);
   const allocated = applyAllocationsToInvoices(invoices.slice(0, 1), result.allocations);
@@ -148,6 +251,6 @@ test("orders same-date transactions deterministically", () => {
 
   assert.deepEqual(
     rows.map((row) => row.reference),
-    ["Opening Balance", "INV-1", "INV-2", "PAY-1"]
+    ["Opening Balance", "PAY-1", "INV-1", "INV-2"]
   );
 });

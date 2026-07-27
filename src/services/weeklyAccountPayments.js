@@ -104,15 +104,23 @@ export function mergeWeeklyAccountPaymentRows({
       invoice_total: 0,
       payment_amount: Number(row.amount || 0),
       payment_type: row.payment_method || "",
-      collected_by: row.paid_by || row.created_by || "",
+      collected_by:
+        row.collector_name ||
+        row.metadata?.collector_name ||
+        row.metadata?.driver_name ||
+        row.metadata?.sales_rep_name ||
+        row.created_by ||
+        "",
       sales_rep_name:
         collectionType === "Sales Rep Collection"
-          ? row.paid_by || row.created_by || ""
+          ? row.collector_name || row.metadata?.collector_name || row.metadata?.sales_rep_name || row.created_by || ""
           : "",
       driver_name:
         collectionType === "Driver"
-          ? row.paid_by || row.created_by || ""
+          ? row.collector_name || row.metadata?.collector_name || row.metadata?.driver_name || row.created_by || ""
           : "",
+      who_paid: row.paid_by || "",
+      collector_staff_id: row.collector_staff_id || null,
       collection_type: collectionType,
       created_at: getWeeklyPaymentDate(row),
       source_kind: "canonical",
@@ -203,53 +211,49 @@ export function mergeWeeklyAccountPaymentRows({
 }
 
 export async function loadWeeklyAccountPayments(supabase) {
-  const [canonicalResult, legacyResult, ordersResult] = await Promise.all([
-    supabase
-      .from("customer_payments")
-      .select(
-        "id,customer_account_id,customer_branch_id,branch_id,amount,payment_date,created_at,status,verification_status,source,idempotency_key,payment_reference,payment_method,paid_by,created_by,collector_role"
-      )
-      .in("status", ["POSTED", "ACTIVE"])
-      .in("verification_status", ["CONFIRMED", "NOT_REQUIRED"])
-      .order("payment_date", { ascending: false })
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("customer_ledger")
-      .select("*")
-      .eq("entry_type", "PAYMENT")
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("orders")
-      .select("*")
-      .eq("payment_collected", "Yes")
-      .gt("payment_amount", 0)
-      .order("created_at", { ascending: false }),
-  ]);
+  const canonicalResult = await supabase
+    .from("customer_payments")
+    .select(
+      "id,customer_account_id,customer_branch_id,branch_id,amount,payment_date,created_at,status,verification_status,source,idempotency_key,payment_reference,payment_method,paid_by,created_by,collector_staff_id,collector_name,collector_role,metadata"
+    )
+    .in("status", ["POSTED", "ACTIVE"])
+    .in("verification_status", ["CONFIRMED", "NOT_REQUIRED"])
+    .order("payment_date", { ascending: false })
+    .order("created_at", { ascending: false });
 
   if (canonicalResult.error) throw canonicalResult.error;
-  if (legacyResult.error) throw legacyResult.error;
-  if (ordersResult.error) throw ordersResult.error;
+
+  const canonicalPayments = canonicalResult.data || [];
 
   const accountIds = [
     ...new Set(
-      (canonicalResult.data || [])
+      canonicalPayments
         .map((row) => row.customer_account_id)
         .filter(Boolean)
     ),
   ];
+
   const branchIds = [
     ...new Set(
-      (canonicalResult.data || [])
+      canonicalPayments
         .map((row) => row.customer_branch_id || row.branch_id)
         .filter(Boolean)
     ),
   ];
+
   const [accountsResult, branchesResult] = await Promise.all([
     accountIds.length
-      ? supabase.from("customer_accounts").select("id,account_name").in("id", accountIds)
+      ? supabase
+          .from("customer_accounts")
+          .select("id,account_name")
+          .in("id", accountIds)
       : Promise.resolve({ data: [], error: null }),
+
     branchIds.length
-      ? supabase.from("customer_branches").select("id,branch_name").in("id", branchIds)
+      ? supabase
+          .from("customer_branches")
+          .select("id,branch_name")
+          .in("id", branchIds)
       : Promise.resolve({ data: [], error: null }),
   ]);
 
@@ -259,6 +263,7 @@ export async function loadWeeklyAccountPayments(supabase) {
       row.account_name,
     ])
   );
+
   const branchNames = new Map(
     (branchesResult.error ? [] : branchesResult.data || []).map((row) => [
       String(row.id),
@@ -267,9 +272,9 @@ export async function loadWeeklyAccountPayments(supabase) {
   );
 
   return mergeWeeklyAccountPaymentRows({
-    canonicalPayments: canonicalResult.data || [],
-    legacyPayments: legacyResult.data || [],
-    orderPayments: ordersResult.data || [],
+    canonicalPayments,
+    legacyPayments: [],
+    orderPayments: [],
     accountNames,
     branchNames,
   });
