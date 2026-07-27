@@ -86,6 +86,7 @@ const navSections = [
       { label: "Customer Credit", page: "credit", hash: "#credit", permission: "access_accounts" },
       { label: "Invoices", page: "invoicesPortal", permission: "access_accounts" },
       { label: "Weekly Account", page: "weeklyAccount", permission: "access_accounts" },
+      { label: "Expenses", page: "expenses" },
       { label: "Branch Separation", page: "branchSeparation", permission: "can_edit_security" },
     ],
   },

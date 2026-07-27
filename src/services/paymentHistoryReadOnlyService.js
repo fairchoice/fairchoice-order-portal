@@ -108,6 +108,7 @@ export function classifyPaymentRecord(payment) {
   const method = String(payment?.payment_method || "").toUpperCase();
 
   if (status === "VOIDED") return "voided";
+  if (method === "BANK TRANSFER" && verification === "REJECTED") return "rejected";
   if (method === "BANK TRANSFER" && verification === "PENDING_VERIFICATION") {
     return "pending";
   }

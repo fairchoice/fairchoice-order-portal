@@ -51,6 +51,7 @@ import CustomerCredit from "./AdminSetup/CustomerCredit";
 import CentralPayment from "./AdminSetup/CentralPayment";
 import BranchSeparation from "./AdminSetup/BranchSeparation";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
+import Expenses from "./AdminSetup/Expenses";
 import InvoicesPortal from "./AdminSetup/InvoicesPortal";
 import OrderSalesInvoices from "./AdminSetup/OrderSalesInvoices";
 import ReturnsPortal from "./AdminSetup/ReturnsPortal";
@@ -1660,6 +1661,16 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       paymentAmount: Number(order.payment_amount || 0),
       paymentCollected: order.payment_collected || "",
       payment_collected: order.payment_collected || "",
+      collectionType: order.collection_type || "",
+      collection_type: order.collection_type || "",
+      resolvedCollectionType: order.resolved_collection_type || "",
+      resolved_collection_type: order.resolved_collection_type || "",
+      outstandingCollectionStatus: order.outstanding_collection_status || "",
+      outstanding_collection_status: order.outstanding_collection_status || "",
+      transactionReason: order.transaction_reason || "",
+      transaction_reason: order.transaction_reason || "",
+      paymentAppliesTo: order.payment_applies_to || "",
+      payment_applies_to: order.payment_applies_to || "",
       paidBy: order.paid_by || "",
       receivedBy: order.received_by || "",
 
@@ -2216,51 +2227,69 @@ const getHomepageSubtitle = (item) => {
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
 );
-const getPaymentHistoryDateKey = (row = {}) => {
-  const value = row.created_at || row.date || row.payment_date || row.invoice_date;
-  const timestamp = new Date(value || 0);
-
-  if (Number.isNaN(timestamp.getTime())) return "";
-
-  return [
-    timestamp.getFullYear(),
-    String(timestamp.getMonth() + 1).padStart(2, "0"),
-    String(timestamp.getDate()).padStart(2, "0"),
-  ].join("-");
+const getPaymentMetadata = (row = {}) => {
+  const metadata = row.metadata || row.payment_metadata || row.meta || {};
+  if (metadata && typeof metadata === "object") return metadata;
+  if (typeof metadata === "string") {
+    try {
+      return JSON.parse(metadata);
+    } catch {
+      return {};
+    }
+  }
+  return {};
 };
 
-const getPaymentHistoryType = (row = {}) =>
-  String(row.entry_type || row.transaction_type || row.type || "")
+const normalizeCustomerCollectionType = (value) => {
+  const normalized = String(value || "")
     .trim()
-    .toUpperCase();
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_");
 
-const getPaymentInvoiceReference = (row = {}) =>
-  String(
-    row.invoice_reference ||
-      row.invoice_number ||
-      row.applies_to_reference ||
-      row.allocated_invoice_reference ||
-      row.allocated_invoice_number ||
-      row.payment_applies_to_reference ||
-      row.order_number ||
-      ""
-  ).trim();
+  if (["OUTSTANDING_PAYMENT", "PREVIOUS_BALANCE", "PREVIOUS_CREDIT_BALANCE"].includes(normalized)) {
+    return "OUTSTANDING_PAYMENT";
+  }
+  if (["PART_PAYMENT", "PARTIAL_PAYMENT"].includes(normalized)) {
+    return "PART_PAYMENT";
+  }
+  if (["UNALLOCATED_PAYMENT", "UNKNOWN_PAYMENT"].includes(normalized)) {
+    return "UNALLOCATED_PAYMENT";
+  }
+  return normalized || "TODAY_INVOICE";
+};
 
-const paymentIsLinkedToInvoice = (payment = {}, invoice = {}) => {
-  const paymentReference = getPaymentInvoiceReference(payment);
-  const invoiceReference = String(
-    invoice.reference_no ||
-      invoice.invoice_reference ||
-      invoice.invoice_number ||
-      invoice.order_number ||
-      ""
-  ).trim();
-
-  return Boolean(
-    paymentReference &&
-      invoiceReference &&
-      paymentReference === invoiceReference
+const getEffectiveCustomerCollectionType = (row = {}) => {
+  const metadata = getPaymentMetadata(row);
+  const collectionType = normalizeCustomerCollectionType(
+    row.collection_type ||
+      row.collectionType ||
+      metadata.collection_type ||
+      row.transaction_reason ||
+      metadata.transaction_reason ||
+      row.payment_applies_to ||
+      metadata.payment_applies_to
   );
+
+  if (collectionType !== "UNALLOCATED_PAYMENT") return collectionType;
+
+  return normalizeCustomerCollectionType(
+    row.resolved_collection_type ||
+      row.resolvedCollectionType ||
+      metadata.resolved_collection_type
+  );
+};
+
+const getCustomerCollectionLabel = (row = {}) => {
+  switch (getEffectiveCustomerCollectionType(row)) {
+    case "OUTSTANDING_PAYMENT":
+      return "Outstanding Payment";
+    case "PART_PAYMENT":
+      return "Part Payment";
+    case "TODAY_INVOICE":
+      return "Today's Invoice";
+    default:
+      return "Payment";
+  }
 };
 
 const sortCustomerPaymentHistory = (rows = []) => {
@@ -2270,36 +2299,23 @@ const sortCustomerPaymentHistory = (rows = []) => {
 
   return [...rows].sort((a, b) => {
     const aDate = new Date(
-      a.created_at || a.date || a.payment_date || a.invoice_date || 0
+      a.orderingTimestamp ||
+        a.ordering_timestamp ||
+        a.created_at ||
+        a.date ||
+        a.payment_date ||
+        a.invoice_date ||
+        0
     ).getTime();
     const bDate = new Date(
-      b.created_at || b.date || b.payment_date || b.invoice_date || 0
+      b.orderingTimestamp ||
+        b.ordering_timestamp ||
+        b.created_at ||
+        b.date ||
+        b.payment_date ||
+        b.invoice_date ||
+        0
     ).getTime();
-
-    const aDay = getPaymentHistoryDateKey(a);
-    const bDay = getPaymentHistoryDateKey(b);
-
-    // Keep the normal newest-first order when the rows are on different days.
-    if (aDay !== bDay) return bDate - aDate;
-
-    const aType = getPaymentHistoryType(a);
-    const bType = getPaymentHistoryType(b);
-
-    if (
-      (aType === "PAYMENT" && bType === "INVOICE") ||
-      (aType === "INVOICE" && bType === "PAYMENT")
-    ) {
-      const payment = aType === "PAYMENT" ? a : b;
-      const invoice = aType === "INVOICE" ? a : b;
-
-      if (paymentIsLinkedToInvoice(payment, invoice)) {
-        // Payment collected for this invoice: payment first, invoice second.
-        return aType === "PAYMENT" ? -1 : 1;
-      }
-
-      // Payment against a previous balance: invoice first, payment second.
-      return aType === "INVOICE" ? -1 : 1;
-    }
 
     if (aDate !== bDate) return bDate - aDate;
 
@@ -3601,6 +3617,7 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "invoicesPortal" && <InvoicesPortal />}
     {page === "returnsPortal" && <ReturnsPortal />}
     {page === "weeklyAccount" && <WeeklyAccount />}
+    {page === "expenses" && <Expenses />}
     {page === "stockhistory" && <StockHistory />}
     {page === "stockTaking" && (
       <StockTaking products={products} fetchProducts={fetchProducts} />
@@ -4366,9 +4383,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
               const invoiceOrder = isInvoice ? getInvoiceOrderForLedgerRow(row) : null;
               const invoicePaid = status === "PAID";
               const invoiceActionTarget = invoiceOrder || row;
-              const displayBalance = isInvoice
-                ? Number(row.remaining_amount ?? row.remainingAmount ?? balance)
-                : balance;
+              const displayBalance = balance;
 
               return (
                 <tr key={row.id} className="border-b">
@@ -4389,7 +4404,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                       <div className="text-xs text-slate-500 font-normal mt-1">
                         Type: {row.payment_type || "-"}<br />
                         Who Paid: {row.paid_by || "-"}<br />
-                        Applies To: Invoice
+                        Collection Type: {getCustomerCollectionLabel(row)}
                       </div>
                     )}
                   </td>
@@ -4419,22 +4434,26 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                   </td>
 
                   <td className="p-3 text-center">
-                    {isInvoice && invoicePaid ? (
-                      <button
-                        type="button"
-                        onClick={() => openCustomerInvoiceDocument(invoiceActionTarget, status)}
-                        className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                      >
-                        Download Invoice
-                      </button>
-                    ) : isInvoice ? (
-                      <button
-                        type="button"
-                        onClick={() => openCustomerInvoiceDocument(invoiceActionTarget, status)}
-                        className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                      >
-                        View Order
-                      </button>
+                    {isInvoice ? (
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openCustomerInvoiceDocument(invoiceActionTarget, "UNPAID")}
+                          className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                        >
+                          View Order
+                        </button>
+
+                        {invoicePaid && (
+                          <button
+                            type="button"
+                            onClick={() => openCustomerInvoiceDocument(invoiceActionTarget, "PAID")}
+                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                          >
+                            Download Invoice
+                          </button>
+                        )}
+                      </div>
                     ) : (
                       "-"
                     )}

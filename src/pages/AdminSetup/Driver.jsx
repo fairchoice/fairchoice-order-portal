@@ -12,9 +12,13 @@ import {
   withResolvedInvoicePaymentStatus,
 } from "../../services/centralInvoiceEngine";
 import {
-  buildPaymentPreview,
   loadCentralPaymentSnapshot,
+  loadReadOnlyCustomerCreditSnapshot,
 } from "../../services/centralPaymentService";
+import {
+  allocatePaymentOldestFirst,
+  applyAllocationsToInvoices,
+} from "../../utils/centralPaymentCalculations";
 import { saveConfirmedServerManagerOrderToProcessingQueue } from "../../services/orders";
 import {
   CANONICAL_PAYMENT_SOURCES,
@@ -27,6 +31,21 @@ import {
 } from "../../services/previousBalanceCollectionService";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
 
+const COMPLETED_COLLECTION_STORAGE_KEY =
+  "fairchoice_driver_completed_collection_orders";
+
+const loadCompletedCollectionOrderIds = () => {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem(COMPLETED_COLLECTION_STORAGE_KEY) || "[]"
+    );
+    return new Set((Array.isArray(saved) ? saved : []).map(String));
+  } catch {
+    return new Set();
+  }
+};
+
+
 export default function Driver({
   orders = [],
   changeOrderStatus = () => {},
@@ -37,6 +56,7 @@ export default function Driver({
   const [selectedDriver, setSelectedDriver] = useState("All");
   const [cashCollectionOrder, setCashCollectionOrder] = useState(null);
   const [returnOrder, setReturnOrder] = useState(null);
+  const [completedCollectionOrderIds, setCompletedCollectionOrderIds] = useState(loadCompletedCollectionOrderIds);
   const [selectedCreditCustomerId, setSelectedCreditCustomerId] = useState("");
   const [selectedCreditBranchId, setSelectedCreditBranchId] = useState("");
 
@@ -51,6 +71,7 @@ const [previousBalanceOutstanding, setPreviousBalanceOutstanding] = useState({
 });
 const [cashCollectionOutstanding, setCashCollectionOutstanding] = useState({
   totalOutstanding: 0,
+  selectedOutstanding: 0,
   branchOutstanding: {},
 });
 
@@ -92,12 +113,34 @@ const cleanLegacyTestAmount = (value, order = {}) => {
  
   const [paymentForm, setPaymentForm] = useState({
   paymentType: "Cash",
+  collectionType: "TODAY_INVOICE",
+  resolvedCollectionType: "",
+  outstandingCollectionStatus: "",
   paymentAmount: "",
-  paymentCollected: "Yes",
-  paidBy: "",  
-  receivedBy: "",
-  paymentAppliesTo: "Today Invoice",
+  paidBy: "",
 });
+
+const getCollectionOrderKey = (order = {}) =>
+  String(order.orderId || order.order_number || order.id || "");
+
+const markCollectionCompleted = (order = {}) => {
+  const completedOrderKey = getCollectionOrderKey(order);
+  if (!completedOrderKey) return;
+
+  setCompletedCollectionOrderIds((currentIds) => {
+    const nextIds = new Set(currentIds);
+    nextIds.add(completedOrderKey);
+
+    localStorage.setItem(
+      COMPLETED_COLLECTION_STORAGE_KEY,
+      JSON.stringify([...nextIds])
+    );
+
+    return nextIds;
+  });
+
+  setCashCollectionOrder(null);
+};
 
 useEffect(() => {
   refreshOrders();
@@ -197,32 +240,134 @@ useEffect(() => {
   const matchesDriver =
     selectedDriver === "All" || driverName === selectedDriver;
 
-  return (isReadyForDriver || isDeliveredWaitingPayment) && matchesDriver;
+  const collectionCompletedLocally = completedCollectionOrderIds.has(
+    String(order.orderId || order.order_number || order.id || "")
+  );
+
+  return (
+    (isReadyForDriver || isDeliveredWaitingPayment) &&
+    matchesDriver &&
+    !collectionCompletedLocally
+  );
+  });
+const loadDriverCreditOutstanding = async ({
+  customerAccountId,
+  customerName,
+  customerBranchId,
+  branchName,
+}) => {
+  const creditSnapshot = await loadReadOnlyCustomerCreditSnapshot({
+    customerAccountId,
+    customerName,
+    selectedBranchId: customerBranchId || "",
   });
 
-        const openCashCollection = async (order) => {
-          setCashCollectionOrder(order.orderId);
-          setCashCollectionOutstanding({ totalOutstanding: 0, branchOutstanding: {} });
+  const branchOutstanding = {};
 
-          setPaymentForm({
-      paymentType: order.paymentType || "Cash",
-      paymentAmount: cleanLegacyTestAmount(order.paymentAmount || order.payment_amount, order),
-      paymentCollected: order.paymentCollected || "Yes",
-      paidBy: cleanLegacyTestText(order.paidBy || order.paid_by),
-      receivedBy: cleanLegacyTestText(order.receivedBy || order.received_by),
-      paymentAppliesTo: order.paymentAppliesTo || "Today Invoice",
+  (creditSnapshot.branchSummaries || []).forEach((branch) => {
+    const outstanding = Number(branch.outstanding || 0);
+
+    if (branch.branchId) {
+      branchOutstanding[String(branch.branchId)] = outstanding;
+    }
+
+    if (branch.branchName) {
+      branchOutstanding[String(branch.branchName)] = outstanding;
+    }
+  });
+
+  const selectedBranchSummary =
+    creditSnapshot.branchSummary ||
+    (creditSnapshot.branchSummaries || []).find((branch) => {
+      const idMatches =
+        String(branch.branchId || "") === String(customerBranchId || "");
+
+      const nameMatches =
+        String(branch.branchName || "")
+          .trim()
+          .toLowerCase() ===
+        String(branchName || "")
+          .trim()
+          .toLowerCase();
+
+      return idMatches || nameMatches;
     });
 
-    try {
-      const snapshot = await loadCustomerOutstandingSnapshot({
-        customerAccountId: order.customerAccountId || order.customer_account_id,
-        customerName: order.companyName || order.company_name,
-      });
-      setCashCollectionOutstanding(snapshot);
-    } catch (error) {
-      console.error("Cash collection outstanding load error:", error);
-    }
-        };
+  const totalOutstanding = Number(
+    creditSnapshot.customerSummary?.outstanding || 0
+  );
+
+  const selectedOutstanding = Number(
+    selectedBranchSummary?.outstanding ?? totalOutstanding
+  );
+
+  return {
+    totalOutstanding,
+    selectedOutstanding,
+    branchOutstanding,
+  };
+};
+
+const openCashCollection = async (order) => {
+  setCashCollectionOrder(order.orderId);
+
+  setCashCollectionOutstanding({
+    totalOutstanding: 0,
+    selectedOutstanding: 0,
+    branchOutstanding: {},
+  });
+
+  const openingPaymentType =
+    order.paymentType || order.payment_type || "Cash";
+
+  const openingCollectionType =
+    openingPaymentType === "Credit"
+      ? "OUTSTANDING_PAYMENT"
+      : order.collectionType ||
+        order.collection_type ||
+        order.paymentAppliesTo ||
+        order.payment_applies_to ||
+        "TODAY_INVOICE";
+
+  setPaymentForm({
+    paymentType: openingPaymentType,
+    collectionType: openingCollectionType,
+    resolvedCollectionType:
+      order.resolvedCollectionType || order.resolved_collection_type || "",
+    outstandingCollectionStatus:
+      order.outstandingCollectionStatus ||
+      order.outstanding_collection_status ||
+      "",
+    paymentAmount: cleanLegacyTestAmount(
+      order.paymentAmount || order.payment_amount,
+      order
+    ),
+    paidBy: cleanLegacyTestText(order.paidBy || order.paid_by),
+  });
+
+  try {
+    const snapshot = await loadDriverCreditOutstanding({
+      customerAccountId:
+        order.customerAccountId || order.customer_account_id,
+      customerName:
+        order.companyName || order.company_name,
+      customerBranchId:
+        order.customerBranchId || order.customer_branch_id,
+      branchName:
+        order.branchName || order.branch_name,
+    });
+
+    setCashCollectionOutstanding(snapshot);
+  } catch (error) {
+    console.error("Cash collection outstanding load error:", error);
+
+    setCashCollectionOutstanding({
+      totalOutstanding: 0,
+      selectedOutstanding: 0,
+      branchOutstanding: {},
+    });
+  }
+};
 
   const savePreviousBalancePayment = async () => {
   const paymentAmount = Number(previousBalanceForm.amount || 0);
@@ -392,192 +537,383 @@ const printDeliveryNoteDocument = (order) => {
   win.document.close();
 };
 
+
+const normalizeCollectionType = (value) => {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_");
+
+  if (["OUTSTANDING_PAYMENT", "PREVIOUS_BALANCE", "PREVIOUS_CREDIT_BALANCE"].includes(normalized)) {
+    return "OUTSTANDING_PAYMENT";
+  }
+  if (["PART_PAYMENT", "PARTIAL_PAYMENT"].includes(normalized)) {
+    return "PART_PAYMENT";
+  }
+  if (["UNALLOCATED_PAYMENT", "UNKNOWN_PAYMENT"].includes(normalized)) {
+    return "UNALLOCATED_PAYMENT";
+  }
+  return "TODAY_INVOICE";
+};
+
+const collectionTypeToAllocationMode = (collectionType, resolvedCollectionType = "") => {
+  const effectiveType =
+    normalizeCollectionType(collectionType) === "UNALLOCATED_PAYMENT"
+      ? normalizeCollectionType(resolvedCollectionType)
+      : normalizeCollectionType(collectionType);
+
+  return effectiveType === "OUTSTANDING_PAYMENT"
+    ? "PREVIOUS_BALANCE"
+    : "TODAY_INVOICE";
+};
+
+const getInvoiceOrderKeys = (invoice = {}) =>
+  [
+    invoice.order_id,
+    invoice.orderId,
+    invoice.order_number,
+    invoice.orderNumber,
+    invoice.invoice_reference,
+    invoice.invoice_number,
+    invoice.reference_no,
+    invoice.id,
+  ]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+
+const buildDeliveryPaymentAllocations = ({
+  invoices = [],
+  allocations = [],
+  amount = 0,
+  branchId = "",
+  order = {},
+  mode = "TODAY_INVOICE",
+} = {}) => {
+  const availableInvoices = applyAllocationsToInvoices(invoices, allocations);
+  const orderKeys = new Set(
+    [order.id, order.orderId, order.order_number, order.orderNumber]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  const todayInvoices = availableInvoices.filter((invoice) =>
+    getInvoiceOrderKeys(invoice).some((key) => orderKeys.has(key))
+  );
+  const previousInvoices = availableInvoices.filter(
+    (invoice) => !todayInvoices.includes(invoice)
+  );
+
+  const allocateSequence = (groups) => {
+    let remaining = Number(amount || 0);
+    const combined = [];
+
+    groups.forEach((group) => {
+      if (remaining <= 0 || !group.length) return;
+      const preview = allocatePaymentOldestFirst(group, remaining, { branchId });
+      combined.push(...preview.allocations);
+      remaining = Number(preview.unallocatedAmount || 0);
+    });
+
+    return { allocations: combined, unallocatedAmount: remaining };
+  };
+
+  switch (String(mode || "TODAY_INVOICE").toUpperCase()) {
+    case "PREVIOUS_BALANCE":
+      return allocateSequence([previousInvoices]);
+    case "PREVIOUS_THEN_TODAY":
+      return allocateSequence([previousInvoices, todayInvoices]);
+    case "TODAY_THEN_PREVIOUS":
+      return allocateSequence([todayInvoices, previousInvoices]);
+    default:
+      return allocateSequence([todayInvoices]);
+  }
+};
+
   const saveCashCollection = async (order) => {
+    if (savingPayment) return;
 
-      if (savingPayment) return;
-    setSavingPayment(true);
-  try {
+    const collectionOrderKey = getCollectionOrderKey(order);
 
-  
-    const paymentType = paymentForm.paymentType;
-    const paymentCollected = paymentForm.paymentCollected;
-    const paymentAmount = Number(paymentForm.paymentAmount || 0);
-
-    // Only require amount + paid by when money was actually collected
-   if (paymentCollected === "Yes") {
-      if (!paymentAmount || paymentAmount <= 0) {
-        alert("Please enter payment amount.");
-        return;
-      }
-
-      if (!paymentForm.paidBy.trim()) {
-        alert("Please enter who paid.");
-        return;
-      }
-
-      if (isLegacyTestText(paymentForm.paidBy) || isLegacyTestText(paymentForm.receivedBy)) {
-        alert("Please replace test payer/receiver names before saving.");
-        return;
-      }
-
-      if (isLegacyTestAmount(paymentAmount) && isLegacyTestText(order.paidBy || order.paid_by)) {
-        alert("Please replace the old test payment amount before saving.");
-        return;
-      }
-    }
-
-    const orderBranchKey =
-      order.customerBranchId || order.customer_branch_id || order.branchName || order.branch_name;
-    const orderBranchOutstanding = orderBranchKey
-      ? Number(
-          cashCollectionOutstanding.branchOutstanding[orderBranchKey] ??
-            cashCollectionOutstanding.branchOutstanding[
-              order.branchName || order.branch_name
-            ] ??
-            0
-        )
-      : Number(cashCollectionOutstanding.totalOutstanding || 0);
-
-    if (
-      paymentCollected === "Yes" &&
-      paymentAmount > 0 &&
-      orderBranchOutstanding > 0 &&
-      paymentAmount > orderBranchOutstanding &&
-      !window.confirm(
-        "Payment is higher than selected branch outstanding. Continue?"
-      )
-    ) {
+    if (completedCollectionOrderIds.has(collectionOrderKey)) {
+      alert("This collection has already been saved. The order cannot be collected again.");
+      setCashCollectionOrder(null);
       return;
     }
 
-    const cashCollectionPayload = {
-      payment_type: paymentType,
+    const paymentType = String(paymentForm.paymentType || "Cash");
+    const isCredit = paymentType === "Credit";
+    const collectionType = isCredit
+      ? "OUTSTANDING_PAYMENT"
+      : normalizeCollectionType(paymentForm.collectionType);
+    const resolvedCollectionType =
+      collectionType === "UNALLOCATED_PAYMENT"
+        ? normalizeCollectionType(paymentForm.resolvedCollectionType)
+        : "";
+    const effectiveCollectionType =
+      collectionType === "UNALLOCATED_PAYMENT"
+        ? resolvedCollectionType
+        : collectionType;
+    const creditCollectionStatus = String(
+      paymentForm.outstandingCollectionStatus || ""
+    ).toUpperCase();
+    const creditPaymentCollected =
+      isCredit && creditCollectionStatus === "COLLECTED";
+    const paymentCollected = isCredit
+      ? creditPaymentCollected
+        ? "Yes"
+        : "No"
+      : "Yes";
+    const paymentAmount = Number(paymentForm.paymentAmount || 0);
+    const invoiceAmount = Number(getDriverTotals(order).grandTotal || 0);
 
-      payment_amount:
-        ["Credit", "Account"].includes(paymentType) || paymentCollected === "No"
-          ? 0
-          : paymentAmount,
+    if (!paymentForm.paidBy.trim()) {
+      alert("Please enter who paid / shop staff name.");
+      return;
+    }
 
-      payment_collected:
-        ["Credit", "Account"].includes(paymentType) ? "No" : paymentCollected,
+    if (isLegacyTestText(paymentForm.paidBy)) {
+      alert("Please replace the test payer name before saving.");
+      return;
+    }
 
-      paid_by:
-        ["Credit", "Account"].includes(paymentType) || paymentCollected === "No"
-          ? ""
-          : paymentForm.paidBy,
+    if (isCredit && !creditCollectionStatus) {
+      alert("Please select Payment Collected or Payment Not Collected.");
+      return;
+    }
 
-      received_by:
-        ["Credit", "Account"].includes(paymentType) || paymentCollected === "No"
-          ? ""
-          : paymentForm.receivedBy,
-    };
+    if (collectionType === "UNALLOCATED_PAYMENT" && !paymentForm.resolvedCollectionType) {
+      alert("Please choose how the unallocated payment should be resolved.");
+      return;
+    }
 
-    
-   // Create the financial payment BEFORE marking the order as paid.
-// If this fails, the delivered order remains visible for retry.
-if (
-  shouldCreateCanonicalDeliveryPayment({
-    paymentCollected,
-    paymentType,
-    amount: paymentAmount,
-  })
-) {
-  const customerAccountId =
-    order.customerAccountId || order.customer_account_id || null;
+    if ((!isCredit || creditPaymentCollected) && paymentAmount <= 0) {
+      alert("Please enter a payment amount greater than zero.");
+      return;
+    }
 
-  const customerBranchId =
-    order.customerBranchId || order.customer_branch_id || null;
+    setSavingPayment(true);
+    try {
+      const orderBranchKey =
+        order.customerBranchId ||
+        order.customer_branch_id ||
+        order.branchName ||
+        order.branch_name;
+      const orderBranchOutstanding = Number(
+        orderBranchKey
+          ? cashCollectionOutstanding.selectedOutstanding ??
+              cashCollectionOutstanding.totalOutstanding ??
+              0
+          : cashCollectionOutstanding.totalOutstanding ?? 0
+      );
 
-  const paymentReference =
-    order.order_number || order.orderId || order.id || "";
+      const availableAccountCredit = Math.max(0, -orderBranchOutstanding);
+      const payablePartPaymentInvoice = Math.max(
+        0,
+        invoiceAmount - availableAccountCredit
+      );
 
-  const snapshot = await loadCentralPaymentSnapshot({
-    customerAccountId,
-    customerName:
-      order.companyName || order.company_name || "Unknown Customer",
-    selectedBranchId: customerBranchId || "",
-  });
+      if (
+        !isCredit &&
+        effectiveCollectionType === "PART_PAYMENT" &&
+        (payablePartPaymentInvoice <= 0 || paymentAmount >= payablePartPaymentInvoice)
+      ) {
+        alert(
+          payablePartPaymentInvoice <= 0
+            ? "Part payment is not available because the account credit fully covers today's invoice."
+            : "Part payment must be less than today's invoice balance after account credit."
+        );
+        return;
+      }
 
-  const allocationPreview = buildPaymentPreview({
-    invoices: snapshot.invoices,
-    allocations: snapshot.allocations,
-    amount: paymentAmount,
-    branchId: customerBranchId || "",
-  });
+      if (
+        !isCredit &&
+        effectiveCollectionType === "OUTSTANDING_PAYMENT" &&
+        orderBranchOutstanding > 0 &&
+        paymentAmount > orderBranchOutstanding &&
+        !window.confirm(
+          "Payment is higher than the current outstanding balance. Continue?"
+        )
+      ) {
+        return;
+      }
 
-await postCanonicalCustomerPayment({
-  customerAccountId,
-  customerBranchId,
-  amount: paymentAmount,
-  paymentDate: new Date().toISOString(),
-  paymentMethod: paymentType,
-  paymentSource: CANONICAL_PAYMENT_SOURCES.DRIVER_DELIVERY,
-  paymentReference,
-  paidBy: paymentForm.paidBy,
-  collectorName:
-    loggedInUser.staff_name ||
-    loggedInUser.name ||
-    loggedInUser.username ||
-    paymentForm.receivedBy ||
-    "",
-  collectorStaffId:
-    loggedInUser.staff_id || loggedInUser.id || null,
-  collectorRole:
-    loggedInUser.role || loggedInUser.access_level || "Driver",
+      const collectorName =
+        loggedInUser.staff_name ||
+        loggedInUser.name ||
+        loggedInUser.full_name ||
+        loggedInUser.username ||
+        "";
 
-  // Temporary until customer_payments.order_id is redesigned.
-  orderId: null,
+      const transactionReason = isCredit
+        ? creditPaymentCollected
+          ? "OUTSTANDING_COLLECTED_WITH_NEW_CREDIT_INVOICE"
+          : "WEEKLY_CREDIT_NOT_COLLECTED"
+        : effectiveCollectionType;
 
-  paymentIntentId:
-    `delivery:${order.id || order.orderId || order.order_number}`,
+      const cashCollectionPayload = {
+        payment_type: paymentType,
+        payment_amount:
+          isCredit && !creditPaymentCollected ? 0 : paymentAmount,
+        payment_collected: paymentCollected,
+        paid_by: paymentForm.paidBy.trim(),
+        received_by: collectorName,
+        collection_type: collectionType,
+        resolved_collection_type: resolvedCollectionType || null,
+        transaction_reason: transactionReason,
+        payment_applies_to: isCredit
+          ? "PREVIOUS_BALANCE"
+          : collectionTypeToAllocationMode(
+              collectionType,
+              resolvedCollectionType
+            ),
+      };
 
-  notes: `Driver delivery collection - ${paymentType}`,
+      const shouldPostPayment =
+        paymentAmount > 0 && (!isCredit || creditPaymentCollected);
 
-  metadata: {
-    order_uuid: order.id || null,
-    order_number: order.order_number || order.orderId || null,
-    payment_applies_to: paymentForm.paymentAppliesTo,
-    delivery_collection: true,
-  },
+      if (
+        shouldPostPayment &&
+        (isCredit ||
+          shouldCreateCanonicalDeliveryPayment({
+            paymentCollected,
+            paymentType,
+            amount: paymentAmount,
+          }))
+      ) {
+        const customerAccountId =
+          order.customerAccountId || order.customer_account_id || null;
+        const customerBranchId =
+          order.customerBranchId || order.customer_branch_id || null;
+        const paymentReference =
+          order.order_number || order.orderId || order.id || "";
 
-  allocations: allocationPreview.allocations,
-});
-}
+        const snapshot = await loadCentralPaymentSnapshot({
+          customerAccountId,
+          customerName:
+            order.companyName || order.company_name || "Unknown Customer",
+          selectedBranchId: customerBranchId || "",
+        });
 
-// Only mark the order as paid after the canonical payment succeeded.
-await updateOrderExtraFields(
-  order.orderId,
-  cashCollectionPayload
-);
+        const allocationMode = isCredit
+          ? "PREVIOUS_BALANCE"
+          : collectionTypeToAllocationMode(
+              collectionType,
+              resolvedCollectionType
+            );
+        const allocationPreview = buildDeliveryPaymentAllocations({
+          invoices: snapshot.invoices,
+          allocations: snapshot.allocations,
+          amount: paymentAmount,
+          branchId: customerBranchId || "",
+          order,
+          mode: allocationMode,
+        });
 
-// Save the confirmed delivered order afterwards.
-await saveConfirmedServerManagerOrderToProcessingQueue({
-  orderNumber: order.orderId || order.order_number,
-  confirmedAt:
-    order.deliveredAt ||
-    order.delivered_at ||
-    order.delivery_confirmed_at ||
-    order.confirmed_at ||
-    new Date().toISOString(),
-  fallbackOrder: {
-    ...order,
-    ...cashCollectionPayload,
-    order_number: order.order_number || order.orderId,
-    price_mode: order.price_mode || order.priceMode,
-    order_items: order.order_items || order.items || [],
-  },
-});
+        await postCanonicalCustomerPayment({
+          customerAccountId,
+          customerBranchId,
+          amount: paymentAmount,
+          paymentDate: new Date().toISOString(),
+          paymentMethod: paymentType,
+          paymentSource: CANONICAL_PAYMENT_SOURCES.DRIVER_DELIVERY,
+          paymentReference,
+          paidBy: paymentForm.paidBy.trim(),
+          collectorName,
+          collectorStaffId: loggedInUser.staff_id || loggedInUser.id || null,
+          collectorRole:
+            loggedInUser.role || loggedInUser.access_level || "Driver",
+          orderId: null,
+          paymentIntentId: `delivery:${
+            order.id || order.orderId || order.order_number
+          }:${collectionType}:${paymentAmount}`,
+          notes: `Delivery collection - ${paymentType} - ${transactionReason}`,
+          metadata: {
+            order_uuid: order.id || null,
+            order_number: order.order_number || order.orderId || null,
+            collection_type: collectionType,
+            resolved_collection_type: resolvedCollectionType || null,
+            outstanding_collection_status: isCredit
+              ? creditCollectionStatus
+              : null,
+            transaction_reason: transactionReason,
+            payment_applies_to: allocationMode,
+            delivery_collection: true,
+            collector_staff_name: collectorName,
+            collector_username: loggedInUser.username || null,
+            collector_staff_code: loggedInUser.staff_code || null,
+          },
+          allocations: allocationPreview.allocations,
+        });
 
-alert("Cash collection saved.");
-setCashCollectionOrder(null);
-await refreshOrders();
-  } catch (error) {
-    console.error("Cash collection error:", error);
-    alert("Could not save cash collection: " + error.message);
-  } finally {
-    setSavingPayment(false);
-  }
-};
+        // The canonical payment is now saved. Hide and lock this order
+        // immediately so a later order-field update error cannot cause
+        // the same collection to be entered again.
+        markCollectionCompleted(order);
+      }
+
+      try {
+        await updateOrderExtraFields(order.orderId, {
+          payment_type: cashCollectionPayload.payment_type,
+          payment_amount: cashCollectionPayload.payment_amount,
+          payment_collected: cashCollectionPayload.payment_collected,
+          paid_by: cashCollectionPayload.paid_by,
+          received_by: cashCollectionPayload.received_by,
+        });
+      } catch (orderUpdateError) {
+        console.error(
+          "Payment saved, but order payment fields could not be updated:",
+          orderUpdateError
+        );
+      }
+
+      await saveConfirmedServerManagerOrderToProcessingQueue({
+        orderNumber: order.orderId || order.order_number,
+        confirmedAt:
+          order.deliveredAt ||
+          order.delivered_at ||
+          order.delivery_confirmed_at ||
+          order.confirmed_at ||
+          new Date().toISOString(),
+        fallbackOrder: {
+          ...order,
+          ...cashCollectionPayload,
+          outstanding_collection_status: isCredit
+            ? creditCollectionStatus
+            : null,
+          amount_not_collected:
+            isCredit && !creditPaymentCollected ? invoiceAmount : 0,
+          order_number: order.order_number || order.orderId,
+          price_mode: order.price_mode || order.priceMode,
+          order_items: order.order_items || order.items || [],
+        },
+      });
+
+      // Credit-not-collected has no canonical payment, so mark it
+      // completed after the weekly-credit queue entry is saved.
+      if (!shouldPostPayment) {
+        markCollectionCompleted(order);
+      }
+
+      alert(
+        isCredit
+          ? creditPaymentCollected
+            ? "Outstanding payment saved first and today's invoice kept in Customer Credit."
+            : "Today's invoice saved to weekly credit as amount not collected."
+          : "Payment collection saved."
+      );
+
+      try {
+        await refreshOrders();
+      } catch (refreshError) {
+        console.error("Orders could not be refreshed after collection:", refreshError);
+      }
+    } catch (error) {
+      console.error("Cash collection error:", error);
+      alert("Could not save collection: " + error.message);
+    } finally {
+      setSavingPayment(false);
+    }
+  };
 
   return (
     <div className="p-4">
@@ -756,6 +1092,9 @@ await refreshOrders();
                 <h3 className="font-bold">
                   {formatDisplayOrderId(order.orderId || order.order_number)} |{" "}
                   {order.companyName || order.company_name || "No company"}
+                  {(order.branchName || order.branch_name)
+                    ? ` | ${order.branchName || order.branch_name}`
+                    : ""}
                 </h3>
 
                 <div className="text-base font-extrabold text-red-600">
@@ -867,133 +1206,471 @@ await refreshOrders();
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <div className="border rounded-xl p-3 bg-white">
-                    <div className="text-xs font-bold text-slate-500">
-                      Customer outstanding
-                    </div>
-                    <div className="text-xl font-extrabold text-red-700">
-                      {formatCurrency(cashCollectionOutstanding.totalOutstanding || 0)}
-                    </div>
-                  </div>
-
-                  {(order.customerBranchId ||
+                {(() => {
+                  const displayBranchKey =
+                    order.customerBranchId ||
                     order.customer_branch_id ||
                     order.branchName ||
-                    order.branch_name) && (
+                    order.branch_name;
+
+                  const displayOutstanding = Number(
+                    displayBranchKey
+                      ? cashCollectionOutstanding.selectedOutstanding ??
+                          cashCollectionOutstanding.totalOutstanding ??
+                          0
+                      : cashCollectionOutstanding.totalOutstanding ?? 0
+                  );
+
+                  return (
                     <div className="border rounded-xl p-3 bg-white">
                       <div className="text-xs font-bold text-slate-500">
-                        Selected branch outstanding
+                        {displayBranchKey ? "Branch outstanding" : "Customer outstanding"}
                       </div>
                       <div className="text-xl font-extrabold text-red-700">
-                        {formatCurrency(
-                          cashCollectionOutstanding.branchOutstanding[
-                            order.customerBranchId || order.customer_branch_id
-                          ] ??
-                            cashCollectionOutstanding.branchOutstanding[
-                              order.branchName || order.branch_name
-                            ] ??
-                            0
-                        )}
+                        {formatCurrency(Math.abs(displayOutstanding))}
                       </div>
                     </div>
-                  )}
-                </div>
+                  );
+                })()}
 
-                <select
-                  value={paymentForm.paymentType}
-                  onChange={(e) =>
-                    setPaymentForm({
-                      ...paymentForm,
-                      paymentType: e.target.value,
-                    })
-                  }
-                  className="w-full border rounded-xl p-3 font-bold bg-white"
-                >
-                  <option value="Cash">Cash</option>
-                  <option value="Bank Transfer">Bank Transfer</option>
-                  <option value="Account">Account</option>
-                  <option value="Credit">Credit</option>
-                </select>
+                {(() => {
+  const invoiceAmount = Number(
+    getDriverTotals(order).grandTotal || 0
+  );
 
-                  <select
-                    value={paymentForm.paymentAppliesTo}
-                    onChange={(e) =>
-                      setPaymentForm({
-                        ...paymentForm,
-                        paymentAppliesTo: e.target.value,
-                      })
-                    }
-                    className="w-full border rounded-xl p-3 bg-white"
-                  >
-                    <option value="Today Invoice">
-                      Today's Invoice
-                    </option>
+  const branchKey =
+    order.customerBranchId ||
+    order.customer_branch_id ||
+    order.branchName ||
+    order.branch_name;
 
-                    <option value="Previous Credit Balance">
-                      Previous Credit Balance
-                    </option>
+  const currentOutstanding = Number(
+    branchKey
+      ? cashCollectionOutstanding.selectedOutstanding ??
+          cashCollectionOutstanding.totalOutstanding ??
+          0
+      : cashCollectionOutstanding.totalOutstanding ?? 0
+  );
 
-                    
-                  </select>
-                    <input
-                      type="number"
-                      placeholder="Amount Collected"
-                      value={paymentForm.paymentAmount}
-                      onChange={(e) =>
-                        setPaymentForm({
-                          ...paymentForm,
-                          paymentAmount: e.target.value,
-                        })
-                      }
-                      className="w-full border rounded-xl p-3"
-                    />
+  /*
+   * Positive outstanding means money is owed.
+   * Negative outstanding means the customer has account credit.
+   *
+   * The Customer Credit snapshot already includes today's delivered invoice,
+   * so do not add today's invoice a second time here.
+   */
+  const outstandingDebt = Math.max(0, currentOutstanding);
+  const availableAccountCredit = Math.max(0, -currentOutstanding);
 
-                    <select
-                      value={paymentForm.paymentCollected}
-                      onChange={(e) =>
-                        setPaymentForm({
-                          ...paymentForm,
-                          paymentCollected: e.target.value,
-                        })
-                      }
-                      className="w-full border rounded-xl p-3 bg-white"
-                    >
-                      <option value="Yes">Payment Collected</option>
-                      <option value="No">Payment Not Collected</option>
-                    </select>
+  const accountBalanceIncludingToday = Math.abs(currentOutstanding);
 
-                    <input
-                      placeholder="Who paid / shop staff name"
-                      value={paymentForm.paidBy}
-                      onChange={(e) =>
-                        setPaymentForm({
-                          ...paymentForm,
-                          paidBy: e.target.value,
-                        })
-                      }
-                      className="w-full border rounded-xl p-3"
-                    />
+  const collectionType = normalizeCollectionType(
+    paymentForm.collectionType
+  );
 
-                    <input
-                      placeholder="Who received payment"
-                      value={paymentForm.receivedBy || ""}
-                      onChange={(e) =>
-                        setPaymentForm({
-                          ...paymentForm,
-                          receivedBy: e.target.value,
-                        })
-                      }
-                      className="w-full border rounded-xl p-3"
-                    />
-             
-                 <button
-                disabled={savingPayment}
-                onClick={() => saveCashCollection(order)}
-                className="w-full bg-green-700 text-white py-3 rounded-xl font-bold disabled:bg-slate-400"
+  const effectiveCollectionType =
+    collectionType === "UNALLOCATED_PAYMENT"
+      ? normalizeCollectionType(
+          paymentForm.resolvedCollectionType
+        )
+      : collectionType;
+
+  const isCredit =
+    paymentForm.paymentType === "Credit";
+
+  const creditCollectionStatus = String(
+    paymentForm.outstandingCollectionStatus || ""
+  ).toUpperCase();
+
+  const creditPaymentCollected =
+    isCredit &&
+    creditCollectionStatus === "COLLECTED";
+
+  const amountIsFixed =
+    !isCredit &&
+    effectiveCollectionType === "TODAY_INVOICE";
+
+  const enteredAmount = Number(
+    paymentForm.paymentAmount || 0
+  );
+
+  /*
+   * Part Payment calculation:
+   *
+   * Existing return/account credit is deducted from
+   * today's invoice before calculating the remaining
+   * invoice amount.
+   */
+  const creditAppliedToPartPayment = isCredit
+    ? 0
+    : availableAccountCredit;
+
+  const payablePartPaymentInvoice = Math.max(
+    0,
+    invoiceAmount - creditAppliedToPartPayment
+  );
+
+  const remainingToday = Math.max(
+    0,
+    payablePartPaymentInvoice - enteredAmount
+  );
+
+  /*
+   * Remaining balance after the entered collection.
+   * The starting figure is the current Customer Credit balance,
+   * which already includes today's invoice.
+   */
+  const remainingAccountCredit = Math.max(
+    0,
+    accountBalanceIncludingToday - enteredAmount
+  );
+
+  const partPaymentAvailable =
+    payablePartPaymentInvoice > 0;
+
+  const canSave =
+    Boolean(paymentForm.paidBy.trim()) &&
+    (
+      isCredit
+        ? Boolean(creditCollectionStatus) &&
+          (
+            !creditPaymentCollected ||
+            enteredAmount > 0
+          )
+        : enteredAmount > 0
+    ) &&
+    (
+      isCredit ||
+      collectionType !== "UNALLOCATED_PAYMENT" ||
+      Boolean(paymentForm.resolvedCollectionType)
+    ) &&
+    (
+      isCredit ||
+      effectiveCollectionType !== "PART_PAYMENT" ||
+      (
+        partPaymentAvailable &&
+        enteredAmount > 0 &&
+        enteredAmount < payablePartPaymentInvoice
+      )
+    );
+
+  return (
+    <>
+      <label className="text-xs font-bold uppercase text-slate-500">
+        Payment Type
+      </label>
+
+      <select
+        value={paymentForm.paymentType}
+        onChange={(e) => {
+          const paymentType = e.target.value;
+          const isNextCredit =
+            paymentType === "Credit";
+
+          const nextCollectionType = isNextCredit
+            ? "OUTSTANDING_PAYMENT"
+            : paymentForm.collectionType;
+
+          setPaymentForm({
+            ...paymentForm,
+            paymentType,
+            collectionType: nextCollectionType,
+            resolvedCollectionType: isNextCredit
+              ? ""
+              : paymentForm.resolvedCollectionType,
+            outstandingCollectionStatus: "",
+            paymentAmount:
+              !isNextCredit &&
+              nextCollectionType === "TODAY_INVOICE"
+                ? String(invoiceAmount)
+                : "",
+          });
+        }}
+        className="w-full border rounded-xl p-3 font-bold bg-white"
+      >
+        <option value="Cash">Cash</option>
+        <option value="Bank Transfer">
+          Bank Transfer
+        </option>
+        <option value="Card">Card</option>
+        <option value="Credit">Credit</option>
+      </select>
+
+      {!isCredit && (
+        <>
+          <label className="text-xs font-bold uppercase text-slate-500">
+            Collection Type
+          </label>
+
+          <select
+            value={paymentForm.collectionType}
+            onChange={(e) => {
+              const nextType = e.target.value;
+
+              setPaymentForm({
+                ...paymentForm,
+                collectionType: nextType,
+                resolvedCollectionType: "",
+                paymentAmount:
+                  nextType === "TODAY_INVOICE"
+                    ? String(invoiceAmount)
+                    : "",
+              });
+            }}
+            className="w-full border rounded-xl p-3 bg-white"
+          >
+            <option value="TODAY_INVOICE">
+              Today's Invoice
+            </option>
+
+            <option value="OUTSTANDING_PAYMENT">
+              Outstanding Payment
+            </option>
+
+            <option
+              value="PART_PAYMENT"
+              disabled={!partPaymentAvailable}
+            >
+              Part Payment
+            </option>
+
+            <option value="UNALLOCATED_PAYMENT">
+              Unallocated Payment
+            </option>
+          </select>
+        </>
+      )}
+
+      {isCredit && (
+        <>
+          <label className="text-xs font-bold uppercase text-slate-500">
+            Outstanding Collection
+          </label>
+
+          <select
+            value={
+              paymentForm.outstandingCollectionStatus
+            }
+            onChange={(e) =>
+              setPaymentForm({
+                ...paymentForm,
+                outstandingCollectionStatus:
+                  e.target.value,
+                paymentAmount: "",
+              })
+            }
+            className="w-full border rounded-xl p-3 bg-white"
+          >
+            <option value="">
+              Select collection status
+            </option>
+
+            <option value="COLLECTED">
+              Payment Collected
+            </option>
+
+            <option value="NOT_COLLECTED">
+              Payment Not Collected
+            </option>
+          </select>
+        </>
+      )}
+
+      {!isCredit &&
+        collectionType === "UNALLOCATED_PAYMENT" && (
+          <>
+            <label className="text-xs font-bold uppercase text-slate-500">
+              Resolve As
+            </label>
+
+            <select
+              value={
+                paymentForm.resolvedCollectionType
+              }
+              onChange={(e) => {
+                const resolvedType = e.target.value;
+
+                setPaymentForm({
+                  ...paymentForm,
+                  resolvedCollectionType:
+                    resolvedType,
+                  paymentAmount:
+                    resolvedType ===
+                    "TODAY_INVOICE"
+                      ? String(invoiceAmount)
+                      : "",
+                });
+              }}
+              className="w-full border rounded-xl p-3 bg-white"
+            >
+              <option value="">
+                Select correction
+              </option>
+
+              <option value="TODAY_INVOICE">
+                Today's Invoice Error
+              </option>
+
+              <option value="OUTSTANDING_PAYMENT">
+                Outstanding Payment Error
+              </option>
+
+              <option
+                value="PART_PAYMENT"
+                disabled={!partPaymentAvailable}
               >
-                {savingPayment ? "Saving..." : "Save Payment Status"}
-              </button>
+                Part Payment Error
+              </option>
+            </select>
+          </>
+        )}
+
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+        <div className="border rounded-xl p-3 bg-white">
+          <div className="text-xs font-bold text-slate-500">
+            Today's invoice
+          </div>
+
+          <div className="text-lg font-extrabold text-slate-900">
+            {formatCurrency(invoiceAmount)}
+          </div>
+        </div>
+
+        <div className="border rounded-xl p-3 bg-white">
+          <div className="text-xs font-bold text-slate-500">
+            Account balance including today's invoice
+          </div>
+
+          <div className="text-lg font-extrabold text-red-700">
+            {formatCurrency(
+              accountBalanceIncludingToday
+            )}
+          </div>
+        </div>
+      </div>
+
+      {(!isCredit || creditPaymentCollected) && (
+        <>
+          <label className="text-xs font-bold uppercase text-slate-500">
+            Amount Collected
+          </label>
+
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Amount Collected"
+            value={paymentForm.paymentAmount}
+            readOnly={amountIsFixed}
+            onChange={(e) =>
+              setPaymentForm({
+                ...paymentForm,
+                paymentAmount: e.target.value,
+              })
+            }
+            className={`w-full border rounded-xl p-3 ${
+              amountIsFixed
+                ? "bg-slate-100 font-bold text-slate-600"
+                : "bg-white"
+            }`}
+          />
+        </>
+      )}
+
+      {!isCredit &&
+        effectiveCollectionType ===
+          "PART_PAYMENT" && (
+          <div className="border rounded-xl p-3 bg-amber-50">
+            <div className="text-xs font-bold text-amber-700">
+              Today's invoice balance after return
+              and payment
+            </div>
+
+            <div className="text-xl font-extrabold text-amber-900">
+              {formatCurrency(remainingToday)}
+            </div>
+          </div>
+        )}
+
+      {!isCredit &&
+        effectiveCollectionType ===
+          "OUTSTANDING_PAYMENT" &&
+        availableAccountCredit > 0 && (
+          <div className="border rounded-xl p-3 bg-blue-50">
+            <div className="text-xs font-bold text-blue-700">
+              Remaining return / account credit
+              after amount collected
+            </div>
+
+            <div className="text-xl font-extrabold text-blue-900">
+              {formatCurrency(
+                remainingAccountCredit
+              )}
+            </div>
+          </div>
+        )}
+
+      {isCredit &&
+        creditCollectionStatus === "COLLECTED" && (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm font-semibold text-indigo-800">
+            The collected amount is recorded
+            against the previous outstanding
+            balance first. Today's invoice remains
+            in Customer Credit after it.
+          </div>
+        )}
+
+      {isCredit &&
+        creditCollectionStatus ===
+          "NOT_COLLECTED" && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+            No payment is recorded. Today's invoice
+            is added to the weekly credit account as
+            Amount Not Collected.
+          </div>
+        )}
+
+      <label className="text-xs font-bold uppercase text-slate-500">
+        Who Paid / Shop Staff Name
+      </label>
+
+      <input
+        placeholder="Who paid / shop staff name"
+        value={paymentForm.paidBy}
+        onChange={(e) =>
+          setPaymentForm({
+            ...paymentForm,
+            paidBy: e.target.value,
+          })
+        }
+        className="w-full border rounded-xl p-3"
+      />
+
+      <div className="rounded-xl border bg-white p-3 text-xs font-semibold text-slate-600">
+        Collected/processed by:{" "}
+        {loggedInUser.staff_name ||
+          loggedInUser.name ||
+          loggedInUser.full_name ||
+          loggedInUser.username ||
+          "Logged-in staff"}
+      </div>
+
+      <button
+        disabled={savingPayment || !canSave}
+        onClick={() => saveCashCollection(order)}
+        className="w-full bg-green-700 text-white py-3 rounded-xl font-bold disabled:bg-slate-400 disabled:cursor-not-allowed"
+      >
+        {savingPayment
+          ? "Saving..."
+          : isCredit
+          ? creditPaymentCollected
+            ? "Save Payment and Credit Invoice"
+            : "Save Weekly Credit Not Collected"
+          : "Save Payment"}
+      </button>
+    </>
+  );
+})()}
               </div>             
             )}
           </div>

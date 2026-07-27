@@ -36,6 +36,7 @@ const stateStyles = {
   active: "bg-emerald-100 text-emerald-800",
   pending: "bg-amber-100 text-amber-900",
   voided: "bg-red-100 text-red-800",
+  rejected: "bg-rose-100 text-rose-800",
   other: "bg-slate-100 text-slate-700",
 };
 
@@ -43,6 +44,7 @@ const stateLabels = {
   active: "Active / posted",
   pending: "Pending bank",
   voided: "Voided",
+  rejected: "Rejected",
   other: "Other",
 };
 
@@ -170,6 +172,7 @@ export default function PaymentHistoryViewer() {
         <Legend state="active" />
         <Legend state="pending" />
         <Legend state="voided" />
+        <Legend state="rejected" />
       </div>
 
       {error && (
