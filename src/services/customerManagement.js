@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { getStoredCustomerStatus } from "../utils/customerStatus";
+import { isTestAccount } from "../utils/testAccountFiltering";
 
 const normaliseStatus = getStoredCustomerStatus;
 const normalisePriceMode = (mode) => {
@@ -26,7 +27,7 @@ export async function getCustomerAccounts({ operationalOnly = false } = {}) {
   const { data, error } = await query.order("account_name", { ascending: true });
 
   if (error) throw error;
-  return data || [];
+  return operationalOnly ? (data || []).filter((row) => !isTestAccount(row)) : data || [];
 }
 
 export async function getStaffUsers() {

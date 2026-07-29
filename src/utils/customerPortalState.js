@@ -98,6 +98,7 @@ export function resolveCustomerPortalPage({
   isWarehouse = false,
   isDriver = false,
   isCustomer = false,
+  canCollectCash = true,
 } = {}) {
   const normalizedHash = String(hash || "").trim().toLowerCase();
 
@@ -110,6 +111,12 @@ export function resolveCustomerPortalPage({
   }
 
   if (isSalesRep) {
+    if (
+      !canCollectCash &&
+      ["#cash-collection", "#sales-cash-collection"].includes(normalizedHash)
+    ) {
+      return "order";
+    }
     return {
       "#cash-collection": "salesCashCollection",
       "#credit": "salesCreditHistory",

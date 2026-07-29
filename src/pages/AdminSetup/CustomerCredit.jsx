@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
-import { supabase } from "../../services/supabase";
 import {
+  amendCustomerCreditPayment,
   loadCentralPaymentCustomers,
   loadReadOnlyCustomerCreditSnapshot,
+  setCustomerOpeningBalance,
+  voidCustomerCreditPayment,
 } from "../../services/centralPaymentService";
 import { PAYMENT_POSTED_EVENT } from "../../services/canonicalPaymentService";
+import {
+  FC_PERMISSIONS,
+  hasFcPermission,
+} from "../../security/fcPermissions";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
@@ -13,6 +19,8 @@ import {
   hasConfiguredCreditAccount,
   hasCreditSnapshotActivity,
 } from "../../utils/customerCreditSelection";
+import { getInvoiceActionForStatus } from "../../utils/invoicePaymentStatus";
+import { sortTransactionsForDisplay } from "../../utils/customerAccountTransactions";
 
 const PAGE_SIZE = 20;
 const BRANCH_SELECT = "__select__";
@@ -38,29 +46,11 @@ const customerMatches = (customer, search) => {
   return text.includes(String(search || "").toLowerCase());
 };
 
-const asTimestamp = (value) => {
-  const timestamp = new Date(value || 0).getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
-};
-
 const firstValue = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== "");
 
-const normalizeReference = (value) => String(value || "").trim().toLowerCase();
-
-const getInvoiceAmount = (invoice = {}) =>
-  Math.abs(
-    Number(
-      firstValue(
-        invoice.invoice_total,
-        invoice.invoice_amount,
-        invoice.debit,
-        invoice.amount,
-        invoice.total,
-        0
-      )
-    )
-  );
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const getPaymentAmount = (payment = {}) =>
   Math.abs(
@@ -74,73 +64,6 @@ const getPaymentAmount = (payment = {}) =>
       )
     )
   );
-
-const getRecordDate = (record = {}) =>
-  firstValue(
-    record.transaction_date,
-    record.payment_date,
-    record.invoice_date,
-    record.date,
-    record.created_at
-  );
-
-const buildFifoInvoiceAllocation = ({
-  invoices = [],
-  payments = [],
-  openingBalance = 0,
-}) => {
-  const oldestInvoices = [...invoices].sort(
-    (a, b) => asTimestamp(getRecordDate(a)) - asTimestamp(getRecordDate(b))
-  );
-
-  const totalPayments = payments.reduce(
-    (sum, payment) => sum + getPaymentAmount(payment),
-    0
-  );
-
-  // Customer payments clear the brought-forward opening balance first.
-  let remainingPayment = Math.max(
-    0,
-    totalPayments - Math.max(0, Number(openingBalance || 0))
-  );
-
-  const allocationByReference = new Map();
-
-  oldestInvoices.forEach((invoice) => {
-    const invoiceAmount = getInvoiceAmount(invoice);
-    const allocatedAmount = Math.min(invoiceAmount, remainingPayment);
-    const remainingAmount = Math.max(0, invoiceAmount - allocatedAmount);
-
-    let status = "UNPAID";
-    if (invoiceAmount > 0 && remainingAmount <= 0.009) {
-      status = "PAID";
-    } else if (allocatedAmount > 0) {
-      status = "PART PAID";
-    }
-
-    const allocation = {
-      status,
-      allocatedAmount,
-      remainingAmount,
-      invoiceAmount,
-    };
-
-    [
-      invoice.id,
-      invoice.invoice_number,
-      invoice.reference_no,
-      invoice.invoice_reference,
-      invoice.order_number,
-    ].forEach((value) => {
-      const key = normalizeReference(value);
-      if (key) allocationByReference.set(key, allocation);
-    });
-
-    remainingPayment = Math.max(0, remainingPayment - allocatedAmount);
-  });
-
-  return allocationByReference;
-};
 
 const getDocumentUrl = (record, kind) => {
   if (!record) return "";
@@ -176,11 +99,18 @@ const getDocumentUrl = (record, kind) => {
   );
 };
 
-const isCustomerVisiblePayment = (payment = {}) => {
-  const method = String(payment.payment_method || payment.paymentMethod || "").toUpperCase();
-  const verification = String(payment.verification_status || payment.verificationStatus || "").toUpperCase();
-  if (method !== "BANK TRANSFER") return true;
-  return !["PENDING_VERIFICATION", "REJECTED"].includes(verification);
+const formatTransactionDate = (row = {}) => {
+  if (row.transaction_type === "OPENING_BALANCE" && !row.transactionDate) {
+    return "Opening Balance";
+  }
+  const value = row.transactionDate || row.createdAt;
+  if (!value) return "—";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+    const [year, month, day] = String(value).split("-");
+    return `${day}/${month}/${year}`;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-GB");
 };
 
 function StatusBadge({ status }) {
@@ -206,26 +136,47 @@ function DocumentActions({ row, restricted }) {
 
   const url = row.documentUrl;
   if (!url) {
-    return <span className="text-xs font-semibold text-slate-400">Not available</span>;
+    return <span className="text-xs font-semibold text-slate-400">—</span>;
   }
 
   const isInvoice = row.type === "INVOICE";
-  const isPaidInvoice =
-    isInvoice && String(row.status || "").toUpperCase() === "PAID";
- const label =
-    isInvoice
-        ? "Download Invoice"
-        : "Receipt";
+  if (isInvoice) {
+    const action = getInvoiceActionForStatus(row.status);
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        {action === "VIEW" && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-slate-700"
+          >
+            View Invoice
+          </a>
+        )}
+        {action === "DOWNLOAD" && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          download=""
+          className="inline-flex rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-500"
+        >
+          Download Invoice
+        </a>
+        )}
+      </div>
+    );
+  }
 
   return (
     <a
       href={url}
       target="_blank"
       rel="noreferrer"
-      download={isPaidInvoice ? "" : undefined}
       className="inline-flex rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
     >
-      {label}
+      Receipt
     </a>
   );
 }
@@ -241,10 +192,16 @@ export default function CustomerCredit({ readOnly = false }) {
   const [selectionMessage, setSelectionMessage] = useState("");
   const [page, setPage] = useState(1);
   const [activeTab, setActiveTab] = useState("summary");
+  const [historySort, setHistorySort] = useState("oldest");
   const [editingOpeningBalance, setEditingOpeningBalance] = useState(false);
   const [openingBalanceInput, setOpeningBalanceInput] = useState("");
+  const [openingBalanceReason, setOpeningBalanceReason] = useState("");
   const [savingOpeningBalance, setSavingOpeningBalance] = useState(false);
   const [paymentRefreshVersion, setPaymentRefreshVersion] = useState(0);
+  const [editingPayment, setEditingPayment] = useState(null);
+  const [paymentForm, setPaymentForm] = useState(null);
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [paymentActionError, setPaymentActionError] = useState("");
   const selectionRequestRef = useRef(0);
   const snapshotRequestRef = useRef(0);
   const prefetchedSnapshotRef = useRef(null);
@@ -254,20 +211,27 @@ export default function CustomerCredit({ readOnly = false }) {
     currentUser?.role || currentUser?.access_level || ""
   ).toLowerCase();
 
-  const username = String(
-    currentUser?.username ||
-      currentUser?.user_name ||
-      currentUser?.login ||
-      ""
-  )
-    .trim()
-    .toLowerCase();
-
   const isAdminUser =
     userRole.includes("admin") ||
     currentUser?.permissions?.access_accounts === true;
 
-  const canEditOpeningBalance = username === "nisstaj_admin";
+  const canEditOpeningBalance = hasFcPermission(
+    currentUser,
+    FC_PERMISSIONS.CUSTOMER_CREDIT_OPENING_BALANCE_EDIT
+  );
+  const canEditPayments = hasFcPermission(
+    currentUser,
+    FC_PERMISSIONS.CUSTOMER_CREDIT_PAYMENT_EDIT
+  );
+  const canDeletePayments =
+    hasFcPermission(
+      currentUser,
+      FC_PERMISSIONS.CUSTOMER_CREDIT_PAYMENT_DELETE
+    ) ||
+    hasFcPermission(
+      currentUser,
+      FC_PERMISSIONS.CUSTOMER_CREDIT_PAYMENT_VOID
+    );
 
   const historyOnlyRole =
     readOnly ||
@@ -483,309 +447,56 @@ export default function CustomerCredit({ readOnly = false }) {
     (branch) => String(branch.id) === String(selectedBranchId)
   );
 
-  const transactionMatchesSelectedBranch = (transaction = {}, source = {}) => {
-    if (!hasSpecificBranch) return true;
-    if (String(transaction.type || "").toUpperCase() === "OPENING") return true;
-
-    const selectedId = String(selectedBranchId || "");
-    const selectedName = String(selectedBranch?.branch_name || "")
-      .trim()
-      .toLowerCase();
-
-    const transactionBranchIds = [
-      transaction.branch_id,
-      transaction.customer_branch_id,
-      transaction.branchId,
-      transaction.customerBranchId,
-      source?.branch_id,
-      source?.customer_branch_id,
-      source?.branchId,
-      source?.customerBranchId,
-    ]
-      .map((value) => String(value || ""))
-      .filter(Boolean);
-
-    if (transactionBranchIds.includes(selectedId)) return true;
-
-    const transactionBranchNames = [
-      transaction.branch_name,
-      transaction.customer_branch_name,
-      transaction.branchName,
-      transaction.customerBranchName,
-      source?.branch_name,
-      source?.customer_branch_name,
-      source?.branchName,
-      source?.customerBranchName,
-    ]
-      .map((value) => String(value || "").trim().toLowerCase())
-      .filter(Boolean);
-
-    return Boolean(
-      selectedName && transactionBranchNames.includes(selectedName)
-    );
-  };
-
-  const invoices = hasSpecificBranch
-    ? snapshot?.selectedInvoices || []
-    : snapshot?.allocatedInvoices || [];
-
-  const payments = (hasSpecificBranch
-    ? snapshot?.selectedPayments || []
-    : snapshot?.payments || []
-  ).filter(isCustomerVisiblePayment);
-
-
   const selectedOpeningBalance = Number(
     hasSpecificBranch
       ? snapshot?.branchSummary?.openingBalance || 0
       : snapshot?.customerSummary?.openingBalance || 0
   );
 
-  const fifoInvoiceAllocation = useMemo(
-    () =>
-      buildFifoInvoiceAllocation({
-        invoices,
-        payments,
-        openingBalance: selectedOpeningBalance,
-      }),
-    [invoices, payments, selectedOpeningBalance]
-  );
-
-  const invoiceByReference = useMemo(() => {
-    const map = new Map();
-
-    invoices.forEach((invoice) => {
-      [
-        invoice.id,
-        invoice.invoice_number,
-        invoice.reference_no,
-        invoice.invoice_reference,
-      ].forEach((value) => {
-        const key = normalizeReference(value);
-        if (key) map.set(key, invoice);
-      });
-    });
-
-    return map;
-  }, [invoices]);
-
-  const paymentByReference = useMemo(() => {
-    const map = new Map();
-
-    payments.forEach((payment) => {
-      [
-        payment.id,
-        payment.payment_reference,
-        payment.reference_no,
-        payment.payment_number,
-      ].forEach((value) => {
-        const key = normalizeReference(value);
-        if (key) map.set(key, payment);
-      });
-    });
-
-    return map;
-  }, [payments]);
-
   const creditHistory = useMemo(() => {
-    const mappedRows = (snapshot?.transactionHistory || [])
-      .filter((transaction) => {
-        const type = String(transaction.type || "TRANSACTION").toUpperCase();
-        const reference = firstValue(
-          transaction.reference,
-          transaction.invoice_number,
-          transaction.payment_reference,
-          transaction.reference_no,
-          transaction.id
-        );
-        const lookupKey = normalizeReference(reference);
-        const source =
-          type === "PAYMENT"
-            ? paymentByReference.get(lookupKey)
-            : invoiceByReference.get(lookupKey);
-
-        if (type === "PAYMENT") {
-          const paymentRecord = source || transaction;
-          if (!isCustomerVisiblePayment(paymentRecord)) return false;
-        }
-        return transactionMatchesSelectedBranch(transaction, source);
-      })
-      .map((transaction, index) => {
-        const type = String(transaction.type || "TRANSACTION").toUpperCase();
-        const reference = firstValue(
-          transaction.reference,
-          transaction.invoice_number,
-          transaction.payment_reference,
-          transaction.reference_no,
-          transaction.id
-        );
-
-        const lookupKey = normalizeReference(reference);
-        const source =
-          type === "PAYMENT"
-            ? paymentByReference.get(lookupKey)
-            : invoiceByReference.get(lookupKey);
-
-        const amount = Number(transaction.amount || 0);
-        const isCredit = amount < 0 || type === "PAYMENT";
-        const transactionDate = firstValue(
-          transaction.transaction_date,
-          transaction.date,
-          transaction.payment_date,
-          transaction.invoice_date,
-          transaction.created_at,
-          source?.transaction_date,
-          source?.payment_date,
-          source?.invoice_date,
-          source?.created_at
-        );
-
-        const description =
-          type === "INVOICE"
-            ? firstValue(
-                source?.price_mode,
-                source?.pricing_mode,
-                source?.offer_type,
-                source?.description,
-                transaction.description,
-                "Customer invoice"
-              )
-            : type === "PAYMENT"
-            ? firstValue(
-                transaction.paymentMethod,
-                source?.payment_method,
-                source?.payment_type,
-                transaction.description,
-                "Customer payment"
-              )
-            : firstValue(transaction.description, type.replaceAll("_", " "));
-
+    const mappedRows = (snapshot?.accountHistory?.transactions || []).map(
+      (transaction, index) => {
+        const source = transaction.source_record || transaction;
+        const type = transaction.type || transaction.transaction_type;
         return {
           ...transaction,
           source,
           type,
-          reference: reference || "-",
-          description,
-          debit: isCredit ? 0 : Math.abs(amount),
-          credit: isCredit ? Math.abs(amount) : 0,
-          runningBalance: Number(transaction.runningBalance || 0),
+          reference: transaction.reference || "-",
+          debit: Number(transaction.debit_amount || 0),
+          credit: Number(transaction.credit_amount || 0),
+          runningBalance: Number(transaction.running_balance || 0),
           status:
-            type === "INVOICE"
-              ? firstValue(
-                  fifoInvoiceAllocation.get(lookupKey)?.status,
-                  source?.paymentStatus,
-                  source?.payment_status,
-                  source?.invoice_status,
-                  source?.status,
-                  transaction.status,
-                  "UNPAID"
-                )
-              : firstValue(
-                  transaction.status,
-                  source?.paymentStatus,
-                  source?.payment_status,
-                  source?.status,
-                  type === "PAYMENT" ? "POSTED" : "UNPAID"
-                ),
-          branchName: firstValue(
-            transaction.branchName,
-            source?.branch_name,
-            source?.customer_branch_name,
-            "-"
-          ),
-          transactionDate,
-          createdAt: firstValue(
-            transaction.created_at,
-            source?.created_at,
-            transactionDate
-          ),
-          documentUrl: getDocumentUrl(source || transaction, type),
+            transaction.invoice_status ||
+            transaction.status ||
+            (type === "INVOICE" ? "UNPAID" : "POSTED"),
+          transactionDate: transaction.transaction_date,
+          createdAt: transaction.ordering_timestamp || transaction.created_at,
+          documentUrl: getDocumentUrl(source, type),
+          relatedInvoice: transaction.related_invoice,
           sortIndex: index,
         };
-      })
-      .sort((a, b) => {
-        const dateDifference =
-          asTimestamp(a.transactionDate) - asTimestamp(b.transactionDate);
-
-        if (dateDifference !== 0) return dateDifference;
-
-        const createdDifference =
-          asTimestamp(a.createdAt) - asTimestamp(b.createdAt);
-
-        if (createdDifference !== 0) return createdDifference;
-
-        return a.sortIndex - b.sortIndex;
-      });
-
-    let runningBalance = 0;
-
-    const rowsWithBranchBalance = mappedRows.map((row) => {
-      if (row.type === "OPENING") {
-        runningBalance = Number(row.debit || row.runningBalance || 0);
-        return {
-          ...row,
-          runningBalance,
-        };
       }
+    );
 
-      runningBalance += Number(row.debit || 0) - Number(row.credit || 0);
-      return {
-        ...row,
-        runningBalance,
-      };
-    });
-
-   return rowsWithBranchBalance.sort((a, b) => {
-
-  const dateDiff =
-    asTimestamp(b.transactionDate) -
-    asTimestamp(a.transactionDate);
-
-  if (dateDiff !== 0) return dateDiff;
-
-  const aInvoice = a.type === "INVOICE";
-  const bInvoice = b.type === "INVOICE";
-
-  const aPayment = a.type === "PAYMENT";
-  const bPayment = b.type === "PAYMENT";
-
-  // Same invoice
-// A payment allocated to an invoice must appear after that invoice.
-if (
-  aPayment &&
-  bInvoice &&
-  isPaymentLinkedToInvoice(a, b)
-) {
-  return 1;
-}
-
-if (
-  aInvoice &&
-  bPayment &&
-  isPaymentLinkedToInvoice(b, a)
-) {
-  return -1;
-}
-
-  const createdDiff =
-    asTimestamp(b.createdAt) -
-    asTimestamp(a.createdAt);
-
-  if (createdDiff !== 0) return createdDiff;
-
-  return b.sortIndex - a.sortIndex;
-});
-
+    return sortTransactionsForDisplay(mappedRows, historySort);
   }, [
     snapshot,
-    invoiceByReference,
-    paymentByReference,
-    fifoInvoiceAllocation,
-    hasSpecificBranch,
-    selectedBranchId,
-    selectedBranch?.branch_name,
-    selectedOpeningBalance,
+    historySort,
   ]);
+
+  const displayedHistory = useMemo(
+    () =>
+      activeTab === "payments"
+        ? creditHistory.filter(
+            (row) =>
+              row.transaction_type === "PAYMENT" ||
+              row.transaction_type === "CREDIT" ||
+              row.transaction_type === "ADJUSTMENT"
+          )
+        : creditHistory,
+    [activeTab, creditHistory]
+  );
 
   const accountCreditLimit = Number(
     firstValue(
@@ -797,23 +508,13 @@ if (
     ) || 0
   );
 
-  const sortedPayments = useMemo(
-    () =>
-      [...payments].sort(
-        (a, b) =>
-          asTimestamp(b.payment_date || b.created_at) -
-          asTimestamp(a.payment_date || a.created_at)
-      ),
-    [payments]
-  );
-
   const lastPayment = Number(
-    firstValue(sortedPayments[0]?.amount, sortedPayments[0]?.credit, 0)
+    snapshot?.customerSummary?.lastPaymentAmount || 0
   );
 
-  const totalPages = Math.max(1, Math.ceil(creditHistory.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(displayedHistory.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const pageRows = creditHistory.slice(
+  const pageRows = displayedHistory.slice(
     (safePage - 1) * PAGE_SIZE,
     safePage * PAGE_SIZE
   );
@@ -832,6 +533,7 @@ if (
           : snapshot?.customerSummary?.openingBalance || 0
       )
     );
+    setOpeningBalanceReason("");
     setEditingOpeningBalance(true);
   };
 
@@ -843,42 +545,23 @@ if (
       setError("Enter a valid opening balance.");
       return;
     }
+    if (!String(openingBalanceReason || "").trim()) {
+      setError("Enter a reason for the opening-balance amendment.");
+      return;
+    }
 
     setSavingOpeningBalance(true);
     setError("");
 
     try {
       const openingBranchId = hasSpecificBranch ? selectedBranchId : null;
-      let lookup = supabase
-        .from("customer_branch_opening_balances")
-        .select("id")
-        .eq("customer_account_id", selectedCustomer.id)
-        .limit(1);
-
-      lookup = openingBranchId
-        ? lookup.eq("customer_branch_id", openingBranchId)
-        : lookup.is("customer_branch_id", null);
-
-      const { data: existingRows, error: lookupError } = await lookup;
-      if (lookupError) throw lookupError;
-
-      const existingId = existingRows?.[0]?.id;
-      const request = existingId
-        ? supabase
-            .from("customer_branch_opening_balances")
-            .update({
-              opening_balance: nextOpeningBalance,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", existingId)
-        : supabase.from("customer_branch_opening_balances").insert({
-            customer_account_id: selectedCustomer.id,
-            customer_branch_id: openingBranchId,
-            opening_balance: nextOpeningBalance,
-          });
-
-      const { error: saveError } = await request;
-      if (saveError) throw saveError;
+      await setCustomerOpeningBalance({
+        customerAccountId: selectedCustomer.id,
+        customerBranchId: openingBranchId,
+        amount: nextOpeningBalance,
+        reason: openingBalanceReason,
+        currentUser,
+      });
 
       const refreshed = await loadReadOnlyCustomerCreditSnapshot({
         customerAccountId: selectedCustomer.id,
@@ -898,14 +581,164 @@ if (
     }
   };
 
+  const refreshAfterPaymentAmendment = async () => {
+    const refreshed = await loadReadOnlyCustomerCreditSnapshot({
+      customerAccountId: selectedCustomer.id,
+      customerName: selectedCustomer.account_name,
+      customer: selectedCustomer,
+      selectedBranchId: hasSpecificBranch ? selectedBranchId : "",
+    });
+    setSnapshot(refreshed);
+  };
+
+  const getEditablePayment = (row) => {
+    if (row?.type !== "PAYMENT") return null;
+    const payment = row.source || {};
+    const paymentId = payment.central_payment_id || payment.id;
+    const status = String(payment.status || payment.payment_status || "POSTED")
+      .trim()
+      .toUpperCase();
+    const verification = String(
+      payment.verification_status || payment.verificationStatus || "CONFIRMED"
+    )
+      .trim()
+      .toUpperCase();
+
+    if (!UUID_PATTERN.test(String(paymentId || ""))) return null;
+    if (status !== "POSTED" || payment.voided_at || payment.reversed_at) return null;
+    if (
+      ["VOIDED", "REVERSED", "REJECTED", "PENDING", "PENDING_VERIFICATION"].includes(
+        verification
+      )
+    ) {
+      return null;
+    }
+    return { ...payment, id: paymentId };
+  };
+
+  const beginPaymentEdit = (row) => {
+    const payment = getEditablePayment(row);
+    if (!payment || (!canEditPayments && !canDeletePayments)) return;
+
+    setEditingPayment(payment);
+    setPaymentForm({
+      amount: String(getPaymentAmount(payment)),
+      paymentMethod: firstValue(
+        payment.payment_method,
+        payment.payment_type,
+        "Other"
+      ),
+      paidBy: firstValue(payment.paid_by, payment.who_paid, ""),
+      collectionType: firstValue(
+        payment.metadata?.collection_type,
+        payment.collection_type,
+        payment.resolved_collection_type,
+        ""
+      ),
+      paymentDate: String(
+        firstValue(payment.payment_date, payment.created_at, "")
+      ).slice(0, 10),
+      reference: firstValue(
+        payment.payment_reference,
+        payment.reference_no,
+        ""
+      ),
+      notes: firstValue(payment.notes, payment.transaction_reason, ""),
+      reason: "",
+    });
+    setPaymentActionError("");
+  };
+
+  const closePaymentEditor = () => {
+    if (savingPayment) return;
+    setEditingPayment(null);
+    setPaymentForm(null);
+    setPaymentActionError("");
+  };
+
+  const savePaymentAmendment = async () => {
+    if (!editingPayment || !paymentForm || !selectedCustomer?.id) return;
+    if (
+      !window.confirm(
+        `Save this payment correction? The existing ${formatCurrency(
+          getPaymentAmount(editingPayment)
+        )} payment will be updated and FIFO allocations recalculated.`
+      )
+    ) {
+      return;
+    }
+
+    setSavingPayment(true);
+    setPaymentActionError("");
+    try {
+      await amendCustomerCreditPayment({
+        customerAccountId: selectedCustomer.id,
+        paymentId: editingPayment.id,
+        changes: paymentForm,
+        reason: paymentForm.reason,
+        currentUser,
+      });
+      await refreshAfterPaymentAmendment();
+      setEditingPayment(null);
+      setPaymentForm(null);
+    } catch (paymentError) {
+      setPaymentActionError(
+        paymentError?.message || "Could not amend the payment."
+      );
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
+  const voidEditedPayment = async () => {
+    if (!editingPayment || !paymentForm || !selectedCustomer?.id) return;
+    if (!String(paymentForm.reason || "").trim()) {
+      setPaymentActionError("Enter a reason before voiding this payment.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Void the ${formatCurrency(
+          getPaymentAmount(editingPayment)
+        )} payment? Its allocations and account effect will be removed.`
+      )
+    ) {
+      return;
+    }
+
+    setSavingPayment(true);
+    setPaymentActionError("");
+    try {
+      await voidCustomerCreditPayment({
+        customerAccountId: selectedCustomer.id,
+        paymentId: editingPayment.id,
+        reason: paymentForm.reason,
+        currentUser,
+      });
+      await refreshAfterPaymentAmendment();
+      setEditingPayment(null);
+      setPaymentForm(null);
+    } catch (paymentError) {
+      setPaymentActionError(
+        paymentError?.message || "Could not void the payment."
+      );
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
   const summaryCards = [
     {
       label: "Credit limit",
       value: accountCreditLimit,
     },
     {
-      label: "Total Outstanding",
-      value: snapshot?.customerSummary?.outstanding,
+      label: "Outstanding Balance",
+      value: snapshot?.customerSummary?.outstandingBalance,
+    },
+    {
+      label: "Customer Credit",
+      value: snapshot?.customerSummary?.customerCredit,
     },
     {
       label: hasSpecificBranch ? "Branch opening balance" : "Opening balance",
@@ -916,8 +749,8 @@ if (
       isOpeningBalance: true,
     },
     {
-      label: "Available credit",
-      value: snapshot?.customerSummary?.availableCredit,
+      label: "Available Credit Limit",
+      value: snapshot?.customerSummary?.availableCreditLimit,
     },
     {
       label: "Branch Credit",
@@ -1029,11 +862,27 @@ if (
           : "Main Customer Account"}
       </div>
 
-      {snapshot?.legacyFallbackUsed && (
+      {isAdminUser && snapshot?.legacyFallbackUsed && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
           Temporary legacy payment compatibility is active for this account
           because matching new-table payment records were not found.
         </div>
+      )}
+
+      {isAdminUser && snapshot?.paymentDiagnostics && (
+        <details className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+          <summary className="cursor-pointer font-bold">
+            Payment reconciliation diagnostics
+          </summary>
+          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3">
+            <div>Canonical payments: {snapshot.paymentDiagnostics.canonicalPaymentCount}</div>
+            <div>Legacy-only payments: {snapshot.paymentDiagnostics.legacyOnlyPaymentCount}</div>
+            <div>Suppressed duplicates: {snapshot.paymentDiagnostics.suppressedDuplicateCount}</div>
+            <div>Canonical total: {formatCurrency(snapshot.paymentDiagnostics.canonicalPaymentTotal)}</div>
+            <div>Legacy-only total: {formatCurrency(snapshot.paymentDiagnostics.legacyOnlyPaymentTotal)}</div>
+            <div>Combined unique total: {formatCurrency(snapshot.paymentDiagnostics.combinedUniquePaymentTotal)}</div>
+          </div>
+        </details>
       )}
 
       <div className="grid grid-cols-1 gap-3 min-[430px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -1080,6 +929,12 @@ if (
                 className="w-full rounded-xl border bg-white p-3"
                 placeholder="0.00"
               />
+              <input
+                value={openingBalanceReason}
+                onChange={(event) => setOpeningBalanceReason(event.target.value)}
+                className="mt-2 w-full rounded-xl border bg-white p-3"
+                placeholder="Reason for amendment (required)"
+              />
              <p className="mt-1 text-xs font-semibold text-slate-500">
                 {hasSpecificBranch
                   ? `This opening balance applies only to ${
@@ -1115,6 +970,7 @@ if (
           {[
             ["summary", "Summary"],
             ["credit", "Credit History"],
+            ["payments", "Payment History"],
             ["transactions", "Transactions"],
           ].map(([value, label]) => (
             <button
@@ -1151,7 +1007,7 @@ if (
               Total Outstanding
             </div>
             <div className="mt-1 text-2xl font-extrabold text-slate-900">
-              {formatCurrency(snapshot?.customerSummary?.outstanding || 0)}
+              {formatCurrency(snapshot?.customerSummary?.outstandingBalance || 0)}
             </div>
           </div>
 
@@ -1184,12 +1040,12 @@ if (
                       </div>
                       <div>
                         <dt className="font-bold text-slate-500">Outstanding</dt>
-                        <dd className="font-extrabold">{formatCurrency(branchSummary.outstanding || 0)}</dd>
+                        <dd className="font-extrabold">{formatCurrency(branchSummary.outstandingBalance || 0)}</dd>
                       </div>
                       {Number(branchSummary.creditLimit || 0) > 0 && (
                         <div>
                           <dt className="font-bold text-slate-500">Available credit</dt>
-                          <dd className="font-extrabold">{formatCurrency(branchSummary.availableCredit || 0)}</dd>
+                          <dd className="font-extrabold">{formatCurrency(branchSummary.availableCreditLimit || 0)}</dd>
                         </div>
                       )}
                     </dl>
@@ -1205,11 +1061,16 @@ if (
         </section>
       )}
 
-      {(activeTab === "credit" || activeTab === "transactions") &&
+      {(["credit", "payments", "transactions"].includes(activeTab)) &&
          branchDetailsRequired && (
           <section className="rounded-2xl border border-blue-200 bg-blue-50 p-6 text-center shadow-sm">
             <h3 className="font-extrabold text-blue-900">
-              Select a branch to view {activeTab === "credit" ? "Credit History" : "Transactions"}
+              Select a branch to view{" "}
+              {activeTab === "credit"
+                ? "Credit History"
+                : activeTab === "payments"
+                  ? "Payment History"
+                  : "Transactions"}
             </h3>
             <p className="mt-2 text-sm font-semibold text-blue-700">
               The total account outstanding remains visible above.
@@ -1217,23 +1078,56 @@ if (
           </section>
         )}
 
-      {(activeTab === "credit" || activeTab === "transactions") &&
+      {(["credit", "payments", "transactions"].includes(activeTab)) &&
         !branchDetailsRequired && (
           <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
             <div className="sticky top-0 z-20 flex flex-col gap-2 border-b bg-white/95 px-4 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 className="text-lg font-extrabold text-slate-900">
-                  {activeTab === "credit" ? "Credit History" : "Transactions"} ({creditHistory.length})
+                  {activeTab === "credit"
+                    ? "Credit History"
+                    : activeTab === "payments"
+                      ? "Payment History"
+                      : "Transactions"}{" "}
+                  ({displayedHistory.length})
                 </h3>
-                <p className="text-sm text-slate-500">Newest transactions first.</p>
+                <p className="text-sm text-slate-500">
+                  Running balances are always calculated chronologically.
+                </p>
               </div>
-              <div className="text-sm font-semibold text-slate-500">
-                {creditHistory.length
-                  ? `Showing ${(safePage - 1) * PAGE_SIZE + 1}-${Math.min(
-                      safePage * PAGE_SIZE,
-                      creditHistory.length
-                    )} of ${creditHistory.length}`
-                  : "No transactions"}
+              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-500">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistorySort("oldest");
+                    setPage(1);
+                  }}
+                  className={`rounded-lg border px-3 py-2 ${
+                    historySort === "oldest" ? "bg-slate-900 text-white" : "bg-white"
+                  }`}
+                >
+                  Oldest first
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistorySort("newest");
+                    setPage(1);
+                  }}
+                  className={`rounded-lg border px-3 py-2 ${
+                    historySort === "newest" ? "bg-slate-900 text-white" : "bg-white"
+                  }`}
+                >
+                  Newest first
+                </button>
+                <span>
+                  {displayedHistory.length
+                    ? `Showing ${(safePage - 1) * PAGE_SIZE + 1}-${Math.min(
+                        safePage * PAGE_SIZE,
+                        displayedHistory.length
+                      )} of ${displayedHistory.length}`
+                    : "No transactions"}
+                </span>
               </div>
             </div>
 
@@ -1241,16 +1135,23 @@ if (
               <table className="w-full min-w-[1080px] text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
                   <tr className="border-b text-left text-xs uppercase tracking-wide text-slate-500">
-                    <th className="p-3">Date</th>
-                                        {activeTab === "transactions" && (
-                      <th className="p-3">Type</th>
-                    )}
+                    <th className="p-3">Date and time</th>
+                    <th className="p-3">Type</th>
                     <th className="p-3">Reference</th>
-                    <th className="p-3">Description</th>
-                                        <th className="p-3 text-right">Debit</th>
+                    <th className="p-3">Details</th>
+                    <th className="p-3 text-right">Debit</th>
                     <th className="p-3 text-right">Credit</th>
-                    <th className="p-3 text-right">Balance</th>
+                    <th className="p-3 text-right">Running balance</th>
                     <th className="p-3">Status</th>
+                    <th className="p-3">Related invoice</th>
+                    {activeTab === "transactions" && (
+                      <>
+                        <th className="p-3 text-right">Allocated</th>
+                        <th className="p-3 text-right">Unallocated</th>
+                        <th className="p-3">Source</th>
+                        <th className="p-3">Created / updated</th>
+                      </>
+                    )}
                     {!historyOnlyRole && <th className="p-3">Action</th>}
                   </tr>
                 </thead>
@@ -1262,13 +1163,11 @@ if (
                       className="border-b last:border-b-0 hover:bg-slate-50"
                     >
                       <td className="whitespace-nowrap p-3">
-                        {row.transactionDate
-                          ? new Date(row.transactionDate).toLocaleString("en-GB")
-                          : "-"}
+                        {formatTransactionDate(row)}
                       </td>
-                      {activeTab === "transactions" && (
-                        <td className="p-3 font-bold">{row.type}</td>
-                      )}
+                      <td className="p-3 font-bold">
+                        {String(row.transaction_subtype || row.type).replaceAll("_", " ")}
+                      </td>
                       <td className="p-3 font-semibold">{formatDisplayOrderId(row.reference)}</td>
                       <td className="p-3 text-slate-600">{row.description}</td>
                       <td className="p-3 text-right font-bold text-red-700">
@@ -1283,9 +1182,49 @@ if (
                       <td className="p-3">
                         <StatusBadge status={row.status} />
                       </td>
+                      <td className="p-3 font-semibold">
+                        {row.relatedInvoice || "—"}
+                      </td>
+                      {activeTab === "transactions" && (
+                        <>
+                          <td className="p-3 text-right">
+                            {row.allocated_amount
+                              ? formatCurrency(row.allocated_amount)
+                              : "—"}
+                          </td>
+                          <td className="p-3 text-right">
+                            {row.unallocated_amount
+                              ? formatCurrency(row.unallocated_amount)
+                              : "—"}
+                          </td>
+                          <td className="p-3">{row.source_table || "—"}</td>
+                          <td className="whitespace-nowrap p-3 text-xs">
+                            {row.created_at
+                              ? new Date(row.created_at).toLocaleString("en-GB")
+                              : "—"}
+                            {row.updated_at && (
+                              <div className="text-slate-500">
+                                Updated {new Date(row.updated_at).toLocaleString("en-GB")}
+                              </div>
+                            )}
+                          </td>
+                        </>
+                      )}
                       {!historyOnlyRole && (
                         <td className="p-3">
-                          <DocumentActions row={row} restricted={historyOnlyRole} />
+                          <div className="flex flex-wrap items-center gap-2">
+                            <DocumentActions row={row} restricted={historyOnlyRole} />
+                            {getEditablePayment(row) &&
+                              (canEditPayments || canDeletePayments) && (
+                                <button
+                                  type="button"
+                                  onClick={() => beginPaymentEdit(row)}
+                                  className="inline-flex rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-600"
+                                >
+                                  Edit Payment
+                                </button>
+                              )}
+                          </div>
                         </td>
                       )}
                     </tr>
@@ -1294,10 +1233,16 @@ if (
                   {!pageRows.length && !loading && (
                     <tr>
                       <td
-                        colSpan={(historyOnlyRole ? 7 : 8) + (activeTab === "transactions" ? 1 : 0)}
+                        colSpan={(historyOnlyRole ? 9 : 10) + (activeTab === "transactions" ? 4 : 0)}
                         className="p-8 text-center text-slate-500"
                       >
-                        No {activeTab === "credit" ? "credit history" : "transactions"} found.
+                        No{" "}
+                        {activeTab === "credit"
+                          ? "credit history"
+                          : activeTab === "payments"
+                            ? "payments"
+                            : "transactions"}{" "}
+                        found.
                       </td>
                     </tr>
                   )}
@@ -1328,6 +1273,223 @@ if (
             </div>
           </section>
         )}
+
+      {editingPayment && paymentForm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-payment-title"
+        >
+          <div className="max-h-[95vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3
+                  id="edit-payment-title"
+                  className="text-xl font-extrabold text-slate-900"
+                >
+                  Edit Payment
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Correct the canonical payment. Saving or voiding will rebuild
+                  FIFO allocations and account balances.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closePaymentEditor}
+                disabled={savingPayment}
+                className="rounded-lg border px-3 py-1.5 font-bold text-slate-600 disabled:opacity-50"
+                aria-label="Close payment editor"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="text-sm font-bold text-slate-700">
+                Payment amount
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={paymentForm.amount}
+                  disabled={!canEditPayments || savingPayment}
+                  onChange={(event) =>
+                    setPaymentForm((value) => ({
+                      ...value,
+                      amount: event.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border p-3 disabled:bg-slate-100"
+                />
+              </label>
+
+              <label className="text-sm font-bold text-slate-700">
+                Payment type
+                <select
+                  value={paymentForm.paymentMethod}
+                  disabled={!canEditPayments || savingPayment}
+                  onChange={(event) =>
+                    setPaymentForm((value) => ({
+                      ...value,
+                      paymentMethod: event.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border p-3 disabled:bg-slate-100"
+                >
+                  {["Cash", "Card", "Bank Transfer", "Other", "Discount"].map((method) => (
+                    <option key={method} value={method}>
+                      {method}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm font-bold text-slate-700">
+                Who paid
+                <input
+                  value={paymentForm.paidBy}
+                  disabled={!canEditPayments || savingPayment}
+                  onChange={(event) =>
+                    setPaymentForm((value) => ({
+                      ...value,
+                      paidBy: event.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border p-3 disabled:bg-slate-100"
+                />
+              </label>
+
+              <label className="text-sm font-bold text-slate-700">
+                Collection type
+                <input
+                  value={paymentForm.collectionType}
+                  disabled={!canEditPayments || savingPayment}
+                  onChange={(event) =>
+                    setPaymentForm((value) => ({
+                      ...value,
+                      collectionType: event.target.value,
+                    }))
+                  }
+                  placeholder="Office, driver, today's invoice..."
+                  className="mt-1 w-full rounded-xl border p-3 disabled:bg-slate-100"
+                />
+              </label>
+
+              <label className="text-sm font-bold text-slate-700">
+                Payment date
+                <input
+                  type="date"
+                  value={paymentForm.paymentDate}
+                  disabled={!canEditPayments || savingPayment}
+                  onChange={(event) =>
+                    setPaymentForm((value) => ({
+                      ...value,
+                      paymentDate: event.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border p-3 disabled:bg-slate-100"
+                />
+              </label>
+
+              <label className="text-sm font-bold text-slate-700">
+                Reference
+                <input
+                  value={paymentForm.reference}
+                  disabled={!canEditPayments || savingPayment}
+                  onChange={(event) =>
+                    setPaymentForm((value) => ({
+                      ...value,
+                      reference: event.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border p-3 disabled:bg-slate-100"
+                />
+              </label>
+
+              <label className="text-sm font-bold text-slate-700 sm:col-span-2">
+                Notes
+                <textarea
+                  rows={3}
+                  value={paymentForm.notes}
+                  disabled={!canEditPayments || savingPayment}
+                  onChange={(event) =>
+                    setPaymentForm((value) => ({
+                      ...value,
+                      notes: event.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border p-3 disabled:bg-slate-100"
+                />
+              </label>
+
+              <label className="text-sm font-bold text-slate-700 sm:col-span-2">
+                Reason for amendment or void
+                <textarea
+                  rows={2}
+                  required
+                  value={paymentForm.reason}
+                  disabled={savingPayment}
+                  onChange={(event) =>
+                    setPaymentForm((value) => ({
+                      ...value,
+                      reason: event.target.value,
+                    }))
+                  }
+                  placeholder="Required for the audit record"
+                  className="mt-1 w-full rounded-xl border border-amber-300 bg-amber-50 p-3"
+                />
+              </label>
+            </div>
+
+            {paymentActionError && (
+              <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">
+                {paymentActionError}
+              </div>
+            )}
+
+            <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+              <div>
+                {canDeletePayments && (
+                  <button
+                    type="button"
+                    onClick={voidEditedPayment}
+                    disabled={savingPayment}
+                    className="w-full rounded-xl border border-red-300 bg-red-50 px-5 py-3 font-bold text-red-700 hover:bg-red-100 disabled:opacity-50 sm:w-auto"
+                  >
+                    {savingPayment ? "Working..." : "Void mistaken payment"}
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col-reverse gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={closePaymentEditor}
+                  disabled={savingPayment}
+                  className="rounded-xl border px-5 py-3 font-bold text-slate-700 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                {canEditPayments && (
+                  <button
+                    type="button"
+                    onClick={savePaymentAmendment}
+                    disabled={
+                      savingPayment ||
+                      !(Number(paymentForm.amount) > 0) ||
+                      !String(paymentForm.reason || "").trim()
+                    }
+                    className="rounded-xl bg-blue-700 px-5 py-3 font-bold text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {savingPayment ? "Saving..." : "Save correction"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

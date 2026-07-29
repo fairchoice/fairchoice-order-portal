@@ -35,6 +35,11 @@ import {
   resolveCustomerPortalPage,
 } from "../utils/customerPortalState";
 import { getDisplayProductImage, isPlaceholderProductImage } from "../utils/productImages";
+import {
+  getCustomerInvoiceWatermark,
+  getInvoiceActionForStatus,
+  normalizeInvoicePaymentStatus,
+} from "../utils/invoicePaymentStatus";
 import { sortPrintItems } from "../utils/printItemSorting";
 
 
@@ -452,6 +457,41 @@ const getCountryFilteredBranches = (customer, country, shouldFilter) => {
     (branch) => normalizeCountry(branch.country) === selectedCountry
   );
 };
+
+const loadSalesRepOutstanding = async ({
+  customer,
+  selectedBranchId = "",
+}) => {
+  if (!customer) {
+    return {
+      creditSnapshot: null,
+      outstandingState: { totalOutstanding: 0, branchOutstanding: {} },
+    };
+  }
+
+  const creditSnapshot = await loadCentralPaymentSnapshot({
+    customerAccountId: customer.id,
+    customerName: customer.account_name,
+    customer,
+    selectedBranchId,
+  });
+  const branchOutstanding = Object.fromEntries(
+    (creditSnapshot.branchSummaries || []).flatMap((branch) => {
+      const entries = [[String(branch.branchId || ""), branch.outstanding]];
+      if (branch.branchName) entries.push([branch.branchName, branch.outstanding]);
+      return entries;
+    })
+  );
+
+  return {
+    creditSnapshot,
+    outstandingState: {
+      totalOutstanding: creditSnapshot.customerSummary?.outstanding || 0,
+      branchOutstanding,
+    },
+  };
+};
+
 export default function CustomerOrder({ userProfile, onLogout, onProfileRefresh }) {
 
 const loggedInUser =
@@ -475,6 +515,12 @@ const loggedInUser =
   const isWarehouse =
     normalizedRole === "warehouse" || permissions.access_warehouse === true;
   const isDriver = normalizedRole === "driver" || permissions.access_driver === true;
+  const canCollectCash =
+    permissions.all_access === true ||
+    permissions["payments.collect_cash"] === true ||
+    ["admin", "superadmin", "driver", "salesrep", "salesrepresentative"].includes(
+      normalizedRole
+    );
   const isCustomer =
     normalizedRole === "customer" ||
     (permissions.access_customer_portal === true && !isAdmin && !isSalesRep && !isWarehouse && !isDriver);
@@ -492,7 +538,14 @@ const loggedInUser =
 
   
 
- const portalRoleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer };
+ const portalRoleState = {
+   isAdmin,
+   isSalesRep,
+   isWarehouse,
+   isDriver,
+   isCustomer,
+   canCollectCash,
+ };
  const [page, setPage] = useState(() =>
   resolveCustomerPortalPage({ hash: window.location.hash, ...portalRoleState })
  );
@@ -579,25 +632,12 @@ useEffect(() => {
     }
 
     try {
-      const creditSnapshot = await loadReadOnlyCustomerCreditSnapshot({
-        customerAccountId: selectedSalesPaymentCustomer.id,
-        customerName: selectedSalesPaymentCustomer.account_name,
+      const { outstandingState } = await loadSalesRepOutstanding({
         customer: selectedSalesPaymentCustomer,
+        selectedBranchId: selectedSalesPaymentBranch?.id || "",
       });
 
-      const branchOutstanding = Object.fromEntries(
-        (creditSnapshot.branchSummaries || []).flatMap((branch) => {
-          const entries = [[String(branch.branchId || ""), branch.outstanding]];
-          if (branch.branchName) entries.push([branch.branchName, branch.outstanding]);
-          return entries;
-        })
-      );
-      const snapshot = {
-        totalOutstanding: creditSnapshot.customerSummary?.outstanding || 0,
-        branchOutstanding,
-      };
-
-      if (active) setSalesOutstandingSnapshot(snapshot);
+      if (active) setSalesOutstandingSnapshot(outstandingState);
     } catch (error) {
       console.error("Sales outstanding load error:", error);
       if (active) setSalesOutstandingSnapshot({ totalOutstanding: 0, branchOutstanding: {} });
@@ -609,7 +649,7 @@ useEffect(() => {
   return () => {
     active = false;
   };
-}, [selectedSalesPaymentCustomer?.id]);
+}, [selectedSalesPaymentCustomer?.id, selectedSalesPaymentBranch?.id]);
 
   const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
  
@@ -1075,7 +1115,7 @@ useEffect(() => {
     [isAdmin, isSalesRep, pricingSettings, selectedCustomerAccount]
   );
   const showPriceModeSelector =
-    !isCustomer && (isAdmin || isSalesRep || allowedPriceModes.length > 1);
+    isAdmin || isSalesRep || allowedPriceModes.length > 1;
   const salesReturnOrder = selectedSalesReturnCustomer
     ? {
         orderId: salesReturnForm.previousInvoiceNumber || `SALES-RETURN-${Date.now()}`,
@@ -1609,6 +1649,7 @@ useEffect(() => {
         isWarehouse,
         isDriver,
         isCustomer,
+        canCollectCash,
       })
     );
   };
@@ -1619,7 +1660,7 @@ useEffect(() => {
     window.clearTimeout(syncTimer);
     window.removeEventListener("hashchange", syncPageFromHash);
   };
-}, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer]);
+}, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash]);
 
 useEffect(() => {
   const roleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer };
@@ -2537,13 +2578,12 @@ const displayedCustomerLedgerRowsWithBalance = sortCustomerPaymentHistory(
   balance: Number(row.running_balance || 0),
 }));
 
-const customerLastPaymentRow = customerLedger.find(
-  (row) => String(row.entry_type || row.transaction_type || "").toUpperCase() === "PAYMENT"
-);
-const customerLastPayment = Number(customerLastPaymentRow?.credit || 0);
 const customerCreditSummary = paymentHistoryBranchId
   ? customerCreditSnapshot?.branchSummary || {}
   : customerCreditSnapshot?.customerSummary || {};
+const customerLastPayment = Number(
+  customerCreditSummary.lastPaymentAmount || 0
+);
 const isFinalOrderStatus = (status) =>
   ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
     String(status || "").trim().toLowerCase()
@@ -2620,12 +2660,20 @@ const getInvoiceLedgerRowForOrder = (order = {}) => {
 };
 
 const getCustomerInvoiceStatus = (row = {}) => {
-  const status = String(row.invoice_status || row.status || "")
-    .trim()
-    .toUpperCase();
+  const status = normalizeInvoicePaymentStatus(
+    row.payment_status ||
+      row.paymentStatus ||
+      row.invoice_status ||
+      row.invoiceStatus ||
+      row.status ||
+      ""
+  );
 
-  if (status === "PAID" || status === "PART PAID" || status === "UNPAID") {
+  if (status === "PAID" || status === "UNPAID") {
     return status;
+  }
+  if (status === "PART PAID" || status === "PARTIALLY PAID") {
+    return "PART PAID";
   }
 
   const invoiceTotal = Number(
@@ -2644,13 +2692,6 @@ const getCustomerInvoiceStatus = (row = {}) => {
 
   return paidAmount >= invoiceTotal && invoiceTotal > 0 ? "PAID" : "UNPAID";
 };
-
-const getCustomerInvoiceWatermark = (status) =>
-  status === "PAID"
-    ? "PAID"
-    : status === "PART PAID"
-    ? "PART PAID"
-    : "ORDER IN PROGRESS";
 
   const toggleOrderExpanded = (orderId) => {
     setExpandedOrders((old) => ({
@@ -2741,14 +2782,14 @@ const getCustomerInvoiceWatermark = (status) =>
       paymentReference: "SALES_REP_COLLECTION",
       paidBy: salesPaymentForm.whoPaid,
       collectorName:
-        loggedInUser.staff_name ||
-        loggedInUser.name ||
-        loggedInUser.username ||
+        activeUser.staff_name ||
+        activeUser.name ||
+        activeUser.username ||
         "",
       collectorStaffId:
-        loggedInUser.staff_id || loggedInUser.id || null,
+        activeUser.staff_id || activeUser.id || null,
       collectorRole:
-        loggedInUser.role || loggedInUser.access_level || "Sales Rep",
+        activeUser.role || activeUser.access_level || "Sales Rep",
       paymentIntentId: salesPaymentForm.paymentIntentId,
       notes: [
         selectedSalesBranch ? `Branch: ${selectedSalesBranch.branch_name}` : "",
@@ -2765,15 +2806,21 @@ const getCustomerInvoiceWatermark = (status) =>
       allocations: allocationPreview.allocations,
     });
 
-    alert("Collection saved successfully.");
+    const { outstandingState } = await loadSalesRepOutstanding({
+      customer,
+      selectedBranchId: selectedSalesBranch?.id || "",
+    });
+    setSalesOutstandingSnapshot(outstandingState);
 
     if (String(selectedCustomerAccount?.id || "") === String(customer.id || "")) {
       await loadCustomerCreditSnapshot(selectedCustomerAccount);
     }
 
+    alert("Collection saved successfully.");
+
     setSalesPaymentForm({
-      customerId: "",
-      branchId: "",
+      customerId: customer.id,
+      branchId: selectedSalesBranch?.id || "",
       amount: "",
       paymentType: "Cash",
       whoPaid: "",
@@ -3079,9 +3126,11 @@ const saveOrderTotalsToDatabase = async (orderId, items, order = {}) => {
   subtotal: roundMoney(totals.netTotal).toFixed(2),
   net_total: roundMoney(totals.netTotal).toFixed(2),
   order_total: roundMoney(totals.grandTotal).toFixed(2),
+  grand_total: roundMoney(totals.grandTotal).toFixed(2),
   vat_total: roundMoney(totals.vatTotal).toFixed(2),
   discount_percent: totals.discountPercent,
   discount_amount: roundMoney(totals.discountAmount).toFixed(2),
+  updated_at: new Date().toISOString(),
 })
     .eq("order_number", orderId);
 
@@ -3704,16 +3753,40 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     win.document.close();
   };
 
-  const openCustomerInvoiceDocument = async (order, invoiceStatus = "PAID") => {
-    const freshOrder = (await fetchInvoiceOrderFromDb(order)) || order;
-    const resolvedOrder = await withResolvedInvoicePaymentStatus({
-      ...freshOrder,
-      _documentPaymentStatus: getCustomerInvoiceWatermark(invoiceStatus),
-    });
-    if (invoiceStatus === "PAID") {
-      downloadCentralInvoice(resolvedOrder);
-    } else {
-      previewCentralInvoice(resolvedOrder);
+  const openCustomerInvoiceDocument = async (
+    order,
+    invoiceStatus = "UNPAID",
+    download = false
+  ) => {
+    try {
+      const freshOrder = await fetchInvoiceOrderFromDb(order);
+      const hasEmbeddedOrderItems =
+        Array.isArray(order?.items) || Array.isArray(order?.order_items);
+      if (!freshOrder && !hasEmbeddedOrderItems) {
+        throw new Error("This invoice is not linked to an order document.");
+      }
+
+      const watermark = getCustomerInvoiceWatermark(invoiceStatus);
+      const resolvedOrder = await withResolvedInvoicePaymentStatus({
+        ...(freshOrder || order),
+        _documentPaymentStatus: watermark,
+        documentPaymentStatus: watermark,
+        invoicePaymentStatus: invoiceStatus,
+      });
+
+      if (download) {
+        await downloadCentralInvoice(resolvedOrder);
+        return;
+      }
+
+      await previewCentralInvoice(resolvedOrder);
+    } catch (error) {
+      console.error("Invoice document error:", error);
+      alert(
+        `Could not ${download ? "download" : "open"} invoice: ${
+          error.message || error
+        }`
+      );
     }
   };
 
@@ -3966,12 +4039,14 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
             Order
           </button>
 
-          <button
-            onClick={() => setPage("salesCashCollection")}
-            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
-          >
-            Cash Collection
-          </button>
+          {canCollectCash && (
+            <button
+              onClick={() => setPage("salesCashCollection")}
+              className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
+            >
+              Cash Collection
+            </button>
+          )}
 
           <button
             onClick={() => setPage("salesCreditHistory")}
@@ -4038,41 +4113,6 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
   <div id="order-customer-details" className="transition-all duration-200">
   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3 text-sm font-bold">
 
-    {isCustomer && (() => {
-  const activeBranches = filteredBranchesForSelectedCustomer;
-
-  if (activeBranches.length <= 1) return null;
-
-  return (
-    <div className="mb-3">
-      <label className="font-bold text-sm block mb-1">
-        Branch
-      </label>
-
-      <select
-        className="border rounded-xl p-3 w-full"
-        value={selectedBranchId}
-        onChange={(e) => {
-          const branch = activeBranches.find(
-            (b) => String(b.id) === String(e.target.value)
-          );
-
-          setSelectedBranchId(e.target.value);
-          setSelectedBranch(branch || null);
-          setCustomerDetailsExpanded(!branch);
-        }}
-      >
-        <option value="">Select Branch / Shop</option>
-        {activeBranches.map((branch) => (
-          <option key={branch.id} value={branch.id}>
-            {branch.branch_name} - {branch.postcode}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-})()}
-
     <div className="grid w-full grid-cols-1 items-center gap-2 text-slate-700 md:grid-cols-[minmax(220px,1fr)_auto_auto_auto]">
       <div className="font-semibold truncate">
         Address: {getCustomerAddress(selectedCustomerAccount, selectedBranch)}
@@ -4083,18 +4123,6 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
       <div className="whitespace-nowrap">
         Credit Limit {formatCurrency(selectedCustomerAccount?.credit_limit)}
       </div>
-      {showPriceModeSelector && (
-        <select
-          value={priceMode}
-          onChange={(e) => setPriceMode(e.target.value)}
-          className="border rounded-xl px-3 py-2 font-bold bg-white text-slate-700"
-        >
-          {allowedPriceModes.includes("vat") && <option value="vat">Ex.VAT</option>}
-          {allowedPriceModes.includes("server") && <option value="server">Inc.VAT</option>}
-          {allowedPriceModes.includes("manager") && <option value="manager">Manager Offer</option>}
-          {allowedPriceModes.includes("super") && <option value="super">Admin Offer</option>}
-        </select>
-      )}
     </div>
   </div>
 
@@ -4178,39 +4206,90 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 
     {(() => {
    const activeBranches = filteredBranchesForSelectedCustomer;
+   const showBranchSelector = !isCustomer || activeBranches.length > 1;
 
-   if (isCustomer && activeBranches.length <= 1) return null;
+   if (!showBranchSelector && !showPriceModeSelector) return null;
+
    return (
-    <div>
-      <label className="font-bold text-sm block mb-1">
-        Branch Details
-      </label>
-      <select
-        className="border rounded-xl p-3 w-full"
-        value={selectedBranchId}
-        disabled={!selectedCustomerAccount}
-        onChange={(e) => {
-          const branchId = e.target.value;
+   <div
+  className="flex flex-col gap-3 md:flex-row md:items-end"
+  style={{ alignItems: "flex-end" }}
+>
+      {showBranchSelector && (
+        <div className="min-w-0 md:min-w-[230px]">
+          <label className="font-bold text-sm block mb-1">
+            Branch Details
+          </label>
+          <select
+            className="border rounded-xl p-3 w-full"
+            value={selectedBranchId}
+            disabled={!selectedCustomerAccount}
+            onChange={(e) => {
+              const branchId = e.target.value;
 
-          const branch = activeBranches.find(
-            (b) => String(b.id) === String(branchId)
-          );
+              const branch = activeBranches.find(
+                (b) => String(b.id) === String(branchId)
+              );
 
-          setSelectedBranchId(branchId);
-          setSelectedBranch(branch || null);
-          setCustomerDetailsExpanded(!branch);
-        }}
-      >
-        <option value="">Select Branch / Shop</option>
+              setSelectedBranchId(branchId);
+              setSelectedBranch(branch || null);
+              setCustomerDetailsExpanded(!branch);
+            }}
+          >
+            <option value="">Select Branch / Shop</option>
 
-        {activeBranches.map((branch) => (
-          <option key={branch.id} value={branch.id}>
-            {branch.branch_name} - {branch.postcode}
-          </option>          
-        ))}
-      </select>      
+            {activeBranches.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.branch_name} - {branch.postcode}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {showPriceModeSelector && (
+  <div
+    style={{
+      width: "150px",
+      minWidth: "150px",
+      flexShrink: 0,
+    }}
+  >
+    <label
+      className="font-bold text-sm block mb-1"
+      style={{ whiteSpace: "nowrap" }}
+    >
+      Price Mode
+    </label>
+
+    <select
+      value={priceMode}
+      onChange={(e) => setPriceMode(e.target.value)}
+      className="border rounded-xl p-3 font-bold bg-white text-slate-700"
+      style={{
+        width: "150px",
+        minWidth: "150px",
+      }}
+    >
+      {allowedPriceModes.includes("vat") && (
+        <option value="vat">Ex.VAT</option>
+      )}
+
+      {allowedPriceModes.includes("server") && (
+        <option value="server">Inc.VAT</option>
+      )}
+
+      {allowedPriceModes.includes("manager") && (
+        <option value="manager">Manager Offer</option>
+      )}
+
+      {allowedPriceModes.includes("super") && (
+        <option value="super">Admin Offer</option>
+      )}
+    </select>
+  </div>
+)}
     </div>
-    
   );
 })()}
 
@@ -4588,7 +4667,6 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 
               const status = isInvoice ? getCustomerInvoiceStatus(row) : "";
               const invoiceOrder = isInvoice ? getInvoiceOrderForLedgerRow(row) : null;
-              const invoicePaid = status === "PAID";
               const invoiceActionTarget = invoiceOrder || row;
               const displayBalance = balance;
 
@@ -4643,22 +4721,35 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                   <td className="p-3 text-center">
                     {isInvoice ? (
                       <div className="flex flex-wrap items-center justify-center gap-2">
+                        {getInvoiceActionForStatus(status) === "VIEW" && (
                         <button
                           type="button"
-                          onClick={() => openCustomerInvoiceDocument(invoiceActionTarget, "UNPAID")}
+                          onClick={() =>
+                            openCustomerInvoiceDocument(
+                              invoiceActionTarget,
+                              status,
+                              false
+                            )
+                          }
                           className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold"
                         >
-                          View Order
+                          View Invoice
                         </button>
-
-                        {invoicePaid && (
-                          <button
-                            type="button"
-                            onClick={() => openCustomerInvoiceDocument(invoiceActionTarget, "PAID")}
-                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                          >
-                            Download Invoice
-                          </button>
+                        )}
+                        {getInvoiceActionForStatus(status) === "DOWNLOAD" && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openCustomerInvoiceDocument(
+                              invoiceActionTarget,
+                              status,
+                              true
+                            )
+                          }
+                          className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                        >
+                          Download Invoice
+                        </button>
                         )}
                       </div>
                     ) : (
@@ -4676,7 +4767,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
     </div>
   </div>
 )}
-       {isSalesRep && page === "salesCashCollection" && (
+       {isSalesRep && canCollectCash && page === "salesCashCollection" && (
   <div className="p-4">
     <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-3">
       <h2 className="text-xl font-bold">

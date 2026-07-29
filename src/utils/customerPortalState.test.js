@@ -31,6 +31,25 @@ test("sales rep credit hash restores the sales credit page", () => {
   assert.equal(getCustomerPortalHash("salesCreditHistory", { isSalesRep: true }), "#credit");
 });
 
+test("cash collection route is hidden when the FC permission is denied", () => {
+  assert.equal(
+    resolveCustomerPortalPage({
+      hash: "#cash-collection",
+      isSalesRep: true,
+      canCollectCash: false,
+    }),
+    "order"
+  );
+  assert.equal(
+    resolveCustomerPortalPage({
+      hash: "#cash-collection",
+      isSalesRep: true,
+      canCollectCash: true,
+    }),
+    "salesCashCollection"
+  );
+});
+
 test("admin credit hash takes precedence over overlapping staff permissions", () => {
   assert.equal(
     resolveCustomerPortalPage({

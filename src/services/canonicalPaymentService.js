@@ -123,7 +123,7 @@ export function buildCanonicalPaymentRpcParams({
   };
 }
 
-function notifyCanonicalPaymentPosted(result) {
+export function notifyCanonicalPaymentPosted(result) {
   if (typeof window === "undefined" || !result?.payment?.id) return;
   window.dispatchEvent(
     new CustomEvent(PAYMENT_POSTED_EVENT, {

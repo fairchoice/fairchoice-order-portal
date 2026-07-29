@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import {
+  allocatePaymentOldestFirst,
   applyAllocationsToInvoices,
   buildCustomerTransactionHistory,
   filterRowsForBranchScope,
@@ -25,6 +26,25 @@ const centralPaymentComponentSource = fs.readFileSync(
 );
 const customerCreditComponentSource = fs.readFileSync(
   new URL("../pages/AdminSetup/CustomerCredit.jsx", import.meta.url),
+  "utf8"
+);
+const driverComponentSource = fs.readFileSync(
+  new URL("../pages/AdminSetup/Driver.jsx", import.meta.url),
+  "utf8"
+);
+const customerOrderComponentSource = fs.readFileSync(
+  new URL("../pages/CustomerOrder.jsx", import.meta.url),
+  "utf8"
+);
+const paymentAmendmentMigrationSource = fs.readFileSync(
+  new URL(
+    "../../supabase/migrations/20260728110000_customer_credit_payment_amendment.sql",
+    import.meta.url
+  ),
+  "utf8"
+);
+const permissionSource = fs.readFileSync(
+  new URL("../security/fcPermissions.js", import.meta.url),
   "utf8"
 );
 
@@ -56,6 +76,352 @@ test("legacy payments fill missing history when new invoices exist", () => {
 
   assert.deepEqual(result.invoices.map((row) => row.id), ["new-invoice"]);
   assert.deepEqual(result.payments.map((row) => row.id), ["legacy-payment"]);
+});
+
+test("posted driver payment reduces customer and selected branch outstanding exactly once", () => {
+  const branches = [{ id: "branch-1", branch_name: "Selected Branch" }];
+  const payments = withResolvedBranchScope(
+    [
+      {
+        id: "driver-payment-15",
+        customer_branch_id: "branch-1",
+        amount: 15,
+        status: "POSTED",
+        source: "DRIVER_DELIVERY_COLLECTION",
+      },
+    ],
+    branches
+  );
+  const branchPayments = filterRowsForBranchScope(payments, "branch-1");
+
+  const customerSummary = summarizeCreditSnapshot({
+    openingBalance: 67.41,
+    payments,
+  });
+  const branchSummary = summarizeCreditSnapshot({
+    openingBalance: 67.41,
+    payments: branchPayments,
+  });
+
+  assert.equal(customerSummary.outstanding, 52.41);
+  assert.equal(branchSummary.outstanding, 52.41);
+  assert.equal(customerSummary.paymentTotal, 15);
+  assert.equal(branchPayments.length, 1);
+});
+
+test("posted manual discount reduces invoice and customer balances exactly once", () => {
+  const invoice = {
+    id: "invoice-67-41",
+    invoice_number: "INV-67-41",
+    invoice_date: "2026-07-28T09:00:00.000Z",
+    created_at: "2026-07-28T09:00:00.000Z",
+    invoice_total: 67.41,
+  };
+  const discount = {
+    id: "discount-15",
+    payment_reference: "DISC-15",
+    payment_date: "2026-07-28",
+    created_at: "2026-07-28T10:00:00.000Z",
+    amount: 15,
+    status: "POSTED",
+    transaction_type: "DISCOUNT",
+  };
+  const allocations = [
+    {
+      payment_id: discount.id,
+      invoice_reference: invoice.invoice_number,
+      allocated_amount: 15,
+      status: "active",
+    },
+  ];
+
+  const [allocatedInvoice] = applyAllocationsToInvoices([invoice], allocations);
+  const summary = summarizeCreditSnapshot({
+    invoices: [allocatedInvoice],
+    payments: [discount],
+  });
+  const history = buildCustomerTransactionHistory({
+    openingBalance: 0,
+    invoices: [allocatedInvoice],
+    payments: [discount],
+    newestFirst: false,
+  });
+
+  assert.equal(allocatedInvoice.remainingAmount, 52.41);
+  assert.equal(allocatedInvoice.paymentStatus, "PARTIALLY PAID");
+  assert.equal(summary.invoiceTotal, 67.41);
+  assert.equal(summary.paymentTotal, 15);
+  assert.equal(summary.outstanding, 52.41);
+  assert.deepEqual(
+    history.map((row) => row.runningBalance),
+    [0, 67.41, 52.41]
+  );
+  assert.equal(history.filter((row) => row.type === "PAYMENT").length, 1);
+});
+
+test("manual discounts use FIFO allocations and refresh the canonical Customer Credit read model", () => {
+  const createSource = getFunctionSource("createCentralPayment");
+
+  assert.match(
+    createSource,
+    /p_transaction_type:\s*type[\s\S]*?p_allocations:\s*preview\.allocations/
+  );
+  assert.match(
+    createSource,
+    /if\s*\(!error\)\s*\{[\s\S]*?notifyCanonicalPaymentPosted\(data\)/
+  );
+  assert.match(
+    serviceSource,
+    /export const loadReadOnlyCustomerCreditSnapshot = \(options = \{\}\) =>\s*loadCentralPaymentSnapshot\(options\)/
+  );
+  assert.doesNotMatch(
+    serviceSource,
+    /loadReadOnlyCustomerCreditSnapshot[\s\S]{0,180}paymentSource:\s*"customer_ledger"/
+  );
+});
+
+test("editing 748.00 to 738.37 removes the extra 9.63 credit and reallocates once", () => {
+  const invoice = {
+    id: "invoice-738-37",
+    invoice_number: "INV-11-07-2026",
+    invoice_date: "2026-07-11T11:00:00.000Z",
+    invoice_total: 738.37,
+  };
+  const originalPayment = {
+    id: "payment-correction",
+    payment_reference: "PAY-748",
+    payment_date: "2026-07-11",
+    created_at: "2026-07-11T12:00:00.000Z",
+    amount: 748,
+    status: "POSTED",
+  };
+  const correctedPayment = { ...originalPayment, amount: 738.37 };
+
+  const originalAllocation = allocatePaymentOldestFirst(
+    [invoice],
+    originalPayment.amount
+  );
+  const correctedAllocation = allocatePaymentOldestFirst(
+    [invoice],
+    correctedPayment.amount
+  );
+  const [correctedInvoice] = applyAllocationsToInvoices(
+    [invoice],
+    correctedAllocation.allocations.map((allocation) => ({
+      payment_id: correctedPayment.id,
+      invoice_reference: allocation.invoiceReference,
+      allocated_amount: allocation.allocatedAmount,
+      status: "active",
+    }))
+  );
+  const originalSummary = summarizeCreditSnapshot({
+    invoices: [invoice],
+    payments: [originalPayment],
+    creditLimit: 1000,
+  });
+  const correctedSummary = summarizeCreditSnapshot({
+    invoices: [correctedInvoice],
+    payments: [correctedPayment],
+    creditLimit: 1000,
+  });
+  const correctedHistory = buildCustomerTransactionHistory({
+    invoices: [correctedInvoice],
+    payments: [correctedPayment],
+    newestFirst: false,
+  });
+
+  assert.equal(originalAllocation.allocations.length, 1);
+  assert.equal(originalAllocation.allocations[0].allocatedAmount, 738.37);
+  assert.equal(originalAllocation.unallocatedAmount, 9.63);
+  assert.equal(originalSummary.outstanding, -9.63);
+  assert.equal(correctedAllocation.allocations.length, 1);
+  assert.equal(correctedAllocation.allocations[0].allocatedAmount, 738.37);
+  assert.equal(correctedAllocation.unallocatedAmount, 0);
+  assert.equal(correctedInvoice.remainingAmount, 0);
+  assert.equal(correctedInvoice.paymentStatus, "PAID");
+  assert.equal(correctedSummary.outstanding, 0);
+  assert.equal(correctedSummary.availableCredit, 1000);
+  assert.deepEqual(
+    correctedHistory.map((row) => row.runningBalance),
+    [0, 738.37, 0]
+  );
+  assert.equal(
+    correctedHistory.filter((row) => row.type === "PAYMENT").length,
+    1
+  );
+});
+
+test("voiding a mistaken 9.63 payment removes its balance effect", () => {
+  const mistakenPayment = {
+    id: "mistaken-9-63",
+    payment_reference: "PAY-9-63",
+    payment_date: "2026-07-11",
+    created_at: "2026-07-11T13:00:00.000Z",
+    amount: 9.63,
+    status: "POSTED",
+  };
+  const beforeVoid = summarizeCreditSnapshot({
+    payments: [mistakenPayment],
+    creditLimit: 1000,
+  });
+  const afterVoid = summarizeCreditSnapshot({
+    payments: [{ ...mistakenPayment, status: "VOIDED" }],
+    creditLimit: 1000,
+  });
+  const history = buildCustomerTransactionHistory({
+    payments: [{ ...mistakenPayment, status: "VOIDED" }],
+    newestFirst: false,
+  });
+
+  assert.equal(beforeVoid.outstanding, -9.63);
+  assert.equal(beforeVoid.availableCredit, 1009.63);
+  assert.equal(afterVoid.outstanding, 0);
+  assert.equal(afterVoid.availableCredit, 1000);
+  assert.deepEqual(history.map((row) => row.runningBalance), [0]);
+});
+
+test("payment amendment RPCs enforce FC permissions, IDs, account ownership, audit, and FIFO", () => {
+  assert.match(
+    permissionSource,
+    /CUSTOMER_CREDIT_PAYMENT_EDIT:\s*"customer_credit\.payment_edit"/
+  );
+  assert.match(
+    permissionSource,
+    /CUSTOMER_CREDIT_PAYMENT_DELETE:\s*"customer_credit\.payment_delete"/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /fc_require_session_permission\([\s\S]*?'customer_credit\.payment_edit'/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /fc_require_session_permission\([\s\S]*?'customer_credit\.payment_delete'/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /if p_payment_id is null then[\s\S]*?Payment ID is required/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /if not found then[\s\S]*?Payment does not exist/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /customer_account_id is distinct from p_customer_account_id[\s\S]*?does not belong to the selected customer account/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /delete from public\.customer_payment_allocations[\s\S]*?perform public\.recalculate_central_payment_fifo/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /before_data[\s\S]*?after_data[\s\S]*?changed_by_staff_id/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /insert into public\.central_payment_archive/
+  );
+  assert.match(
+    paymentAmendmentMigrationSource,
+    /notify pgrst,\s*'reload schema'/
+  );
+});
+
+test("Customer Credit exposes confirmed canonical payments and refreshes after amendment", () => {
+  assert.match(customerCreditComponentSource, />\s*Edit Payment\s*</);
+  assert.match(
+    customerCreditComponentSource,
+    /await amendCustomerCreditPayment\([\s\S]*?await refreshAfterPaymentAmendment\(\)/
+  );
+  assert.match(
+    customerCreditComponentSource,
+    /await voidCustomerCreditPayment\([\s\S]*?await refreshAfterPaymentAmendment\(\)/
+  );
+  assert.match(
+    customerCreditComponentSource,
+    /const refreshed = await loadReadOnlyCustomerCreditSnapshot\([\s\S]*?setSnapshot\(refreshed\)/
+  );
+  assert.match(customerCreditComponentSource, /window\.confirm\(/);
+  assert.match(
+    customerCreditComponentSource,
+    /UUID_PATTERN\.test\(String\(paymentId \|\| ""\)\)/
+  );
+});
+
+test("Customer Credit amendment services use RPCs instead of browser table updates", () => {
+  const editSource = getFunctionSource("amendCustomerCreditPayment");
+  const voidSource = getFunctionSource("voidCustomerCreditPayment");
+
+  assert.match(editSource, /supabase\.rpc\(\s*"edit_customer_credit_payment_v1"/);
+  assert.match(voidSource, /supabase\.rpc\(\s*"void_customer_credit_payment_v1"/);
+  assert.match(editSource, /p_customer_account_id:\s*customerAccountId/);
+  assert.match(voidSource, /p_customer_account_id:\s*customerAccountId/);
+  assert.doesNotMatch(editSource, /\.from\("customer_payments"\)\.update/);
+  assert.doesNotMatch(voidSource, /\.from\("customer_payments"\)\.update/);
+});
+
+test("Driver reloads the canonical outstanding snapshot after posting a collection", () => {
+  const saveStart = driverComponentSource.indexOf(
+    "const saveCashCollection = async"
+  );
+  const saveSource = driverComponentSource.slice(saveStart);
+  const postIndex = saveSource.indexOf("await postCanonicalCustomerPayment");
+  const refreshIndex = saveSource.indexOf(
+    "await loadDriverCreditOutstanding",
+    postIndex
+  );
+  const stateIndex = saveSource.indexOf(
+    "setCashCollectionOutstanding(outstandingState)",
+    refreshIndex
+  );
+
+  assert.notEqual(saveStart, -1);
+  assert.notEqual(postIndex, -1);
+  assert.ok(refreshIndex > postIndex);
+  assert.ok(stateIndex > refreshIndex);
+  assert.match(
+    driverComponentSource,
+    /const loadDriverCreditOutstanding[\s\S]*?loadCentralPaymentSnapshot\(\{/
+  );
+});
+
+test("Sales Rep reloads canonical outstanding without clearing the selected account", () => {
+  const saveStart = customerOrderComponentSource.indexOf(
+    "const saveSalesRepCollection = async"
+  );
+  const saveEnd = customerOrderComponentSource.indexOf(
+    "const submitOrder = async",
+    saveStart
+  );
+  const saveSource = customerOrderComponentSource.slice(saveStart, saveEnd);
+  const postIndex = saveSource.indexOf("await postCanonicalCustomerPayment");
+  const refreshIndex = saveSource.indexOf(
+    "await loadSalesRepOutstanding",
+    postIndex
+  );
+  const stateIndex = saveSource.indexOf(
+    "setSalesOutstandingSnapshot(outstandingState)",
+    refreshIndex
+  );
+
+  assert.notEqual(saveStart, -1);
+  assert.notEqual(postIndex, -1);
+  assert.ok(refreshIndex > postIndex);
+  assert.ok(stateIndex > refreshIndex);
+  assert.match(
+    customerOrderComponentSource,
+    /const loadSalesRepOutstanding[\s\S]*?loadCentralPaymentSnapshot\(\{/
+  );
+  assert.match(saveSource, /customerId:\s*customer\.id/);
+  assert.match(saveSource, /branchId:\s*selectedSalesBranch\?\.id \|\| ""/);
+  assert.equal(
+    saveSource.match(/await postCanonicalCustomerPayment\(/g)?.length,
+    1
+  );
+  assert.match(saveSource, /collectorName:\s*activeUser\.staff_name/);
+  assert.match(saveSource, /collectorStaffId:\s*activeUser\.staff_id/);
+  assert.match(saveSource, /collectorRole:\s*activeUser\.role/);
+  assert.doesNotMatch(saveSource, /collectorName:\s*loggedInUser/);
 });
 
 test("legacy customer_ledger invoice rows are excluded from active Customer Credit", () => {
@@ -438,10 +804,10 @@ test("central snapshot exposes branch summaries for Customer Credit Summary", ()
 
   assert.match(source, /const branchSummaries = branches\.map/);
   assert.match(source, /filterRowsForBranchScope\(invoices, branchId\)/);
-  assert.match(source, /summarizeCreditSnapshot\(\{/);
+  assert.match(source, /buildCustomerAccountTransactionModel\(\{/);
   assert.match(source, /branchSummaries,/);
   assert.match(source, /difference:\s*money\(customerSummary\.outstanding - branchOutstandingTotal\)/);
-  assert.match(customerCreditComponentSource, /Total Outstanding/);
+  assert.match(customerCreditComponentSource, /Outstanding Balance/);
   assert.match(customerCreditComponentSource, /snapshot\?\.branchSummaries/);
   assert.match(customerCreditComponentSource, /Branch Outstanding/);
 });
@@ -556,18 +922,152 @@ test("Customer Credit suppresses a legacy row linked to its canonical payment", 
   assert.equal(result.payments.length, 1);
   assert.equal(result.payments[0].id, "canonical-221");
   assert.equal(result.legacyFallbackUsed, false);
+  assert.equal(result.paymentDiagnostics.canonicalPaymentCount, 1);
+  assert.equal(result.paymentDiagnostics.legacyOnlyPaymentCount, 0);
+  assert.equal(result.paymentDiagnostics.suppressedDuplicateCount, 1);
 });
 
-test("branch opening balances save and reload independently", () => {
+test("payment diagnostics suppress exact canonical and legacy duplicates once", () => {
+  const shared = {
+    customer_account_id: "customer-1",
+    payment_reference: "ORD-100",
+    payment_date: "2026-07-11",
+    amount: 50,
+  };
+  const result = resolveLegacyCompatibilityRows({
+    payments: [
+      { ...shared, id: "canonical-a", created_at: "2026-07-11T09:00:00Z" },
+      { ...shared, id: "canonical-b", created_at: "2026-07-11T09:01:00Z" },
+    ],
+    legacyPayments: [
+      {
+        ...shared,
+        id: "legacy-10",
+        legacy_ledger_id: 10,
+        created_at: "2026-07-11T09:02:00Z",
+      },
+    ],
+  });
+
+  assert.deepEqual(result.payments.map((row) => row.id), ["canonical-a"]);
+  assert.deepEqual(result.paymentDiagnostics, {
+    canonicalPaymentCount: 1,
+    legacyOnlyPaymentCount: 0,
+    suppressedDuplicateCount: 2,
+    canonicalPaymentTotal: 50,
+    legacyOnlyPaymentTotal: 0,
+    combinedUniquePaymentTotal: 50,
+    suppressedPaymentIds: ["canonical-b", "legacy-10"],
+  });
+  assert.equal(result.legacyFallbackUsed, false);
+});
+
+test("legacy compatibility warning and totals require a genuinely unmatched payment", () => {
+  const result = resolveLegacyCompatibilityRows({
+    payments: [
+      {
+        id: "canonical-a",
+        customer_account_id: "customer-1",
+        payment_reference: "PAY-1",
+        payment_date: "2026-07-10",
+        amount: 25,
+      },
+    ],
+    legacyPayments: [
+      {
+        id: "legacy-20",
+        legacy_ledger_id: 20,
+        customer_account_id: "customer-1",
+        payment_reference: "PAY-2",
+        payment_date: "2026-07-11",
+        amount: 10,
+      },
+    ],
+  });
+
+  assert.equal(result.legacyFallbackUsed, true);
+  assert.equal(result.paymentDiagnostics.canonicalPaymentCount, 1);
+  assert.equal(result.paymentDiagnostics.legacyOnlyPaymentCount, 1);
+  assert.equal(result.paymentDiagnostics.canonicalPaymentTotal, 25);
+  assert.equal(result.paymentDiagnostics.legacyOnlyPaymentTotal, 10);
+  assert.equal(result.paymentDiagnostics.combinedUniquePaymentTotal, 35);
+});
+
+test("canonical ledger mirrors are suppressed even when legacy branch scope is missing", () => {
+  const result = resolveLegacyCompatibilityRows({
+    payments: [
+      {
+        id: "canonical-a",
+        customer_account_id: "customer-1",
+        customer_branch_id: "branch-1",
+        payment_reference: "PAY-1",
+        payment_date: "2026-07-10",
+        amount: 25,
+      },
+    ],
+    legacyPayments: [
+      {
+        id: "legacy-20",
+        legacy_ledger_id: 20,
+        customer_account_id: "customer-1",
+        customer_branch_id: null,
+        payment_reference: "PAY-1",
+        payment_date: "2026-07-10",
+        amount: 25,
+      },
+    ],
+  });
+
+  assert.equal(result.payments.length, 1);
+  assert.equal(result.paymentDiagnostics.legacyOnlyPaymentCount, 0);
+  assert.equal(result.paymentDiagnostics.suppressedDuplicateCount, 1);
+  assert.equal(result.legacyFallbackUsed, false);
+});
+
+test("a ledger mirror of a voided canonical payment cannot re-enter active history", () => {
+  const voidedCanonical = {
+    id: "canonical-voided",
+    customer_account_id: "customer-1",
+    payment_reference: "PAY-VOID",
+    payment_date: "2026-07-10",
+    amount: 25,
+    status: "VOIDED",
+    voided_at: "2026-07-11T09:00:00Z",
+  };
+  const result = resolveLegacyCompatibilityRows({
+    payments: [],
+    canonicalIdentityPayments: [voidedCanonical],
+    legacyPayments: [
+      {
+        id: "legacy-voided",
+        legacy_ledger_id: 21,
+        central_payment_id: "canonical-voided",
+        customer_account_id: "customer-1",
+        payment_reference: "PAY-VOID",
+        payment_date: "2026-07-10",
+        amount: 25,
+      },
+    ],
+  });
+
+  assert.equal(result.payments.length, 0);
+  assert.equal(result.paymentDiagnostics.legacyOnlyPaymentCount, 0);
+  assert.equal(result.legacyFallbackUsed, false);
+});
+
+test("branch opening balances save through the permission-checked RPC", () => {
   const componentSource = fs.readFileSync(
     new URL("../pages/AdminSetup/CustomerCredit.jsx", import.meta.url),
     "utf8"
   );
 
-  assert.match(componentSource, /\.from\("customer_branch_opening_balances"\)/);
-  assert.match(componentSource, /customer_branch_id:\s*openingBranchId/);
-  assert.match(componentSource, /lookup\.eq\("customer_branch_id", openingBranchId\)/);
-  assert.match(componentSource, /lookup\.is\("customer_branch_id", null\)/);
+  assert.match(componentSource, /setCustomerOpeningBalance\(\{/);
+  assert.match(componentSource, /customerBranchId:\s*openingBranchId/);
+  assert.match(serviceSource, /set_customer_opening_balance_v1/);
+  assert.doesNotMatch(
+    componentSource,
+    /\.from\("customer_branch_opening_balances"\)/
+  );
   assert.doesNotMatch(componentSource, /\.from\("customer_opening_balances"\)/);
 });
 

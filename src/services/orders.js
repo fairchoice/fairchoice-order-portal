@@ -5,6 +5,7 @@ import {
   getOrderItemProductCode,
 } from "../utils/orderTotals";
 import { isServerManagerPriceMode } from "../utils/pricing";
+import { sanitizeOrderWritePayload } from "../utils/orderWritePayload";
 import {
   loadProcessingQueueOrders,
   mergeOperationalOrders,
@@ -165,10 +166,8 @@ export async function saveConfirmedServerManagerOrderToProcessingQueue({
     const vatTotal = getProcessingQueueTotal(order, "vat_total", "total_vat", "vat");
     const grandTotal = getProcessingQueueTotal(
       order,
-      "order_total",
-      "total_amount",
-      "final_total",
-      "total"
+       "order_total",
+  "grand_total",
     );
     const totalQuantity = lineItems.reduce(
       (sum, item) => sum + getProcessingQueueLineQty(item),
@@ -277,7 +276,12 @@ export async function getOrders() {
    
 
     priceMode: order.price_mode || "",
-    total: Number(order.order_total || order.total || order.final_total || 0),
+    total: Number(
+  order.grand_total ||
+  order.order_total ||
+  order.total ||
+  0
+),
 
     createdAt: order.created_at,
 
@@ -369,6 +373,7 @@ const orderPayload = {
   net_total: calculatedTotals.netTotal.toFixed(2),
   vat_total: calculatedTotals.vatTotal.toFixed(2),
   order_total: calculatedTotals.grandTotal.toFixed(2),
+  grand_total: calculatedTotals.grandTotal.toFixed(2),
   
 
   discount_percent: calculatedTotals.discountPercent,
@@ -378,6 +383,7 @@ const orderPayload = {
   notes: notes || "",
 
   status: "Received",
+  updated_at: new Date().toISOString(),
 };
 
   let order = null;
@@ -631,10 +637,11 @@ export async function updateOrderStatus(orderNumber, status) {
 
 export async function updateOrderFields(orderNumber, updates) {
   console.log("[Orders] updateOrderFields input", { orderNumber, updates });
+  const safeUpdates = sanitizeOrderWritePayload(updates);
 
   const { data, error } = await supabase
     .from("orders")
-    .update(updates)
+    .update(safeUpdates)
     .eq("order_number", orderNumber)
     .select()
     .single();

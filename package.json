@@ -9,6 +9,9 @@
     "lint": "eslint .",
     "test": "node --test \"src/**/*.test.js\" && node scripts/validate-central-payment-migrations.mjs && node scripts/validate-global-ledger-migrations.mjs",
     "test:migrations": "node scripts/validate-central-payment-migrations.mjs && node scripts/validate-global-ledger-migrations.mjs",
+    "reconcile:customer-accounts": "node --env-file=.env scripts/reconcile-customer-accounts.mjs",
+    "reconcile:total-collection": "node --env-file=.env scripts/reconcile-total-collection.mjs",
+    "cleanup:test-shop": "node --env-file=.env scripts/cleanup-test-shop.mjs",
     "preview": "vite preview",
     "testdata:financial": "node scripts/generate-financial-test-data.mjs"
   },
