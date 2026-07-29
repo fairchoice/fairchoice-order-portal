@@ -44,7 +44,52 @@ const BACK_OFFICE_HASH_ROUTES = {
   "#config": "loginSetup",
   "#customers": "customers",
   "#credit": "credit",
+  "#home-content-notices": "homePageImages",
 };
+
+export const CUSTOMER_PORTAL_HOME_VIEW = "home";
+
+export function buildCustomerPortalHistoryState(
+  currentState,
+  { page = "order", view = CUSTOMER_PORTAL_HOME_VIEW } = {}
+) {
+  const safeCurrentState =
+    currentState && typeof currentState === "object" ? currentState : {};
+  return {
+    ...safeCurrentState,
+    fairchoicePortal: true,
+    page,
+    view,
+  };
+}
+
+export function getCustomerPortalHistoryAction(
+  currentState,
+  nextView
+) {
+  if (
+    currentState?.fairchoicePortal === true &&
+    currentState?.view === nextView
+  ) {
+    return "none";
+  }
+  return currentState?.fairchoicePortal === true &&
+    currentState?.view !== CUSTOMER_PORTAL_HOME_VIEW
+    ? "replace"
+    : "push";
+}
+
+export function isCustomerPortalHomeView({
+  page = "order",
+  showHomepage = false,
+  hasSelectedProduct = false,
+} = {}) {
+  return (
+    page === "order" &&
+    showHomepage === true &&
+    hasSelectedProduct === false
+  );
+}
 
 export function resolveCustomerPortalPage({
   hash = "",
@@ -85,6 +130,7 @@ export function getCustomerPortalHash(
   { isAdmin = false, isCustomer = false, isSalesRep = false } = {}
 ) {
   if (isAdmin) {
+    if (page === "homePageImages") return "";
     return Object.entries(BACK_OFFICE_HASH_ROUTES).find(
       ([, routePage]) => routePage === page
     )?.[0] || "";
