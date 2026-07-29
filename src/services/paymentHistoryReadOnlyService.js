@@ -124,7 +124,21 @@ export function assertUniquePaymentIds(payments = []) {
   return payments;
 }
 
-async function findMatchingCustomerIds(search) {
+async function loadTestAccountIds() {
+  const { data, error } = await supabase
+    .from("customer_accounts")
+    .select("*")
+    .eq("is_test_account", true);
+
+  if (error) {
+    if (["42703", "PGRST204"].includes(String(error.code || ""))) return [];
+    reportReadError("test-account lookup failed", error);
+    return [];
+  }
+  return (data || []).map((row) => row.id).filter(Boolean);
+}
+
+async function findMatchingCustomerIds(search, testAccountIds = []) {
   if (!search) return [];
 
   const { data, error } = await supabase
@@ -137,7 +151,10 @@ async function findMatchingCustomerIds(search) {
     reportReadError("customer-name search lookup failed", error);
     return [];
   }
-  return (data || []).map((row) => row.id).filter(Boolean);
+  const excluded = new Set(testAccountIds.map(String));
+  return (data || [])
+    .map((row) => row.id)
+    .filter((id) => id && !excluded.has(String(id)));
 }
 
 async function loadPageLookups(payments) {
@@ -152,7 +169,7 @@ async function loadPageLookups(payments) {
 
   const [accountsResult, branchesResult] = await Promise.all([
     accountIds.length
-      ? supabase.from("customer_accounts").select("id,account_name").in("id", accountIds)
+      ? supabase.from("customer_accounts").select("*").in("id", accountIds)
       : Promise.resolve({ data: [], error: null }),
     branchIds.length
       ? supabase.from("customer_branches").select("id,branch_name").in("id", branchIds)
@@ -195,12 +212,21 @@ export async function listReadOnlyPaymentHistory({
     ...REQUIRED_PAYMENT_COLUMNS,
     ...OPTIONAL_PAYMENT_COLUMNS.filter((column) => deployedColumns.has(column)),
   ];
-  const matchingCustomerIds = await findMatchingCustomerIds(safeSearch);
+  const testAccountIds = await loadTestAccountIds();
+  const matchingCustomerIds = await findMatchingCustomerIds(safeSearch, testAccountIds);
   const selectedSort = SORTS[sort] || SORTS.payment_newest;
 
   let query = supabase
     .from("customer_payments")
     .select(paymentColumns.join(","), { count: "exact" });
+
+  if (testAccountIds.length) {
+    query = query.not(
+      "customer_account_id",
+      "in",
+      `(${testAccountIds.join(",")})`
+    );
+  }
 
   if (safeSearch) {
     const clauses = [`payment_reference.ilike.%${safeSearch}%`];

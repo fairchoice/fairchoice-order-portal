@@ -4,6 +4,7 @@ import {
   loadProcessingQueueOrders,
   mergeDeliveredOrderInvoicesIntoLedgerRows,
 } from "../../services/centralInvoiceEngine";
+import { loadDeliveredInvoices } from "../../services/centralPaymentService";
 import { formatCurrency } from "../../utils/currency";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
@@ -137,7 +138,9 @@ export default function WeeklyAccount() {
       weekStart.setHours(0, 0, 0, 0);
 
       const results = await Promise.allSettled([
-        loadWeeklyAccountPayments(supabase),
+        loadWeeklyAccountPayments(supabase, {
+          loadInvoices: loadDeliveredInvoices,
+        }),
         supabase.from("drivers").select("*"),
         supabase
           .from("customer_ledger")
@@ -493,7 +496,8 @@ export default function WeeklyAccount() {
 
 function CollectionSection({ rows, title, money, formatDate }) {
   const total = rows.reduce((sum, row) => sum + paymentAmount(row), 0);
-  return <><div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Paid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Payments" value={rows.length} /><SummaryCard title={title} value={money(total)} /></div><PaymentTable rows={rows} money={money} formatDate={formatDate} /></>;
+  const paymentCount = new Set(rows.map((row) => row.canonical_payment_key || row.id)).size;
+  return <><div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Paid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Payments" value={paymentCount} /><SummaryCard title={title} value={money(total)} /></div><PaymentTable rows={rows} money={money} formatDate={formatDate} /></>;
 }
 
 function CollectorCollectionSection({ rows, totals, title, money, formatDate }) {
@@ -502,8 +506,11 @@ function CollectorCollectionSection({ rows, totals, title, money, formatDate }) 
 
 function PaymentTable({ rows, money, formatDate }) {
   const invoiceTotal = (row) => Number(row.invoice_total || row.order_total || row.total_amount || row.invoice_amount || 0);
-  const balance = (row) => Math.max(0, invoiceTotal(row) - paymentAmount(row));
-  return <PaginatedTable rows={rows} empty="No payment records found." renderHeader={() => <tr className="bg-gray-100 text-left"><Th>Customer</Th><Th>Order No</Th><Th right>Invoice Total</Th><Th right>Paid Amount</Th><Th right>Balance</Th><Th>Payment Date</Th><Th>Payment Type</Th><Th>Who Paid</Th><Th>Collected By</Th><Th>Collection Type</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-t"><Td>{row.customer_name || "-"}</Td><Td>{formatDisplayOrderId(row.invoice_no || row.order_number)}</Td><Td right>{money(invoiceTotal(row))}</Td><Td right>{money(paymentAmount(row))}</Td><Td right>{money(balance(row))}</Td><Td>{formatDate(getWeeklyPaymentDate(row))}</Td><Td>{row.payment_type || row.payment_method || "-"}</Td><Td>{row.who_paid || row.paid_by || "-"}</Td><Td bold>{collectorNameFor(row) || "-"}</Td><Td>{collectorTypeFor(row)}</Td></tr>} />;
+  const balance = (row) =>
+    Number.isFinite(Number(row.running_balance))
+      ? Number(row.running_balance)
+      : Math.max(0, invoiceTotal(row) - paymentAmount(row));
+  return <PaginatedTable rows={rows} empty="No payment records found." renderHeader={() => <tr className="bg-gray-100 text-left"><Th>Customer</Th><Th>Order No</Th><Th right>Invoice Total</Th><Th right>Paid Amount</Th><Th right>Balance</Th><Th>Payment Date</Th><Th>Payment Type</Th><Th>Who Paid</Th><Th>Collected By</Th><Th>Collection Type</Th><Th>Source</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-t"><Td>{row.customer_name || "-"}</Td><Td>{formatDisplayOrderId(row.invoice_no || row.order_number)}</Td><Td right>{money(invoiceTotal(row))}</Td><Td right>{money(paymentAmount(row))}</Td><Td right>{money(balance(row))}</Td><Td>{formatDate(getWeeklyPaymentDate(row))}</Td><Td>{row.payment_type || row.payment_method || "-"}</Td><Td>{row.who_paid || row.paid_by || "-"}</Td><Td bold>{collectorNameFor(row) || "-"}</Td><Td>{collectorTypeFor(row)}</Td><Td><SourceBadge legacy={row.is_legacy} /></Td></tr>} />;
 }
 
 function ExpenseTable({ rows, money, formatDate, onStatus }) {
@@ -537,3 +544,4 @@ function SummaryCard({ title, value }) { return <div className="rounded-xl borde
 function Th({ children, right }) { return <th className={`whitespace-nowrap p-3 ${right ? "text-right" : "text-left"}`}>{children}</th>; }
 function Td({ children, right, bold, className = "" }) { return <td className={`whitespace-nowrap p-3 ${right ? "text-right" : "text-left"} ${bold ? "font-bold" : ""} ${className}`}>{children}</td>; }
 function StatusBadge({ value }) { const status = String(value || "").toUpperCase(); const style = status === "APPROVED" || status === "PAID" ? "bg-green-100 text-green-700" : status === "PENDING" || status.includes("PART") ? "bg-amber-100 text-amber-700" : status === "REJECTED" || status === "VOIDED" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-700"; return <span className={`rounded-full px-2 py-1 text-xs font-bold ${style}`}>{status}</span>; }
+function SourceBadge({ legacy }) { return <span className={`rounded-full px-2 py-1 text-xs font-bold ${legacy ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-700"}`}>{legacy ? "Legacy" : "Current"}</span>; }

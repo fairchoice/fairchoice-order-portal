@@ -7,6 +7,10 @@ import {
 } from "../utils/orderTotals";
 import { isServerManagerPriceMode, roundMoney } from "../utils/pricing";
 import { formatCurrency } from "../utils/currency";
+import {
+  getCustomerInvoiceWatermark,
+  normalizeInvoicePaymentStatus,
+} from "../utils/invoicePaymentStatus";
 import { sortPrintItems } from "../utils/printItemSorting";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
@@ -482,7 +486,6 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
     order.order_total,
     order.orderTotal,
     order.total_amount,
-    order.final_total,
     order.total
   );
 
@@ -714,8 +717,27 @@ export async function withResolvedInvoicePaymentStatus(order = {}) {
   };
 }
 
-const getInvoicePaymentStatus = (order = {}, totals = {}) =>
-  order._documentPaymentStatus || order.documentPaymentStatus || (isInvoicePaid(order, totals) ? "PAID" : "UNPAID");
+const getInvoicePaymentStatus = (order = {}, totals = {}) => {
+  const status = normalizeInvoicePaymentStatus(
+    order._documentPaymentStatus ||
+      order.documentPaymentStatus ||
+      order.invoicePaymentStatus ||
+      order.payment_status ||
+      (isInvoicePaid(order, totals) ? "PAID" : "UNPAID")
+  );
+
+  if (status === "PARTIALLY PAID") return "PART PAID";
+  return status || "UNPAID";
+};
+
+const getInvoiceDocumentWatermark = (order = {}, totals = {}) =>
+  getCustomerInvoiceWatermark(
+    order._documentPaymentStatus ||
+      order.documentPaymentStatus ||
+      order.invoicePaymentStatus ||
+      order.payment_status ||
+      getInvoicePaymentStatus(order, totals)
+  );
 
 export const getPrintTemplate = (priceMode) =>
   isServerManagerPriceMode(priceMode)
@@ -1253,6 +1275,8 @@ function buildLegacyStandardInvoiceHtml(
             min-height: 277mm;
             display: flex;
             flex-direction: column;
+              position: relative;
+  isolation: isolate;
           }
           .content {
             flex: 1 0 auto;
@@ -1571,7 +1595,7 @@ export function buildStandardInvoiceHtml(
     settings.company_registration_number ||
     "16350457";
   const companyAddress = getPrintableCompanyAddress(settings.companyAddress);
-  const paymentStatus = getInvoicePaymentStatus(invoiceOrder, totals);
+  const paymentStatus = getInvoiceDocumentWatermark(invoiceOrder, totals);
   const vatGroups = (totals.vatGroups || totals.vat_groups || []).filter(
     (group) => Number(group.net_total ?? group.netTotal ?? 0) || Number(group.vat_total ?? group.vatTotal ?? 0)
   );
@@ -1665,20 +1689,30 @@ export function buildStandardInvoiceHtml(
             top: 43%;
             left: 50%;
             transform: translate(-50%, -50%) rotate(-28deg);
-            color: rgba(239, 68, 68, 0.16);
-            border: 4px solid rgba(239, 68, 68, 0.2);
+            color: rgba(217, 119, 6, 0.14);
+            border: 4px solid rgba(217, 119, 6, 0.18);
             padding: 10mm 18mm;
             font-size: 46px;
             font-weight: 900;
             letter-spacing: 0;
-            z-index: 5;
+            z-index: 3;
             pointer-events: none;
             background: transparent;
           }
-          .watermark.paid {
-            color: rgba(22, 163, 74, 0.12);
-            border-color: rgba(22, 163, 74, 0.16);
-          }
+        .watermark.paid {
+  color: rgba(22, 163, 74, 0.14);
+  border-color: rgba(22, 163, 74, 0.18);
+}
+
+.watermark.part-paid {
+  color: rgba(124, 58, 237, 0.14);
+  border-color: rgba(124, 58, 237, 0.18);
+}
+
+.watermark.in-progress {
+  color: rgba(217, 119, 6, 0.16);
+  border-color: rgba(217, 119, 6, 0.20);
+}
           .content,
           .footer {
             position: relative;
@@ -1954,7 +1988,13 @@ export function buildStandardInvoiceHtml(
       </head>
       <body>
         <div class="page">
-          ${!isOrderForm && !isDeliveryNote ? `<div class="watermark ${paymentStatus === "PAID" ? "paid" : ""}">${escapeHtml(paymentStatus)}</div>` : ""}
+          ${
+            !isOrderForm && !isDeliveryNote
+              ? `<div class="watermark ${paymentStatus
+                  .toLowerCase()
+                  .replace(/\s+/g, "-")}">${escapeHtml(paymentStatus)}</div>`
+              : ""
+          }
           <main class="content">
             ${
               showHeaderFooter
@@ -2201,10 +2241,12 @@ export async function createManualInvoice({
     net_total: calculatedTotals.netTotal.toFixed(2),
     vat_total: calculatedTotals.vatTotal.toFixed(2),
     order_total: calculatedTotals.grandTotal.toFixed(2),
+    grand_total: calculatedTotals.grandTotal.toFixed(2),
     discount_percent: calculatedTotals.discountPercent || 0,
     discount_amount: calculatedTotals.discountAmount.toFixed(2),
     status: "Delivered",
     delivered_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
     notes,
     invoice_type: "MANUAL",
     created_by: currentUser?.id || currentUser?.staff_id || null,
@@ -2775,8 +2817,13 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
     order_total: Number(row.grand_total || snapshot.order_total || snapshot.total || 0),
     totalAmount: Number(row.grand_total || snapshot.total_amount || 0),
     total_amount: Number(row.grand_total || snapshot.total_amount || 0),
-    finalTotal: Number(row.grand_total || snapshot.final_total || snapshot.order_total || 0),
-    final_total: Number(row.grand_total || snapshot.final_total || snapshot.order_total || 0),
+    finalTotal: Number(
+  row.grand_total ||
+  snapshot.grand_total ||
+  snapshot.order_total ||
+  0
+),
+
     subtotal: Number(row.subtotal || snapshot.subtotal || 0),
     net_total: Number(row.net_total || snapshot.net_total || snapshot.subtotal || 0),
     vatTotal: Number(row.vat_total || snapshot.vat_total || snapshot.total_vat || 0),
@@ -2881,7 +2928,11 @@ const mapOrderForLedgerFallback = (order = {}) => ({
     order.shop_name ||
     "",
   priceMode: order.price_mode || "vat",
-  finalTotal: Number(order.final_total || order.total_amount || order.order_total || 0),
+  finalTotal: Number(
+  order.grand_total ||
+  order.order_total ||
+  0
+),
   orderTotal: Number(order.order_total || order.total || 0),
   createdAt: order.created_at,
   deliveredAt: order.delivered_at || order.updated_at || order.created_at,

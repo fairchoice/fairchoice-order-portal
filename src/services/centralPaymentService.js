@@ -4,22 +4,26 @@ import { hydrateOrdersWithFullOrderItems } from "./centralInvoiceEngine";
 import { getActiveCustomerBranches } from "../utils/customerBranchScope";
 import {
   CANONICAL_PAYMENT_SOURCES,
+  notifyCanonicalPaymentPosted,
   postCanonicalCustomerPayment,
 } from "./canonicalPaymentService";
 import {
   allocatePaymentOldestFirst,
   applyAllocationsToInvoices,
   filterRowsForBranchScope,
-  buildCustomerTransactionHistory,
   createPaymentIdempotencyKey,
   getBranchKey,
   isVoidedPayment,
   money,
   resolveLegacyCompatibilityRows,
   summarizeCreditSnapshot,
-  summarizeCreditSummaryRows,
   withResolvedBranchScope,
 } from "../utils/centralPaymentCalculations";
+import {
+  buildCustomerAccountTransactionModel,
+  isBalanceAffectingPayment,
+} from "../utils/customerAccountTransactions";
+import { isTestAccount } from "../utils/testAccountFiltering";
 
 const deliveredStatuses = ["delivered", "confirmed", "delivery confirmed", "completed"];
 
@@ -137,6 +141,32 @@ const branchSeparationUnavailableMessage =
 
 const emptyQueryResult = { data: [], error: null };
 
+const createEmptyCentralPaymentSnapshot = () => ({
+  openingBalances: [],
+  invoices: [],
+  payments: [],
+  allPayments: [],
+  allocations: [],
+  paymentAudits: [],
+  allocatedInvoices: [],
+  transactionHistory: [],
+  accountHistory: buildCustomerAccountTransactionModel(),
+  customerSummary: summarizeCreditSnapshot(),
+  branchSummary: summarizeCreditSnapshot(),
+  branchSummaries: [],
+  allocationPreview: { allocations: [], unallocatedAmount: 0 },
+  legacyFallbackUsed: false,
+  paymentDiagnostics: {
+    canonicalPaymentCount: 0,
+    legacyOnlyPaymentCount: 0,
+    suppressedDuplicateCount: 0,
+    canonicalPaymentTotal: 0,
+    legacyOnlyPaymentTotal: 0,
+    combinedUniquePaymentTotal: 0,
+    suppressedPaymentIds: [],
+  },
+});
+
 async function safeSelect(table, buildQuery) {
   try {
     const query = buildQuery(supabase.from(table));
@@ -159,7 +189,9 @@ export async function loadCentralPaymentCustomers() {
     .order("account_name");
 
   if (error) throw error;
-  return (data || []).filter((customer) => customer.active !== false);
+  return (data || []).filter(
+    (customer) => customer.active !== false && !isTestAccount(customer)
+  );
 }
 
 export async function loadBranchOpeningBalances(customerAccountId) {
@@ -265,6 +297,10 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
 }
 
 export async function loadPayments(customerAccountId) {
+  return (await loadAllPayments(customerAccountId)).filter(isBalanceAffectingPayment);
+}
+
+export async function loadAllPayments(customerAccountId) {
   if (!customerAccountId) return [];
   const { data, error } = await safeSelect("customer_payments", (query) =>
     query
@@ -273,7 +309,7 @@ export async function loadPayments(customerAccountId) {
       .order("payment_date", { ascending: true })
   );
   if (error) throw error;
-  return (data || []).filter((payment) => !isVoidedPayment(payment));
+  return data || [];
 }
 
 const inactiveLedgerPaymentStatuses = new Set([
@@ -356,7 +392,6 @@ async function loadLegacyLedgerFallback({
   customerAccountId,
   customerName,
   customer,
-  invoiceRows = [],
 } = {}) {
   if (!customerAccountId && !customerName) return { invoices: [], payments: [] };
 
@@ -411,36 +446,28 @@ export async function loadCentralPaymentSnapshot({
   selectedBranchId = "",
   paymentSource = "canonical",
 } = {}) {
-  if (!customerAccountId && !customerName) {
-    return {
-      openingBalances: [],
-      invoices: [],
-      payments: [],
-      allocations: [],
-      allocatedInvoices: [],
-      transactionHistory: [],
-      customerSummary: summarizeCreditSnapshot(),
-      branchSummary: summarizeCreditSnapshot(),
-      branchSummaries: [],
-      allocationPreview: { allocations: [], unallocatedAmount: 0 },
-      legacyFallbackUsed: false,
-    };
+  if ((!customerAccountId && !customerName) || isTestAccount(customer)) {
+    return createEmptyCentralPaymentSnapshot();
   }
 
-  let [openingBalances, invoices, payments, allocations] = await Promise.all([
+  let [openingBalances, invoices, loadedPayments, allocations, paymentAudits] =
+    await Promise.all([
     loadBranchOpeningBalances(customerAccountId),
     loadDeliveredInvoices({ customerAccountId, customerName }),
     paymentSource === "customer_ledger"
       ? loadCustomerLedgerPayments({ customerAccountId, customerName })
-      : loadPayments(customerAccountId),
+      : loadAllPayments(customerAccountId),
     loadAllocations(customerAccountId),
+    loadPaymentAuditHistory(customerAccountId),
   ]);
+  let allPayments = loadedPayments;
 
   // Branch accounting is ON only when the customer has active branches.
   // Otherwise every financial record belongs to the main customer account.
   const branches = getActiveCustomerBranches(customer);
   const scopedNewInvoices = withResolvedBranchScope(invoices, branches);
-  const scopedNewPayments = withResolvedBranchScope(payments, branches);
+  const scopedAllPayments = withResolvedBranchScope(allPayments, branches);
+  const scopedNewPayments = scopedAllPayments.filter(isBalanceAffectingPayment);
   const scopedAllocations = withResolvedBranchScope(allocations, branches);
   const compatibilityRows =
     paymentSource === "customer_ledger"
@@ -448,37 +475,69 @@ export async function loadCentralPaymentSnapshot({
           invoices: scopedNewInvoices,
           payments: scopedNewPayments,
           legacyFallbackUsed: false,
+          paymentDiagnostics: {
+            canonicalPaymentCount: scopedNewPayments.length,
+            legacyOnlyPaymentCount: 0,
+            suppressedDuplicateCount: 0,
+            canonicalPaymentTotal: money(
+              scopedNewPayments.reduce(
+                (sum, payment) => sum + Number(payment.amount || 0),
+                0
+              )
+            ),
+            legacyOnlyPaymentTotal: 0,
+            combinedUniquePaymentTotal: money(
+              scopedNewPayments.reduce(
+                (sum, payment) => sum + Number(payment.amount || 0),
+                0
+              )
+            ),
+            suppressedPaymentIds: [],
+          },
         }
       : resolveLegacyCompatibilityRows({
           invoices: scopedNewInvoices,
           payments: scopedNewPayments,
+          canonicalIdentityPayments: scopedAllPayments,
           legacyInvoices: [],
           legacyPayments: (
             await loadLegacyLedgerFallback({
               customerAccountId,
               customerName,
               customer,
-              invoiceRows: scopedNewInvoices,
             })
           ).payments,
         });
   invoices = compatibilityRows.invoices;
-  payments = compatibilityRows.payments;
-  allocations = scopedAllocations;
+  const payments = compatibilityRows.payments;
+  allPayments = [
+    ...scopedAllPayments.filter(
+      (payment) => !isBalanceAffectingPayment(payment)
+    ),
+    ...compatibilityRows.payments,
+  ];
+  const suppressedPaymentIds = new Set(
+    (compatibilityRows.paymentDiagnostics?.suppressedPaymentIds || []).map(String)
+  );
+  allocations = scopedAllocations.filter(
+    (allocation) =>
+      !suppressedPaymentIds.has(
+        String(
+          allocation.payment_id ||
+            allocation.paymentId ||
+            allocation.customer_payment_id ||
+            ""
+        )
+      )
+  );
   const selectedInvoices = filterRowsForBranchScope(invoices, selectedBranchId);
   const selectedPayments = filterRowsForBranchScope(payments, selectedBranchId);
+  const selectedAllPayments = filterRowsForBranchScope(allPayments, selectedBranchId);
   const selectedAllocations = filterRowsForBranchScope(allocations, selectedBranchId);
-  const branchAwareRecordCount = [...scopedNewInvoices, ...scopedNewPayments, ...scopedAllocations].filter(
-    (row) => row._branchMatched === true
-  ).length;
-  const legacyFallbackUsed =
-    !selectedBranchId && compatibilityRows.legacyFallbackUsed && branchAwareRecordCount === 0;
+  const legacyFallbackUsed = compatibilityRows.legacyFallbackUsed;
 
   const allocatedInvoices = applyAllocationsToInvoices(invoices, allocations);
   const selectedAllocatedInvoices = applyAllocationsToInvoices(selectedInvoices, selectedAllocations);
-  const openingBalance = money(
-    (openingBalances || []).reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
-  );
   const selectedOpeningBalance = money(
     (openingBalances || [])
       .filter((row) =>
@@ -489,54 +548,71 @@ export async function loadCentralPaymentSnapshot({
       .reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
   );
   const transactionInvoices = selectedBranchId ? selectedAllocatedInvoices : allocatedInvoices;
-  const transactionPayments = selectedBranchId ? selectedPayments : payments;
-  const transactionOpeningBalance = selectedBranchId ? selectedOpeningBalance : openingBalance;
+  const modelOpeningBalances = selectedBranchId
+    ? (openingBalances || []).filter(
+        (row) =>
+          getBranchKey(row.customer_branch_id) === getBranchKey(selectedBranchId)
+      )
+    : openingBalances;
+  const accountHistory = buildCustomerAccountTransactionModel({
+    customer,
+    openingBalances: modelOpeningBalances,
+    invoices: transactionInvoices,
+    payments: selectedBranchId ? selectedAllPayments : allPayments,
+    allocations: selectedBranchId ? selectedAllocations : allocations,
+    paymentAudits,
+    sortDirection: "oldest",
+  });
   const activeBranchKeys = new Set(branches.map((branch) => getBranchKey(branch.id)));
   const branchSummaries = branches.map((branch) => {
     const branchId = String(branch.id);
     const branchInvoices = filterRowsForBranchScope(invoices, branchId);
-    const branchPayments = filterRowsForBranchScope(payments, branchId);
     const branchAllocations = filterRowsForBranchScope(allocations, branchId);
     const branchAllocatedInvoices = applyAllocationsToInvoices(branchInvoices, branchAllocations);
-    const branchOpeningBalance = money(
-      (openingBalances || [])
-        .filter((row) => getBranchKey(row.customer_branch_id) === getBranchKey(branchId))
-        .reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
-    );
     const branchCreditLimit = branch.credit_limit ?? branch.creditLimit ?? customer?.credit_limit;
-    const summary = summarizeCreditSnapshot({
-      creditLimit: branchCreditLimit,
-      openingBalance: branchOpeningBalance,
+    const branchOpeningRows = (openingBalances || []).filter(
+      (row) => getBranchKey(row.customer_branch_id) === getBranchKey(branchId)
+    );
+    const branchAllPayments = filterRowsForBranchScope(allPayments, branchId);
+    const branchModel = buildCustomerAccountTransactionModel({
+      customer: { ...customer, credit_limit: branchCreditLimit },
+      openingBalances: branchOpeningRows,
       invoices: branchAllocatedInvoices,
-      payments: branchPayments,
+      payments: branchAllPayments,
+      allocations: branchAllocations,
+      paymentAudits,
     });
 
     return {
       branchId,
       branchName: branch.branch_name || branch.name || "",
-      ...summary,
+      ...branchModel.summary,
     };
   });
 
   // Existing accounts can contain opening balances or historical transactions
   // which pre-date branch assignment. Keep those amounts visible as a separate
   // reconciliation row instead of dropping them from the branch total.
-  const unassignedOpeningBalance = money(
-    (openingBalances || [])
-      .filter((row) => !activeBranchKeys.has(getBranchKey(row.customer_branch_id)))
-      .reduce((sum, row) => sum + Number(row.opening_balance || 0), 0)
-  );
   const unassignedInvoices = branches.length
     ? invoices.filter((row) => row._branchMatched !== true)
     : invoices;
-  const unassignedPayments = branches.length
-    ? payments.filter((row) => row._branchMatched !== true)
-    : payments;
-  const unassignedSummary = summarizeCreditSnapshot({
-    openingBalance: unassignedOpeningBalance,
+  const unassignedOpeningRows = (openingBalances || []).filter(
+    (row) => !activeBranchKeys.has(getBranchKey(row.customer_branch_id))
+  );
+  const unassignedAllPayments = branches.length
+    ? allPayments.filter((row) => row._branchMatched !== true)
+    : allPayments;
+  const unassignedModel = buildCustomerAccountTransactionModel({
+    customer: { ...customer, credit_limit: 0 },
+    openingBalances: unassignedOpeningRows,
     invoices: unassignedInvoices,
-    payments: unassignedPayments,
+    payments: unassignedAllPayments,
+    allocations: branches.length
+      ? allocations.filter((row) => row._branchMatched !== true)
+      : allocations,
+    paymentAudits,
   });
+  const unassignedSummary = unassignedModel.summary;
   const hasUnassignedFinancialActivity = [
     unassignedSummary.openingBalance,
     unassignedSummary.invoiceTotal,
@@ -552,34 +628,35 @@ export async function loadCentralPaymentSnapshot({
     });
   }
 
-  const customerSummary = summarizeCreditSummaryRows({
-    creditLimit: customer?.credit_limit,
-    summaries: branchSummaries,
+  const fullAccountHistory = buildCustomerAccountTransactionModel({
+    customer,
+    openingBalances,
+    invoices: allocatedInvoices,
+    payments: allPayments,
+    allocations,
+    paymentAudits,
+    sortDirection: "oldest",
   });
+  const customerSummary = fullAccountHistory.summary;
   const branchOutstandingTotal = money(
     branchSummaries.reduce((sum, row) => sum + Number(row.outstanding || 0), 0)
   );
   const selectedBranchSummary = selectedBranchId
-    ? summarizeCreditSnapshot({
-        creditLimit: customer?.credit_limit,
-        openingBalance: selectedOpeningBalance,
-        invoices: selectedAllocatedInvoices,
-        payments: selectedPayments,
-      })
+    ? accountHistory.summary
     : customerSummary;
 
   return {
     openingBalances,
     invoices,
     payments,
+    allPayments,
     allocations,
+    paymentAudits,
     allocatedInvoices,
-    transactionHistory: buildCustomerTransactionHistory({
-      openingBalance: transactionOpeningBalance,
-      invoices: transactionInvoices,
-      payments: transactionPayments,
-      newestFirst: true,
-    }),
+    transactionHistory: accountHistory.transactions,
+    accountHistory,
+    fullAccountHistory,
+    paymentHistory: accountHistory.paymentHistory,
     customerSummary,
     branchSummary: selectedBranchSummary,
     branchSummaries,
@@ -593,14 +670,12 @@ export async function loadCentralPaymentSnapshot({
     selectedOpeningBalance,
     branchName: getBranchName(customer, selectedBranchId),
     legacyFallbackUsed,
+    paymentDiagnostics: compatibilityRows.paymentDiagnostics,
   };
 }
 
 export const loadReadOnlyCustomerCreditSnapshot = (options = {}) =>
-  loadCentralPaymentSnapshot({
-    ...options,
-    paymentSource: "customer_ledger",
-  });
+  loadCentralPaymentSnapshot(options);
 
 export function buildPaymentPreview({ invoices = [], allocations = [], amount = 0, branchId = "" } = {}) {
   const allocatedInvoices = applyAllocationsToInvoices(invoices, allocations);
@@ -690,9 +765,12 @@ export async function createCentralPayment({
     p_external_reference: String(externalReference || "").trim() || null,
     p_notes: notes || "",
     p_idempotency_key: idempotencyKey,
-    p_allocations: [],
+    p_allocations: preview.allocations,
   });
-  if (!error) return { ...(data || {}), preview };
+  if (!error) {
+    notifyCanonicalPaymentPosted(data);
+    return { ...(data || {}), preview };
+  }
   if (isMissingRpcError(error)) throw new Error("Protected Central Payment is not installed. Review and apply the additive owner-security migration first.");
   throw error;
 }
@@ -913,6 +991,160 @@ export async function editCentralPayment({ payment, changes, reason } = {}) {
     .eq("id", payment.id)
     .select("*")
     .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function loadPaymentAuditHistory(customerAccountId) {
+  if (!customerAccountId) return [];
+  const { data, error } = await safeSelect("central_payment_lifecycle_audit", (query) =>
+    query
+      .select("*")
+      .eq("customer_account_id", customerAccountId)
+      .order("changed_at", { ascending: true })
+  );
+  if (
+    error &&
+    (String(error.code || "") === "42501" ||
+      /permission denied/i.test(String(error.message || "")))
+  ) {
+    return [];
+  }
+  if (error) throw error;
+  return data || [];
+}
+
+const getFcSessionCredentials = (currentUser = null) => {
+  let storedUser = null;
+  if (typeof window !== "undefined") {
+    try {
+      storedUser = JSON.parse(
+        localStorage.getItem("loggedInUser") ||
+          localStorage.getItem("fairchoice_user") ||
+          "null"
+      );
+    } catch {
+      storedUser = null;
+    }
+  }
+
+  const user = currentUser || storedUser || {};
+  return {
+    username: String(user.username || user.user_name || "").trim(),
+    sessionToken:
+      user.fc_session_token ||
+      user.session_token ||
+      user.sessionToken ||
+      storedUser?.fc_session_token ||
+      storedUser?.session_token ||
+      null,
+  };
+};
+
+export async function amendCustomerCreditPayment({
+  customerAccountId,
+  paymentId,
+  changes,
+  reason,
+  currentUser,
+} = {}) {
+  if (!customerAccountId) throw new Error("Customer account is required.");
+  if (!paymentId) throw new Error("Payment is required.");
+  if (!(Number(changes?.amount) > 0)) {
+    throw new Error("Payment amount must be greater than zero.");
+  }
+  if (!String(reason || "").trim()) {
+    throw new Error("Amendment reason is required.");
+  }
+
+  const { username, sessionToken } = getFcSessionCredentials(currentUser);
+  if (!username || !sessionToken) {
+    throw new Error("FC login session is missing. Sign out and sign in again.");
+  }
+
+  const { data, error } = await supabase.rpc(
+    "edit_customer_credit_payment_v1",
+    {
+      p_username: username,
+      p_session_token: sessionToken,
+      p_customer_account_id: customerAccountId,
+      p_payment_id: paymentId,
+      p_amount: Number(changes.amount),
+      p_payment_method: String(changes.paymentMethod || "Other").trim(),
+      p_payment_date: changes.paymentDate || null,
+      p_paid_by: String(changes.paidBy || "").trim(),
+      p_collection_type: String(changes.collectionType || "").trim(),
+      p_reference: String(changes.reference || "").trim(),
+      p_notes: String(changes.notes || "").trim(),
+      p_reason: String(reason).trim(),
+    }
+  );
+  if (error) throw error;
+  return data;
+}
+
+export async function setCustomerOpeningBalance({
+  customerAccountId,
+  customerBranchId = null,
+  amount,
+  reason,
+  currentUser,
+} = {}) {
+  if (!customerAccountId) throw new Error("Customer account is required.");
+  if (!Number.isFinite(Number(amount))) {
+    throw new Error("Opening balance must be a valid amount.");
+  }
+  if (!String(reason || "").trim()) {
+    throw new Error("Opening-balance amendment reason is required.");
+  }
+
+  const { username, sessionToken } = getFcSessionCredentials(currentUser);
+  if (!username || !sessionToken) {
+    throw new Error("FC login session is missing. Sign out and sign in again.");
+  }
+
+  const { data, error } = await supabase.rpc(
+    "set_customer_opening_balance_v1",
+    {
+      p_username: username,
+      p_session_token: sessionToken,
+      p_customer_account_id: customerAccountId,
+      p_customer_branch_id: customerBranchId || null,
+      p_amount: Number(amount),
+      p_reason: String(reason).trim(),
+    }
+  );
+  if (error) throw error;
+  return data;
+}
+
+export async function voidCustomerCreditPayment({
+  customerAccountId,
+  paymentId,
+  reason,
+  currentUser,
+} = {}) {
+  if (!customerAccountId) throw new Error("Customer account is required.");
+  if (!paymentId) throw new Error("Payment is required.");
+  if (!String(reason || "").trim()) {
+    throw new Error("Void reason is required.");
+  }
+
+  const { username, sessionToken } = getFcSessionCredentials(currentUser);
+  if (!username || !sessionToken) {
+    throw new Error("FC login session is missing. Sign out and sign in again.");
+  }
+
+  const { data, error } = await supabase.rpc(
+    "void_customer_credit_payment_v1",
+    {
+      p_username: username,
+      p_session_token: sessionToken,
+      p_customer_account_id: customerAccountId,
+      p_payment_id: paymentId,
+      p_reason: String(reason).trim(),
+    }
+  );
   if (error) throw error;
   return data;
 }
