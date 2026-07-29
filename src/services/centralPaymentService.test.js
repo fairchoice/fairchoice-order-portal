@@ -622,6 +622,10 @@ test("Central Payment is one page with shared owner password", () => {
   );
   assert.match(centralPaymentComponentSource, /function PaymentRecordsPanel/);
   assert.match(centralPaymentComponentSource, /function GlobalLedgerPanel/);
+  assert.match(
+    centralPaymentComponentSource,
+    /const ledgerTypes = \["PAYMENT", "DISCOUNT", "INVOICE", "CREDIT", "REFUND", "ADJUSTMENT", "EXPENSE"\]/
+  );
   assert.match(centralPaymentComponentSource, /function AllocationPreview/);
   assert.match(centralPaymentComponentSource, /function ManualPaymentPanel/);
   assert.match(centralPaymentComponentSource, /export default function CentralPayment/);

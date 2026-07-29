@@ -25,7 +25,7 @@ import {
 } from "../../services/fcSession";
 
 const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
-const ledgerTypes = ["PAYMENT", "DISCOUNT", "INVOICE", "CREDIT", "REFUND", "ADJUSTMENT"];
+const ledgerTypes = ["PAYMENT", "DISCOUNT", "INVOICE", "CREDIT", "REFUND", "ADJUSTMENT", "EXPENSE"];
 const BRANCH_SELECT = "__select__";
 
 const matchesCustomer = (customer, search) =>
