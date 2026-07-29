@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabase.js";
 import {
   buildLegacyStaffProfile,
@@ -25,8 +25,11 @@ import PriceManagement from "./AdminSetup/PriceManagement";
 import { formatCurrency } from "../utils/currency";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import {
+  buildCustomerPortalHistoryState,
   getCustomerCartStorageKey,
+  getCustomerPortalHistoryAction,
   getCustomerPortalHash,
+  isCustomerPortalHomeView,
   isCustomerPortalPageAllowed,
   isOrderAuthError,
   resolveCustomerPortalPage,
@@ -65,11 +68,16 @@ import {
   isOperationalCustomer,
 } from "../utils/customerStatus";
 import HomeCategoryGrid from "../components/HomeCategoryGrid";
+import HomepageTargetMessages from "../components/HomepageTargetMessages";
 import Cart from "../components/Cart.jsx";
 import ReturnRequestModal from "../components/ReturnRequestModal";
 
 import { getProducts } from "../services/products";
 import { getHomepageItems } from "../services/homepageItems";
+import {
+  getActiveHomepageMessages,
+  getMatchingHomepageMessages,
+} from "../services/homepageMessages";
 import {
   applyLocationStockToProducts,
   saveProductLocationStock,
@@ -624,6 +632,7 @@ useEffect(() => {
   const [productsLoading, setProductsLoading] = useState(false);
   const [productError, setProductError] = useState("");
   const [homepageItems, setHomepageItems] = useState([]);
+  const [homepageMessages, setHomepageMessages] = useState([]);
   const [homepageLoading, setHomepageLoading] = useState(false);
   const [showHomepage, setShowHomepage] = useState(true);
   const [homepageSelectionType, setHomepageSelectionType] = useState("");
@@ -639,6 +648,8 @@ useEffect(() => {
   const lastCartProductIdRef = useRef("");
   const browseScrollPositionRef = useRef(0);
   const productHighlightTimerRef = useRef(null);
+  const portalHistoryInitializedRef = useRef(false);
+  const activePortalViewRef = useRef("home");
 
 const cartStorageKey = getCustomerCartStorageKey(activeUser);
 const orderSubmissionStorageKey = `${cartStorageKey}:submission`;
@@ -1242,6 +1253,10 @@ const findHomepagePriceProduct = (item) => {
       return product.subCategory === item.targetValue;
     }
 
+    if (categoryType === "brand") {
+      return product.brand === item.targetValue;
+    }
+
     if (categoryType === "promotion") {
       return productMatchesHomepagePromotion(product, item.targetValue);
     }
@@ -1285,11 +1300,13 @@ const getHomepageDisplayPrice = (item) => {
 
 const getHomepageCardProducts = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
+  if (categoryType === "custom_link") return [];
   return products.filter((product) => {
     if (!product.active) return false;
     if (orderCountry === "England" && !product.availableInEngland) return false;
     if (orderCountry === "Wales" && !product.availableInWales) return false;
     if (categoryType === "sub_category") return product.subCategory === item.targetValue;
+    if (categoryType === "brand") return product.brand === item.targetValue;
     if (categoryType === "promotion") return productMatchesHomepagePromotion(product, item.targetValue);
     return product.category === item.targetValue;
   });
@@ -1307,24 +1324,196 @@ const homepageCategoryCards = homepageItems.map((item) => {
   };
 });
 
-const showHome = () => {
+const matchingHomepageMessages = getMatchingHomepageMessages(homepageMessages, {
+  selectedCategory,
+  selectedSubCategory,
+  selectedBrand,
+});
+const selectedProductNotices = getMatchingHomepageMessages(homepageMessages, {
+  selectedProductId: selectedImage?.id,
+}).filter((message) => message.targetType === "product");
+
+const recordCustomerPortalView = useCallback(
+  (view, portalPage = "order") => {
+    if (!isCustomer || !view) return;
+    activePortalViewRef.current = view;
+    const nextState = buildCustomerPortalHistoryState(
+      window.history.state,
+      { page: portalPage, view }
+    );
+    const action = getCustomerPortalHistoryAction(
+      window.history.state,
+      view
+    );
+    if (action === "push") {
+      window.history.pushState(nextState, "", window.location.href);
+    } else if (action === "replace") {
+      window.history.replaceState(nextState, "", window.location.href);
+    }
+  },
+  [isCustomer]
+);
+
+const restoreCustomerHome = useCallback(() => {
+  activePortalViewRef.current = "home";
   setShowHomepage(true);
   setHomepageSelectionType("");
   setHomepageBrowseTitle("");
   setHomepagePromotionTarget("");
+  setPage("order");
   setSelectedCategory("All Products");
   setSelectedSubCategory("All Sub Categories");
   setSelectedBrand("All Brands");
   setSelectedSeries("All Series");
   setSearch("");
+  setProductPage(1);
+  setSelectedImage(null);
+  setIsCartEditing(false);
+
+  if (isCustomer || isSalesRep) {
+    const homeHash = getCustomerPortalHash("order", {
+      isCustomer,
+      isSalesRep,
+    });
+    window.history.replaceState(
+      buildCustomerPortalHistoryState(window.history.state, {
+        page: "order",
+        view: "home",
+      }),
+      "",
+      homeHash || window.location.href
+    );
+  }
+
+  requestAnimationFrame(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+}, [
+  isCustomer,
+  isSalesRep,
+  setHomepageBrowseTitle,
+  setHomepagePromotionTarget,
+  setHomepageSelectionType,
+  setIsCartEditing,
+  setPage,
+  setProductPage,
+  setSearch,
+  setSelectedBrand,
+  setSelectedCategory,
+  setSelectedImage,
+  setSelectedSeries,
+  setSelectedSubCategory,
+  setShowHomepage,
+]);
+
+const goToCustomerHome = useCallback(() => {
+  if (
+    isCustomer &&
+    window.history.state?.fairchoicePortal === true &&
+    window.history.state?.view !== "home"
+  ) {
+    window.history.back();
+    return;
+  }
+  restoreCustomerHome();
+}, [isCustomer, restoreCustomerHome]);
+
+useEffect(() => {
+  if (!isCustomer || portalHistoryInitializedRef.current) return;
+  portalHistoryInitializedRef.current = true;
+  const initialUrl = window.location.href;
+  const startsAtHome = isCustomerPortalHomeView({
+    page,
+    showHomepage,
+    hasSelectedProduct: Boolean(selectedImage),
+  });
+
+  window.history.replaceState(
+    buildCustomerPortalHistoryState(window.history.state, {
+      page: "order",
+      view: "home",
+    }),
+    "",
+    initialUrl
+  );
+
+  if (!startsAtHome) {
+    activePortalViewRef.current = selectedImage ? "product" : page;
+    window.history.pushState(
+      buildCustomerPortalHistoryState(window.history.state, {
+        page,
+        view: selectedImage ? "product" : page,
+      }),
+      "",
+      initialUrl
+    );
+  }
+}, [isCustomer, page, selectedImage, showHomepage]);
+
+useEffect(() => {
+  if (!isCustomer) return undefined;
+  const handlePortalPopState = () => {
+    const isAtHome = isCustomerPortalHomeView({
+      page,
+      showHomepage,
+      hasSelectedProduct: Boolean(selectedImage),
+    });
+    if (activePortalViewRef.current !== "home" || !isAtHome) {
+      restoreCustomerHome();
+    }
+  };
+
+  window.addEventListener("popstate", handlePortalPopState);
+  return () => window.removeEventListener("popstate", handlePortalPopState);
+}, [isCustomer, page, restoreCustomerHome, selectedImage, showHomepage]);
+
+const updateHomepageSearch = (value) => {
+  if (!String(search || "").trim() && String(value || "").trim()) {
+    recordCustomerPortalView("search");
+  }
+  setSearch(value);
+};
+
+const openProductDetails = (product) => {
+  recordCustomerPortalView("product");
+  setSelectedImage(product);
+};
+
+const openCustomerCart = () => {
+  recordCustomerPortalView("cart");
+  document.querySelector(".cart-panel")?.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+};
+
+const openCustomerCheckout = () => {
+  recordCustomerPortalView("checkout");
+  document.querySelector(".checkout-section")?.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
 };
 
 const openHomepageItem = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
 
+  if (categoryType === "custom_link") {
+    const target = String(item.targetValue || "").trim();
+    if (/^(https?:\/\/|\/(?!\/)|#)/i.test(target)) {
+      window.location.assign(target);
+    } else {
+      console.warn("Blocked unsafe homepage custom link:", target);
+    }
+    return;
+  }
+
+  recordCustomerPortalView(categoryType);
   setShowHomepage(false);
   setHomepageSelectionType(categoryType);
-  setHomepageBrowseTitle(item.description || item.targetValue || "Products");
+  setHomepageBrowseTitle(
+    item.title || item.description || item.targetValue || "Products"
+  );
   setHomepagePromotionTarget("");
   setSearch("");
   setSelectedBrand("All Brands");
@@ -1344,6 +1533,13 @@ const openHomepageItem = (item) => {
     setSelectedCategory("All Products");
     setSelectedSubCategory("All Sub Categories");
     setHomepagePromotionTarget(item.targetValue || "");
+    return;
+  }
+
+  if (categoryType === "brand") {
+    setSelectedCategory("All Products");
+    setSelectedSubCategory("All Sub Categories");
+    setSelectedBrand(item.targetValue || "All Brands");
     return;
   }
 
@@ -1432,7 +1628,7 @@ useEffect(() => {
 
   const nextHash = getCustomerPortalHash(page, roleState);
   if (nextHash && window.location.hash !== nextHash) {
-    window.history.replaceState(null, "", nextHash);
+    window.history.replaceState(window.history.state, "", nextHash);
   }
 }, [page, isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer]);
 
@@ -1568,15 +1764,24 @@ useEffect(() => {
     setProductsLoading(false);
   };
 
-  const fetchHomepageCards = async () => {
+  const fetchHomepageContent = async () => {
     setHomepageLoading(true);
 
-    try {
-      const rows = await getHomepageItems();
-      setHomepageItems(rows || []);
-    } catch (error) {
-      console.error("Homepage loading error:", error);
+    const [itemsResult, messagesResult] = await Promise.allSettled([
+      getHomepageItems(),
+      getActiveHomepageMessages(),
+    ]);
+    if (itemsResult.status === "fulfilled") {
+      setHomepageItems(itemsResult.value || []);
+    } else {
+      console.error("Homepage loading error:", itemsResult.reason);
       setHomepageItems([]);
+    }
+    if (messagesResult.status === "fulfilled") {
+      setHomepageMessages(messagesResult.value || []);
+    } else {
+      console.error("Homepage message loading error:", messagesResult.reason);
+      setHomepageMessages([]);
     }
 
     setHomepageLoading(false);
@@ -1584,8 +1789,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (!supabase) return;
-    fetchProducts();
-    fetchHomepageCards();
+    void Promise.all([fetchProducts(), fetchHomepageContent()]);
   }, [orderCountry]);
 
   const fetchPricingSettings = async () => {
@@ -2068,6 +2272,7 @@ const getHomepageSubtitle = (item) => {
 
   const changeCartEditing = (nextEditing) => {
     if (nextEditing) {
+      recordCustomerPortalView("cart");
       browseScrollPositionRef.current = window.scrollY;
       setIsCartEditing(true);
       requestAnimationFrame(() => {
@@ -3723,7 +3928,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
       {isCustomer && (
         <div className="customer-nav-buttons flex gap-2">
           <button
-            onClick={() => setPage("order")}
+            onClick={goToCustomerHome}
             className={`order-tab-btn btn-secondary bg-white text-blue-800 px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
           >
             Order
@@ -3732,6 +3937,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
           <button
             onClick={async () => {
               await fetchCustomerLedger();
+              recordCustomerPortalView("paymentHistory", "paymentHistory");
               setPage("paymentHistory");
             }}
             className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold ${page === "paymentHistory" ? "active" : ""}`}
@@ -3754,7 +3960,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
       {isSalesRep && (
         <div className="customer-nav-buttons flex gap-1 sm:gap-2">
           <button
-            onClick={() => setPage("order")}
+            onClick={goToCustomerHome}
             className={`order-tab-btn btn-secondary bg-white text-blue-800 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
           >
             Order
@@ -4056,7 +4262,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 
   setSelectedSeries={setSelectedSeries}
   resultCount={filteredProducts.length}
-  onBackToCategories={showHome}
+  onBackToCategories={goToCustomerHome}
   onClearAll={() => setProductPage(1)}
 />
 
@@ -4088,11 +4294,11 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                   loading={homepageLoading || productsLoading}
                   search={search}
                   productResultCount={homepageSearchProducts.length}
-                  onSearchChange={setSearch}
+                  onSearchChange={updateHomepageSearch}
                   onBrowse={openHomepageItem}
-                  onHome={showHome}
+                  onHome={goToCustomerHome}
                   cartItemCount={cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + Number(item.qty || 0), 0)}
-                  onCartClick={() => document.querySelector(".cart-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  onCartClick={openCustomerCart}
                 >
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 md:gap-3">
                     {homepageVisibleSearchProducts.map((product) => {
@@ -4107,7 +4313,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                             displayMessage: getProductDisplayMessage(product),
                           }}
                           addToCart={addToCart}
-                          onImageClick={setSelectedImage}
+                          onImageClick={openProductDetails}
                           price={getPrice(product)}
                           cartQty={cart.find((item) => item.id === product.id)?.qty || 0}
                           onAdd={addToCart}
@@ -4125,6 +4331,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                 </HomeCategoryGrid>
               ) : (
                 <>
+              <HomepageTargetMessages messages={matchingHomepageMessages} />
               {productsLoading && products.length === 0 && (
                 <div className="bg-slate-50 border rounded-3xl p-5 mb-4" role="status" aria-live="polite">
                   Loading products from Supabase...
@@ -4166,7 +4373,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                         displayMessage: getProductDisplayMessage(product),
                       }}
                       addToCart={addToCart}
-                      onImageClick={setSelectedImage}
+                      onImageClick={openProductDetails}
                       price={getPrice(product)}
                       cartQty={
                         cart.find((item) => item.id === product.id)?.qty || 0
@@ -4198,7 +4405,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                         displayMessage: getProductDisplayMessage(product),
                       }}
                       addToCart={addToCart}
-                      onImageClick={setSelectedImage}
+                      onImageClick={openProductDetails}
                       price={getPrice(product)}
                       cartQty={
                         cart.find((item) => item.id === product.id)?.qty || 0
@@ -4766,6 +4973,8 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
                 {selectedImage.name}
               </h3>
 
+              <HomepageTargetMessages messages={selectedProductNotices} />
+
               <button
                 onClick={() => setSelectedImage(null)}
                 className="mt-4 w-full bg-blue-600 text-white py-3 rounded-xl font-bold"
@@ -4819,12 +5028,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
         )}
       <button
         type="button"
-        onClick={() => {
-          document.querySelector(".checkout-section")?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          });
-        }}
+        onClick={openCustomerCheckout}
         className="min-h-12 rounded-xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700 sm:px-6"
       >
         Checkout
@@ -4834,16 +5038,16 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
   </div>
 )}
 
-{page === "order" && (isAdmin || isSalesRep || isCustomer) && (
+{(isCustomer || isSalesRep || (isAdmin && page === "order")) && (
   <div className="fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] right-3 z-50 flex gap-2 sm:right-4">
-    {showHomepage && <button
+    <button
       type="button"
       aria-label="Go to home"
-      onClick={showHome}
-      className="inline-flex min-h-12 items-center gap-2 rounded-full border border-orange-500 bg-white px-4 py-3 text-sm font-bold text-orange-700 shadow-lg sm:hidden"
+      onClick={goToCustomerHome}
+      className="inline-flex min-h-11 items-center gap-2 rounded-xl border-2 border-blue-950 bg-blue-950 px-4 py-2 text-sm font-extrabold text-white shadow-sm hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
     >
       <span aria-hidden="true">⌂</span> Home
-    </button>}
+    </button>
     <button
       type="button"
       aria-label="Scroll to top"

@@ -345,10 +345,10 @@ export default function ProductFilters({
             type="button"
             onClick={onBackToCategories}
             aria-label="Go to home"
-            className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500"
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border-2 border-blue-950 bg-blue-950 px-4 py-2 text-sm font-extrabold text-white shadow-sm hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
           >
             <span aria-hidden="true">⌂</span>
-            Home Page
+            Home
           </button>
           {hasSelection && (
             <button
