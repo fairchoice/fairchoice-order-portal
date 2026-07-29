@@ -1,119 +1,153 @@
 import { supabase } from "./supabase";
 
-export const EXPENSE_CATEGORIES = ["Fuel", "Vehicle Maintenance", "Food", "Office Accessories", "Other"];
-export const PAYOUT_CATEGORIES = ["Wages", "Commission", "Bonus", "Own Car Mileage", "Supplier Payout"];
-export const INVOICE_OPTIONS = ["Online", "Paper", "Paid", "Credit", "Part Paid"];
-export const PAYMENT_TYPES = ["Cash", "Bank", "Credit", "Card"];
-export const PAYOUT_STATUSES = ["Paid", "Pending", "Approval Needed", "Cancelled"];
-export const DIRECT_DEBIT_FREQUENCIES = ["Weekly", "Monthly"];
+export const PAYMENT_TYPES = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
+export const PAYOUT_STATUSES = ["DRAFT", "SUBMITTED", "POSTED", "REJECTED", "VOIDED"];
 
-const userName = (user = {}) => user.staff_name || user.name || user.username || "Unknown";
-
-export async function loadSuppliers() {
-  const { data, error } = await supabase.from("suppliers").select("*").eq("active", true).order("supplier_name");
-  if (error) throw error;
-  return data || [];
+function storedUser() {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    return JSON.parse(
+      localStorage.getItem("loggedInUser") ||
+        localStorage.getItem("fairchoice_user") ||
+        "null",
+    ) || {};
+  } catch {
+    return {};
+  }
 }
 
-export async function loadExpenses() {
-  const { data, error } = await supabase.from("expenses").select("*, suppliers(*)").order("expense_date", { ascending: false }).order("created_at", { ascending: false });
-  if (error) throw error;
-  return data || [];
+function sessionArguments(user = {}) {
+  const saved = storedUser();
+  const username = String(user.username || saved.username || "").trim();
+  const sessionToken =
+    user.fc_session_token ||
+    user.session_token ||
+    saved.fc_session_token ||
+    saved.session_token ||
+    "";
+
+  if (!username || !sessionToken) {
+    throw new Error("Your Fair Choice session is missing. Please sign in again.");
+  }
+
+  return {
+    p_username: username,
+    p_session_token: sessionToken,
+  };
 }
 
-export async function createExpense(input, user = {}) {
-  const amount = Number(input.amount || 0);
-  if (!(amount > 0)) throw new Error("Amount must be greater than zero.");
-  if (input.category === "Other" && !String(input.otherReason || "").trim()) throw new Error("Please enter the reason for Other expense.");
-  const description = input.category === "Other" ? String(input.otherReason).trim() : input.category;
-  const { data, error } = await supabase.from("expenses").insert({
-    expense_date: input.expenseDate,
-    category: input.category,
-    description,
-    amount,
-    invoice_option: input.invoiceOption,
-    payment_type: input.paymentType,
-    reference: String(input.reference || "").trim() || null,
-    notes: String(input.notes || "").trim() || null,
-    status: "RECORDED",
-    created_by: userName(user),
-    created_by_username: user.username || null,
-  }).select().single();
+async function callExpenseRpc(name, parameters) {
+  const { data, error } = await supabase.rpc(name, parameters);
   if (error) throw error;
   return data;
 }
 
-export async function loadPayouts() {
-  const { data, error } = await supabase.from("business_payouts").select("*, suppliers(*)").order("payout_date", { ascending: false }).order("created_at", { ascending: false });
+export async function loadSuppliers() {
+  const { data, error } = await supabase
+    .from("suppliers")
+    .select("id, supplier_name")
+    .eq("active", true)
+    .order("supplier_name");
   if (error) throw error;
   return data || [];
+}
+
+export async function loadExpenseTypes(user = {}, includeInactive = false) {
+  const data = await callExpenseRpc("fc_list_expense_types", {
+    ...sessionArguments(user),
+    p_include_inactive: includeInactive,
+  });
+  return data || [];
+}
+
+export async function loadPayouts(user = {}) {
+  const data = await callExpenseRpc(
+    "fc_list_business_payouts",
+    sessionArguments(user),
+  );
+  return data || [];
+}
+
+function payoutArguments(input) {
+  const amount = Number(input.amount);
+  if (!(amount > 0)) throw new Error("Amount must be greater than zero.");
+  if (!input.payoutDate) throw new Error("Payout date is required.");
+  if (!input.expenseTypeId) throw new Error("Expense type is required.");
+  if (!PAYMENT_TYPES.includes(input.paymentMethod)) {
+    throw new Error("Select a valid payment method.");
+  }
+
+  return {
+    p_payout_date: input.payoutDate,
+    p_expense_type_id: input.expenseTypeId,
+    p_supplier_id: input.supplierId || null,
+    p_amount: amount,
+    p_payment_method: input.paymentMethod,
+    p_description: String(input.description || "").trim() || null,
+    p_receipt_reference: String(input.receiptReference || "").trim() || null,
+    p_receipt_url: String(input.receiptUrl || "").trim() || null,
+    p_paid_by_type: String(input.paidByType || "BUSINESS").trim(),
+    p_paid_by_staff_id: input.paidByStaffId || null,
+  };
 }
 
 export async function createPayout(input, user = {}) {
-  const amount = Number(input.amount || 0);
-  if (!(amount > 0)) throw new Error("Amount must be greater than zero.");
-  if (!String(input.payeeName || "").trim() && input.type !== "Supplier Payout") throw new Error("Name is required.");
-  const { data, error } = await supabase.from("business_payouts").insert({
-    payout_date: input.payoutDate,
-    payout_type: input.type,
-    payment_type: input.paymentType,
-    payee_name: String(input.payeeName || "").trim() || null,
-    supplier_id: input.supplierId || null,
-    pay_period: String(input.payPeriod || "").trim() || null,
-    notes: String(input.notes || "").trim() || null,
-    amount,
-    status: input.status,
-    created_by: userName(user),
-    created_by_username: user.username || null,
-  }).select().single();
-  if (error) throw error;
-  return data;
+  return callExpenseRpc("fc_create_business_payout", {
+    ...sessionArguments(user),
+    ...payoutArguments(input),
+    p_submit: Boolean(input.submit),
+  });
 }
 
-export async function loadDirectDebits() {
-  const { data, error } = await supabase.from("direct_debit_reminders").select("*, suppliers(*)").order("next_due_date", { ascending: true });
-  if (error) throw error;
-  return data || [];
+export async function updatePayout(payoutId, input, user = {}) {
+  if (!payoutId) throw new Error("Expense ID is required.");
+  return callExpenseRpc("fc_update_business_payout", {
+    ...sessionArguments(user),
+    p_payout_id: payoutId,
+    ...payoutArguments(input),
+  });
 }
 
-export async function createDirectDebit(input, user = {}) {
-  const amount = Number(input.amount || 0);
-  if (!(amount > 0)) throw new Error("Amount must be greater than zero.");
-  const { data, error } = await supabase.from("direct_debit_reminders").insert({
-    name: String(input.name || "").trim(), supplier_id: input.supplierId || null,
-    amount, frequency: input.frequency, next_due_date: input.nextDueDate,
-    payment_type: input.paymentType, account_reference: String(input.accountReference || "").trim() || null,
-    whatsapp_number: String(input.whatsappNumber || "").trim(), reminder_days_before: Number(input.reminderDaysBefore || 1),
-    notes: String(input.notes || "").trim() || null, active: true,
-    created_by: userName(user), created_by_username: user.username || null,
-  }).select().single();
-  if (error) throw error;
-  return data;
+async function transitionPayout(rpcName, payoutId, user, reason) {
+  if (!payoutId) throw new Error("Expense ID is required.");
+  return callExpenseRpc(rpcName, {
+    ...sessionArguments(user),
+    p_payout_id: payoutId,
+    ...(reason === undefined ? {} : { p_reason: String(reason).trim() }),
+  });
 }
 
-export async function loadSupplierCredit(supplierId) {
-  if (!supplierId) return { transactions: [], balance: 0 };
-  const { data, error } = await supabase.rpc("fc_supplier_credit_statement", { p_supplier_id: supplierId });
-  if (error) throw error;
-  const transactions = data || [];
-  const balance = transactions.length ? Number(transactions[transactions.length - 1].running_balance || 0) : 0;
-  return { transactions, balance };
+export function submitPayout(payoutId, user = {}) {
+  return transitionPayout("fc_submit_business_payout", payoutId, user);
 }
 
-export async function createSupplierCreditTransaction(input, user = {}) {
-  const amount = Number(input.amount || 0);
-  if (!(amount > 0)) throw new Error("Amount must be greater than zero.");
-  const { data, error } = await supabase.from("supplier_credit_transactions").insert({
-    supplier_id: input.supplierId,
-    transaction_date: input.transactionDate,
-    transaction_type: input.transactionType,
-    amount,
-    invoice_number: String(input.invoiceNumber || "").trim() || null,
-    payment_type: input.paymentType || null,
-    reference: String(input.reference || "").trim() || null,
-    notes: String(input.notes || "").trim() || null,
-    created_by: userName(user), created_by_username: user.username || null,
-  }).select().single();
-  if (error) throw error;
-  return data;
+export function approvePayout(payoutId, user = {}) {
+  return transitionPayout("fc_approve_business_payout", payoutId, user);
+}
+
+export function rejectPayout(payoutId, reason, user = {}) {
+  if (!String(reason || "").trim()) throw new Error("Rejection reason is required.");
+  return transitionPayout("fc_reject_business_payout", payoutId, user, reason);
+}
+
+export function voidPayout(payoutId, reason, user = {}) {
+  if (!String(reason || "").trim()) throw new Error("Void reason is required.");
+  return transitionPayout("fc_void_business_payout", payoutId, user, reason);
+}
+
+export async function upsertExpenseType(input, user = {}) {
+  const code = String(input.expenseTypeCode || "").trim().toUpperCase();
+  const name = String(input.expenseTypeName || "").trim();
+  if (!code || !name) throw new Error("Expense type code and name are required.");
+
+  return callExpenseRpc("fc_upsert_expense_type", {
+    ...sessionArguments(user),
+    p_expense_type_id: input.id || null,
+    p_expense_type_code: code,
+    p_expense_type_name: name,
+    p_description: String(input.description || "").trim() || null,
+    p_ledger_category: String(input.ledgerCategory || "").trim() || null,
+    p_active: input.active !== false,
+    p_sort_order: Number(input.sortOrder || 0),
+  });
 }

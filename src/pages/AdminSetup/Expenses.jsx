@@ -1,43 +1,317 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
 import {
-  createDirectDebit, createExpense, createPayout, createSupplierCreditTransaction,
-  DIRECT_DEBIT_FREQUENCIES, EXPENSE_CATEGORIES, INVOICE_OPTIONS, loadDirectDebits,
-  loadExpenses, loadPayouts, loadSupplierCredit, loadSuppliers, PAYMENT_TYPES,
-  PAYOUT_CATEGORIES, PAYOUT_STATUSES,
+  approvePayout,
+  createPayout,
+  loadExpenseTypes,
+  loadPayouts,
+  loadSuppliers,
+  PAYMENT_TYPES,
+  PAYOUT_STATUSES,
+  rejectPayout,
+  submitPayout,
+  updatePayout,
+  voidPayout,
 } from "../../services/expenses";
 
-const today=()=>new Date().toISOString().slice(0,10);
-const user=()=>{try{return JSON.parse(localStorage.getItem("loggedInUser")||localStorage.getItem("fairchoice_user")||"null")||{}}catch{return{}}};
-const field="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm";
-const tabs=["Expenses","Payout","Direct Debit","Supplier Credit"];
-function Pager({rows,page,setPage}){const pages=Math.max(1,Math.ceil(rows.length/30));return <div className="flex items-center justify-end gap-2 p-3 text-sm"><button disabled={page<=1} onClick={()=>setPage(page-1)} className="rounded border px-3 py-1 disabled:opacity-40">Previous</button><span>Page {page} of {pages}</span><button disabled={page>=pages} onClick={()=>setPage(page+1)} className="rounded border px-3 py-1 disabled:opacity-40">Next</button></div>}
-function Table({headers,rows,render,page,setPage,empty="No records found."}){const slice=rows.slice((page-1)*30,page*30);return <div className="overflow-hidden rounded-xl border bg-white"><div className="overflow-x-auto"><table className="min-w-full text-xs"><thead className="bg-slate-100"><tr>{headers.map(h=><th key={h} className="p-2 text-left">{h}</th>)}</tr></thead><tbody>{slice.map(render)}{!slice.length&&<tr><td colSpan={headers.length} className="p-6 text-center text-slate-500">{empty}</td></tr>}</tbody></table></div><Pager rows={rows} page={page} setPage={setPage}/></div>}
-export default function Expenses(){
- const [tab,setTab]=useState("Expenses"),[suppliers,setSuppliers]=useState([]),[expenses,setExpenses]=useState([]),[payouts,setPayouts]=useState([]),[debits,setDebits]=useState([]),[credit,setCredit]=useState({transactions:[],balance:0}),[supplierId,setSupplierId]=useState("");
- const [search,setSearch]=useState(""),[filter,setFilter]=useState("All"),[page,setPage]=useState(1),[error,setError]=useState("");
- const [ef,setEf]=useState({date:today(),type:"Fuel",other:"",amount:"",invoice:"Online",pay:"Cash",note:"",reference:""});
- const [pf,setPf]=useState({date:today(),type:"Wages",pay:"Bank",name:"",supplierId:"",period:"",note:"",amount:"",status:"Paid"});
- const [df,setDf]=useState({name:"",supplierId:"",amount:"",frequency:"Monthly",nextDueDate:today(),pay:"Bank",accountReference:"",whatsappNumber:"",reminderDaysBefore:"1",notes:""});
- const [cf,setCf]=useState({date:today(),type:"Credit Purchase",amount:"",invoiceNumber:"",pay:"Bank",reference:"",notes:""});
- async function refresh(){setError("");try{const [s,e,p,d]=await Promise.all([loadSuppliers(),loadExpenses(),loadPayouts(),loadDirectDebits()]);setSuppliers(s);setExpenses(e);setPayouts(p);setDebits(d);if(supplierId)setCredit(await loadSupplierCredit(supplierId));}catch(e){setError(e.message||"Could not load accounts information.")}}
- useEffect(()=>{refresh()},[]); useEffect(()=>{setPage(1)},[tab,search,filter]);
- async function save(fn,reset){try{await fn();reset();await refresh();alert("Saved successfully.")}catch(e){alert(e.message||"Could not save.")}}
- async function chooseSupplier(id){setSupplierId(id);setCredit(await loadSupplierCredit(id));}
- const selected=suppliers.find(s=>String(s.id)===String(supplierId));
- const expenseRows=useMemo(()=>expenses.filter(r=>(filter==="All"||r.category===filter)&&`${r.category} ${r.description} ${r.reference||""} ${r.created_by||""}`.toLowerCase().includes(search.toLowerCase())),[expenses,filter,search]);
- const payoutRows=useMemo(()=>payouts.filter(r=>(filter==="All"||r.status===filter)&&`${r.payout_type} ${r.payee_name||""} ${r.suppliers?.supplier_name||""} ${r.pay_period||""}`.toLowerCase().includes(search.toLowerCase())),[payouts,filter,search]);
- return <div className="min-h-screen bg-slate-100 p-4"><div className="mx-auto max-w-7xl space-y-4"><div><h2 className="text-2xl font-extrabold">Accounts</h2><p className="text-sm text-slate-600">Expenses, payouts, direct debit reminders and supplier credit.</p></div>{error&&<div className="rounded border border-red-300 bg-red-50 p-3 text-red-700">{error}</div>}
- <div className="grid grid-cols-2 gap-2 md:grid-cols-4">{tabs.map(t=><button key={t} onClick={()=>{setTab(t);setFilter("All")}} className={`rounded-lg border border-blue-600 px-3 py-3 font-bold ${tab===t?"bg-blue-700 text-white":"bg-white text-blue-700"}`}>{t}</button>)}</div>
- {tab==="Expenses"&&<><form onSubmit={e=>{e.preventDefault();save(()=>createExpense({expenseDate:ef.date,category:ef.type,otherReason:ef.other,amount:ef.amount,invoiceOption:ef.invoice,paymentType:ef.pay,notes:ef.note,reference:ef.reference},user()),()=>setEf({...ef,amount:"",other:"",note:"",reference:""}))}} className="rounded-xl border bg-white p-4"><h3 className="mb-3 font-bold">Record Expense</h3><div className="grid gap-3 md:grid-cols-4"><Input label="Date" type="date" v={ef.date} set={v=>setEf({...ef,date:v})}/><Select label="Expense Type" v={ef.type} set={v=>setEf({...ef,type:v})} options={EXPENSE_CATEGORIES}/>{ef.type==="Other"&&<Input label="Reason" v={ef.other} set={v=>setEf({...ef,other:v})}/>}<Input label="Amount" type="number" v={ef.amount} set={v=>setEf({...ef,amount:v})}/><Select label="Invoice" v={ef.invoice} set={v=>setEf({...ef,invoice:v})} options={INVOICE_OPTIONS}/><Select label="Type of Pay" v={ef.pay} set={v=>setEf({...ef,pay:v})} options={PAYMENT_TYPES}/><Input label="Reference" v={ef.reference} set={v=>setEf({...ef,reference:v})}/><Input label="Note" v={ef.note} set={v=>setEf({...ef,note:v})}/></div><button className="mt-4 rounded bg-blue-700 px-5 py-2 font-bold text-white">Save Expense</button></form><Filters search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} options={["All",...EXPENSE_CATEGORIES]}/><Table headers={["Date","Type","Reason","Amount","Invoice","Pay Type","Note","Reference","Recorded By"]} rows={expenseRows} page={page} setPage={setPage} render={r=><tr key={r.id} className="border-t"><Cell>{r.expense_date}</Cell><Cell>{r.category}</Cell><Cell>{r.description}</Cell><Cell>{formatCurrency(r.amount)}</Cell><Cell>{r.invoice_option}</Cell><Cell>{r.payment_type}</Cell><Cell>{r.notes||"-"}</Cell><Cell>{r.reference||"-"}</Cell><Cell>{r.created_by||"-"}</Cell></tr>}/></>}
- {tab==="Payout"&&<><form onSubmit={e=>{e.preventDefault();save(()=>createPayout({payoutDate:pf.date,type:pf.type,paymentType:pf.pay,payeeName:pf.name,supplierId:pf.supplierId,payPeriod:pf.period,notes:pf.note,amount:pf.amount,status:pf.status},user()),()=>setPf({...pf,amount:"",note:"",period:"",name:""}))}} className="rounded-xl border bg-white p-4"><h3 className="mb-3 font-bold">Record Payout</h3><div className="grid gap-3 md:grid-cols-4"><Input label="Date" type="date" v={pf.date} set={v=>setPf({...pf,date:v})}/><Select label="Type of Payout" v={pf.type} set={v=>setPf({...pf,type:v})} options={PAYOUT_CATEGORIES}/><Select label="Type of Pay" v={pf.pay} set={v=>setPf({...pf,pay:v})} options={PAYMENT_TYPES}/>{pf.type==="Supplier Payout"?<SupplierSelect suppliers={suppliers} v={pf.supplierId} set={v=>setPf({...pf,supplierId:v})}/>:<Input label="Name" v={pf.name} set={v=>setPf({...pf,name:v})}/>}<Input label="Pay for Period" v={pf.period} set={v=>setPf({...pf,period:v})}/><Input label="Note" v={pf.note} set={v=>setPf({...pf,note:v})}/><Input label="Amount" type="number" v={pf.amount} set={v=>setPf({...pf,amount:v})}/><Select label="Status" v={pf.status} set={v=>setPf({...pf,status:v})} options={PAYOUT_STATUSES}/></div><button className="mt-4 rounded bg-blue-700 px-5 py-2 font-bold text-white">Save Payout</button></form><Filters search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} options={["All",...PAYOUT_STATUSES]}/><Table headers={["Date","Type","Pay Type","Name","Pay Period","Note","Amount","Status","Recorded By"]} rows={payoutRows} page={page} setPage={setPage} render={r=><tr key={r.id} className="border-t"><Cell>{r.payout_date}</Cell><Cell>{r.payout_type}</Cell><Cell>{r.payment_type}</Cell><Cell>{r.suppliers?.supplier_name||r.payee_name||"-"}</Cell><Cell>{r.pay_period||"-"}</Cell><Cell>{r.notes||"-"}</Cell><Cell>{formatCurrency(r.amount)}</Cell><Cell>{r.status}</Cell><Cell>{r.created_by||"-"}</Cell></tr>}/></>}
- {tab==="Direct Debit"&&<><form onSubmit={e=>{e.preventDefault();save(()=>createDirectDebit({name:df.name,supplierId:df.supplierId,amount:df.amount,frequency:df.frequency,nextDueDate:df.nextDueDate,paymentType:df.pay,accountReference:df.accountReference,whatsappNumber:df.whatsappNumber,reminderDaysBefore:df.reminderDaysBefore,notes:df.notes},user()),()=>setDf({...df,name:"",amount:"",accountReference:"",notes:""}))}} className="rounded-xl border bg-white p-4"><h3 className="mb-3 font-bold">Direct Debit Reminder</h3><div className="grid gap-3 md:grid-cols-4"><Input label="Payment Name" v={df.name} set={v=>setDf({...df,name:v})}/><SupplierSelect suppliers={suppliers} v={df.supplierId} set={v=>setDf({...df,supplierId:v})} optional/><Input label="Amount" type="number" v={df.amount} set={v=>setDf({...df,amount:v})}/><Select label="Frequency" v={df.frequency} set={v=>setDf({...df,frequency:v})} options={DIRECT_DEBIT_FREQUENCIES}/><Input label="Next Due Date" type="date" v={df.nextDueDate} set={v=>setDf({...df,nextDueDate:v})}/><Select label="Type of Pay" v={df.pay} set={v=>setDf({...df,pay:v})} options={PAYMENT_TYPES}/><Input label="Account Reference" v={df.accountReference} set={v=>setDf({...df,accountReference:v})}/><Input label="WhatsApp Number" v={df.whatsappNumber} set={v=>setDf({...df,whatsappNumber:v})}/><Input label="Reminder Days Before" type="number" v={df.reminderDaysBefore} set={v=>setDf({...df,reminderDaysBefore:v})}/><Input label="Notes" v={df.notes} set={v=>setDf({...df,notes:v})}/></div><button className="mt-4 rounded bg-blue-700 px-5 py-2 font-bold text-white">Save Reminder</button></form><Table headers={["Due Date","Name","Supplier","Amount","Frequency","Pay Type","WhatsApp","Reminder","Recorded By"]} rows={debits} page={page} setPage={setPage} render={r=><tr key={r.id} className="border-t"><Cell>{r.next_due_date}</Cell><Cell>{r.name}</Cell><Cell>{r.suppliers?.supplier_name||"-"}</Cell><Cell>{formatCurrency(r.amount)}</Cell><Cell>{r.frequency}</Cell><Cell>{r.payment_type}</Cell><Cell>{r.whatsapp_number}</Cell><Cell>{r.reminder_days_before} day(s) before</Cell><Cell>{r.created_by||"-"}</Cell></tr>}/></>}
- {tab==="Supplier Credit"&&<><div className="rounded-xl border bg-white p-4"><div className="grid gap-3 md:grid-cols-3"><SupplierSelect suppliers={suppliers} v={supplierId} set={chooseSupplier}/>{selected&&<><Info label="Address" v={selected.address}/><Info label="VAT Number" v={selected.vat_number}/><Info label="Contact Number" v={selected.contact_number||selected.phone}/><Info label="Email" v={selected.email}/><Info label="Contact Person" v={selected.contact_person||selected.contact_name}/></>}<Info label="Current Supplier Credit" v={formatCurrency(credit.balance)}/></div></div>{supplierId&&<form onSubmit={e=>{e.preventDefault();save(()=>createSupplierCreditTransaction({supplierId,transactionDate:cf.date,transactionType:cf.type,amount:cf.amount,invoiceNumber:cf.invoiceNumber,paymentType:cf.pay,reference:cf.reference,notes:cf.notes},user()),()=>setCf({...cf,amount:"",invoiceNumber:"",reference:"",notes:""}))}} className="rounded-xl border bg-white p-4"><h3 className="mb-3 font-bold">Record Supplier Credit Transaction</h3><div className="grid gap-3 md:grid-cols-4"><Input label="Date" type="date" v={cf.date} set={v=>setCf({...cf,date:v})}/><Select label="Transaction" v={cf.type} set={v=>setCf({...cf,type:v})} options={["Credit Purchase","Payment","Credit Note","Adjustment"]}/><Input label="Amount" type="number" v={cf.amount} set={v=>setCf({...cf,amount:v})}/><Input label="Invoice Number" v={cf.invoiceNumber} set={v=>setCf({...cf,invoiceNumber:v})}/><Select label="Type of Pay" v={cf.pay} set={v=>setCf({...cf,pay:v})} options={PAYMENT_TYPES}/><Input label="Reference" v={cf.reference} set={v=>setCf({...cf,reference:v})}/><Input label="Notes" v={cf.notes} set={v=>setCf({...cf,notes:v})}/></div><button className="mt-4 rounded bg-blue-700 px-5 py-2 font-bold text-white">Save Transaction</button></form>}<Table headers={["Date","Source","Transaction","Invoice","Reference","Credit Added","Payment/Credit Note","Balance"]} rows={credit.transactions} page={page} setPage={setPage} empty="Select a supplier to see its exact credit statement." render={(r,i)=><tr key={`${r.transaction_date}-${i}`} className="border-t"><Cell>{r.transaction_date}</Cell><Cell>{r.source}</Cell><Cell>{r.transaction_type}</Cell><Cell>{r.invoice_number||"-"}</Cell><Cell>{r.reference||"-"}</Cell><Cell>{formatCurrency(r.debit)}</Cell><Cell>{formatCurrency(r.credit)}</Cell><Cell>{formatCurrency(r.running_balance)}</Cell></tr>}/></>}
- </div></div>
+const field =
+  "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm";
+const today = () => new Date().toISOString().slice(0, 10);
+const emptyForm = () => ({
+  payoutDate: today(),
+  expenseTypeId: "",
+  supplierId: "",
+  amount: "",
+  paymentMethod: "Cash",
+  description: "",
+  receiptReference: "",
+  receiptUrl: "",
+  paidByType: "BUSINESS",
+  paidByStaffId: "",
+});
+
+function currentUser() {
+  try {
+    return (
+      JSON.parse(
+        localStorage.getItem("loggedInUser") ||
+          localStorage.getItem("fairchoice_user") ||
+          "null",
+      ) || {}
+    );
+  } catch {
+    return {};
+  }
 }
-function Input({label,type="text",v,set}){return <label className="text-xs font-bold">{label}<input required className={`${field} mt-1`} type={type} step={type==="number"?"0.01":undefined} value={v} onChange={e=>set(e.target.value)}/></label>}
-function Select({label,v,set,options}){return <label className="text-xs font-bold">{label}<select className={`${field} mt-1`} value={v} onChange={e=>set(e.target.value)}>{options.map(x=><option key={x}>{x}</option>)}</select></label>}
-function SupplierSelect({suppliers,v,set,optional=false}){return <label className="text-xs font-bold">Supplier<select required={!optional} className={`${field} mt-1`} value={v} onChange={e=>set(e.target.value)}><option value="">{optional?"Not applicable":"Select supplier"}</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.supplier_name}</option>)}</select></label>}
-function Filters({search,setSearch,filter,setFilter,options}){return <div className="flex flex-col gap-2 rounded-xl border bg-white p-3 md:flex-row"><input className={field} placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)}/><select className={field} value={filter} onChange={e=>setFilter(e.target.value)}>{options.map(x=><option key={x}>{x}</option>)}</select></div>}
-function Cell({children}){return <td className="p-2">{children}</td>}
-function Info({label,v}){return <div className="rounded bg-slate-50 p-3 text-sm"><b>{label}:</b> {v||"-"}</div>}
+
+function hasPermission(user, permission) {
+  const permissions = user.effective_permissions || user.permissions || {};
+  return permissions.all_access === true || permissions[permission] === true;
+}
+
+export default function Expenses() {
+  const [user] = useState(currentUser);
+  const [expenseTypes, setExpenseTypes] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [payouts, setPayouts] = useState([]);
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState(null);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("All");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    setError("");
+    try {
+      const [types, supplierRows, payoutRows] = await Promise.all([
+        loadExpenseTypes(user),
+        loadSuppliers(),
+        loadPayouts(user),
+      ]);
+      setExpenseTypes(types);
+      setSuppliers(supplierRows);
+      setPayouts(payoutRows);
+      setForm((existing) => ({
+        ...existing,
+        expenseTypeId: existing.expenseTypeId || types[0]?.id || "",
+      }));
+    } catch (refreshError) {
+      setError(refreshError.message || "Could not load expenses.");
+    }
+  }, [user]);
+
+  useEffect(() => {
+    const refreshTimer = window.setTimeout(refresh, 0);
+    return () => window.clearTimeout(refreshTimer);
+  }, [refresh]);
+
+  const visiblePayouts = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return payouts.filter((row) => {
+      if (status !== "All" && row.status !== status) return false;
+      return `${row.payout_reference} ${row.expense_type_name} ${row.supplier_name || ""} ${row.description || ""}`
+        .toLowerCase()
+        .includes(term);
+    });
+  }, [payouts, search, status]);
+
+  function resetForm() {
+    setEditingId(null);
+    setForm({
+      ...emptyForm(),
+      expenseTypeId: expenseTypes[0]?.id || "",
+    });
+  }
+
+  async function saveExpense(event, submit) {
+    event.preventDefault();
+    if (busy) return;
+    const action = submit ? "submit this expense for approval" : "save this expense";
+    if (!window.confirm(`Are you sure you want to ${action}?`)) return;
+
+    setBusy(true);
+    try {
+      if (editingId) {
+        await updatePayout(editingId, form, user);
+        if (submit) await submitPayout(editingId, user);
+      } else {
+        await createPayout({ ...form, submit }, user);
+      }
+      resetForm();
+      await refresh();
+      window.alert(submit ? "Expense submitted for approval." : "Expense saved as a draft.");
+    } catch (saveError) {
+      window.alert(saveError.message || "Could not save the expense.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function editExpense(row) {
+    setEditingId(row.id);
+    setForm({
+      payoutDate: row.payout_date,
+      expenseTypeId: row.expense_type_id,
+      supplierId: row.supplier_id || "",
+      amount: String(row.amount),
+      paymentMethod: row.payment_method,
+      description: row.description || "",
+      receiptReference: row.receipt_reference || "",
+      receiptUrl: row.receipt_url || "",
+      paidByType: row.paid_by_type || "BUSINESS",
+      paidByStaffId: row.paid_by_staff_id || "",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function runTransition(label, operation, reasonRequired = false) {
+    const reason = reasonRequired ? window.prompt(`${label} reason:`) : undefined;
+    if (reasonRequired && !String(reason || "").trim()) return;
+    if (!window.confirm(`Are you sure you want to ${label.toLowerCase()} this expense?`)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await operation(reason);
+      await refresh();
+      window.alert(`Expense ${label.toLowerCase()} completed.`);
+    } catch (transitionError) {
+      window.alert(transitionError.message || `Could not ${label.toLowerCase()} the expense.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-100 p-4">
+      <div className="mx-auto max-w-7xl space-y-4">
+        <header>
+          <h2 className="text-2xl font-extrabold text-slate-950">Expenses</h2>
+          <p className="text-sm text-slate-600">
+            Record business expenses, submit them for approval, and post approved
+            money-out entries to the Global Ledger.
+          </p>
+        </header>
+
+        {error && (
+          <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-red-800">
+            {error}
+          </div>
+        )}
+
+        <form className="rounded-xl border bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="font-bold">
+              {editingId ? "Edit draft expense" : "Record expense"}
+            </h3>
+            {editingId && (
+              <button type="button" className="text-sm font-semibold text-blue-700" onClick={resetForm}>
+                Cancel edit
+              </button>
+            )}
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <Input label="Payout date" type="date" value={form.payoutDate} onChange={(value) => setForm({ ...form, payoutDate: value })} />
+            <Select label="Expense type" value={form.expenseTypeId} onChange={(value) => setForm({ ...form, expenseTypeId: value })}>
+              {expenseTypes.map((type) => <option key={type.id} value={type.id}>{type.expense_type_name}</option>)}
+            </Select>
+            <Select label="Supplier (optional)" value={form.supplierId} required={false} onChange={(value) => setForm({ ...form, supplierId: value })}>
+              <option value="">Not applicable</option>
+              {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.supplier_name}</option>)}
+            </Select>
+            <Input label="Amount" type="number" step="0.01" value={form.amount} onChange={(value) => setForm({ ...form, amount: value })} />
+            <Select label="Payment method" value={form.paymentMethod} onChange={(value) => setForm({ ...form, paymentMethod: value })}>
+              {PAYMENT_TYPES.map((method) => <option key={method}>{method}</option>)}
+            </Select>
+            <Input label="Paid by type" value={form.paidByType} onChange={(value) => setForm({ ...form, paidByType: value })} />
+            <Input label="Description" value={form.description} onChange={(value) => setForm({ ...form, description: value })} />
+            <Input label="Receipt reference" required={false} value={form.receiptReference} onChange={(value) => setForm({ ...form, receiptReference: value })} />
+            <Input label="Receipt URL" type="url" required={false} value={form.receiptUrl} onChange={(value) => setForm({ ...form, receiptUrl: value })} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button disabled={busy} onClick={(event) => saveExpense(event, false)} className="rounded-lg border border-blue-700 bg-white px-5 py-2 font-bold text-blue-700 disabled:opacity-50">
+              {editingId ? "Update draft" : "Save draft"}
+            </button>
+            <button disabled={busy} onClick={(event) => saveExpense(event, true)} className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white disabled:opacity-50">
+              {editingId ? "Update and submit" : "Save and submit"}
+            </button>
+          </div>
+        </form>
+
+        <div className="flex flex-col gap-2 rounded-xl border bg-white p-3 md:flex-row">
+          <input className={field} placeholder="Search expenses..." value={search} onChange={(event) => setSearch(event.target.value)} />
+          <select className={field} value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option>All</option>
+            {PAYOUT_STATUSES.map((value) => <option key={value}>{value}</option>)}
+          </select>
+        </div>
+
+        <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-100 text-left">
+                <tr>
+                  {["Date", "Reference", "Type", "Supplier", "Amount", "Method", "Status", "Recorded by", "Actions"].map((heading) => (
+                    <th key={heading} className="p-3">{heading}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visiblePayouts.map((row) => (
+                  <tr key={row.id} className="border-t align-top">
+                    <Cell>{row.payout_date}</Cell>
+                    <Cell>{row.payout_reference}</Cell>
+                    <Cell>{row.expense_type_name}</Cell>
+                    <Cell>{row.supplier_name || "—"}</Cell>
+                    <Cell>{formatCurrency(row.amount)}</Cell>
+                    <Cell>{row.payment_method}</Cell>
+                    <Cell><StatusBadge status={row.status} /></Cell>
+                    <Cell>{row.recorded_by_staff_name}</Cell>
+                    <Cell>
+                      <div className="flex min-w-48 flex-wrap gap-2">
+                        {["DRAFT", "REJECTED"].includes(row.status) && (
+                          <button disabled={busy} className="text-blue-700 underline" onClick={() => editExpense(row)}>Edit</button>
+                        )}
+                        {row.status === "DRAFT" && (
+                          <button disabled={busy} className="text-blue-700 underline" onClick={() => runTransition("Submit", () => submitPayout(row.id, user))}>Submit</button>
+                        )}
+                        {row.status === "SUBMITTED" && hasPermission(user, "expenses.approve") && (
+                          <>
+                            <button disabled={busy} className="text-green-700 underline" onClick={() => runTransition("Approve", () => approvePayout(row.id, user))}>Approve</button>
+                            <button disabled={busy} className="text-amber-700 underline" onClick={() => runTransition("Reject", (reason) => rejectPayout(row.id, reason, user), true)}>Reject</button>
+                          </>
+                        )}
+                        {row.status !== "VOIDED" && hasPermission(user, "expenses.void") && (
+                          <button disabled={busy} className="text-red-700 underline" onClick={() => runTransition("Void", (reason) => voidPayout(row.id, reason, user), true)}>Void</button>
+                        )}
+                      </div>
+                    </Cell>
+                  </tr>
+                ))}
+                {!visiblePayouts.length && (
+                  <tr><td colSpan="9" className="p-8 text-center text-slate-500">No expenses found.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Input({ label, type = "text", value, onChange, required = true, step }) {
+  return (
+    <label className="text-xs font-bold text-slate-700">
+      {label}
+      <input className={field} type={type} step={step} required={required} value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function Select({ label, value, onChange, children, required = true }) {
+  return (
+    <label className="text-xs font-bold text-slate-700">
+      {label}
+      <select className={field} required={required} value={value} onChange={(event) => onChange(event.target.value)}>
+        {children}
+      </select>
+    </label>
+  );
+}
+
+function Cell({ children }) {
+  return <td className="p-3">{children || "—"}</td>;
+}
+
+function StatusBadge({ status }) {
+  const styles = {
+    DRAFT: "bg-slate-100 text-slate-800",
+    SUBMITTED: "bg-blue-100 text-blue-800",
+    POSTED: "bg-green-100 text-green-800",
+    REJECTED: "bg-amber-100 text-amber-900",
+    VOIDED: "bg-red-100 text-red-800",
+  };
+  return <span className={`rounded-full px-2 py-1 text-xs font-bold ${styles[status] || styles.DRAFT}`}>{status}</span>;
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
 import {
   buildPaymentPreview,
@@ -18,17 +18,15 @@ import {
 import { isOwnerUser } from "../../services/ownerFinancialSecurity";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
+import {
+  clearFcSessionStorage,
+  getFcSessionState,
+  isInvalidFcSessionError,
+} from "../../services/fcSession";
 
 const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
 const ledgerTypes = ["PAYMENT", "DISCOUNT", "INVOICE", "CREDIT", "REFUND", "ADJUSTMENT"];
 const BRANCH_SELECT = "__select__";
-
-const getLoggedInUser = () =>
-  JSON.parse(
-    localStorage.getItem("loggedInUser") ||
-      localStorage.getItem("fairchoice_user") ||
-      "null"
-  );
 
 const matchesCustomer = (customer, search) =>
   [
@@ -56,7 +54,7 @@ function SummaryCard({ label, value, neutral = false }) {
   );
 }
 
-function PaymentRecordsPanel({ archived }) {
+function PaymentRecordsPanel({ archived, onInvalidSessionError }) {
   const [filters, setFilters] = useState({ search: "", method: "", dateFrom: "", dateTo: "" });
   const [page, setPage] = useState(1);
   const [result, setResult] = useState({ records: [], total: 0, total_pages: 1 });
@@ -67,6 +65,7 @@ function PaymentRecordsPanel({ archived }) {
       setMessage("");
       setResult(await listCentralPaymentRecords({ archived, ...filters, page }));
     } catch (loadError) {
+      if (await onInvalidSessionError?.(loadError)) return;
       setMessage(loadError.message || "Could not load payment records.");
     }
   };
@@ -119,7 +118,11 @@ function PaymentRecordsPanel({ archived }) {
   );
 }
 
-function GlobalLedgerPanel({ currentUser, ownerPassword }) {
+function GlobalLedgerPanel({
+  currentUser,
+  ownerPassword,
+  onInvalidSessionError,
+}) {
   const [filters, setFilters] = useState({ search: "", method: "", status: "ACTIVE", transactionType: "", dateFrom: "", dateTo: "" });
   const [page, setPage] = useState(1);
   const [result, setResult] = useState({ records: [], total: 0, totalPages: 1 });
@@ -136,6 +139,7 @@ function GlobalLedgerPanel({ currentUser, ownerPassword }) {
       setResult(data);
       setSelected([]);
     } catch (error) {
+      if (await onInvalidSessionError?.(error)) return;
       setMessage(error.message || "Could not load global ledger.");
     } finally {
       setLoading(false);
@@ -158,6 +162,7 @@ function GlobalLedgerPanel({ currentUser, ownerPassword }) {
       setMessage(`${count} transaction(s) archived with a permanent audit trail.`);
       await load();
     } catch (error) {
+      if (await onInvalidSessionError?.(error)) return;
       setMessage(error.message || "Bulk archive failed.");
     }
   };
@@ -174,6 +179,7 @@ function GlobalLedgerPanel({ currentUser, ownerPassword }) {
       }
       await load();
     } catch (error) {
+      if (await onInvalidSessionError?.(error)) return;
       setMessage(error.message || "Archive action failed.");
     }
   };
@@ -250,13 +256,18 @@ function ManualPaymentPanel({
           <input value={form.externalReference} onChange={(event) => onUpdateForm("externalReference", event.target.value)} placeholder="Bank/reference number (optional)" className="rounded-xl border p-3" />
           <textarea value={form.notes} onChange={(event) => onUpdateForm("notes", event.target.value)} placeholder={form.transactionType === "DISCOUNT" ? "Compulsory detailed discount reason" : "Notes"} className="min-h-24 rounded-xl border p-3 md:col-span-2" />
           <input type="password" value={ownerPassword} onChange={(event) => onOwnerPasswordChange(event.target.value)} placeholder="Owner financial password required" className="rounded-xl border border-blue-300 p-3 md:col-span-2" autoComplete="current-password" />
+          <p className="text-xs text-slate-600 md:col-span-2">
+            The owner password is used only for legacy discounts, bank review,
+            and Global Ledger actions. Customer payments use your live Fair
+            Choice session.
+          </p>
         </div>
         {form.paymentMethod === "Bank Transfer" && form.transactionType === "PAYMENT" && (
           <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">
             Bank transfers are recorded as Pending Verification. They are not allocated and do not reduce the customer balance until the owner confirms them against the bank statement.
           </div>
         )}
-        <button type="button" onClick={onSave} disabled={saving || !selectedCustomer || branchSelectionRequired || Number(form.amount || 0) <= 0 || !ownerPassword} className="mt-4 w-full rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:bg-slate-300">
+        <button type="button" onClick={onSave} disabled={saving || !selectedCustomer || branchSelectionRequired || Number(form.amount || 0) <= 0 || (form.transactionType === "DISCOUNT" && !ownerPassword)} className="mt-4 w-full rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:bg-slate-300">
           {saving ? "Saving..." : form.transactionType === "DISCOUNT" ? "Save audited discount" : "Save owner payment"}
         </button>
       </section>
@@ -293,9 +304,9 @@ function AllocationPreview({ branches, preview }) {
   );
 }
 
-export default function CentralPayment() {
-  const currentUser = useMemo(() => getLoggedInUser(), []);
+export default function CentralPayment({ currentUser, onInvalidSession }) {
   const isNisstajAdmin = isOwnerUser(currentUser);
+  const invalidatingSessionRef = useRef(false);
   const [activeTab, setActiveTab] = useState("manual");
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState("");
@@ -307,6 +318,7 @@ export default function CentralPayment() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [ownerPassword, setOwnerPassword] = useState("");
+  const [sessionInvalid, setSessionInvalid] = useState(false);
   const [form, setForm] = useState({
     transactionType: "PAYMENT",
     amount: "",
@@ -316,6 +328,64 @@ export default function CentralPayment() {
     externalReference: "",
     notes: "",
   });
+  const fcSession = useMemo(
+    () => getFcSessionState(currentUser),
+    [currentUser],
+  );
+  const sessionReady = fcSession.valid && !sessionInvalid;
+
+  const clearFinancialState = useCallback(() => {
+    setCustomers([]);
+    setSelectedCustomerId("");
+    setSelectedBranchId("");
+    setSnapshot(null);
+    setOwnerPassword("");
+    setSearch("");
+    setSuccess("");
+    setLoading(false);
+  }, []);
+
+  const invalidateFcSession = useCallback(async () => {
+    if (invalidatingSessionRef.current) return;
+    invalidatingSessionRef.current = true;
+    setSessionInvalid(true);
+    clearFinancialState();
+    clearFcSessionStorage(window.localStorage);
+    await onInvalidSession?.();
+  }, [clearFinancialState, onInvalidSession]);
+
+  const handleInvalidSessionError = useCallback(
+    async (sessionError) => {
+      if (!isInvalidFcSessionError(sessionError)) return false;
+      await invalidateFcSession();
+      return true;
+    },
+    [invalidateFcSession],
+  );
+
+  useEffect(() => {
+    if (!fcSession.valid) {
+      const invalidTimer = window.setTimeout(() => {
+        void invalidateFcSession();
+      }, 0);
+      return () => window.clearTimeout(invalidTimer);
+    }
+
+    const validTimer = window.setTimeout(() => {
+      invalidatingSessionRef.current = false;
+      setSessionInvalid(false);
+    }, 0);
+    const expiryDelay = Math.max(0, fcSession.expiresAt - Date.now());
+    const expiryTimer = window.setTimeout(
+      () => void invalidateFcSession(),
+      Math.min(expiryDelay, 2_147_483_647),
+    );
+
+    return () => {
+      window.clearTimeout(validTimer);
+      window.clearTimeout(expiryTimer);
+    };
+  }, [fcSession.expiresAt, fcSession.valid, invalidateFcSession]);
 
   useEffect(() => {
     if (!isNisstajAdmin && activeTab !== "manual") {
@@ -324,6 +394,7 @@ export default function CentralPayment() {
   }, [activeTab, isNisstajAdmin]);
 
   useEffect(() => {
+    if (!sessionReady) return undefined;
     let active = true;
     loadCentralPaymentCustomers()
       .then((rows) => {
@@ -331,11 +402,14 @@ export default function CentralPayment() {
         setCustomers(rows);
         if (rows.length) setSelectedCustomerId((value) => value || rows[0].id);
       })
-      .catch((loadError) => setError(loadError.message || "Could not load customers."));
+      .catch(async (loadError) => {
+        if (await handleInvalidSessionError(loadError)) return;
+        setError(loadError.message || "Could not load customers.");
+      });
     return () => {
       active = false;
     };
-  }, []);
+  }, [handleInvalidSessionError, sessionReady]);
 
   const selectedCustomer = customers.find((customer) => String(customer.id) === String(selectedCustomerId));
   const branches = getActiveCustomerBranches(selectedCustomer);
@@ -372,7 +446,7 @@ export default function CentralPayment() {
   );
 
   const refreshSnapshot = async () => {
-    if (!selectedCustomer) return;
+    if (!sessionReady || !selectedCustomer) return;
     setLoading(true);
     try {
       setSnapshot(
@@ -384,6 +458,7 @@ export default function CentralPayment() {
         })
       );
     } catch (loadError) {
+      if (await handleInvalidSessionError(loadError)) return;
       setError(loadError.message);
     } finally {
       setLoading(false);
@@ -391,6 +466,7 @@ export default function CentralPayment() {
   };
 
   useEffect(() => {
+    if (!sessionReady) return undefined;
     let active = true;
     if (!selectedCustomer) return undefined;
     if (selectedBranchId === BRANCH_SELECT) {
@@ -409,13 +485,20 @@ export default function CentralPayment() {
         });
         if (active) setSnapshot(nextSnapshot);
       } catch (loadError) {
+        if (await handleInvalidSessionError(loadError)) return;
         if (active) setError(loadError.message);
       } finally {
         if (active) setLoading(false);
       }
     });
     return () => { active = false; };
-  }, [selectedBranchId, selectedCustomer, snapshotBranchId]);
+  }, [
+    handleInvalidSessionError,
+    selectedBranchId,
+    selectedCustomer,
+    sessionReady,
+    snapshotBranchId,
+  ]);
 
   useEffect(() => {
     if (!selectedCustomer || !hasBranches) {
@@ -480,6 +563,7 @@ export default function CentralPayment() {
       }));
       await refreshSnapshot();
     } catch (saveError) {
+      if (await handleInvalidSessionError(saveError)) return;
       setError(saveError.message || "Could not save transaction.");
     } finally {
       setSaving(false);
@@ -511,6 +595,7 @@ export default function CentralPayment() {
       setSuccess("Bank transfer confirmed, audited and allocated to the oldest outstanding invoices.");
       await refreshSnapshot();
     } catch (confirmError) {
+      if (await handleInvalidSessionError(confirmError)) return;
       setError(confirmError.message || "Could not confirm bank transfer.");
     }
   };
@@ -542,9 +627,20 @@ export default function CentralPayment() {
       setSuccess("Bank transfer rejected. It remains in internal history and has been removed from the customer display.");
       await refreshSnapshot();
     } catch (rejectError) {
+      if (await handleInvalidSessionError(rejectError)) return;
       setError(rejectError.message || "Could not reject bank transfer.");
     }
   };
+
+  if (!sessionReady) {
+    return (
+      <div className="p-4">
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 font-bold text-amber-900">
+          Your Fair Choice session is missing or expired. Returning to sign in…
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 p-4">
@@ -651,13 +747,23 @@ export default function CentralPayment() {
       )}
 
       {activeTab === "history" && (
-        <PaymentRecordsPanel archived={false} />
+        <PaymentRecordsPanel
+          archived={false}
+          onInvalidSessionError={handleInvalidSessionError}
+        />
       )}
       {activeTab === "archive" && (
-        <PaymentRecordsPanel archived />
+        <PaymentRecordsPanel
+          archived
+          onInvalidSessionError={handleInvalidSessionError}
+        />
       )}
       {isNisstajAdmin && activeTab === "ledger" && (
-        <GlobalLedgerPanel currentUser={currentUser} ownerPassword={ownerPassword} />
+        <GlobalLedgerPanel
+          currentUser={currentUser}
+          ownerPassword={ownerPassword}
+          onInvalidSessionError={handleInvalidSessionError}
+        />
       )}
     </div>
   );

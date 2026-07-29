@@ -24,6 +24,7 @@ import {
   isBalanceAffectingPayment,
 } from "../utils/customerAccountTransactions";
 import { isTestAccount } from "../utils/testAccountFiltering";
+import { getFcSessionState } from "./fcSession";
 
 const deliveredStatuses = ["delivered", "confirmed", "delivery confirmed", "completed"];
 
@@ -700,11 +701,24 @@ export async function createCentralPayment({
   const paymentAmount = money(amount);
   const actor = getActor(currentUser).toLowerCase();
   const type = String(transactionType || "PAYMENT").toUpperCase();
-  if (actor !== "nisstaj_admin") throw new Error("Only nisstaj_admin can post Central Payment transactions.");
-  if (!ownerPassword) throw new Error("Owner financial password is required.");
   if (!accountId) throw new Error("Select a customer before saving a transaction.");
   if (paymentAmount <= 0) throw new Error("Amount must be greater than zero.");
   if (type === "DISCOUNT" && !String(notes || "").trim()) throw new Error("A detailed discount reason is compulsory.");
+  if (type === "DISCOUNT") {
+    if (actor !== "nisstaj_admin") {
+      throw new Error("Only nisstaj_admin can post Central Payment discounts.");
+    }
+    if (!ownerPassword) throw new Error("Owner financial password is required.");
+  }
+  const fcSession =
+    type === "PAYMENT" ? getFcSessionState(currentUser) : null;
+  if (type === "PAYMENT" && !fcSession.valid) {
+    throw new Error(
+      fcSession.expired
+        ? "FC session is invalid or expired. Please sign in again."
+        : "FC login session is missing. Sign out and sign in again.",
+    );
+  }
 
   const idempotencyKey = createPaymentIdempotencyKey({ customerAccountId: accountId, customerBranchId, amount: paymentAmount, paymentDate, paymentMethod: type === "DISCOUNT" ? "Discount" : paymentMethod, externalReference });
   const duplicate = await safeSelect("customer_payments", (query) => query.select("*").eq("customer_account_id", accountId).eq("idempotency_key", idempotencyKey).limit(1));
@@ -738,14 +752,15 @@ export async function createCentralPayment({
         notes,
         metadata: { entry_point: "CENTRAL_PAYMENT" },
         allocations: isPendingBank ? [] : preview.allocations,
-        ownerUsername: "nisstaj_admin",
-        ownerPassword,
+        fcUsername: fcSession.username,
+        fcSessionToken: fcSession.token,
       });
       return { ...(data || {}), preview };
     } catch (error) {
       if (isMissingRpcError(error)) {
         throw new Error(
-          "Canonical Central Payment is not installed. Review and apply the additive payment architecture migration first."
+          "Canonical Central Payment is not installed. Review and apply the additive payment architecture migration first.",
+          { cause: error },
         );
       }
       throw error;

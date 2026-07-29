@@ -1,4 +1,8 @@
 import { supabase } from "./supabase.js";
+import {
+  getFcSessionState,
+  readStoredFcProfile,
+} from "./fcSession.js";
 
 export const PAYMENT_POSTED_EVENT = "fairchoice:fc-payment-posted";
 
@@ -147,24 +151,16 @@ export async function postCanonicalCustomerPayment(input = {}) {
     throw new Error("A stable payment intent is required.");
   }
 
-  let storedUser = null;
-  if (typeof window !== "undefined") {
-    try {
-      storedUser = JSON.parse(
-        localStorage.getItem("loggedInUser") ||
-          localStorage.getItem("fairchoice_user") ||
-          "null"
-      );
-    } catch {
-      storedUser = null;
-    }
-  }
+  const storedUser =
+    typeof window === "undefined"
+      ? null
+      : readStoredFcProfile(window.localStorage);
+  const storedSession = getFcSessionState(storedUser);
 
   const securedInput = {
     ...input,
-    ownerUsername: input.ownerUsername || storedUser?.username || null,
-    ownerPassword:
-      input.ownerPassword || storedUser?.fc_session_token || null,
+    ownerUsername: input.fcUsername || storedSession.username || null,
+    ownerPassword: input.fcSessionToken || storedSession.token || null,
     metadata: {
       ...(input.metadata || {}),
       fc_staff_code: storedUser?.staff_code || null,

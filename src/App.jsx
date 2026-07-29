@@ -4,16 +4,17 @@ import LoginPage from "./pages/AdminSetup/LoginPage";
 
 import PriceManagement from "./pages/AdminSetup/PriceManagement";
 import PricingRule from "./pages/AdminSetup/PricingRule";
+import {
+  clearFcSessionStorage,
+  mergeAuthenticatedProfile,
+} from "./services/fcSession";
 
 const SESSION_KEY = "fairchoice_user";
 const LAST_ACTIVE_KEY = "fairchoice_last_active";
 const SESSION_TIMEOUT = 10 * 60 * 1000; // 10 minutes
 
 function clearLegacyProfileStorage() {
-  localStorage.removeItem(SESSION_KEY);
-  localStorage.removeItem("loggedInUser");
-  localStorage.removeItem("loginPortal");
-  localStorage.removeItem(LAST_ACTIVE_KEY);
+  clearFcSessionStorage(localStorage);
 }
 
 function storeCompatibleProfile(profile) {
@@ -55,8 +56,14 @@ export default function App() {
   }, []);
 
   const handleLogin = (userProfile) => {
-    storeCompatibleProfile(userProfile);
-    setProfile(userProfile);
+    setProfile((currentProfile) => {
+      const mergedProfile = mergeAuthenticatedProfile(
+        currentProfile,
+        userProfile,
+      );
+      storeCompatibleProfile(mergedProfile);
+      return mergedProfile;
+    });
   };
 
   const handleLogout = () => {

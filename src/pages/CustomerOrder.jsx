@@ -142,6 +142,7 @@ import {
   previewInvoice as previewCentralInvoice,
   withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
+import { mergeAuthenticatedProfile } from "../services/fcSession";
 
 const LEGACY_CART_KEY = "fairchoice_cart";
 
@@ -2021,7 +2022,9 @@ const openBackOffice = async () => {
       return;
     }
 
-    onProfileRefresh?.(staffProfile);
+    onProfileRefresh?.(
+      mergeAuthenticatedProfile(activeUser, staffProfile)
+    );
     window.history.replaceState(null, "", "#admin");
     setPage("orders");
 
@@ -3889,7 +3892,12 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {page === "credit" && <CustomerCredit />}
-    {page === "centralPayment" && <CentralPayment />}
+    {page === "centralPayment" && (
+      <CentralPayment
+        currentUser={activeUser}
+        onInvalidSession={onLogout}
+      />
+    )}
     {page === "branchSeparation" && <BranchSeparation />}
     {page === "orderSalesInvoices" && <OrderSalesInvoices />}
     {page === "invoicesPortal" && <InvoicesPortal />}
