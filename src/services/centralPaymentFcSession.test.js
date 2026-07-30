@@ -99,7 +99,7 @@ test("legacy owner-password RPCs remain password based", () => {
       ),
     );
   }
-  assert.match(
+  assert.doesNotMatch(
     centralPageSource,
     /owner password is used only for legacy discounts, bank review,[\s\S]*Global Ledger actions/i,
   );

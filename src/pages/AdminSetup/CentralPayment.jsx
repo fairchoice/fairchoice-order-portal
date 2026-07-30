@@ -15,7 +15,11 @@ import {
   permanentlyDeleteFinancialArchive,
   restoreFinancialTransaction,
 } from "../../services/globalFinancialLedgerService";
-import { isOwnerUser } from "../../services/ownerFinancialSecurity";
+import {
+  getCentralPaymentSections,
+  isOwnerUser,
+  runOwnerFinancialRequest,
+} from "../../services/ownerFinancialSecurity";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
@@ -39,6 +43,52 @@ const matchesCustomer = (customer, search) =>
     .toLowerCase()
     .includes(String(search || "").toLowerCase());
 
+const getSensitiveFinancialDetails = (row = {}) => {
+  const metadata =
+    row.metadata && typeof row.metadata === "object" ? row.metadata : {};
+  const snapshot =
+    metadata.transaction_snapshot &&
+    typeof metadata.transaction_snapshot === "object"
+      ? metadata.transaction_snapshot
+      : {};
+  const priceMode =
+    row.price_mode ||
+    row.priceMode ||
+    metadata.price_mode ||
+    metadata.priceMode ||
+    snapshot.price_mode ||
+    snapshot.priceMode ||
+    "";
+  const incVat =
+    row.inc_vat ??
+    row.vat_included ??
+    metadata.inc_vat ??
+    metadata.vat_included ??
+    snapshot.inc_vat ??
+    snapshot.vat_included;
+  const manager =
+    row.manager_name ||
+    row.manager ||
+    metadata.manager_name ||
+    metadata.manager ||
+    snapshot.manager_name ||
+    snapshot.manager ||
+    (String(row.collector_role || "").trim().toUpperCase() === "MANAGER"
+      ? row.paid_by || row.staffName || row.staff_name
+      : "");
+
+  return {
+    priceMode: String(priceMode || "").trim() || "-",
+    incVat:
+      typeof incVat === "boolean"
+        ? incVat
+          ? "Yes"
+          : "No"
+        : String(incVat ?? "").trim() || "-",
+    manager: String(manager || "").trim() || "-",
+  };
+};
+
 function SummaryCard({ label, value, neutral = false }) {
   return (
     <div className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -54,28 +104,39 @@ function SummaryCard({ label, value, neutral = false }) {
   );
 }
 
-function PaymentRecordsPanel({ archived, onInvalidSessionError }) {
+function PaymentRecordsPanel({ archived, currentUser, onInvalidSessionError }) {
+  const canViewFinancialHistory = isOwnerUser(currentUser);
   const [filters, setFilters] = useState({ search: "", method: "", dateFrom: "", dateTo: "" });
   const [page, setPage] = useState(1);
   const [result, setResult] = useState({ records: [], total: 0, total_pages: 1 });
   const [message, setMessage] = useState("");
 
   const load = async () => {
+    if (!canViewFinancialHistory) return;
     try {
       setMessage("");
-      setResult(await listCentralPaymentRecords({ archived, ...filters, page }));
+      const data = await runOwnerFinancialRequest(currentUser, () =>
+        listCentralPaymentRecords({ currentUser, archived, ...filters, page })
+      );
+      if (!data) return;
+      setResult(data);
     } catch (loadError) {
       if (await onInvalidSessionError?.(loadError)) return;
       setMessage(loadError.message || "Could not load payment records.");
     }
   };
 
-  useEffect(() => { void load(); }, [archived, filters, page]);
+  useEffect(() => {
+    if (!canViewFinancialHistory) return;
+    void load();
+  }, [archived, canViewFinancialHistory, filters, page]);
 
   const updateFilter = (field, value) => {
     setFilters((current) => ({ ...current, [field]: value }));
     setPage(1);
   };
+
+  if (!canViewFinancialHistory) return null;
 
   return (
     <section className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -91,21 +152,27 @@ function PaymentRecordsPanel({ archived, onInvalidSessionError }) {
       </div>
       {message && <div className="mb-3 rounded-xl bg-red-50 p-3 font-bold text-red-700">{message}</div>}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
-          <thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Date</th><th className="p-3">Customer</th><th className="p-3">Reference</th><th className="p-3">Method</th><th className="p-3">Paid By</th><th className="p-3">Status</th><th className="p-3 text-right">Amount</th></tr></thead>
+        <table className="w-full min-w-[1040px] text-sm">
+          <thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Date</th><th className="p-3">Customer</th><th className="p-3">Reference</th><th className="p-3">Method</th><th className="p-3">Paid By</th><th className="p-3">Price Mode</th><th className="p-3">Inc. VAT</th><th className="p-3">Manager</th><th className="p-3">Status</th><th className="p-3 text-right">Amount</th></tr></thead>
           <tbody>
-            {(result.records || []).map((payment) => (
-              <tr key={payment.id} className="border-b align-middle">
-                <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
-                <td className="p-3 font-semibold">{payment.customer_name || "-"}</td>
-                <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td>
-                <td className="p-3">{payment.payment_method || "-"}</td>
-                <td className="p-3">{payment.paid_by || "-"}</td>
-                <td className="p-3 font-bold">{payment.verification_status === "REJECTED" ? "REJECTED" : payment.verification_status === "PENDING_VERIFICATION" ? "UNAPPROVED" : "APPROVED"}</td>
-                <td className="p-3 text-right font-bold">{formatCurrency(payment.amount || 0)}</td>
-              </tr>
-            ))}
-            {!result.records?.length && <tr><td colSpan="7" className="p-8 text-center text-slate-500">No payment records match these filters.</td></tr>}
+            {(result.records || []).map((payment) => {
+              const sensitive = getSensitiveFinancialDetails(payment);
+              return (
+                <tr key={payment.id} className="border-b align-middle">
+                  <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
+                  <td className="p-3 font-semibold">{payment.customer_name || "-"}</td>
+                  <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td>
+                  <td className="p-3">{payment.payment_method || "-"}</td>
+                  <td className="p-3">{payment.paid_by || "-"}</td>
+                  <td className="p-3">{sensitive.priceMode}</td>
+                  <td className="p-3">{sensitive.incVat}</td>
+                  <td className="p-3">{sensitive.manager}</td>
+                  <td className="p-3 font-bold">{payment.verification_status === "REJECTED" ? "REJECTED" : payment.verification_status === "PENDING_VERIFICATION" ? "UNAPPROVED" : "APPROVED"}</td>
+                  <td className="p-3 text-right font-bold">{formatCurrency(payment.amount || 0)}</td>
+                </tr>
+              );
+            })}
+            {!result.records?.length && <tr><td colSpan="10" className="p-8 text-center text-slate-500">No payment records match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -131,11 +198,19 @@ function GlobalLedgerPanel({
   const [message, setMessage] = useState("");
 
   const load = async () => {
-    if (!ownerPassword) return;
+    if (!isOwnerUser(currentUser) || !ownerPassword) return;
     setLoading(true);
     setMessage("");
     try {
-      const data = await listGlobalFinancialHistory({ currentUser, ownerPassword, filters, page });
+      const data = await runOwnerFinancialRequest(currentUser, () =>
+        listGlobalFinancialHistory({
+          currentUser,
+          ownerPassword,
+          filters,
+          page,
+        })
+      );
+      if (!data) return;
       setResult(data);
       setSelected([]);
     } catch (error) {
@@ -184,13 +259,7 @@ function GlobalLedgerPanel({
     }
   };
 
-  if (!ownerPassword) {
-    return (
-      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 font-semibold text-amber-900">
-        Enter the Owner Financial Password in Manual Payment to unlock the global ledger.
-      </div>
-    );
-  }
+  if (!ownerPassword) return null;
 
   return (
     <section className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -208,16 +277,19 @@ function GlobalLedgerPanel({
       </div>
       {message && <div className="mb-3 rounded-xl bg-slate-100 p-3 font-bold text-slate-700">{message}</div>}
       {loading && <div className="mb-3 rounded-xl bg-blue-50 p-3 font-bold text-blue-800">Loading ledger...</div>}
-      <div className="overflow-x-auto"><table className="w-full min-w-[1180px] text-sm"><thead><tr className="border-b bg-slate-50 text-left">
+      <div className="overflow-x-auto"><table className="w-full min-w-[1440px] text-sm"><thead><tr className="border-b bg-slate-50 text-left">
         <th className="p-3"><input type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? [] : activeRows.map((row) => row.recordId))} aria-label="Select all active rows" /></th>
-        <th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Type</th><th className="p-3">Source</th><th className="p-3">Method</th><th className="p-3">Staff</th><th className="p-3">Status</th><th className="p-3 text-right">Debit</th><th className="p-3 text-right">Credit</th><th className="p-3">Description</th><th className="p-3 text-right">Actions</th>
+        <th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Type</th><th className="p-3">Source</th><th className="p-3">Method</th><th className="p-3">Staff</th><th className="p-3">Price Mode</th><th className="p-3">Inc. VAT</th><th className="p-3">Manager</th><th className="p-3">Status</th><th className="p-3 text-right">Debit</th><th className="p-3 text-right">Credit</th><th className="p-3">Description</th><th className="p-3 text-right">Actions</th>
       </tr></thead><tbody>
-        {result.records.map((row) => <tr key={`${row.archiveId || "active"}-${row.recordId}`} className="border-b align-top">
-          <td className="p-3">{row.status === "ACTIVE" && <input type="checkbox" checked={selected.includes(row.recordId)} onChange={() => toggle(row.recordId)} aria-label={`Select ${formatDisplayOrderId(row.reference) || row.recordId}`} />}</td>
-          <td className="p-3">{new Date(row.transactionDate).toLocaleDateString("en-GB")}</td><td className="p-3 font-bold">{formatDisplayOrderId(row.reference) || "-"}</td><td className="p-3">{row.transactionType || "-"}</td><td className="p-3">{row.sourceType || "-"}</td><td className="p-3">{row.paymentMethod || "-"}</td><td className="p-3">{row.staffName || "-"}</td><td className="p-3 font-bold">{row.status}</td><td className="p-3 text-right">{formatCurrency(row.debitAmount)}</td><td className="p-3 text-right">{formatCurrency(row.creditAmount)}</td><td className="max-w-[280px] whitespace-pre-wrap p-3">{row.description || "-"}</td>
-          <td className="p-3 text-right">{row.status === "ARCHIVED" && row.archiveId && <><button type="button" onClick={() => archiveAction(row, "restore")} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Restore</button><button type="button" onClick={() => archiveAction(row, "delete")} className="ml-2 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white">Delete permanently</button></>}</td>
-        </tr>)}
-        {!result.records.length && <tr><td colSpan="12" className="p-6 text-center text-slate-500">No ledger records match these filters.</td></tr>}
+        {result.records.map((row) => {
+          const sensitive = getSensitiveFinancialDetails(row);
+          return <tr key={`${row.archiveId || "active"}-${row.recordId}`} className="border-b align-top">
+            <td className="p-3">{row.status === "ACTIVE" && <input type="checkbox" checked={selected.includes(row.recordId)} onChange={() => toggle(row.recordId)} aria-label={`Select ${formatDisplayOrderId(row.reference) || row.recordId}`} />}</td>
+            <td className="p-3">{new Date(row.transactionDate).toLocaleDateString("en-GB")}</td><td className="p-3 font-bold">{formatDisplayOrderId(row.reference) || "-"}</td><td className="p-3">{row.transactionType || "-"}</td><td className="p-3">{row.sourceType || "-"}</td><td className="p-3">{row.paymentMethod || "-"}</td><td className="p-3">{row.staffName || "-"}</td><td className="p-3">{sensitive.priceMode}</td><td className="p-3">{sensitive.incVat}</td><td className="p-3">{sensitive.manager}</td><td className="p-3 font-bold">{row.status}</td><td className="p-3 text-right">{formatCurrency(row.debitAmount)}</td><td className="p-3 text-right">{formatCurrency(row.creditAmount)}</td><td className="max-w-[280px] whitespace-pre-wrap p-3">{row.description || "-"}</td>
+            <td className="p-3 text-right">{row.status === "ARCHIVED" && row.archiveId && <><button type="button" onClick={() => archiveAction(row, "restore")} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Restore</button><button type="button" onClick={() => archiveAction(row, "delete")} className="ml-2 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white">Delete permanently</button></>}</td>
+          </tr>;
+        })}
+        {!result.records.length && <tr><td colSpan="15" className="p-6 text-center text-slate-500">No ledger records match these filters.</td></tr>}
       </tbody></table></div>
       <div className="mt-4 flex items-center justify-end gap-3"><button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)} className="rounded-lg border px-3 py-2 font-bold disabled:text-slate-300">Previous</button><span className="text-sm font-bold">Page {page} of {result.totalPages || 1}</span><button type="button" disabled={page >= (result.totalPages || 1)} onClick={() => setPage((value) => value + 1)} className="rounded-lg border px-3 py-2 font-bold disabled:text-slate-300">Next</button></div>
     </section>
@@ -256,11 +328,6 @@ function ManualPaymentPanel({
           <input value={form.externalReference} onChange={(event) => onUpdateForm("externalReference", event.target.value)} placeholder="Bank/reference number (optional)" className="rounded-xl border p-3" />
           <textarea value={form.notes} onChange={(event) => onUpdateForm("notes", event.target.value)} placeholder={form.transactionType === "DISCOUNT" ? "Compulsory detailed discount reason" : "Notes"} className="min-h-24 rounded-xl border p-3 md:col-span-2" />
           <input type="password" value={ownerPassword} onChange={(event) => onOwnerPasswordChange(event.target.value)} placeholder="Owner financial password required" className="rounded-xl border border-blue-300 p-3 md:col-span-2" autoComplete="current-password" />
-          <p className="text-xs text-slate-600 md:col-span-2">
-            The owner password is used only for legacy discounts, bank review,
-            and Global Ledger actions. Customer payments use your live Fair
-            Choice session.
-          </p>
         </div>
         {form.paymentMethod === "Bank Transfer" && form.transactionType === "PAYMENT" && (
           <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">
@@ -679,10 +746,7 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
       </div>
 
       <nav className="flex flex-wrap gap-2" aria-label="Central Payment sections">
-        {[
-          ["manual", "Manual Payment"],
-          ["history", "Payment History"], ["archive", "Payment Archive"], ...(isNisstajAdmin ? [["ledger", "Global Ledger & Archive"]] : []),
-        ].map(([value, label]) => (
+        {getCentralPaymentSections(currentUser).map(([value, label]) => (
           <button key={value} type="button" onClick={() => setActiveTab(value)} className={`rounded-xl px-4 py-3 font-bold ${activeTab === value ? "bg-blue-800 text-white" : "border bg-white text-slate-700"}`}>
             {label}
           </button>
@@ -746,15 +810,17 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
         />
       )}
 
-      {activeTab === "history" && (
+      {isNisstajAdmin && activeTab === "history" && (
         <PaymentRecordsPanel
           archived={false}
+          currentUser={currentUser}
           onInvalidSessionError={handleInvalidSessionError}
         />
       )}
-      {activeTab === "archive" && (
+      {isNisstajAdmin && activeTab === "archive" && (
         <PaymentRecordsPanel
           archived
+          currentUser={currentUser}
           onInvalidSessionError={handleInvalidSessionError}
         />
       )}

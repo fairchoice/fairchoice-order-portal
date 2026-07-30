@@ -36,6 +36,33 @@ export function getWeeklyPaymentDateKey(row) {
   return dateKey(getWeeklyPaymentDate(row));
 }
 
+export function calculateWeeklyHandoverAmounts({
+  cashCollected = 0,
+  approvedExpenses = 0,
+  cashReceived = 0,
+} = {}) {
+  const amountDue = Number(cashCollected || 0) - Number(approvedExpenses || 0);
+  return {
+    amountDue,
+    difference: Number(cashReceived || 0) - amountDue,
+  };
+}
+
+const valueAtPath = (row, path) =>
+  String(
+    String(path)
+      .split(".")
+      .reduce((value, key) => value?.[key], row) ?? ""
+  ).toLowerCase();
+
+export function filterWeeklyAccountRows(rows, search, fields) {
+  const query = String(search || "").trim().toLowerCase();
+  if (!query) return rows;
+  return rows.filter((row) =>
+    fields.some((field) => valueAtPath(row, field).includes(query))
+  );
+}
+
 const fingerprint = (row) =>
   [
     row.customer_account_id || "",

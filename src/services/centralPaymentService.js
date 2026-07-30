@@ -25,6 +25,7 @@ import {
 } from "../utils/customerAccountTransactions";
 import { isTestAccount } from "../utils/testAccountFiltering";
 import { getFcSessionState } from "./fcSession";
+import { isOwnerUser } from "./ownerFinancialSecurity";
 
 const deliveredStatuses = ["delivered", "confirmed", "delivery confirmed", "completed"];
 
@@ -887,6 +888,7 @@ const requirePermanentDeleteAdmin = (currentUser, ownerPassword) => {
 };
 
 export async function listCentralPaymentRecords({
+  currentUser,
   archived = false,
   search = "",
   method = "",
@@ -894,99 +896,39 @@ export async function listCentralPaymentRecords({
   dateTo = null,
   page = 1,
 } = {}) {
-  const pageSize = 30;
+  if (!isOwnerUser(currentUser)) {
+    throw new Error("Payment History is restricted to nisstaj_admin.");
+  }
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
   const safePage = Math.max(1, Number(page) || 1);
-  const from = (safePage - 1) * pageSize;
-  const to = from + pageSize - 1;
-
-  let query = supabase
-    .from("customer_payments")
-    .select("*", { count: "exact" })
-    .order("payment_date", { ascending: false })
-    .range(from, to);
-
-  query = archived
-    ? query.eq("status", "VOIDED")
-    : query.eq("status", "POSTED");
-
-  if (method) {
-    query = query.eq("payment_method", method);
-  }
-
-  if (dateFrom) {
-    query = query.gte("payment_date", `${dateFrom}T00:00:00`);
-  }
-
-  if (dateTo) {
-    query = query.lte("payment_date", `${dateTo}T23:59:59.999`);
-  }
-
-  if (String(search || "").trim()) {
-    const term = String(search)
-      .trim()
-      .replace(/[%(),]/g, " ");
-
-    query = query.or(
-      `payment_reference.ilike.%${term}%,paid_by.ilike.%${term}%,notes.ilike.%${term}%`
-    );
-  }
-
-  const {
-    data: paymentRows,
-    error: paymentError,
-    count,
-  } = await query;
-
-  if (paymentError) {
-    console.error("Payment History query failed:", paymentError);
-    throw paymentError;
-  }
-
-  const customerIds = [
-    ...new Set(
-      (paymentRows || [])
-        .map((row) => row.customer_account_id)
-        .filter(Boolean)
-    ),
-  ];
-
-  let customerMap = new Map();
-
-  if (customerIds.length) {
-    const {
-      data: customerRows,
-      error: customerError,
-    } = await supabase
-      .from("customer_accounts")
-      .select("id, account_name")
-      .in("id", customerIds);
-
-    if (customerError) {
-      console.error("Customer name query failed:", customerError);
-    } else {
-      customerMap = new Map(
-        (customerRows || []).map((customer) => [
-          String(customer.id),
-          customer.account_name,
-        ])
-      );
+  const { data, error } = await supabase.rpc(
+    "list_owner_central_payment_records_v1",
+    {
+      p_username: fcSession.username,
+      p_session_token: fcSession.token,
+      p_archived: Boolean(archived),
+      p_search: String(search || "").trim(),
+      p_method: String(method || "").trim(),
+      p_date_from: dateFrom || null,
+      p_date_to: dateTo || null,
+      p_page: safePage,
+      p_page_size: 30,
     }
-  }
+  );
 
-  const total = Number(count || 0);
+  if (error) throw error;
 
   return {
-    records: (paymentRows || []).map((row) => ({
-      ...row,
-      customer_name:
-        customerMap.get(String(row.customer_account_id)) ||
-        row.customer_name ||
-        "-",
-    })),
-    total,
-    page: safePage,
-    page_size: pageSize,
-    total_pages: Math.max(1, Math.ceil(total / pageSize)),
+    records: Array.isArray(data?.records) ? data.records : [],
+    total: Number(data?.total || 0),
+    page: Number(data?.page || safePage),
+    page_size: Number(data?.page_size || 30),
+    total_pages: Number(data?.total_pages || 1),
   };
 }
 export async function editCentralPayment({ payment, changes, reason } = {}) {

@@ -2,10 +2,130 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import {
+  calculateWeeklyHandoverAmounts,
+  filterWeeklyAccountRows,
   isActiveLegacyPaymentRow,
   loadWeeklyAccountPayments,
   mergeWeeklyAccountPaymentRows,
 } from "./weeklyAccountPayments.js";
+import { isOwnerUser } from "./ownerFinancialSecurity.js";
+
+const weeklyAccountSource = fs.readFileSync(
+  new URL("../pages/AdminSetup/WeeklyAccount.jsx", import.meta.url),
+  "utf8",
+);
+const customerOrderSource = fs.readFileSync(
+  new URL("../pages/CustomerOrder.jsx", import.meta.url),
+  "utf8",
+);
+
+test("Weekly Account search matches customer, reference, and collector literally", () => {
+  const rows = [
+    {
+      id: "one",
+      customer_name: "Acme Corner Shop",
+      payment_reference: "PAY_100%\\CASH",
+      collector_name: "Alice Driver",
+      payment_method: "Cash",
+      status: "POSTED",
+    },
+    {
+      id: "two",
+      customer_name: "Beta Stores",
+      payment_reference: "PAY-200",
+      collector_name: "Bob Sales",
+      payment_method: "Card",
+      status: "POSTED",
+    },
+  ];
+  const fields = [
+    "customer_name",
+    "payment_reference",
+    "collector_name",
+    "payment_method",
+    "status",
+  ];
+
+  assert.deepEqual(
+    filterWeeklyAccountRows(rows, "  corner  ", fields).map((row) => row.id),
+    ["one"],
+  );
+  assert.deepEqual(
+    filterWeeklyAccountRows(rows, "PAY_100%\\CASH", fields).map((row) => row.id),
+    ["one"],
+  );
+  assert.deepEqual(
+    filterWeeklyAccountRows(rows, "alice", fields).map((row) => row.id),
+    ["one"],
+  );
+  assert.equal(filterWeeklyAccountRows(rows, "%", fields).length, 1);
+  assert.equal(filterWeeklyAccountRows(rows, "_", fields).length, 1);
+  assert.equal(filterWeeklyAccountRows(rows, "\\", fields).length, 1);
+});
+
+test("Weekly Account search composes with filters and clearing restores filtered rows", () => {
+  const dateAndMethodFilteredRows = [
+    {
+      id: "cash-one",
+      customer_name: "Acme Shop",
+      payment_reference: "REF-1",
+      payment_method: "Cash",
+    },
+    {
+      id: "cash-two",
+      customer_name: "Beta Shop",
+      payment_reference: "REF-2",
+      payment_method: "Cash",
+    },
+  ];
+  const fields = ["customer_name", "payment_reference", "payment_method"];
+
+  assert.deepEqual(
+    filterWeeklyAccountRows(dateAndMethodFilteredRows, "acme", fields).map(
+      (row) => row.id,
+    ),
+    ["cash-one"],
+  );
+  assert.equal(
+    filterWeeklyAccountRows(dateAndMethodFilteredRows, "   ", fields),
+    dateAndMethodFilteredRows,
+  );
+});
+
+test("Weekly Account keeps tab searches isolated and excludes aggregate amounts", () => {
+  assert.match(weeklyAccountSource, /const \[searchByTab, setSearchByTab\] = useState\(\{\}\)/);
+  assert.match(weeklyAccountSource, /const activeSearch = searchByTab\[activeTab\] \|\| ""/);
+  assert.match(weeklyAccountSource, /\[activeTab\]: event\.target\.value/);
+  for (const searchedRows of [
+    "searchedPayments",
+    "searchedDriverPayments",
+    "searchedSalesRepPayments",
+    "searchedCashHoldingRows",
+    "searchedHandovers",
+    "searchedUnpaid",
+  ]) {
+    assert.match(weeklyAccountSource, new RegExp(`rows=\\{${searchedRows}\\}`));
+  }
+  for (const restrictedField of [
+    '"amount"',
+    '"collected"',
+    '"holding"',
+    '"cash_received"',
+    '"difference"',
+  ]) {
+    assert.doesNotMatch(
+      weeklyAccountSource.slice(
+        weeklyAccountSource.indexOf("const PAYMENT_SEARCH_FIELDS"),
+        weeklyAccountSource.indexOf("const EXPENSE_CATEGORIES"),
+      ),
+      new RegExp(restrictedField),
+    );
+  }
+  assert.match(
+    weeklyAccountSource,
+    /showSummary=\{canViewTotalCollection\}/,
+  );
+});
 
 test("joins Sales Rep payments to invoice totals and chronological balances", () => {
   const rows = mergeWeeklyAccountPaymentRows({
@@ -454,12 +574,147 @@ test("pending and voided canonical payments do not contribute", () => {
   assert.equal(rows.length, 0);
 });
 
-test("Weekly Account payment tables remain read-only", () => {
-  const source = fs.readFileSync(
-    new URL("../pages/AdminSetup/WeeklyAccount.jsx", import.meta.url),
-    "utf8",
-  );
+test("Total Collection includes confirmed payment methods and discounts, not only cash", () => {
+  const base = {
+    customer_account_id: "account-1",
+    amount: 10,
+    payment_date: "2026-07-22T10:00:00Z",
+    status: "POSTED",
+    verification_status: "CONFIRMED",
+  };
+  const rows = mergeWeeklyAccountPaymentRows({
+    canonicalPayments: [
+      { ...base, id: "cash", payment_method: "Cash", transaction_type: "PAYMENT" },
+      { ...base, id: "card", payment_method: "Card", transaction_type: "PAYMENT" },
+      {
+        ...base,
+        id: "bank",
+        payment_method: "Bank Transfer",
+        transaction_type: "PAYMENT",
+      },
+      {
+        ...base,
+        id: "discount",
+        payment_method: "Other",
+        transaction_type: "DISCOUNT",
+      },
+      {
+        ...base,
+        id: "pending-bank",
+        payment_method: "Bank Transfer",
+        verification_status: "PENDING_VERIFICATION",
+      },
+    ],
+  });
 
+  assert.deepEqual(
+    rows.map((row) => row.id).sort(),
+    ["canonical:bank", "canonical:card", "canonical:cash", "canonical:discount"],
+  );
+  assert.equal(rows.reduce((sum, row) => sum + row.payment_amount, 0), 40);
+});
+
+test("allocated Weekly Account rows preserve one canonical payment total", () => {
+  const rows = mergeWeeklyAccountPaymentRows({
+    canonicalPayments: [{
+      id: "one-payment",
+      customer_account_id: "account-1",
+      amount: 75,
+      payment_date: "2026-07-22T10:00:00Z",
+      status: "POSTED",
+      verification_status: "CONFIRMED",
+      payment_method: "Cash",
+    }],
+    allocations: [
+      {
+        id: "allocation-a",
+        payment_id: "one-payment",
+        invoice_reference: "INV-A",
+        allocated_amount: 50,
+        status: "active",
+      },
+      {
+        id: "allocation-b",
+        payment_id: "one-payment",
+        invoice_reference: "INV-B",
+        allocated_amount: 25,
+        status: "active",
+      },
+    ],
+    invoices: [
+      { id: "invoice-a", invoice_number: "INV-A", invoice_total: 50 },
+      { id: "invoice-b", invoice_number: "INV-B", invoice_total: 25 },
+    ],
+  });
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows.reduce((sum, row) => sum + row.payment_amount, 0), 75);
+  assert.deepEqual(
+    new Set(rows.map((row) => row.canonical_payment_key)),
+    new Set(["customer_payments:one-payment"]),
+  );
+});
+
+test("only nisstaj_admin receives the Weekly Account total summary", () => {
+  assert.equal(isOwnerUser({ username: " NISSTAJ_ADMIN " }), true);
+  assert.equal(isOwnerUser({ username: "ordinary_user" }), false);
+  assert.match(
+    customerOrderSource,
+    /<WeeklyAccount currentUser=\{activeUser\}/,
+  );
+  assert.match(
+    weeklyAccountSource,
+    /const canViewTotalCollection = isOwnerUser\(currentUser\)/,
+  );
+  assert.match(
+    weeklyAccountSource,
+    /canViewTotalCollection \? "Total Collection" : "Payment Reconciliation"/,
+  );
+  assert.match(
+    weeklyAccountSource,
+    /showSummary=\{canViewTotalCollection\}/,
+  );
+  assert.match(
+    weeklyAccountSource,
+    /<CollectorCollectionSection rows=\{searchedDriverPayments\}[\s\S]*?showSummary=\{canViewTotalCollection\}/,
+  );
+  assert.match(
+    weeklyAccountSource,
+    /<CollectorCollectionSection rows=\{searchedSalesRepPayments\}[\s\S]*?showSummary=\{canViewTotalCollection\}/,
+  );
+  assert.match(
+    weeklyAccountSource,
+    /\{showSummary && <div[\s\S]*?<SummaryCard title="Total Collection" value=\{money\(total\)\}/,
+  );
+  assert.doesNotMatch(
+    weeklyAccountSource,
+    /(?:display\s*:\s*["']none|className=["'][^"']*\bhidden\b)[\s\S]{0,120}Total Collection/i,
+  );
+});
+
+test("summary gating preserves payment rows and handover arithmetic", () => {
+  assert.match(
+    weeklyAccountSource,
+    /\{showSummary && <div[\s\S]*?\}<PaymentTable rows=\{rows\}/,
+  );
+  assert.match(
+    weeklyAccountSource,
+    /calculateWeeklyHandoverAmounts\(\{[\s\S]*cashCollected: selectedCashCollected,[\s\S]*approvedExpenses: selectedApprovedExpenses,[\s\S]*cashReceived/,
+  );
+  assert.deepEqual(
+    calculateWeeklyHandoverAmounts({
+      cashCollected: 125,
+      approvedExpenses: 20,
+      cashReceived: 100,
+    }),
+    {
+      amountDue: 105,
+      difference: -5,
+    },
+  );
+});
+
+test("Weekly Account payment tables remain read-only", () => {
   for (const forbidden of [
     "editPayment",
     "onEditPayment",
@@ -468,12 +723,12 @@ test("Weekly Account payment tables remain read-only", () => {
     "setEditingPayment",
     "Edit Payment",
   ]) {
-    assert.doesNotMatch(source, new RegExp(forbidden, "i"));
+    assert.doesNotMatch(weeklyAccountSource, new RegExp(forbidden, "i"));
   }
 
-  assert.doesNotMatch(source, /<th[^>]*>\s*Action\s*<\/th>/i);
+  assert.doesNotMatch(weeklyAccountSource, /<th[^>]*>\s*Action\s*<\/th>/i);
   assert.doesNotMatch(
-    source,
+    weeklyAccountSource,
     /\.from\(["'](?:customer_ledger|customer_payments|financial_transactions)["']\)[\s\S]{0,200}\.update\(/,
   );
 
@@ -489,10 +744,10 @@ test("Weekly Account payment tables remain read-only", () => {
     "Collection Type",
     "Source",
   ]) {
-    assert.match(source, new RegExp(`>${column}<`));
+    assert.match(weeklyAccountSource, new RegExp(`>${column}<`));
   }
-  assert.match(source, /row\.running_balance/);
-  assert.match(source, /legacy \? "Legacy" : "Current"/);
+  assert.match(weeklyAccountSource, /row\.running_balance/);
+  assert.match(weeklyAccountSource, /legacy \? "Legacy" : "Current"/);
 });
 
 test("legacy compatibility migration preserves source tables and creates the shared read model", () => {

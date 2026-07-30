@@ -8,10 +8,13 @@ import { loadDeliveredInvoices } from "../../services/centralPaymentService";
 import { formatCurrency } from "../../utils/currency";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
+  calculateWeeklyHandoverAmounts,
+  filterWeeklyAccountRows,
   getWeeklyPaymentDate,
   getWeeklyPaymentDateKey,
   loadWeeklyAccountPayments,
 } from "../../services/weeklyAccountPayments";
+import { isOwnerUser } from "../../services/ownerFinancialSecurity";
 import { saveHandover, getHandoverHistory } from "../../services/handovers";
 import {
   loadStaffCashExpenses,
@@ -20,6 +23,47 @@ import {
 } from "../../services/staffCashExpenses";
 
 const PAGE_SIZE = 30;
+const PAYMENT_SEARCH_FIELDS = [
+  "customer_name",
+  "invoice_no",
+  "order_number",
+  "payment_reference",
+  "reference_no",
+  "collector_name",
+  "driver_name",
+  "sales_rep_name",
+  "collected_by",
+  "who_paid",
+  "paid_by",
+  "payment_type",
+  "payment_method",
+  "branch_name",
+  "status",
+  "verification_status",
+  "collection_type",
+  "collector_role",
+  "source",
+];
+const CASH_HOLDING_SEARCH_FIELDS = ["collectorType", "collectorName"];
+const HANDOVER_SEARCH_FIELDS = [
+  "collector_type",
+  "collector_name",
+  "reason",
+];
+const UNPAID_SEARCH_FIELDS = [
+  "customer_name",
+  "invoice_no",
+  "order_number",
+  "reference_no",
+  "driver_name",
+  "name",
+  "sales_rep_name",
+  "collected_by",
+  "payment_type",
+  "payment_method",
+  "branch_name",
+  "invoice_status",
+];
 const EXPENSE_CATEGORIES = [
   "Fuel",
   "Parking",
@@ -66,8 +110,6 @@ const getLoggedInUser = () => {
     return {};
   }
 };
-const isOwnerLogin = () =>
-  String(getLoggedInUser()?.username || "").trim().toLowerCase() === "nisstaj_admin";
 const isRestrictedCreditRecord = (row = {}) => {
   const invoiceValue = normalize(
     row.invoice_option ||
@@ -90,10 +132,12 @@ const getLoggedInName = () => {
   }
 };
 
-export default function WeeklyAccount() {
+export default function WeeklyAccount({ currentUser }) {
+  const canViewTotalCollection = isOwnerUser(currentUser);
   const [activeTab, setActiveTab] = useState("total");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [searchByTab, setSearchByTab] = useState({});
   const [payments, setPayments] = useState([]);
   const [unpaidInvoices, setUnpaidInvoices] = useState([]);
   const [drivers, setDrivers] = useState([]);
@@ -188,7 +232,9 @@ export default function WeeklyAccount() {
       });
 
       setPayments(
-        (paymentsData || []).filter((row) => isOwnerLogin() || !isRestrictedCreditRecord(row)),
+        (paymentsData || []).filter(
+          (row) => canViewTotalCollection || !isRestrictedCreditRecord(row),
+        ),
       );
       setDrivers(driverResult.data || []);
       setUnpaidInvoices(merged);
@@ -349,8 +395,14 @@ export default function WeeklyAccount() {
         new Date(row.expense_date || row.created_at) <= handoverPeriodEnd,
     )
     .reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const selectedAmountDue = selectedCashCollected - selectedApprovedExpenses;
-  const handoverDifference = Number(cashReceived || 0) - selectedAmountDue;
+  const {
+    amountDue: selectedAmountDue,
+    difference: handoverDifference,
+  } = calculateWeeklyHandoverAmounts({
+    cashCollected: selectedCashCollected,
+    approvedExpenses: selectedApprovedExpenses,
+    cashReceived,
+  });
 
   async function handleSaveHandover() {
     if (!collectorName) return alert(`Please select ${collectorType}.`);
@@ -416,7 +468,10 @@ export default function WeeklyAccount() {
   }
 
   const tabs = [
-    ["total", "Total Collection"],
+    [
+      "total",
+      canViewTotalCollection ? "Total Collection" : "Payment Reconciliation",
+    ],
     ["driver", "Driver Collection"],
     ["salesrep", "Sales Rep Collection"],
     ["holding", "Cash Holding"],
@@ -432,6 +487,37 @@ export default function WeeklyAccount() {
   );
   const filteredUnpaid = unpaidInvoices.filter((row) =>
     dateInRange(row.delivered_at || row.created_at, startDate, endDate),
+  );
+  const activeSearch = searchByTab[activeTab] || "";
+  const searchedPayments = filterWeeklyAccountRows(
+    filteredPayments,
+    searchByTab.total,
+    PAYMENT_SEARCH_FIELDS,
+  );
+  const searchedDriverPayments = filterWeeklyAccountRows(
+    driverPayments,
+    searchByTab.driver,
+    PAYMENT_SEARCH_FIELDS,
+  );
+  const searchedSalesRepPayments = filterWeeklyAccountRows(
+    salesRepPayments,
+    searchByTab.salesrep,
+    PAYMENT_SEARCH_FIELDS,
+  );
+  const searchedCashHoldingRows = filterWeeklyAccountRows(
+    cashHoldingRows,
+    searchByTab.holding,
+    CASH_HOLDING_SEARCH_FIELDS,
+  );
+  const searchedHandovers = filterWeeklyAccountRows(
+    filteredHandovers,
+    searchByTab.handover,
+    HANDOVER_SEARCH_FIELDS,
+  );
+  const searchedUnpaid = filterWeeklyAccountRows(
+    filteredUnpaid,
+    searchByTab.unpaid,
+    UNPAID_SEARCH_FIELDS,
   );
 
   if (loading) return <div className="p-4">Loading Weekly Account...</div>;
@@ -460,12 +546,47 @@ export default function WeeklyAccount() {
         ))}
       </div>
 
-      {activeTab === "total" && <CollectionSection rows={filteredPayments} title="Total Collection" money={money} formatDate={formatDate} />}
-      {activeTab === "driver" && <CollectorCollectionSection rows={driverPayments} title="Driver Collection" money={money} formatDate={formatDate} totals={totalsByCollector(driverPayments)} />}
-      {activeTab === "salesrep" && <CollectorCollectionSection rows={salesRepPayments} title="Sales Rep Collection" money={money} formatDate={formatDate} totals={totalsByCollector(salesRepPayments)} />}
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label={`Search ${tabs.find(([key]) => key === activeTab)?.[1] || "Weekly Account"}`}>
+          <input
+            type="search"
+            value={activeSearch}
+            onChange={(event) =>
+              setSearchByTab((current) => ({
+                ...current,
+                [activeTab]: event.target.value,
+              }))
+            }
+            placeholder="Search visible records..."
+            className="w-full min-w-64 rounded-lg border px-3 py-2 sm:w-80"
+          />
+        </Field>
+        {activeSearch && (
+          <button
+            type="button"
+            onClick={() =>
+              setSearchByTab((current) => ({ ...current, [activeTab]: "" }))
+            }
+            className="rounded-lg bg-slate-600 px-4 py-2 font-bold text-white"
+          >
+            Clear Search
+          </button>
+        )}
+      </div>
+
+      {activeTab === "total" && (
+        <CollectionSection
+          rows={searchedPayments}
+          showSummary={canViewTotalCollection}
+          money={money}
+          formatDate={formatDate}
+        />
+      )}
+      {activeTab === "driver" && <CollectorCollectionSection rows={searchedDriverPayments} title="Driver Collection" showSummary={canViewTotalCollection} money={money} formatDate={formatDate} totals={totalsByCollector(searchedDriverPayments)} />}
+      {activeTab === "salesrep" && <CollectorCollectionSection rows={searchedSalesRepPayments} title="Sales Rep Collection" showSummary={canViewTotalCollection} money={money} formatDate={formatDate} totals={totalsByCollector(searchedSalesRepPayments)} />}
 
       {activeTab === "holding" && (
-        <PaginatedTable rows={cashHoldingRows} empty="No staff cash holding found." renderHeader={() => <tr className="bg-blue-700 text-white"><Th>Type</Th><Th>Collector</Th><Th right>Cash Collected</Th><Th right>Approved Expenses</Th><Th right>Handed Over</Th><Th right>Amount Due</Th><Th>Last Handover</Th><Th right>Days Holding</Th></tr>} renderRow={(row) => <tr key={row.key} className="border-b"><Td>{row.collectorType}</Td><Td bold>{row.collectorName}</Td><Td right>{money(row.collected)}</Td><Td right>{money(row.expenses)}</Td><Td right>{money(row.handedOver)}</Td><Td right bold className={row.holding > 0 ? "text-red-600" : "text-green-600"}>{money(row.holding)}</Td><Td>{formatDate(row.lastHandoverDate)}</Td><Td right>{row.daysHolding}</Td></tr>} />
+        <PaginatedTable rows={searchedCashHoldingRows} empty="No staff cash holding found." renderHeader={() => <tr className="bg-blue-700 text-white"><Th>Type</Th><Th>Collector</Th><Th right>Cash Collected</Th><Th right>Approved Expenses</Th><Th right>Handed Over</Th><Th right>Amount Due</Th><Th>Last Handover</Th><Th right>Days Holding</Th></tr>} renderRow={(row) => <tr key={row.key} className="border-b"><Td>{row.collectorType}</Td><Td bold>{row.collectorName}</Td><Td right>{money(row.collected)}</Td><Td right>{money(row.expenses)}</Td><Td right>{money(row.handedOver)}</Td><Td right bold className={row.holding > 0 ? "text-red-600" : "text-green-600"}>{money(row.holding)}</Td><Td>{formatDate(row.lastHandoverDate)}</Td><Td right>{row.daysHolding}</Td></tr>} />
       )}
 
       {activeTab === "handover" && (
@@ -485,23 +606,23 @@ export default function WeeklyAccount() {
             <Field label="Reason (required when different)"><textarea className="w-full rounded-lg border p-2.5" value={handoverReason} onChange={(e) => setHandoverReason(e.target.value)} /></Field>
             <button type="button" onClick={handleSaveHandover} disabled={savingHandover} className="rounded-lg bg-green-600 px-5 py-2.5 font-bold text-white disabled:opacity-50">{savingHandover ? "Saving..." : "Save Handover"}</button>
           </div>
-          <HandoverTable rows={filteredHandovers} money={money} formatDateTime={formatDateTime} />
+          <HandoverTable rows={searchedHandovers} money={money} formatDateTime={formatDateTime} />
         </div>
       )}
 
-      {activeTab === "unpaid" && <OutstandingTable rows={filteredUnpaid} money={money} formatDate={formatDate} />}
+      {activeTab === "unpaid" && <OutstandingTable rows={searchedUnpaid} money={money} formatDate={formatDate} />}
     </div>
   );
 }
 
-function CollectionSection({ rows, title, money, formatDate }) {
+function CollectionSection({ rows, showSummary, money, formatDate }) {
   const total = rows.reduce((sum, row) => sum + paymentAmount(row), 0);
   const paymentCount = new Set(rows.map((row) => row.canonical_payment_key || row.id)).size;
-  return <><div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Paid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Payments" value={paymentCount} /><SummaryCard title={title} value={money(total)} /></div><PaymentTable rows={rows} money={money} formatDate={formatDate} /></>;
+  return <>{showSummary && <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Paid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Payments" value={paymentCount} /><SummaryCard title="Total Collection" value={money(total)} /></div>}<PaymentTable rows={rows} money={money} formatDate={formatDate} /></>;
 }
 
-function CollectorCollectionSection({ rows, totals, title, money, formatDate }) {
-  return <><div className="grid grid-cols-1 gap-3 md:grid-cols-3">{totals.map(([name, total]) => <SummaryCard key={name} title={name} value={money(total)} />)}{totals.length === 0 && <SummaryCard title={title} value={money(0)} />}</div><PaymentTable rows={rows} money={money} formatDate={formatDate} /></>;
+function CollectorCollectionSection({ rows, totals, title, showSummary, money, formatDate }) {
+  return <>{showSummary && <div className="grid grid-cols-1 gap-3 md:grid-cols-3">{totals.map(([name, total]) => <SummaryCard key={name} title={name} value={money(total)} />)}{totals.length === 0 && <SummaryCard title={title} value={money(0)} />}</div>}<PaymentTable rows={rows} money={money} formatDate={formatDate} /></>;
 }
 
 function PaymentTable({ rows, money, formatDate }) {

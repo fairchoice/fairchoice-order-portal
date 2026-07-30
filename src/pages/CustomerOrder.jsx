@@ -3902,7 +3902,7 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "orderSalesInvoices" && <OrderSalesInvoices />}
     {page === "invoicesPortal" && <InvoicesPortal />}
     {page === "returnsPortal" && <ReturnsPortal />}
-    {page === "weeklyAccount" && <WeeklyAccount />}
+    {page === "weeklyAccount" && <WeeklyAccount currentUser={activeUser} />}
     {page === "expenses" && <Expenses />}
     {page === "stockhistory" && <StockHistory />}
     {page === "stockTaking" && (

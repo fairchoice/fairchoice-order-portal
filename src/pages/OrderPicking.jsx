@@ -163,7 +163,7 @@ export default function OrderPicking({ order, products = [], currentUser, onExit
         {error && <div className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-800">{error}</div>}
 
         <div className="space-y-2">
-          {items.map((item, index) => {
+          {items.map((item) => {
             const itemId = item.dbId || item.id;
             const action = item.pickingAction || item.picking_action || null;
             const decided = Boolean(action);
@@ -173,11 +173,7 @@ export default function OrderPicking({ order, products = [], currentUser, onExit
 
             return (
               <article key={itemId} className="rounded-xl border bg-white p-3 shadow-sm">
-                <div className="flex items-start gap-3">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-600">
-                    {index + 1}
-                  </div>
-                  <div className="min-w-0 flex-1">
+                <div className="min-w-0">
                     <h2 className="text-base font-black leading-snug text-slate-900 sm:text-lg">{item.productName || item.product_name || item.name}</h2>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <span className="text-sm font-bold text-blue-800">Quantity: {Number(item.qty ?? item.quantity ?? 0)}</span>
@@ -189,7 +185,6 @@ export default function OrderPicking({ order, products = [], currentUser, onExit
                     {action === "replace" && replacementName && (
                       <div className="mt-2 rounded-lg bg-violet-50 px-3 py-2 text-sm font-bold text-violet-800">Replace with: {replacementName}</div>
                     )}
-                  </div>
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">

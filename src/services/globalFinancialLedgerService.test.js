@@ -77,3 +77,26 @@ test("global ledger reads through the password-validated paginated RPC", () => {
   assert.match(migration, /central_payment_require_admin_credentials/);
   assert.match(migration, /order by transaction_date desc, created_at desc, record_id desc/);
 });
+
+test("canonical customer payments retain one Global Ledger row and one CREATE event", () => {
+  const migration = fs.readFileSync(
+    new URL(
+      "../../supabase/migrations/20260726130000_complete_canonical_payment_and_global_ledger.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    migration,
+    /on conflict \(source_type, source_id\) do update/,
+  );
+  assert.match(
+    migration,
+    /on conflict \(transaction_id\) where event_type = 'CREATE' do nothing/,
+  );
+  assert.match(
+    migration,
+    /create trigger customer_payments_global_ledger_sync[\s\S]*after insert or update on public\.customer_payments/,
+  );
+});
