@@ -27,14 +27,14 @@ begin
     from (
       values
         ('supplier_name'),
-        ('vat_number'),
+        ('contact_name'),
         ('address'),
         ('phone'),
         ('email'),
         ('payment_terms'),
         ('notes'),
         ('active'),
-        ('contact_number')
+        ('vat_registered')
     ) as required(column_name)
     where not exists (
       select 1
@@ -51,6 +51,7 @@ $$;
 
 alter table public.suppliers
   add column if not exists company_legal_name text,
+  add column if not exists vat_number text,
   add column if not exists address_line_1 text,
   add column if not exists address_line_2 text,
   add column if not exists city text,
@@ -64,6 +65,7 @@ update public.suppliers
 set
   supplier_name = trim(supplier_name),
   company_legal_name = nullif(trim(company_legal_name), ''),
+  contact_name = nullif(trim(contact_name), ''),
   vat_number = nullif(trim(vat_number), ''),
   address_line_1 = nullif(trim(address_line_1), ''),
   address_line_2 = nullif(trim(address_line_2), ''),
@@ -169,6 +171,7 @@ begin
           ' ',
           s.supplier_name,
           s.company_legal_name,
+          s.contact_name,
           s.vat_number,
           s.address_line_1,
           s.address_line_2,
@@ -248,6 +251,7 @@ begin
     insert into public.suppliers (
       supplier_name,
       company_legal_name,
+      contact_name,
       vat_number,
       address_line_1,
       address_line_2,
@@ -261,13 +265,14 @@ begin
       bank_payment_reference,
       notes,
       address,
-      contact_number,
+      vat_registered,
       active,
       updated_at
     )
     values (
       v_name,
       nullif(trim(coalesce(p_supplier->>'company_legal_name', '')), ''),
+      nullif(trim(coalesce(p_supplier->>'contact_name', '')), ''),
       nullif(trim(coalesce(p_supplier->>'vat_number', '')), ''),
       nullif(trim(coalesce(p_supplier->>'address_line_1', '')), ''),
       nullif(trim(coalesce(p_supplier->>'address_line_2', '')), ''),
@@ -281,7 +286,7 @@ begin
       nullif(trim(coalesce(p_supplier->>'bank_payment_reference', '')), ''),
       nullif(trim(coalesce(p_supplier->>'notes', '')), ''),
       v_address,
-      nullif(trim(coalesce(p_supplier->>'phone', '')), ''),
+      coalesce((p_supplier->>'vat_registered')::boolean, true),
       true,
       now()
     )
@@ -292,6 +297,8 @@ begin
       supplier_name = v_name,
       company_legal_name =
         nullif(trim(coalesce(p_supplier->>'company_legal_name', '')), ''),
+      contact_name =
+        nullif(trim(coalesce(p_supplier->>'contact_name', '')), ''),
       vat_number = nullif(trim(coalesce(p_supplier->>'vat_number', '')), ''),
       address_line_1 =
         nullif(trim(coalesce(p_supplier->>'address_line_1', '')), ''),
@@ -301,7 +308,6 @@ begin
       postcode = nullif(trim(coalesce(p_supplier->>'postcode', '')), ''),
       country = nullif(trim(coalesce(p_supplier->>'country', '')), ''),
       phone = nullif(trim(coalesce(p_supplier->>'phone', '')), ''),
-      contact_number = nullif(trim(coalesce(p_supplier->>'phone', '')), ''),
       email = v_email,
       payment_terms =
         nullif(trim(coalesce(p_supplier->>'payment_terms', '')), ''),
@@ -310,6 +316,8 @@ begin
         nullif(trim(coalesce(p_supplier->>'bank_payment_reference', '')), ''),
       notes = nullif(trim(coalesce(p_supplier->>'notes', '')), ''),
       address = v_address,
+      vat_registered =
+        coalesce((p_supplier->>'vat_registered')::boolean, true),
       updated_at = now()
     where id = p_supplier_id
     returning * into v_row;

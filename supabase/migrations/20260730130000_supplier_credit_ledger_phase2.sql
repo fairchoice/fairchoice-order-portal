@@ -4,22 +4,117 @@
 
 do $$
 begin
-  if to_regclass('public.suppliers') is null
-     or to_regclass('public.supplier_credit_transactions') is null then
-    raise exception 'Supplier Credit Ledger prerequisites are missing';
+  if to_regclass('public.suppliers') is null then
+    raise exception 'Supplier Credit Ledger requires public.suppliers';
   end if;
   if to_regprocedure(
        'public.fc_require_session_permission(text,text,text)'
      ) is null then
     raise exception 'Supplier Credit Ledger requires FC session permissions';
   end if;
-  if to_regprocedure(
-       'public.fc_supplier_credit_statement(uuid)'
-     ) is null then
-    raise exception 'Supplier Credit Ledger requires the legacy statement RPC';
+  if to_regclass('public.stock_receipts') is null then
+    raise exception 'Supplier Credit Ledger requires public.stock_receipts';
+  end if;
+  if exists (
+    select required.column_name
+    from (
+      values
+        ('id'),
+        ('supplier_id'),
+        ('supplier_name'),
+        ('received_date'),
+        ('total_cost'),
+        ('payment_method'),
+        ('invoice_number'),
+        ('purchase_type')
+    ) as required(column_name)
+    where not exists (
+      select 1
+      from information_schema.columns c
+      where c.table_schema = 'public'
+        and c.table_name = 'stock_receipts'
+        and c.column_name = required.column_name
+    )
+  ) then
+    raise exception 'Supplier Credit Ledger requires the verified stock_receipts columns';
   end if;
 end
 $$;
+
+create table if not exists public.supplier_credit_transactions (
+  id uuid primary key default extensions.gen_random_uuid(),
+  supplier_id uuid not null,
+  transaction_date date not null default current_date,
+  transaction_type text not null,
+  amount numeric(14,2) not null,
+  invoice_number text,
+  reference text,
+  description text,
+  notes text,
+  status text not null default 'posted',
+  created_by text,
+  created_by_username text,
+  created_by_login_id uuid,
+  created_by_staff_id uuid,
+  created_at timestamptz not null default now(),
+  voided_by_login_id uuid,
+  voided_by_staff_id uuid,
+  voided_by_username text,
+  voided_at timestamptz,
+  void_reason text,
+  reversal_of_transaction_id uuid,
+  updated_at timestamptz not null default now(),
+  constraint supplier_credit_supplier_fk
+    foreign key (supplier_id) references public.suppliers(id) on delete restrict,
+  constraint supplier_credit_amount_positive_check
+    check (amount > 0),
+  constraint supplier_credit_transaction_type_v2_check
+    check (
+      transaction_type in (
+        'Credit Purchase',
+        'Payment',
+        'Credit Note',
+        'Adjustment',
+        'opening_balance',
+        'purchase_invoice',
+        'payment',
+        'credit_note',
+        'refund',
+        'debit_adjustment',
+        'credit_adjustment'
+      )
+    ),
+  constraint supplier_credit_status_check
+    check (status in ('posted', 'voided', 'cancelled')),
+  constraint supplier_credit_void_audit_check
+    check (
+      status <> 'voided'
+      or (
+        voided_at is not null
+        and nullif(trim(coalesce(void_reason, '')), '') is not null
+      )
+    ),
+  constraint supplier_credit_created_login_fk
+    foreign key (created_by_login_id)
+    references public.login_users(id)
+    on delete set null,
+  constraint supplier_credit_created_staff_fk
+    foreign key (created_by_staff_id)
+    references public.staff_users(id)
+    on delete set null,
+  constraint supplier_credit_voided_login_fk
+    foreign key (voided_by_login_id)
+    references public.login_users(id)
+    on delete set null,
+  constraint supplier_credit_voided_staff_fk
+    foreign key (voided_by_staff_id)
+    references public.staff_users(id)
+    on delete set null,
+  constraint supplier_credit_reversal_source_fk
+    foreign key (reversal_of_transaction_id)
+    references public.supplier_credit_transactions(id)
+    on delete restrict
+);
 
 alter table public.supplier_credit_transactions
   add column if not exists description text,
@@ -199,6 +294,8 @@ create unique index if not exists supplier_credit_one_active_opening_idx
   on public.supplier_credit_transactions (supplier_id)
   where transaction_type = 'opening_balance' and status = 'posted';
 
+alter table public.supplier_credit_transactions enable row level security;
+
 drop policy if exists supplier_credit_transactions_all
   on public.supplier_credit_transactions;
 
@@ -372,8 +469,14 @@ begin
       null::timestamptz
     from public.stock_receipts sr
     join public.suppliers s
-      on lower(trim(s.supplier_name)) = lower(trim(sr.supplier_name))
-    where s.id = p_supplier_id
+      on s.id = p_supplier_id
+    where (
+        sr.supplier_id = p_supplier_id
+        or (
+          sr.supplier_id is null
+          and lower(trim(s.supplier_name)) = lower(trim(sr.supplier_name))
+        )
+      )
       and lower(coalesce(sr.payment_method, '')) in ('account', 'credit')
       and coalesce(sr.total_cost, 0) > 0
   ),

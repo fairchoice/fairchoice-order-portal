@@ -40,6 +40,7 @@ export const SUPPLIER_LEDGER_TYPE_LABELS = Object.freeze({
 });
 
 const OPTIONAL_TEXT_FIELDS = [
+  "contact_name",
   "company_legal_name",
   "vat_number",
   "address_line_1",
@@ -80,6 +81,7 @@ export function validateSupplier(input = {}) {
   for (const field of OPTIONAL_TEXT_FIELDS) {
     supplier[field] = normalizeOptionalText(input[field]);
   }
+  supplier.vat_registered = input.vat_registered !== false;
 
   const errors = {};
   if (!supplier.supplier_name) {

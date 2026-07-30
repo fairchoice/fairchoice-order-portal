@@ -25,14 +25,18 @@ test("supplier create and edit validation requires a trimmed name", () => {
 
   const valid = validateSupplier({
     supplier_name: "  Acme Foods  ",
+    contact_name: "  Accounts Team  ",
     company_legal_name: "  ",
     email: " accounts@example.test ",
     default_payment_method: "Bank Transfer",
+    vat_registered: false,
   });
   assert.equal(valid.valid, true);
   assert.equal(valid.supplier.supplier_name, "Acme Foods");
   assert.equal(valid.supplier.company_legal_name, null);
+  assert.equal(valid.supplier.contact_name, "Accounts Team");
   assert.equal(valid.supplier.email, "accounts@example.test");
+  assert.equal(valid.supplier.vat_registered, false);
   assert.equal(normalizeOptionalText("\t"), null);
 });
 
@@ -124,6 +128,7 @@ test("Supplier Setup migration extends the canonical suppliers table and ID", ()
   assert.match(migrationSql, /public\.suppliers\.id uuid/i);
   for (const column of [
     "company_legal_name",
+    "vat_number",
     "address_line_1",
     "address_line_2",
     "city",
@@ -136,6 +141,14 @@ test("Supplier Setup migration extends the canonical suppliers table and ID", ()
   }
   assert.doesNotMatch(migrationSql, /drop\s+(?:table|column)/i);
   assert.doesNotMatch(migrationSql, /create\s+table/i);
+  const prerequisiteBlock = migrationSql.slice(
+    0,
+    migrationSql.indexOf("alter table public.suppliers"),
+  );
+  assert.doesNotMatch(prerequisiteBlock, /\('vat_number'\)|\('contact_number'\)/);
+  assert.doesNotMatch(migrationSql, /\bcontact_number\b|\bcontact_person\b/);
+  assert.match(migrationSql, /\bcontact_name\b/);
+  assert.match(migrationSql, /\bvat_registered\b/);
 });
 
 test("Supplier Setup RPCs require FC session permission and block direct writes", () => {

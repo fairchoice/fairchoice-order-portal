@@ -11,8 +11,10 @@ import {
 
 const emptySupplierForm = {
   supplier_name: "",
+  contact_name: "",
   company_legal_name: "",
   vat_number: "",
+  vat_registered: true,
   address_line_1: "",
   address_line_2: "",
   city: "",
@@ -307,7 +309,9 @@ function SupplierDetail({ supplier, saving, onEdit, onToggleActive }) {
 
   const details = [
     ["Company / legal name", supplier.company_legal_name],
+    ["Contact name", supplier.contact_name],
     ["VAT number", supplier.vat_number],
+    ["VAT registered", supplier.vat_registered === false ? "No" : "Yes"],
     ["Address", displayAddress(supplier)],
     ["Phone", supplier.phone],
     ["Email", supplier.email],
@@ -414,10 +418,25 @@ function SupplierForm({
             onChange={(value) => onChange("company_legal_name", value)}
           />
           <InputField
+            label="Contact name"
+            value={form.contact_name}
+            onChange={(value) => onChange("contact_name", value)}
+          />
+          <InputField
             label="VAT number"
             value={form.vat_number}
             onChange={(value) => onChange("vat_number", value)}
           />
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <input
+              type="checkbox"
+              checked={form.vat_registered}
+              onChange={(event) =>
+                onChange("vat_registered", event.target.checked)
+              }
+            />
+            VAT registered
+          </label>
           <InputField
             label="Phone"
             type="tel"

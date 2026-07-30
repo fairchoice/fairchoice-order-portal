@@ -16,7 +16,7 @@ const read = (relativePath) =>
 const migration = read(
   "../../supabase/migrations/20260730130000_supplier_credit_ledger_phase2.sql",
 );
-const legacyMigration = read(
+const obsoleteMigration = read(
   "../../supabase/migrations/20260727150000_expenses_payout_direct_debit_supplier_credit.sql",
 );
 const serviceSource = read("./suppliers.js");
@@ -240,21 +240,45 @@ test("manual entries require active supplier, positive amount, reference, and re
   assert.equal(valid.entry.reference, "COR-12");
 });
 
-test("migration extends the canonical ledger without creating duplicate objects", () => {
+test("migration creates the canonical ledger from the actual Preview baseline", () => {
   assert.match(
     migration,
-    /alter table public\.supplier_credit_transactions/i,
+    /create table if not exists public\.supplier_credit_transactions/i,
   );
-  assert.doesNotMatch(migration, /create\s+table/i);
+  const prerequisiteBlock = migration.slice(
+    0,
+    migration.indexOf(
+      "create table if not exists public.supplier_credit_transactions",
+    ),
+  );
+  assert.doesNotMatch(
+    prerequisiteBlock,
+    /to_regclass\('public\.supplier_credit_transactions'\)/i,
+  );
+  assert.doesNotMatch(
+    prerequisiteBlock,
+    /fc_supplier_credit_statement\(uuid\)/i,
+  );
   assert.doesNotMatch(
     migration,
     /create\s+(?:table|function)[\s\S]*supplier_payments/i,
   );
   for (const column of [
+    "id uuid primary key",
+    "supplier_id uuid not null",
+    "transaction_date date not null",
+    "transaction_type text not null",
+    "amount numeric(14,2) not null",
+    "invoice_number text",
+    "reference text",
     "description",
+    "notes text",
     "status",
+    "created_by text",
+    "created_by_username text",
     "created_by_login_id",
     "created_by_staff_id",
+    "created_at timestamptz",
     "voided_by_login_id",
     "voided_by_staff_id",
     "voided_by_username",
@@ -262,8 +286,17 @@ test("migration extends the canonical ledger without creating duplicate objects"
     "void_reason",
     "reversal_of_transaction_id",
   ]) {
-    assert.match(migration, new RegExp(`add column if not exists ${column}`));
+    assert.ok(migration.includes(column), `missing ledger field: ${column}`);
   }
+  assert.match(migration, /check \(amount > 0\)/i);
+  assert.match(
+    migration,
+    /foreign key \(supplier_id\)[\s\S]*references public\.suppliers\(id\)[\s\S]*on delete restrict/i,
+  );
+  assert.match(
+    migration,
+    /alter table public\.supplier_credit_transactions enable row level security/i,
+  );
 });
 
 test("statement v2 calculates prior opening and current balances deterministically", () => {
@@ -290,6 +323,10 @@ test("statement v2 calculates prior opening and current balances deterministical
   assert.match(statement, /position\(/i);
   assert.doesNotMatch(statement, /\bilike\b|\blike\b/i);
   assert.match(statement, /stock_receipt/i);
+  assert.match(
+    statement,
+    /sr\.supplier_id = p_supplier_id[\s\S]*sr\.supplier_id is null[\s\S]*sr\.supplier_name/i,
+  );
 });
 
 test("posting and void RPCs enforce FC permission and preserve audit rows", () => {
@@ -311,17 +348,37 @@ test("posting and void RPCs enforce FC permission and preserve audit rows", () =
   );
 });
 
-test("legacy statement RPC remains unchanged and the canonical UI uses v2", () => {
+test("alleged legacy ledger objects have no real application caller", () => {
   assert.match(
-    legacyMigration,
-    /function public\.fc_supplier_credit_statement\(p_supplier_id uuid\)[\s\S]*returns table\(transaction_date date, source text, transaction_type text, invoice_number text, reference text, debit numeric, credit numeric, running_balance numeric\)/i,
+    obsoleteMigration,
+    /create table if not exists public\.supplier_credit_transactions/i,
+  );
+  assert.match(
+    obsoleteMigration,
+    /function public\.fc_supplier_credit_statement\(p_supplier_id uuid\)/i,
   );
   assert.doesNotMatch(
     migration,
     /create or replace function public\.fc_supplier_credit_statement\s*\(/i,
   );
   assert.match(serviceSource, /"fc_supplier_credit_statement_v2"/);
+  assert.doesNotMatch(serviceSource, /"fc_supplier_credit_statement"/);
   assert.doesNotMatch(serviceSource, /\.from\("supplier_credit_transactions"\)/);
+});
+
+test("migration verifies every Preview stock receipt column it references", () => {
+  for (const column of [
+    "id",
+    "supplier_id",
+    "supplier_name",
+    "received_date",
+    "total_cost",
+    "payment_method",
+    "invoice_number",
+    "purchase_type",
+  ]) {
+    assert.match(migration, new RegExp(`\\('${column}'\\)`));
+  }
 });
 
 test("Supplier Accounts extends the existing Accounts route and printable UI", () => {
