@@ -13,6 +13,7 @@ import {
   updatePayout,
   voidPayout,
 } from "../../services/expenses";
+import { supplierOptionsForSelection } from "../../services/suppliers";
 
 const field =
   "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm";
@@ -95,6 +96,17 @@ export default function Expenses() {
         .includes(term);
     });
   }, [payouts, search, status]);
+
+  const supplierOptions = useMemo(() => {
+    const currentPayout = payouts.find((row) => row.id === editingId);
+    const currentSupplier = form.supplierId
+      ? {
+          id: form.supplierId,
+          supplier_name: currentPayout?.supplier_name || "Inactive supplier",
+        }
+      : null;
+    return supplierOptionsForSelection(suppliers, currentSupplier);
+  }, [editingId, form.supplierId, payouts, suppliers]);
 
   function resetForm() {
     setEditingId(null);
@@ -198,7 +210,7 @@ export default function Expenses() {
             </Select>
             <Select label="Supplier (optional)" value={form.supplierId} required={false} onChange={(value) => setForm({ ...form, supplierId: value })}>
               <option value="">Not applicable</option>
-              {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.supplier_name}</option>)}
+              {supplierOptions.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.supplier_name}{supplier.active === false ? " (inactive)" : ""}</option>)}
             </Select>
             <Input label="Amount" type="number" step="0.01" value={form.amount} onChange={(value) => setForm({ ...form, amount: value })} />
             <Select label="Payment method" value={form.paymentMethod} onChange={(value) => setForm({ ...form, paymentMethod: value })}>

@@ -18,6 +18,7 @@ import {
 } from "../services/canonicalPaymentService";
 import PricingRule from "./AdminSetup/PricingRule";
 import Suppliers from "./AdminSetup/Suppliers";
+import SupplierAccounts from "./AdminSetup/SupplierAccounts";
 import Staff from "./AdminSetup/Staff";
 import LoginConfig from "./AdminSetup/LoginConfig";
 import PriceManagement from "./AdminSetup/PriceManagement";
@@ -3903,6 +3904,7 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "invoicesPortal" && <InvoicesPortal />}
     {page === "returnsPortal" && <ReturnsPortal />}
     {page === "weeklyAccount" && <WeeklyAccount currentUser={activeUser} />}
+    {page === "supplierAccounts" && <SupplierAccounts user={activeUser} />}
     {page === "expenses" && <Expenses />}
     {page === "stockhistory" && <StockHistory />}
     {page === "stockTaking" && (
@@ -3915,7 +3917,7 @@ const backOfficeContent = comingSoonTitle ? (
 
     {page === "staff" && <Staff />}
     {page === "loginSetup" && <LoginConfig />}
-    {page === "suppliers" && <Suppliers />}
+    {page === "suppliers" && <Suppliers user={activeUser} />}
     {page === "pricingRule" && (
   <PricingRule
     pricingSettings={pricingSettings}

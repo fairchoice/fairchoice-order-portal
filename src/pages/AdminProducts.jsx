@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { supabase } from "../services/supabase";
+import { supplierOptionsForSelection } from "../services/suppliers";
 import { getActiveStockLocations } from "../services/locationStock";
 import {
   deleteHomepageItem,
@@ -163,7 +164,8 @@ const handleHomepageImageUpload = async () => {
   const fetchSuppliers = async () => {
   const { data } = await supabase
     .from("suppliers")
-    .select("*")
+    .select("id, supplier_name, active")
+    .eq("active", true)
     .order("supplier_name");
 
   setSuppliers(data || []);
@@ -1459,9 +1461,13 @@ const updateProductLabel = (labelValue) => {
                 >
                   <option value="">Select Supplier</option>
 
-                  {suppliers.map((supplier) => (
+                  {supplierOptionsForSelection(
+                    suppliers,
+                    productForm.supplierName,
+                  ).map((supplier) => (
                     <option key={supplier.id} value={supplier.supplier_name}>
                       {supplier.supplier_name}
+                      {supplier.active === false ? " (inactive)" : ""}
                     </option>
                   ))}
                 </select>
