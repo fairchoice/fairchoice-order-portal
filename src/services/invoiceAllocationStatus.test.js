@@ -63,6 +63,23 @@ test("reversed, voided, and pending bank payments do not settle invoices", () =>
   }
 });
 
+test("deleted exact-reference payments do not settle invoices", () => {
+  const resolved = resolveInvoiceRowFromAllocations({
+    row: { order_number: "ORD-DELETED", customer_account_id: "acct-1" },
+    legacyLedgerPayments: [{
+      entry_type: "PAYMENT",
+      payment_status: "DELETED",
+      reference_no: "ORD-DELETED",
+      customer_account_id: "acct-1",
+      payment_amount: 100,
+    }],
+    invoiceTotal: 100,
+  });
+
+  assert.equal(resolved.invoice_status, "UNPAID");
+  assert.equal(resolved.outstanding_amount, 100);
+});
+
 test("allocation must match invoice and account scope", () => {
   const resolved = resolveInvoiceRowFromAllocations({
     row: { order_number: "ORD-200", customer_account_id: "acct-1" },
@@ -226,6 +243,28 @@ test("stable order UUID has first-priority matching even when the visible refere
   assert.equal(resolved.invoice_status, "PAID");
 });
 
+test("a conflicting real payment UUID cannot fall back to a matching text reference", () => {
+  const resolved = resolveInvoiceRowFromAllocations({
+    row: {
+      order_uuid: "718d21a5-7f01-472a-b2b9-50980b6c9357",
+      order_number: "ORD-SHARED",
+      customer_account_id: "acct-1",
+    },
+    referencePayments: [{
+      id: "pay-wrong-order",
+      order_id: "8e01cbbe-e847-47c0-8150-790610926870",
+      payment_reference: "ORD-SHARED",
+      customer_account_id: "acct-1",
+      status: "POSTED",
+      amount: 100,
+    }],
+    invoiceTotal: 100,
+  });
+
+  assert.equal(resolved.invoice_status, "UNPAID");
+  assert.equal(resolved.outstanding_amount, 100);
+});
+
 test("an exact full reference matches when a source UUID is unavailable", () => {
   const resolved = resolveInvoiceRowFromAllocations({
     row: {
@@ -341,6 +380,103 @@ test("legacy repaired invoices match PAYMENT reference_no when order_number is n
     assert.equal(row.outstanding_amount, 0);
   });
   assert.equal(sumResolvedInvoiceOutstanding(resolvedRows), 0);
+});
+
+test("exact payment fields resolve paid and part-paid outstanding amounts", () => {
+  const row = {
+    order_uuid: "718d21a5-7f01-472a-b2b9-50980b6c9357",
+    order_number: "ORD-FULL-REFERENCE",
+    reference_no: "ORD-FULL-REFERENCE",
+    customer_account_id: "account-1",
+    customer_branch_id: "branch-1",
+  };
+  const paid = resolveInvoiceRowFromAllocations({
+    row,
+    referencePayments: [{
+      id: "payment-paid",
+      status: "POSTED",
+      order_id: row.order_uuid,
+      payment_reference: "UNRELATED-TEXT-REFERENCE",
+      customer_account_id: "account-1",
+      customer_branch_id: "branch-1",
+      amount: 100,
+    }],
+    invoiceTotal: 100,
+  });
+  const partPaid = resolveInvoiceRowFromAllocations({
+    row,
+    legacyLedgerPayments: [{
+      entry_type: "PAYMENT",
+      payment_status: "POSTED",
+      order_number: null,
+      reference_no: "NOT-THE-INVOICE",
+      payment_reference: "ORD-FULL-REFERENCE",
+      customer_account_id: "account-1",
+      customer_branch_id: "branch-1",
+      payment_amount: 0,
+      credit: 40,
+    }],
+    invoiceTotal: 100,
+  });
+
+  assert.equal(paid.invoice_status, "PAID");
+  assert.equal(paid.outstanding_amount, 0);
+  assert.equal(partPaid.invoice_status, "PART PAID");
+  assert.equal(partPaid.paid_amount, 40);
+  assert.equal(partPaid.outstanding_amount, 60);
+});
+
+test("duplicate full references cannot cross customer or branch scope", () => {
+  const row = {
+    order_number: "ORD-DUPLICATE",
+    customer_account_id: "account-correct",
+    customer_branch_id: "branch-correct",
+  };
+  const wrongScopePayments = [
+    {
+      entry_type: "PAYMENT",
+      payment_status: "POSTED",
+      reference_no: "ORD-DUPLICATE",
+      customer_account_id: "account-other",
+      customer_branch_id: "branch-correct",
+      payment_amount: 100,
+    },
+    {
+      entry_type: "PAYMENT",
+      payment_status: "POSTED",
+      reference_no: "ORD-DUPLICATE",
+      customer_account_id: "account-correct",
+      customer_branch_id: "branch-other",
+      payment_amount: 100,
+    },
+  ];
+  const resolved = resolveInvoiceRowFromAllocations({
+    row,
+    legacyLedgerPayments: wrongScopePayments,
+    invoiceTotal: 100,
+  });
+
+  assert.equal(resolved.invoice_status, "UNPAID");
+  assert.equal(resolved.outstanding_amount, 100);
+});
+
+test("stored PAID legacy invoice remains paid when its verified ledger metadata is merged", () => {
+  const resolved = resolveInvoiceRowFromAllocations({
+    row: {
+      order_number: "ORD-1784144566386",
+      customer_account_id: "account-legacy-1",
+      _ledgerRow: {
+        entry_type: "INVOICE",
+        invoice_status: "PAID",
+        paid_amount: 168.45,
+        remaining_amount: 0,
+      },
+    },
+    invoiceTotal: 168.45,
+  });
+
+  assert.equal(resolved.invoice_status, "PAID");
+  assert.equal(resolved.outstanding_amount, 0);
 });
 
 test("legacy PAYMENT matching rejects another customer and shortened references", () => {

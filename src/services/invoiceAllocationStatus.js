@@ -5,6 +5,7 @@ const INACTIVE_PAYMENT_STATUSES = new Set([
   "VOIDED",
   "REVERSED",
   "ARCHIVED",
+  "DELETED",
   "INACTIVE",
   "CANCELLED",
 ]);
@@ -42,14 +43,78 @@ export function isActiveInvoiceAllocation(allocation = {}) {
 }
 
 export function isActiveLegacyLedgerPayment(payment = {}) {
-  const type = normalize(payment.entry_type || payment.transaction_type);
+  const types = new Set([
+    normalize(payment.entry_type),
+    normalize(payment.transaction_type),
+  ]);
   const status = normalize(payment.payment_status || payment.status);
 
-  if (!["PAYMENT", "COLLECTION"].includes(type)) return false;
+  if (!["PAYMENT", "COLLECTION"].some((type) => types.has(type))) return false;
   if (INACTIVE_PAYMENT_STATUSES.has(status)) return false;
   if (payment.voided_at || payment.reversed_at || payment.archived_at) return false;
   return !status || ["ACTIVE", "POSTED", "CONFIRMED", "COMPLETED", "PAID"].includes(status);
 }
+
+export function getPaymentReferenceKeys(payment = {}) {
+  const references = new Set();
+  [
+    payment.order_number,
+    payment.reference_no,
+    payment.payment_reference,
+  ].forEach((value) => addReference(references, value));
+  return references;
+}
+
+const getPositivePaymentAmount = (payment = {}) =>
+  Math.max(
+    0,
+    Number(payment.allocated_amount || 0),
+    Number(payment.payment_amount || 0),
+    Number(payment.amount || 0),
+    Number(payment.credit || 0),
+  );
+
+const hasMatchingScope = (row = {}, payment = {}) => {
+  const customerAccountId = String(
+    row.customer_account_id || row._freshOrder?.customer_account_id || ""
+  );
+  const paymentCustomerAccountId = String(payment.customer_account_id || "");
+  if (
+    customerAccountId &&
+    paymentCustomerAccountId &&
+    customerAccountId !== paymentCustomerAccountId
+  ) {
+    return false;
+  }
+
+  const branchId = String(
+    row.customer_branch_id ||
+      row.branch_id ||
+      row._freshOrder?.customer_branch_id ||
+      row._freshOrder?.branch_id ||
+      ""
+  );
+  const paymentBranchId = String(
+    payment.customer_branch_id || payment.branch_id || ""
+  );
+  return !branchId || !paymentBranchId || branchId === paymentBranchId;
+};
+
+const getStoredLedgerInvoicePaidAmount = (row = {}, invoiceTotal = 0) => {
+  const ledgerRow = row._ledgerRow || row;
+  const type = normalize(ledgerRow.entry_type || ledgerRow.transaction_type);
+  if (!type.includes("INVOICE")) return 0;
+
+  const status = normalize(ledgerRow.invoice_status || ledgerRow.payment_status || ledgerRow.status);
+  if (status === "PAID") return Math.max(0, Number(invoiceTotal || 0));
+  if (status !== "PART PAID") return 0;
+
+  return Math.max(
+    0,
+    Number(ledgerRow.paid_amount || ledgerRow.amount_paid || 0),
+    Number(invoiceTotal || 0) - Number(ledgerRow.remaining_amount || 0),
+  );
+};
 
 export function getInvoiceLedgerReferenceKeys(row = {}) {
   const references = new Set();
@@ -114,6 +179,7 @@ export function resolveInvoiceRowFromAllocations({
   row,
   allocations = [],
   paymentsById = new Map(),
+  referencePayments = [],
   legacyLedgerPayments = [],
   invoiceTotal = 0,
 } = {}) {
@@ -152,34 +218,51 @@ export function resolveInvoiceRowFromAllocations({
       allocationReference && exactReferences.has(allocationReference);
     const compatibilityMatch =
       allocationReference && compatibilityReferences.has(allocationReference);
-    if (!sourceMatch && !exactReferenceMatch && !compatibilityMatch) return sum;
+    const hasComparableSourceIds = UUID_PATTERN.test(allocationSourceId) && sourceIds.size > 0;
+    if (
+      (hasComparableSourceIds && !sourceMatch) ||
+      (!hasComparableSourceIds && !exactReferenceMatch && !compatibilityMatch)
+    ) return sum;
 
     return sum + Math.max(0, Number(allocation.allocated_amount || 0));
   }, 0);
 
   const legacyLedgerPaidAmount = legacyLedgerPayments.reduce((sum, payment) => {
     if (!isActiveLegacyLedgerPayment(payment)) return sum;
+    if (!hasMatchingScope(row, payment)) return sum;
+    const paymentReferences = getPaymentReferenceKeys(payment);
+    if (![...paymentReferences].some((reference) => ledgerReferences.has(reference))) return sum;
+    return sum + getPositivePaymentAmount(payment);
+  }, 0);
 
-    const paymentReference = normalizeRef(payment.reference_no || payment.order_number);
-    if (!paymentReference || !ledgerReferences.has(paymentReference)) return sum;
+  const canonicalReferencePaidAmount = referencePayments.reduce((sum, payment) => {
+    if (!isActiveInvoicePayment(payment) || !hasMatchingScope(row, payment)) return sum;
 
-    const paymentCustomerAccountId = String(payment.customer_account_id || "");
-    if (
-      customerAccountId &&
-      paymentCustomerAccountId &&
-      paymentCustomerAccountId !== customerAccountId
-    ) {
+    const paymentOrderId = String(payment.order_id || "").trim();
+    const hasComparableSourceIds = UUID_PATTERN.test(paymentOrderId) && sourceIds.size > 0;
+    const uuidMatch = hasComparableSourceIds && sourceIds.has(paymentOrderId);
+    const paymentReferences = getPaymentReferenceKeys(payment);
+    const referenceMatch = [...paymentReferences].some((reference) =>
+      ledgerReferences.has(reference)
+    );
+    if ((hasComparableSourceIds && !uuidMatch) || (!hasComparableSourceIds && !referenceMatch)) {
       return sum;
     }
 
-    return sum + Math.max(0, Number(payment.payment_amount || 0));
+    return sum + getPositivePaymentAmount(payment);
   }, 0);
 
   const total = Math.max(0, Number(invoiceTotal || 0));
+  const storedLedgerInvoicePaidAmount = getStoredLedgerInvoicePaidAmount(row, total);
   // A canonical payment may also have a customer_ledger mirror. Taking the
   // larger resolved effect prevents counting the same payment twice while
   // retaining support for legacy ledger-only payments.
-  const resolvedPaidAmount = Math.max(allocatedAmount, legacyLedgerPaidAmount);
+  const resolvedPaidAmount = Math.max(
+    allocatedAmount,
+    canonicalReferencePaidAmount,
+    legacyLedgerPaidAmount,
+    storedLedgerInvoicePaidAmount,
+  );
   const paidAmount = Math.min(total || resolvedPaidAmount, resolvedPaidAmount);
   const invoiceStatus =
     total > 0 && resolvedPaidAmount >= total - 0.01
@@ -199,7 +282,9 @@ export function resolveInvoiceRowFromAllocations({
     status: invoiceStatus,
     _allocationPaidAmount: resolvedPaidAmount,
     _canonicalAllocationPaidAmount: allocatedAmount,
+    _canonicalReferencePaidAmount: canonicalReferencePaidAmount,
     _legacyLedgerPaidAmount: legacyLedgerPaidAmount,
+    _storedLedgerInvoicePaidAmount: storedLedgerInvoicePaidAmount,
   };
 }
 

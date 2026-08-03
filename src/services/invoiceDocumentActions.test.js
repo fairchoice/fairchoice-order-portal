@@ -84,6 +84,10 @@ test("document ledger status uses full references and customer scope", () => {
 
   assert.match(resolverSource, /reference_no\.eq\.\$\{reference\}/);
   assert.match(resolverSource, /order_number\.eq\.\$\{reference\}/);
+  assert.match(resolverSource, /payment_reference\.eq\.\$\{reference\}/);
   assert.match(resolverSource, /customer_account_id/);
-  assert.match(resolverSource, /rowCustomerAccountId === customerAccountId/);
+  assert.match(resolverSource, /rowCustomerAccountId !== customerAccountId/);
+  assert.match(resolverSource, /rowBranchId !== branchId/);
+  assert.match(invoiceEngineSource, /Number\(row\.payment_amount \|\| 0\)/);
+  assert.match(invoiceEngineSource, /Number\(row\.invoice_total \|\| 0\)/);
 });

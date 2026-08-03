@@ -23,7 +23,8 @@ const getOrderReference = (order = {}) =>
   order.id;
 const getCustomerName = (order = {}) => order.companyName || order.company_name || order.customerName || "Unknown Customer";
 const getBranchName = (order = {}) => order.branchName || order.branch_name || order.delivery_branch_name || "";
-const getBranchId = (order = {}) => order.customerBranchId || order.customer_branch_id || null;
+const getBranchId = (order = {}) =>
+  order.customerBranchId || order.customer_branch_id || order.branch_id || null;
 const getCustomerAccountId = (order = {}) => order.customerAccountId || order.customer_account_id || null;
 const getInvoiceReference = (row = {}) =>
   row.canonical_order_number ||
@@ -541,6 +542,8 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
 };
 
 const getInvoiceLedgerReferences = (order = {}) => [
+  order.canonical_order_number,
+  order.full_order_number,
   order.order_number,
   order.orderNumber,
   order.orderId,
@@ -550,11 +553,32 @@ const getInvoiceLedgerReferences = (order = {}) => [
   .map((value) => String(value || "").trim())
   .filter(Boolean);
 
-const getLedgerRowDebit = (row = {}) =>
-  Number(row.debit ?? row.invoice_amount ?? row.invoice_total ?? 0);
+const getLedgerRowDebit = (row = {}) => {
+  const type = String(row.entry_type || row.transaction_type || "").toUpperCase();
+  const invoiceLikeAmount = type.includes("INVOICE") ? Number(row.amount || 0) : 0;
+  return Math.max(
+    0,
+    Number(row.debit || 0),
+    Number(row.invoice_amount || 0),
+    Number(row.invoice_total || 0),
+    invoiceLikeAmount,
+  );
+};
 
-const getLedgerRowCredit = (row = {}) =>
-  Number(row.credit ?? row.payment_amount ?? row.amount_paid ?? 0);
+const getLedgerRowCredit = (row = {}) => {
+  const type = String(row.entry_type || row.transaction_type || "").toUpperCase();
+  const paymentLikeAmount =
+    type.includes("PAYMENT") || type.includes("COLLECTION") || type.includes("CREDIT")
+      ? Number(row.amount || 0)
+      : 0;
+  return Math.max(
+    0,
+    Number(row.credit || 0),
+    Number(row.payment_amount || 0),
+    Number(row.amount_paid || 0),
+    paymentLikeAmount,
+  );
+};
 
 const getProductCodeFromInvoiceItem = (item = {}) =>
   item.product_code ||
@@ -670,12 +694,13 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
 
   const { data, error } = await supabase
     .from("customer_ledger")
-    .select("id, reference_no, order_number, customer_account_id, entry_type, transaction_type, debit, credit, amount, payment_amount, invoice_amount, invoice_total")
+    .select("*")
     .or(
       references
         .flatMap((reference) => [
           `reference_no.eq.${reference}`,
           `order_number.eq.${reference}`,
+          `payment_reference.eq.${reference}`,
         ])
         .join(",")
     );
@@ -686,9 +711,25 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
   }
 
   const customerAccountId = String(getCustomerAccountId(order) || "");
+  const branchId = String(getBranchId(order) || "");
   const rows = (data || []).filter((row) => {
     const rowCustomerAccountId = String(row.customer_account_id || "");
-    return !customerAccountId || !rowCustomerAccountId || rowCustomerAccountId === customerAccountId;
+    if (customerAccountId && rowCustomerAccountId && rowCustomerAccountId !== customerAccountId) {
+      return false;
+    }
+
+    const rowBranchId = String(row.customer_branch_id || row.branch_id || "");
+    if (branchId && rowBranchId && rowBranchId !== branchId) return false;
+
+    const type = String(row.entry_type || row.transaction_type || "").trim().toUpperCase();
+    const status = String(row.payment_status || row.status || "").trim().toUpperCase();
+    if (["PAYMENT", "COLLECTION"].includes(type)) {
+      if (["PENDING", "PENDING_VERIFICATION", "REJECTED", "VOIDED", "REVERSED", "ARCHIVED", "DELETED", "INACTIVE", "CANCELLED"].includes(status)) {
+        return false;
+      }
+      if (row.voided_at || row.reversed_at || row.archived_at) return false;
+    }
+    return true;
   });
   if (!rows.length) return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
 

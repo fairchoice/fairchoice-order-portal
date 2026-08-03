@@ -21,17 +21,20 @@ test("exact search no longer duplicates stale order status calculation", () => {
   assert.doesNotMatch(exactSearchSource, /Number\(order\.payment_amount/);
 });
 
-test("allocation failures preserve existing rows without blocking ledger-only resolution", () => {
+test("allocation failures do not block exact payment or ledger resolution", () => {
   assert.match(source, /customerAccountIds\.length[\s\S]*\{ data: \[\], error: null \}/);
   assert.match(source, /allocations: customerAccountId \? allocations : \[\]/);
-  assert.match(source, /if \(allocationsResult\.error\)[\s\S]*return invoiceRows/);
-  assert.match(source, /if \(paymentsResult\.error\)[\s\S]*return invoiceRows/);
+  assert.match(source, /allocationsResult\.error \? \[\] : allocationsResult\.data/);
+  assert.doesNotMatch(source, /if \(allocationsResult\.error\)[\s\S]{0,240}return invoiceRows/);
 });
 
 test("normal and exact rows load legacy payments by full ledger reference", () => {
   assert.match(source, /getInvoiceLedgerReferenceKeys\(row\)/);
   assert.match(source, /\.in\("reference_no", referenceChunk\)/);
   assert.match(source, /\.in\("order_number", referenceChunk\)/);
+  assert.match(source, /\.in\("payment_reference", referenceChunk\)/);
+  assert.match(source, /\.in\("order_id", sourceIdChunk\)/);
+  assert.match(source, /referencePayments: \[\.\.\.paymentsById\.values\(\)\]/);
   assert.match(source, /legacyLedgerPayments,/);
 });
 

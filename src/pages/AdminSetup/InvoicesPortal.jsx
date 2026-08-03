@@ -26,6 +26,7 @@ import { getCustomerAccounts } from "../../services/customerManagement";
 import { getProducts } from "../../services/products";
 import { getProductPriceForMode, isServerManagerPriceMode } from "../../utils/pricing";
 import {
+  getInvoiceAllocationKeys,
   getInvoiceLedgerReferenceKeys,
   resolveInvoiceRowFromAllocations,
   sumResolvedInvoiceOutstanding,
@@ -247,39 +248,62 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
     if (!isSchemaCompatibilityError(allocationsResult.error)) {
       console.warn("Could not resolve invoice payment allocations:", allocationsResult.error);
     }
-    return invoiceRows;
   }
 
-  const allocations = allocationsResult.data || [];
+  const allocations = allocationsResult.error ? [] : allocationsResult.data || [];
   const paymentIds = [
     ...new Set(allocations.map((row) => row.payment_id).filter(Boolean)),
   ];
-  const paymentsResult = paymentIds.length
-    ? await supabase.from("customer_payments").select("*").in("id", paymentIds)
-    : { data: [], error: null };
-
-  if (paymentsResult.error) {
-    if (!isSchemaCompatibilityError(paymentsResult.error)) {
-      console.warn("Could not validate allocated invoice payments:", paymentsResult.error);
-    }
-    return invoiceRows;
-  }
-
-  const paymentsById = new Map(
-    (paymentsResult.data || []).map((payment) => [String(payment.id), payment])
-  );
 
   const fullReferences = [
     ...new Set(
       invoiceRows.flatMap((row) => [...getInvoiceLedgerReferenceKeys(row)])
     ),
   ];
+  const sourceIds = [
+    ...new Set(
+      invoiceRows.flatMap((row) => [...getInvoiceAllocationKeys(row).sourceIds])
+    ),
+  ];
+  const chunkValues = (values, size = 100) => {
+    const chunks = [];
+    for (let index = 0; index < values.length; index += size) {
+      chunks.push(values.slice(index, index + size));
+    }
+    return chunks;
+  };
+  const referenceChunks = chunkValues(fullReferences);
+  const sourceIdChunks = chunkValues(sourceIds);
+
+  const canonicalPaymentResults = await Promise.all([
+    ...(paymentIds.length
+      ? [supabase.from("customer_payments").select("*").in("id", paymentIds)]
+      : []),
+    ...referenceChunks.map((referenceChunk) =>
+      supabase
+        .from("customer_payments")
+        .select("*")
+        .in("payment_reference", referenceChunk)
+    ),
+    ...sourceIdChunks.map((sourceIdChunk) =>
+      supabase.from("customer_payments").select("*").in("order_id", sourceIdChunk)
+    ),
+  ]);
+  const paymentsById = new Map();
+  canonicalPaymentResults.forEach((result) => {
+    if (result.error) {
+      if (!isSchemaCompatibilityError(result.error)) {
+        console.warn("Could not load exact invoice payments:", result.error);
+      }
+      return;
+    }
+    (result.data || []).forEach((payment) => {
+      paymentsById.set(String(payment.id), payment);
+    });
+  });
+
   const legacyLedgerPayments = [];
   const seenLegacyLedgerPaymentIds = new Set();
-  const referenceChunks = [];
-  for (let index = 0; index < fullReferences.length; index += 100) {
-    referenceChunks.push(fullReferences.slice(index, index + 100));
-  }
 
   const ledgerResults = await Promise.all(
     referenceChunks.flatMap((referenceChunk) => [
@@ -291,6 +315,10 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
         .from("customer_ledger")
         .select("*")
         .in("order_number", referenceChunk),
+      supabase
+        .from("customer_ledger")
+        .select("*")
+        .in("payment_reference", referenceChunk),
     ])
   );
 
@@ -320,6 +348,7 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
       row,
       allocations: customerAccountId ? allocations : [],
       paymentsById,
+      referencePayments: [...paymentsById.values()],
       legacyLedgerPayments,
       invoiceTotal: getAmount(row),
     });
