@@ -26,6 +26,7 @@ import { getCustomerAccounts } from "../../services/customerManagement";
 import { getProducts } from "../../services/products";
 import { getProductPriceForMode, isServerManagerPriceMode } from "../../utils/pricing";
 import {
+  getInvoiceLedgerReferenceKeys,
   resolveInvoiceRowFromAllocations,
   sumResolvedInvoiceOutstanding,
 } from "../../services/invoiceAllocationStatus";
@@ -235,12 +236,12 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
     ),
   ];
 
-  if (!customerAccountIds.length) return invoiceRows;
-
-  const allocationsResult = await supabase
-    .from("customer_payment_allocations")
-    .select("*")
-    .in("customer_account_id", customerAccountIds);
+  const allocationsResult = customerAccountIds.length
+    ? await supabase
+        .from("customer_payment_allocations")
+        .select("*")
+        .in("customer_account_id", customerAccountIds)
+    : { data: [], error: null };
 
   if (allocationsResult.error) {
     if (!isSchemaCompatibilityError(allocationsResult.error)) {
@@ -268,14 +269,58 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
     (paymentsResult.data || []).map((payment) => [String(payment.id), payment])
   );
 
+  const fullReferences = [
+    ...new Set(
+      invoiceRows.flatMap((row) => [...getInvoiceLedgerReferenceKeys(row)])
+    ),
+  ];
+  const legacyLedgerPayments = [];
+  const seenLegacyLedgerPaymentIds = new Set();
+  const referenceChunks = [];
+  for (let index = 0; index < fullReferences.length; index += 100) {
+    referenceChunks.push(fullReferences.slice(index, index + 100));
+  }
+
+  const ledgerResults = await Promise.all(
+    referenceChunks.flatMap((referenceChunk) => [
+      supabase
+        .from("customer_ledger")
+        .select("*")
+        .in("reference_no", referenceChunk),
+      supabase
+        .from("customer_ledger")
+        .select("*")
+        .in("order_number", referenceChunk),
+    ])
+  );
+
+  ledgerResults.forEach((result) => {
+    if (result.error) {
+      if (!isSchemaCompatibilityError(result.error)) {
+        console.warn("Could not load legacy invoice ledger payments:", result.error);
+      }
+      return;
+    }
+
+    (result.data || []).forEach((payment) => {
+      const identity = String(
+        payment.id ||
+          `${payment.reference_no || ""}|${payment.order_number || ""}|${payment.created_at || ""}|${payment.payment_amount || 0}`
+      );
+      if (seenLegacyLedgerPaymentIds.has(identity)) return;
+      seenLegacyLedgerPaymentIds.add(identity);
+      legacyLedgerPayments.push(payment);
+    });
+  });
+
   return invoiceRows.map((row) => {
     const customerAccountId = row.customer_account_id || row._freshOrder?.customer_account_id;
-    if (!customerAccountId) return row;
 
     return resolveInvoiceRowFromAllocations({
       row,
-      allocations,
+      allocations: customerAccountId ? allocations : [],
       paymentsById,
+      legacyLedgerPayments,
       invoiceTotal: getAmount(row),
     });
   });

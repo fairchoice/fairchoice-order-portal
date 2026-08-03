@@ -21,11 +21,18 @@ test("exact search no longer duplicates stale order status calculation", () => {
   assert.doesNotMatch(exactSearchSource, /Number\(order\.payment_amount/);
 });
 
-test("allocation fallback is retained only for rows that cannot be safely resolved", () => {
-  assert.match(source, /if \(!customerAccountIds\.length\) return invoiceRows/);
-  assert.match(source, /if \(!customerAccountId\) return row/);
+test("allocation failures preserve existing rows without blocking ledger-only resolution", () => {
+  assert.match(source, /customerAccountIds\.length[\s\S]*\{ data: \[\], error: null \}/);
+  assert.match(source, /allocations: customerAccountId \? allocations : \[\]/);
   assert.match(source, /if \(allocationsResult\.error\)[\s\S]*return invoiceRows/);
   assert.match(source, /if \(paymentsResult\.error\)[\s\S]*return invoiceRows/);
+});
+
+test("normal and exact rows load legacy payments by full ledger reference", () => {
+  assert.match(source, /getInvoiceLedgerReferenceKeys\(row\)/);
+  assert.match(source, /\.in\("reference_no", referenceChunk\)/);
+  assert.match(source, /\.in\("order_number", referenceChunk\)/);
+  assert.match(source, /legacyLedgerPayments,/);
 });
 
 test("normal invoice rows carry canonical UUID and full reference fields", () => {

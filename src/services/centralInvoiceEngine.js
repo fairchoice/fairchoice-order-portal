@@ -670,7 +670,7 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
 
   const { data, error } = await supabase
     .from("customer_ledger")
-    .select("id, reference_no, order_number, entry_type, transaction_type, debit, credit, amount, payment_amount, invoice_amount, invoice_total")
+    .select("id, reference_no, order_number, customer_account_id, entry_type, transaction_type, debit, credit, amount, payment_amount, invoice_amount, invoice_total")
     .or(
       references
         .flatMap((reference) => [
@@ -685,7 +685,11 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
     return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
   }
 
-  const rows = data || [];
+  const customerAccountId = String(getCustomerAccountId(order) || "");
+  const rows = (data || []).filter((row) => {
+    const rowCustomerAccountId = String(row.customer_account_id || "");
+    return !customerAccountId || !rowCustomerAccountId || rowCustomerAccountId === customerAccountId;
+  });
   if (!rows.length) return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
 
   const netBalance = rows.reduce((sum, row) => {

@@ -71,3 +71,19 @@ test("central invoice HTML renders the resolved three-state watermark", () => {
     /paymentStatus\s*\.toLowerCase\(\)\s*\.replace\(\/\\s\+\/g, "-"\)/
   );
 });
+
+test("document ledger status uses full references and customer scope", () => {
+  const resolverStart = invoiceEngineSource.indexOf(
+    "export async function resolveInvoiceLedgerPaymentStatus"
+  );
+  const resolverEnd = invoiceEngineSource.indexOf(
+    "export async function withResolvedInvoicePaymentStatus",
+    resolverStart
+  );
+  const resolverSource = invoiceEngineSource.slice(resolverStart, resolverEnd);
+
+  assert.match(resolverSource, /reference_no\.eq\.\$\{reference\}/);
+  assert.match(resolverSource, /order_number\.eq\.\$\{reference\}/);
+  assert.match(resolverSource, /customer_account_id/);
+  assert.match(resolverSource, /rowCustomerAccountId === customerAccountId/);
+});

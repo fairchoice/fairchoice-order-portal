@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   getInvoiceAllocationKeys,
+  getInvoiceLedgerReferenceKeys,
   getResolvedInvoiceOutstanding,
+  isActiveLegacyLedgerPayment,
   isActiveInvoicePayment,
   resolveInvoiceRowFromAllocations,
   sumResolvedInvoiceOutstanding,
@@ -295,4 +297,75 @@ test("Outstanding summary uses resolved paid, partial, and unpaid amounts", () =
 
   assert.equal(getResolvedInvoiceOutstanding(rows[0]), 0);
   assert.equal(sumResolvedInvoiceOutstanding(rows), 175);
+});
+
+test("legacy repaired invoices match PAYMENT reference_no when order_number is null", () => {
+  const fixtures = [
+    { reference: "ORD-1784144566386", accountId: "account-legacy-1", total: 168.45 },
+    { reference: "ORD-1784197506132", accountId: "account-legacy-2", total: 294.8 },
+  ];
+
+  const resolvedRows = fixtures.map((fixture) => {
+    const row = {
+      canonical_order_number: fixture.reference,
+      full_order_number: fixture.reference,
+      reference_no: fixture.reference,
+      order_number: fixture.reference,
+      customer_account_id: fixture.accountId,
+      invoice_status: "PAID",
+      paid_amount: fixture.total,
+    };
+    const legacyPayment = {
+      id: `payment-${fixture.reference}`,
+      entry_type: "PAYMENT",
+      payment_status: "POSTED",
+      reference_no: fixture.reference,
+      order_number: null,
+      customer_account_id: fixture.accountId,
+      payment_amount: fixture.total,
+    };
+
+    assert.equal(isActiveLegacyLedgerPayment(legacyPayment), true);
+    assert.equal(getInvoiceLedgerReferenceKeys(row).has(fixture.reference), true);
+    return resolveInvoiceRowFromAllocations({
+      row,
+      allocations: [],
+      paymentsById: new Map(),
+      legacyLedgerPayments: [legacyPayment],
+      invoiceTotal: fixture.total,
+    });
+  });
+
+  resolvedRows.forEach((row) => {
+    assert.equal(row.invoice_status, "PAID");
+    assert.equal(row.outstanding_amount, 0);
+  });
+  assert.equal(sumResolvedInvoiceOutstanding(resolvedRows), 0);
+});
+
+test("legacy PAYMENT matching rejects another customer and shortened references", () => {
+  const row = {
+    canonical_order_number: "ORD-1784144566386",
+    orderId: "ORD-1784144566",
+    customer_account_id: "account-correct",
+  };
+  const basePayment = {
+    entry_type: "PAYMENT",
+    payment_status: "POSTED",
+    order_number: null,
+    payment_amount: 100,
+  };
+
+  for (const payment of [
+    { ...basePayment, reference_no: "ORD-1784144566386", customer_account_id: "account-other" },
+    { ...basePayment, reference_no: "ORD-1784144566", customer_account_id: "account-correct" },
+  ]) {
+    const resolved = resolveInvoiceRowFromAllocations({
+      row,
+      legacyLedgerPayments: [payment],
+      invoiceTotal: 100,
+    });
+    assert.equal(resolved.invoice_status, "UNPAID");
+    assert.equal(resolved.outstanding_amount, 100);
+  }
 });
