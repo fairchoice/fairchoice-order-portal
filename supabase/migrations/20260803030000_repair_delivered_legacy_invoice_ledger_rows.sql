@@ -133,7 +133,7 @@ begin
     end if;
 
     -- A rerun must be a no-op for an order that already has its one invoice.
-    if exists (
+ if exists (
       select 1
       from public.customer_ledger existing_invoice
       where upper(coalesce(
@@ -144,7 +144,6 @@ begin
         and (
           existing_invoice.reference_no = v_order.order_number
           or existing_invoice.order_number = v_order.order_number
-          or existing_invoice.order_id = v_order.id
         )
     ) then
       continue;
@@ -296,15 +295,14 @@ with target_orders as (
     created_at,
     updated_at
   )
-  select
+select
     target.customer_account_id,
     nullif(to_jsonb(target)->>'customer_id', '')::uuid,
     target.customer_branch_id,
     target.branch_id,
     coalesce(
-      nullif(trim(target.branch_name), ''),
-      nullif(trim(target.delivery_branch_name), ''),
-      nullif(trim(target.shop_name), '')
+      nullif(trim(to_jsonb(target)->>'branch_name'), ''),
+      nullif(trim(to_jsonb(target)->>'delivery_branch_name'), '')
     ),
     target.repair_customer_name,
     'INVOICE',
@@ -340,10 +338,9 @@ with target_orders as (
             ''
           )) = 'INVOICE'
       and (
-        existing_invoice.reference_no = target.order_number
-        or existing_invoice.order_number = target.order_number
-        or existing_invoice.order_id = target.id
-      )
+  existing_invoice.reference_no = target.order_number
+  or existing_invoice.order_number = target.order_number
+)
   )
   on conflict do nothing
   returning *
@@ -375,7 +372,8 @@ select
   ),
   '20260803030000_repair_delivered_legacy_invoice_ledger_rows'
 from inserted
-join target_orders target on target.id = inserted.order_id;
+join target_orders target
+  on target.order_number = inserted.order_number;
 
 do $$
 declare
@@ -393,7 +391,10 @@ begin
       count(*) filter (
         where invoice.reference_no = o.order_number
           and invoice.order_number = o.order_number
-          and invoice.order_id = o.id
+          and (
+  invoice.reference_no = o.order_number
+  or invoice.order_number = o.order_number
+)
           and invoice.customer_account_id is not distinct from o.customer_account_id
           and invoice.customer_branch_id is not distinct from o.customer_branch_id
           and invoice.branch_id is not distinct from o.branch_id
@@ -421,7 +422,7 @@ begin
       and (
         invoice.reference_no = v_order_number
         or invoice.order_number = v_order_number
-        or invoice.order_id = o.id
+        
       );
 
     if v_invoice_count <> 1 then
