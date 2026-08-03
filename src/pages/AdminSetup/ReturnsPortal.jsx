@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
+import { confirmReturnCredit } from "../../services/centralReturnEngine";
 
 const getReference = (row) => row.return_number || row.reference_no || row.id || "-";
 const getCustomer = (row) => row.customer_name || row.company_name || "-";
@@ -12,13 +13,20 @@ export default function ReturnsPortal() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [approvingId, setApprovingId] = useState(null);
+  const [success, setSuccess] = useState("");
   const currentUser = JSON.parse(
     localStorage.getItem("loggedInUser") ||
       localStorage.getItem("fairchoice_user") ||
       "null"
   );
   const role = String(currentUser?.role || currentUser?.access_level || "").toLowerCase();
-  const isAdminUser = role.includes("admin");
+  const normalizedRole = role.replace(/[^a-z0-9]/g, "");
+  const permissions = currentUser?.effective_permissions || currentUser?.permissions || {};
+  const isAdminUser = normalizedRole.includes("admin");
+  const isWarehouseUser =
+    normalizedRole === "warehouse" || permissions.access_warehouse === true;
+  const canApproveReturns = isAdminUser || isWarehouseUser;
 
   const loadReturns = async () => {
     setLoading(true);
@@ -51,6 +59,31 @@ export default function ReturnsPortal() {
   useEffect(() => {
     loadReturns();
   }, []);
+
+  const approveReturn = async (row) => {
+    if (!canApproveReturns) {
+      setError("Only admin or warehouse users can approve return credits.");
+      return;
+    }
+
+    const approvalKey = row.id || getReference(row);
+    setApprovingId(approvalKey);
+    setError("");
+    setSuccess("");
+
+    try {
+      await confirmReturnCredit({ returnRequest: row, currentUser });
+      setSuccess(
+        `${getReference(row)} approved. The customer credit was posted and allocated to outstanding invoices.`
+      );
+      await loadReturns();
+    } catch (err) {
+      console.error("Return approval error:", err);
+      setError(err.message || "Could not approve the return credit.");
+    } finally {
+      setApprovingId(null);
+    }
+  };
 
   const filteredReturns = useMemo(() => {
     const value = search.trim().toLowerCase();
@@ -103,6 +136,7 @@ export default function ReturnsPortal() {
       </div>
 
       {error && <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4">{error}</div>}
+      {success && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-4">{success}</div>}
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
@@ -117,13 +151,14 @@ export default function ReturnsPortal() {
                 <th className="text-right p-3">Value</th>
                 <th className="text-left p-3">Status</th>
                 <th className="text-left p-3">Date</th>
+                <th className="text-right p-3">Action</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td className="p-5 text-center text-slate-500" colSpan="8">Loading returns...</td></tr>
+                <tr><td className="p-5 text-center text-slate-500" colSpan="9">Loading returns...</td></tr>
               ) : filteredReturns.length === 0 ? (
-                <tr><td className="p-5 text-center text-slate-500" colSpan="8">No returns found yet.</td></tr>
+                <tr><td className="p-5 text-center text-slate-500" colSpan="9">No returns found yet.</td></tr>
               ) : (
                 filteredReturns.map((row) => (
                   <tr key={row.id || getReference(row)} className="border-t border-slate-100">
@@ -135,6 +170,27 @@ export default function ReturnsPortal() {
                     <td className="p-3 text-right font-bold">{formatCurrency(Number(row.return_total || 0))}</td>
                     <td className="p-3"><span className="rounded-full bg-amber-50 text-amber-700 px-3 py-1 text-xs font-bold">{row.status || "Pending"}</span></td>
                     <td className="p-3">{getDate(row) ? new Date(getDate(row)).toLocaleDateString() : "-"}</td>
+                    <td className="p-3 text-right">
+                      {String(row.status || "").toLowerCase().includes("pending") ? (
+                        <button
+                          type="button"
+                          onClick={() => approveReturn(row)}
+                          disabled={!canApproveReturns || approvingId === (row.id || getReference(row))}
+                          title={
+                            canApproveReturns
+                              ? "Approve and post this return as customer credit"
+                              : "Admin or warehouse permission is required"
+                          }
+                          className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                        >
+                          {approvingId === (row.id || getReference(row))
+                            ? "Approving..."
+                            : "Approve Credit"}
+                        </button>
+                      ) : (
+                        <span className="text-xs font-semibold text-emerald-700">Approved</span>
+                      )}
+                    </td>
                   </tr>
                 ))
               )}

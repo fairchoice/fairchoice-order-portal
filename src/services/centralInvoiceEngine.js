@@ -15,12 +15,19 @@ import { sortPrintItems } from "../utils/printItemSorting";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
-const getOrderReference = (order = {}) => order.orderId || order.order_number || order.id;
+const getOrderReference = (order = {}) =>
+  order.canonical_order_number ||
+  order.full_order_number ||
+  order.order_number ||
+  order.orderId ||
+  order.id;
 const getCustomerName = (order = {}) => order.companyName || order.company_name || order.customerName || "Unknown Customer";
 const getBranchName = (order = {}) => order.branchName || order.branch_name || order.delivery_branch_name || "";
 const getBranchId = (order = {}) => order.customerBranchId || order.customer_branch_id || null;
 const getCustomerAccountId = (order = {}) => order.customerAccountId || order.customer_account_id || null;
 const getInvoiceReference = (row = {}) =>
+  row.canonical_order_number ||
+  row.full_order_number ||
   row.reference_no ||
   row.order_number ||
   row.invoice_number ||
@@ -31,6 +38,10 @@ const getInvoiceReferenceCandidates = (rowOrReference = {}) => {
   if (typeof rowOrReference === "string") return [rowOrReference];
 
   const values = [
+    rowOrReference.canonical_order_number,
+    rowOrReference.full_order_number,
+    rowOrReference._freshOrder?.canonical_order_number,
+    rowOrReference._freshOrder?.full_order_number,
     rowOrReference._freshOrder?.order_number,
     rowOrReference._freshOrder?.orderId,
     rowOrReference.order_number,
@@ -88,6 +99,13 @@ const normalizeInvoiceOrder = (order = {}) => {
 
   return {
     ...order,
+    order_uuid: order.order_uuid || order.dbId || order.order_id || order.id || null,
+    dbId: order.dbId || order.order_id || order.id || null,
+    order_id: order.order_id || order.dbId || order.id || null,
+    canonical_order_number:
+      order.canonical_order_number || order.full_order_number || order.order_number || order.orderId,
+    full_order_number:
+      order.full_order_number || order.canonical_order_number || order.order_number || order.orderId,
     orderId: order.orderId || order.order_number,
     order_number: order.order_number || order.orderId,
     companyName: order.companyName || order.company_name,
@@ -1219,7 +1237,11 @@ function buildLegacyStandardInvoiceHtml(
     isServerManagerDocument && (isDeliveryNote || isOrderForm)
       ? false
       : shouldShowInvoiceHeaderFooter(settings, invoiceOrder);
-  const referenceLabel = isOrderForm || isDeliveryNote ? "Order Number" : "Invoice Number";
+  const referenceLabel = isReturnInvoice
+    ? "Return Invoice Number"
+    : isOrderForm || isDeliveryNote
+    ? "Order Number"
+    : "Invoice Number";
   const rawReference = getOrderReference(invoiceOrder) || "-";
   const reference =
     isOrderForm || isDeliveryNote
@@ -1545,6 +1567,7 @@ export function buildStandardInvoiceHtml(
   const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
   const isDeliveryNote = resolvedDocumentType === "deliveryNote";
   const isOrderForm = resolvedDocumentType === "orderForm";
+  const isReturnInvoice = resolvedDocumentType === "returnInvoice";
   const isServerManagerDocument = isServerManagerPriceMode(
     invoiceOrder.priceMode || invoiceOrder.price_mode
   );
@@ -1553,6 +1576,8 @@ export function buildStandardInvoiceHtml(
     ? "DELIVERY NOTE"
     : isOrderForm
     ? "ORDER FORM"
+    : isReturnInvoice
+    ? "RETURN INVOICE / CREDIT NOTE"
     : "SALES INVOICE";
   const showHeaderFooter = isDeliveryNote
     ? !isServerManagerDocument && shouldShowInvoiceHeaderFooter(settings, invoiceOrder)
@@ -2787,6 +2812,10 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
     ...snapshot,
     id: row.order_id || snapshot.id || row.id,
     dbId: row.order_id || snapshot.id || row.id,
+    order_uuid: row.order_id || snapshot.id || null,
+    order_id: row.order_id || snapshot.id || null,
+    canonical_order_number: orderNumber,
+    full_order_number: orderNumber,
     processingQueueId: row.id,
     isProcessingQueueOrder: true,
     orderId: orderNumber,
@@ -2914,6 +2943,10 @@ export async function loadProcessingQueueOrders({
 
 const mapOrderForLedgerFallback = (order = {}) => ({
   dbId: order.id,
+  order_uuid: order.id,
+  order_id: order.id,
+  canonical_order_number: order.order_number,
+  full_order_number: order.order_number,
   orderId: order.order_number,
   order_number: order.order_number,
   customerAccountId: order.customer_account_id || "",
@@ -2953,7 +2986,7 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
 
   const fallbackRows = deliveredOrders
     .filter((order) => {
-      const referenceNo = String(order.orderId || order.order_number || "").trim();
+      const referenceNo = String(getOrderReference(order) || "").trim();
       return referenceNo && !invoiceReferences.has(referenceNo);
     })
     .map((order) => {
@@ -2962,12 +2995,17 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
       const invoiceTotal = roundMoney(totals.grandTotal);
 
       return {
-        id: `delivered-invoice-${order.orderId || order.order_number}`,
+        id: `delivered-invoice-${getOrderReference(order)}`,
+        order_uuid: order.order_uuid || order.dbId || order.order_id || order.id || null,
+        dbId: order.dbId || order.order_id || order.id || null,
+        order_id: order.order_id || order.dbId || order.id || null,
+        canonical_order_number: getOrderReference(order),
+        full_order_number: getOrderReference(order),
         created_at: order.deliveredAt || order.createdAt || new Date().toISOString(),
         entry_type: "INVOICE",
         transaction_type: "INVOICE",
-        reference_no: order.orderId || order.order_number,
-        order_number: order.orderId || order.order_number,
+        reference_no: getOrderReference(order),
+        order_number: getOrderReference(order),
         description: "Invoice",
         debit: invoiceTotal,
         credit: 0,

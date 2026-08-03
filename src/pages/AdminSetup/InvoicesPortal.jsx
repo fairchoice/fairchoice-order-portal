@@ -26,13 +26,24 @@ import { getCustomerAccounts } from "../../services/customerManagement";
 import { getProducts } from "../../services/products";
 import { getProductPriceForMode, isServerManagerPriceMode } from "../../utils/pricing";
 import {
+  resolveInvoiceRowFromAllocations,
+  sumResolvedInvoiceOutstanding,
+} from "../../services/invoiceAllocationStatus";
+import {
   calculateCartOrderItems,
   calculateCartTotals,
   getOrderItemProductCode,
 } from "../../utils/orderTotals";
 
 const getCreatedDate = (row) => row.created_at || row.invoice_date || row.date || "";
-const getReference = (row) => row.reference_no || row.order_number || row.invoice_number || row.id || "-";
+const getReference = (row) =>
+  row.canonical_order_number ||
+  row.full_order_number ||
+  row.reference_no ||
+  row.order_number ||
+  row.invoice_number ||
+  row.id ||
+  "-";
 const getCustomer = (row) => row.customer_name || row.company_name || row.account_name || "-";
 const isSchemaCompatibilityError = (error = {}) =>
   ["42P01", "42703", "PGRST204", "PGRST205"].includes(error?.code);
@@ -173,11 +184,20 @@ const getOrderInvoiceListRow = (order = {}) => {
 
   return {
     id: `order-invoice-${order.order_number}`,
+    order_uuid: order.id || order.dbId || order.order_id || null,
+    dbId: order.id || order.dbId || order.order_id || null,
+    order_id: order.id || order.dbId || order.order_id || null,
+    canonical_order_number: order.order_number,
+    full_order_number: order.order_number,
     created_at: order.delivered_at || order.updated_at || order.created_at,
     invoice_date: order.delivered_at || order.updated_at || order.created_at,
     entry_type: "INVOICE",
     reference_no: order.order_number,
     order_number: order.order_number,
+    customer_account_id: order.customer_account_id || order.customerAccountId || null,
+    customer_branch_id:
+      order.customer_branch_id || order.customerBranchId || order.branch_id || null,
+    branch_id: order.branch_id || order.customer_branch_id || order.customerBranchId || null,
     customer_name: order.company_name || "",
     branch_name:
       order.delivery_branch_name ||
@@ -201,6 +221,64 @@ const getOrderInvoiceListRow = (order = {}) => {
       items: order.items || order.order_items || [],
     },
   };
+};
+
+// Both the normal list and exact-order search must pass through this loader.
+// Rows without a stable customer account retain their existing compatibility
+// status because allocations cannot be scoped safely for them.
+const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
+  const customerAccountIds = [
+    ...new Set(
+      invoiceRows
+        .map((row) => row.customer_account_id || row._freshOrder?.customer_account_id)
+        .filter(Boolean)
+    ),
+  ];
+
+  if (!customerAccountIds.length) return invoiceRows;
+
+  const allocationsResult = await supabase
+    .from("customer_payment_allocations")
+    .select("*")
+    .in("customer_account_id", customerAccountIds);
+
+  if (allocationsResult.error) {
+    if (!isSchemaCompatibilityError(allocationsResult.error)) {
+      console.warn("Could not resolve invoice payment allocations:", allocationsResult.error);
+    }
+    return invoiceRows;
+  }
+
+  const allocations = allocationsResult.data || [];
+  const paymentIds = [
+    ...new Set(allocations.map((row) => row.payment_id).filter(Boolean)),
+  ];
+  const paymentsResult = paymentIds.length
+    ? await supabase.from("customer_payments").select("*").in("id", paymentIds)
+    : { data: [], error: null };
+
+  if (paymentsResult.error) {
+    if (!isSchemaCompatibilityError(paymentsResult.error)) {
+      console.warn("Could not validate allocated invoice payments:", paymentsResult.error);
+    }
+    return invoiceRows;
+  }
+
+  const paymentsById = new Map(
+    (paymentsResult.data || []).map((payment) => [String(payment.id), payment])
+  );
+
+  return invoiceRows.map((row) => {
+    const customerAccountId = row.customer_account_id || row._freshOrder?.customer_account_id;
+    if (!customerAccountId) return row;
+
+    return resolveInvoiceRowFromAllocations({
+      row,
+      allocations,
+      paymentsById,
+      invoiceTotal: getAmount(row),
+    });
+  });
 };
 const getProductName = (product) => product?.name || product?.productName || product?.product_name || "";
 const getProductSku = (product) => product?.sku || product?.SKU || product?.product_sku || "";
@@ -296,6 +374,11 @@ export default function InvoicesPortal() {
 
     return {
       ...order,
+      order_uuid: order.id || order.dbId || order.order_id || null,
+      dbId: order.id || order.dbId || order.order_id || null,
+      order_id: order.id || order.dbId || order.order_id || null,
+      canonical_order_number: order.order_number,
+      full_order_number: order.order_number,
       orderId: order.order_number,
       order_number: order.order_number,
       companyName: order.company_name || row.customer_name,
@@ -933,6 +1016,77 @@ const normalizeInvoicePaymentStatus = (value) => {
 
 const runInvoiceAction = async (row, action) => {
   try {
+    const isReturnInvoice =
+      String(row.entry_type || row.transaction_type || "").toUpperCase() ===
+      "RETURN_INVOICE";
+
+    if (isReturnInvoice) {
+      const { data: returnHeader, error: returnHeaderError } = await supabase
+        .from("customer_returns")
+        .select("*")
+        .eq("return_number", row.reference_no)
+        .maybeSingle();
+
+      if (returnHeaderError) throw returnHeaderError;
+
+      const { data: returnItems, error: returnItemsError } = await supabase
+        .from("customer_return_items")
+        .select("*")
+        .eq("return_number", row.reference_no)
+        .order("created_at", { ascending: true });
+
+      if (returnItemsError) throw returnItemsError;
+
+      const returnInvoiceOrder = {
+        id: returnHeader?.id || row.id,
+        orderId: row.reference_no,
+        order_number: row.reference_no,
+        canonical_order_number: row.reference_no,
+        full_order_number: row.reference_no,
+        companyName: returnHeader?.customer_name || row.customer_name,
+        company_name: returnHeader?.customer_name || row.customer_name,
+        customerAccountId:
+          returnHeader?.customer_account_id || row.customer_account_id || null,
+        customer_account_id:
+          returnHeader?.customer_account_id || row.customer_account_id || null,
+        customerBranchId:
+          returnHeader?.customer_branch_id || row.customer_branch_id || null,
+        customer_branch_id:
+          returnHeader?.customer_branch_id || row.customer_branch_id || null,
+        branchName: returnHeader?.branch_name || row.branch_name || "",
+        branch_name: returnHeader?.branch_name || row.branch_name || "",
+        createdAt: returnHeader?.confirmed_at || returnHeader?.created_at || row.created_at,
+        created_at: returnHeader?.confirmed_at || returnHeader?.created_at || row.created_at,
+        notes: returnHeader?.notes || row.notes || "Return credit",
+        payment_status: "CREDITED",
+        invoice_status: "CREDITED",
+        items: (returnItems || []).map((item) => ({
+          id: item.id,
+          productId: item.product_id,
+          product_id: item.product_id,
+          productCode: item.product_code,
+          product_code: item.product_code,
+          name: item.product_name,
+          productName: item.product_name,
+          product_name: item.product_name,
+          qty: Number(item.qty || 0),
+          quantity: Number(item.qty || 0),
+          price: Number(item.unit_price || 0),
+          unit_price: Number(item.unit_price || 0),
+          net_total: Number(item.net_total || 0),
+          vat_total: Number(item.vat_total || 0),
+          vatRate:
+            Number(item.net_total || 0) > 0
+              ? (Number(item.vat_total || 0) / Number(item.net_total || 0)) * 100
+              : 0,
+          reason: item.reason || returnHeader?.return_type || "Return",
+        })),
+      };
+
+      action(returnInvoiceOrder, { documentType: "returnInvoice" });
+      return;
+    }
+
     const order = await getOrderForInvoice(row);
     if (!order) return;
 
@@ -1007,11 +1161,11 @@ const runInvoiceAction = async (row, action) => {
     setError("");
 
     try {
-      const [ledgerResult, ordersResult, processingQueueOrders] = await Promise.all([
+      const [ledgerResult, ordersResult, processingQueueOrders, confirmedReturnsResult] = await Promise.all([
         supabase
           .from("customer_ledger")
           .select("*")
-          .eq("entry_type", "INVOICE")
+          .in("entry_type", ["INVOICE", "RETURN_INVOICE"])
           .order("created_at", { ascending: false }),
         supabase
           .from("orders")
@@ -1019,6 +1173,10 @@ const runInvoiceAction = async (row, action) => {
           .order("created_at", { ascending: false })
           .limit(500),
         canViewServerManagerInvoices ? loadProcessingQueueOrders() : Promise.resolve([]),
+        supabase
+          .from("customer_returns")
+          .select("*")
+          .order("created_at", { ascending: false }),
       ]);
 
       let data = (ledgerResult.data || []).filter(canShowInvoiceRow);
@@ -1038,7 +1196,70 @@ const runInvoiceAction = async (row, action) => {
 
       if (ledgerError) throw ledgerError;
 
-      const ledgerRows = data || [];
+      const confirmedReturnRows = confirmedReturnsResult.error
+        ? []
+        : (confirmedReturnsResult.data || [])
+            .filter((row) => {
+              const status = String(row.status || "").trim().toLowerCase();
+              return status === "confirmed" || status === "credited" || Boolean(row.confirmed_at);
+            })
+            .map((row) => {
+              const amount = Number(
+                row.return_total || row.grand_total || row.amount || row.invoice_total || 0
+              );
+
+              return {
+                id: `return-invoice-${row.id || row.return_number}`,
+                return_id: row.id || null,
+                entry_type: "RETURN_INVOICE",
+                transaction_type: "RETURN_INVOICE",
+                reference_no: row.return_number,
+                invoice_number: row.return_number,
+                order_number: row.order_number || row.return_number,
+                canonical_order_number: row.return_number,
+                full_order_number: row.return_number,
+                customer_account_id: row.customer_account_id || null,
+                customer_branch_id: row.customer_branch_id || row.branch_id || null,
+                branch_id: row.branch_id || row.customer_branch_id || null,
+                branch_name: row.branch_name || "",
+                customer_name: row.customer_name || "",
+                created_at: row.confirmed_at || row.updated_at || row.created_at,
+                invoice_date: row.confirmed_at || row.updated_at || row.created_at,
+                debit: 0,
+                credit: 0,
+                amount,
+                invoice_amount: amount,
+                invoice_total: amount,
+                paid_amount: amount,
+                remaining_amount: 0,
+                outstanding_amount: 0,
+                invoice_status: "CREDITED",
+                status: "CREDITED",
+                description: `Return Invoice - ${row.return_type || "Return"}`,
+                notes: row.notes || "Return credit",
+                _returnHeader: row,
+              };
+            });
+
+      if (confirmedReturnsResult.error && !isSchemaCompatibilityError(confirmedReturnsResult.error)) {
+        console.warn("Could not load confirmed return invoices:", confirmedReturnsResult.error);
+      }
+
+      const ledgerRows = [...(data || [])];
+      const existingReturnReferences = new Set(
+        ledgerRows
+          .filter((row) => String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE")
+          .map((row) => String(row.reference_no || row.invoice_number || "").trim())
+          .filter(Boolean)
+      );
+
+      confirmedReturnRows.forEach((row) => {
+        const reference = String(row.reference_no || "").trim();
+        if (reference && !existingReturnReferences.has(reference)) {
+          ledgerRows.push(row);
+        }
+      });
+
       const ledgerRowsByReference = new Map();
       ledgerRows.forEach((row) => {
         getReferenceCandidates(row).forEach((reference) => {
@@ -1099,6 +1320,13 @@ const runInvoiceAction = async (row, action) => {
             const refreshedRow = {
               ...row,
               _freshOrder: order,
+              order_uuid: order.id || order.dbId || order.order_id || row.order_uuid || null,
+              dbId: order.id || order.dbId || order.order_id || row.dbId || null,
+              order_id: order.id || order.dbId || order.order_id || row.order_id || null,
+              canonical_order_number:
+                order.order_number || row.canonical_order_number || row.order_number,
+              full_order_number:
+                order.order_number || row.full_order_number || row.order_number,
               _invoiceSource: "canonical_order_refresh",
               debit: invoiceTotal,
               amount: invoiceTotal,
@@ -1114,7 +1342,9 @@ const runInvoiceAction = async (row, action) => {
         })
       );
 
-      setInvoices(invoiceRows.filter(canShowInvoiceRow));
+      const resolvedInvoiceRows = await resolveInvoiceRowsWithAllocationData(invoiceRows);
+
+      setInvoices(resolvedInvoiceRows.filter(canShowInvoiceRow));
     } catch (err) {
       console.error("Invoice portal loading error:", err);
       setError(err.message || "Could not load invoices.");
@@ -1173,31 +1403,10 @@ const runInvoiceAction = async (row, action) => {
           hiddenProtectedReferences.add(orderSearch.canonical);
           hiddenProtectedReferences.add(orderSearch.bareOrder);
         } else if (order) {
-          const invoiceTotal = getInvoiceTotal(order);
-          const invoiceStatus = getOrderPaymentStatus(order, invoiceTotal);
+          const fallbackOrderRow = getOrderInvoiceListRow(order);
           rowsByReference.set(order.order_number, {
+            ...fallbackOrderRow,
             id: `order-search-${order.order_number}`,
-            reference_no: order.order_number,
-            order_number: order.order_number,
-            customer_name: order.company_name || order.companyName || "",
-            branch_name:
-              order.branch_name ||
-              order.branchName ||
-              order.delivery_branch_name ||
-              "",
-            created_at: order.created_at || order.invoice_date || order.delivered_at,
-            invoice_status: invoiceStatus,
-            status: invoiceStatus,
-            debit: invoiceTotal,
-            amount: invoiceTotal,
-            invoice_amount: invoiceTotal,
-            invoice_total: invoiceTotal,
-            paid_amount: invoiceStatus === "PAID" ? invoiceTotal : Number(order.payment_amount || 0),
-            remaining_amount:
-              invoiceStatus === "PAID"
-                ? 0
-                : Math.max(0, invoiceTotal - Number(order.payment_amount || 0)),
-            _freshOrder: order,
           });
         }
       } catch (err) {
@@ -1229,7 +1438,11 @@ const runInvoiceAction = async (row, action) => {
       }
 
       if (!cancelled) {
-        setExactSearchInvoices([...rowsByReference.values()].filter(canShowInvoiceRow));
+        const exactRows = [...rowsByReference.values()].filter(canShowInvoiceRow);
+        const resolvedExactRows = await resolveInvoiceRowsWithAllocationData(exactRows);
+        if (!cancelled) {
+          setExactSearchInvoices(resolvedExactRows.filter(canShowInvoiceRow));
+        }
       }
     };
 
@@ -1292,10 +1505,7 @@ const runInvoiceAction = async (row, action) => {
     return filteredInvoices.slice(start, start + invoicePageSize);
   }, [filteredInvoices, invoicePage, invoicePageSize]);
 
-  const totalOutstanding = filteredInvoices.reduce(
-    (sum, row) => sum + Math.max(0, Number(row.debit || getAmount(row)) - Number(row.credit || 0)),
-    0
-  );
+  const totalOutstanding = sumResolvedInvoiceOutstanding(filteredInvoices);
 
   return (
     <div className="space-y-5">
@@ -1774,13 +1984,13 @@ const runInvoiceAction = async (row, action) => {
                       <td className="p-3">{getCustomer(row)}</td>
                       <td className="p-3">{getCreatedDate(row) ? new Date(getCreatedDate(row)).toLocaleDateString() : "-"}</td>
                       <td className="p-3 text-right font-bold">{formatCurrency(amount)}</td>
-                      <td className="p-3"><span className="rounded-full bg-blue-50 text-blue-700 px-3 py-1 text-xs font-bold">{row.invoice_status || row.status || "UNPAID"}</span></td>
+                      <td className="p-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE" ? "bg-purple-50 text-purple-700" : "bg-blue-50 text-blue-700"}`}>{row.invoice_status || row.status || "UNPAID"}</span></td>
                       <td className="p-3">
                         <div className="flex flex-wrap justify-end gap-2">
                           <button type="button" onClick={() => runInvoiceAction(row, previewInvoice)} className="bg-slate-100 text-slate-800 px-3 py-1 rounded-lg text-xs font-bold">View</button>
                           <button type="button" onClick={() => runInvoiceAction(row, downloadInvoice)} className="bg-blue-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Download PDF</button>
                           <button type="button" onClick={() => runInvoiceAction(row, printInvoice)} className="bg-black text-white px-3 py-1 rounded-lg text-xs font-bold">Print</button>
-                          {isAdminUser && (
+                          {isAdminUser && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
                           )}
                         </div>

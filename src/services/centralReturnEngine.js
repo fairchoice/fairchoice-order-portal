@@ -178,6 +178,49 @@ export async function confirmReturnCredit({ returnRequest, currentUser } = {}) {
 
   if (error) throw error;
 
+  // Keep a documentary return invoice in the invoice register while the
+  // RETURN_CREDIT row remains the only financial credit used for allocation.
+  // The documentary row carries zero debit/credit to avoid double-counting.
+  const returnInvoicePayload = {
+    customer_account_id: returnRequest.customer_account_id || null,
+    customer_branch_id: returnRequest.customer_branch_id || returnRequest.branch_id || null,
+    branch_id: returnRequest.branch_id || returnRequest.customer_branch_id || null,
+    branch_name: returnRequest.branch_name || null,
+    customer_name: returnRequest.customer_name,
+    entry_type: "RETURN_INVOICE",
+    transaction_type: "RETURN_INVOICE",
+    reference_no: returnRequest.return_number,
+    order_number: returnRequest.order_number || null,
+    description: `Return Invoice - ${returnRequest.return_type || "Return"}`,
+    debit: 0,
+    credit: 0,
+    amount,
+    invoice_amount: amount,
+    invoice_total: amount,
+    paid_amount: amount,
+    remaining_amount: 0,
+    invoice_status: "CREDITED",
+    payment_type: "Return Invoice",
+    payment_applies_to: "RETURN_DOCUMENT",
+    collection_source: "WAREHOUSE_RETURN_CONFIRMATION",
+    confirmed_by: currentUser?.name || currentUser?.username || null,
+    notes: `Return invoice for ${returnRequest.return_number}`,
+  };
+
+  const existingReturnInvoice = existingRows.find(
+    (row) => String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE"
+  );
+
+  const returnInvoiceQuery = existingReturnInvoice?.id
+    ? supabase
+        .from("customer_ledger")
+        .update(returnInvoicePayload)
+        .eq("id", existingReturnInvoice.id)
+    : supabase.from("customer_ledger").insert(returnInvoicePayload);
+
+  const { error: returnInvoiceError } = await returnInvoiceQuery;
+  if (returnInvoiceError) throw returnInvoiceError;
+
   const { error: returnUpdateError } = await supabase
     .from("customer_returns")
     .update({
