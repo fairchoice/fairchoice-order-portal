@@ -28,6 +28,7 @@ export default function AdminOrders({
 
   const [showArchive, setShowArchive] = useState(false);
   const [statusFilter, setStatusFilter] = useState("All");
+  const [stableItemOrders, setStableItemOrders] = useState({});
 
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -36,7 +37,7 @@ export default function AdminOrders({
   const [addQty, setAddQty] = useState(1);
   const [editedQty, setEditedQty] = useState({});
 
-  const [editedStatus, setEditedStatus] = useState({});
+  const [editedStatus] = useState({});
   const [refreshFilters, setRefreshFilters] = useState({});
 
   const [customerFilter, setCustomerFilter] = useState("");
@@ -125,28 +126,45 @@ visibleOrders = visibleOrders.filter((order) => {
 
   const findOrder = (orderId) => orders.find((order) => order.orderId === orderId);
 
-  const getDisplaySourceStatus = (sourceStatus) =>
-    sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus || "In Stock";
-
-  const sortOrderItems = (items = []) =>
+  const initialOrderItemSort = (items = []) =>
     [...items].sort((a, b) => {
       const statusRank = {
         "In Stock": 1,
         "Need Supplier": 2,
         "Pre-Order": 2,
+        "Pre Order": 2,
         "Cannot Supply": 3,
       };
-
       const aRank = statusRank[a.sourceStatus] || 99;
       const bRank = statusRank[b.sourceStatus] || 99;
-
       if (aRank !== bRank) return aRank - bRank;
-
-      const aGroup = `${a.brand || ""} ${a.series || ""} ${a.productName || a.name || ""}`.toLowerCase();
-      const bGroup = `${b.brand || ""} ${b.series || ""} ${b.productName || b.name || ""}`.toLowerCase();
-
+      const aGroup = `${a.series || ""} ${a.brand || ""} ${a.subCategory || a.sub_category || ""} ${a.category || ""} ${a.productName || a.name || ""}`.toLowerCase();
+      const bGroup = `${b.series || ""} ${b.brand || ""} ${b.subCategory || b.sub_category || ""} ${b.category || ""} ${b.productName || b.name || ""}`.toLowerCase();
       return aGroup.localeCompare(bGroup);
     });
+
+  const captureStableOrderItems = (order = {}) => {
+    const key = String(order.orderId || "");
+    const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
+    setStableItemOrders((previous) => previous[key]
+      ? previous
+      : { ...previous, [key]: initialOrderItemSort(order.items || []).map(itemKey) });
+  };
+
+  const getStableOrderItems = (orderId, items = []) => {
+    const key = String(orderId || "");
+    const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
+    const snapshot = stableItemOrders[key] || initialOrderItemSort(items).map(itemKey);
+    const byId = new Map(items.map((item) => [itemKey(item), item]));
+    const result = snapshot.map((id) => byId.get(id)).filter(Boolean);
+    const known = new Set(snapshot);
+    const additions = items.filter((item) => !known.has(itemKey(item)));
+    if (additions.length) {
+      const additionIds = initialOrderItemSort(additions).map(itemKey);
+      result.push(...additionIds.map((id) => byId.get(id)).filter(Boolean));
+    }
+    return result;
+  };
 
   const putBackToReceived = async (orderId) => {
     if (
@@ -369,6 +387,7 @@ const printOrderPickingList = async (order) => {
 const updatePreparedItem = async (order, item, changes) => {
   if (!requirePermission(loggedInUser, "can_receive_order", "You cannot receive orders.")) return;
 
+  captureStableOrderItems(order);
   await updateOrderItem(order.orderId, item.dbId, changes);
   await logAction({
     user: loggedInUser,
@@ -497,33 +516,6 @@ const buildPriceRefreshPayload = async (order, item) => {
       unitPrice: price,
     },
   };
-};
-
-const refreshOrderItemPrice = async (order, item) => {
-  if (!requirePermission(loggedInUser, "can_receive_order", "You cannot update received order prices.")) return;
-
-  const result = await buildPriceRefreshPayload(order, item);
-
-  if (result.error) {
-    alert(result.error);
-    return;
-  }
-
-  const oldPrice = Number(item.price || item.selectedPrice || item.unit_price || 0);
-  const newPrice = Number(result.updates.price || 0);
-
-  if (!window.confirm(`Update this line price from ${formatCurrency(oldPrice)} to ${formatCurrency(newPrice)}?`)) return;
-
-  await updateOrderItem(order.orderId, item.dbId, result.updates);
-  await logAction({
-    user: loggedInUser,
-    action_type: "Received order line price refreshed",
-    page_module: "Received Orders",
-    order_id: order.orderId,
-    product_id: item.productId || item.id,
-    old_value: oldPrice,
-    new_value: newPrice,
-  });
 };
 
 const setOrderRefreshFilter = (orderId, field, value) => {
@@ -682,11 +674,8 @@ const bulkRefreshOrderPrices = async (order) => {
           const priceMode = order.price_mode || order.priceMode || "-";
           const orderTotals = calculateDocumentTotals(order.items || [], order);
           const totalQty = orderTotals.totalQty;
-          const priceModeKey = String(priceMode || "").toLowerCase();
-                    const orderNumber =
+          const orderNumber =
             order.order_number || order.orderNumber || order.orderId || "-";
-            const printButtonLabel =
-           priceModeKey === "server" ? "Print Order Form" : "Print Invoice";
           const customerName =
             order.customer_name || order.customerName || order.companyName || "-";
           const branchName = order.branch_name || order.branchName || "";
@@ -805,7 +794,7 @@ const bulkRefreshOrderPrices = async (order) => {
       <div>Remove</div>
     </div>
 
-    {sortOrderItems(order.items).map((item) => {
+    {getStableOrderItems(order.orderId, order.items).map((item) => {
       const savedLineTotal = Number(
   item.net_total ??
     item.netTotal ??
@@ -874,7 +863,16 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
             )}
           </div>
           <div className="received-product-name">
-            {item.productName || item.name}
+            {Number(item.pickingReplacedQty || item.picking_replaced_qty || 0) > 0 ? (
+              <>
+                <span>{item.replacementProductName || item.replacement_product_name || item.productName || item.name}</span>
+                <small className="block text-[10px] text-slate-500">
+                  Replaced: {item.productName || item.name}
+                </small>
+              </>
+            ) : (
+              item.productName || item.name
+            )}
           </div>
           <div className="received-line-total received-unit-price">{formatCurrency(savedUnitPrice)}</div>
           <div className="received-status-cell">

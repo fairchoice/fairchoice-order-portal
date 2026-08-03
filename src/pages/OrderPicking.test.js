@@ -1,39 +1,77 @@
+import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import test from "node:test";
+import { getPickingAvailability } from "../services/pickingAvailability.js";
 
-const source = fs.readFileSync(
-  new URL("./OrderPicking.jsx", import.meta.url),
-  "utf8",
-);
-
-test("Picking List renders items in source order without sequence badges", () => {
-  assert.match(source, /items\.map\(\(item\) =>/);
-  assert.doesNotMatch(source, /\{index \+ 1\}/);
-  assert.doesNotMatch(source, /rounded-full bg-slate-100 text-xs font-black text-slate-600/);
-  assert.match(source, /<article key=\{itemId\}/);
+test("picking availability uses current country stock", () => {
+  assert.equal(getPickingAvailability(1, { stock: 5, inventoryLocationMissing: false }).key, "in_stock");
+  assert.equal(getPickingAvailability(5, { stock: 3, inventoryLocationMissing: false }).key, "part_stock");
+  assert.equal(getPickingAvailability(1, { stock: 0, inventoryLocationMissing: false }).key, "pre_order");
+  assert.equal(getPickingAvailability(1, { stock: 0, inventoryLocationMissing: true }).key, "not_configured");
 });
 
-test("Picking List actions and completion calculations remain intact", () => {
-  assert.match(
-    source,
-    /const completedCount = items\.filter\(\(item\) => Boolean\(item\.pickingAction \|\| item\.picking_action\)\)\.length/,
-  );
-  assert.match(
-    source,
-    /const allDecided = items\.length > 0 && items\.every\(\(item\) => Boolean\(item\.pickingAction \|\| item\.picking_action\)\)/,
-  );
-  for (const label of [
-    "Add / In Stock",
-    "Pre-Order",
-    "Replace",
-    "Recall",
-    "Break / Save Progress",
-    "Complete Picking",
-  ]) {
-    assert.match(source, new RegExp(label.replace("/", "\\/")));
-  }
-  assert.match(source, /savePickingDecision/);
-  assert.match(source, /pauseOrderPicking/);
-  assert.match(source, /completeOrderPicking/);
+test("picking UI has separate break and bottom release controls", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, />\s*Break\s*</);
+  assert.match(source, /Cancel Picking \/ Release Order/);
+  assert.match(source, /const breakPicking = \(\) =>/);
+  assert.match(source, /await pauseOrderPicking\(order\.orderId, currentUser\)/);
+});
+
+test("picking refreshes location stock directly when opened", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, /getProductLocationStock\(ids\)/);
+  assert.match(source, /buildLocationStockMap\(rows\)/);
+});
+
+
+test("picking helper tolerates null order items", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, /const productIdOf = \(item\) =>[\s\S]*item\?\.id \|\|[\s\S]*null;/);
+  assert.match(source, /const itemIdOf = \(item\) => item\?\.dbId \|\| item\?\.id \|\| null;/);
+});
+
+
+test("part pick is restricted to genuine partial stock and saved statuses are clickable", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, /stock > 0 &&[\s\S]*stock < remaining &&[\s\S]*selectedQty === stock/);
+  assert.match(source, /Picked <b>\{pickedQty\}<\/b>/);
+  assert.match(source, /Pre-order <b>\{preOrderQty\}<\/b>/);
+  assert.match(source, /Replaced <b>\{replacedQty\}<\/b>/);
+  assert.match(source, /action === "replace"[\s\S]*Math\.min\(selectedQuantity\(item, stock\), Math\.max\(0, stock\), remaining\)/);
+});
+
+test("picking refreshes warehouse stock after pick, replacement, and recall", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, /if \(action === "in_stock" \|\| action === "replace"\)[\s\S]*setStockRefreshNonce/);
+  assert.match(source, /const recall = async[\s\S]*setStockRefreshNonce/);
+});
+
+test("action buttons stay visible, saved rows enable recall, and recall all is available", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, />\s*Recall All\s*</);
+  assert.match(source, /const recallAll = async \(\) =>/);
+  assert.match(source, /items\.filter\(\(item\) => getResolvedQty\(item\) > 0\)/);
+  assert.match(source, /disabled=\{hasSavedAction \|\| !canPickAll \|\| itemBusy\}/);
+  assert.match(source, /disabled=\{!hasSavedAction \|\| itemBusy\}/);
+});
+
+test("replacement selection is mobile friendly and excludes inactive products", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, /const \[selectedReplacement, setSelectedReplacement\]/);
+  assert.match(source, /onClick=\{\(\) => setSelectedReplacement\(product\)\}/);
+  assert.match(source, /Add Replacement/);
+  assert.match(source, /\.filter\(isActiveProduct\)/);
+});
+
+test("replacement result displays the selected replacement product", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, /Replacement:/);
+  assert.match(source, /replacementProductName/);
+});
+
+test("partial pick can be followed by pre-order or replacement for the remainder", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, /const canResolveRemainder = remaining > 0 && pickedQty > 0/);
+  assert.match(source, /hasSavedAction && !canResolveRemainder/);
 });
