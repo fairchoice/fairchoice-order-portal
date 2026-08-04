@@ -32,6 +32,7 @@ import {
   applyDriverCollectionType,
   getDriverCashCollectionTypeSetup,
   normalizeDriverCollectionType,
+  resolveDriverDeliveryAllocations,
 } from "../../utils/driverCashCollectionForm";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
 
@@ -676,7 +677,7 @@ const buildDeliveryPaymentAllocations = ({
 } = {}) => {
   const availableInvoices = applyAllocationsToInvoices(invoices, allocations);
   const orderKeys = new Set(
-    [order.id, order.orderId, order.order_number, order.orderNumber]
+    [order.dbId, order.id, order.orderId, order.order_number, order.orderNumber]
       .map((value) => String(value || "").trim().toLowerCase())
       .filter(Boolean)
   );
@@ -861,8 +862,21 @@ const paymentCollected = isCredit ? "No" : "Yes";
           order.customerAccountId || order.customer_account_id || null;
         const customerBranchId =
           order.customerBranchId || order.customer_branch_id || null;
+        const canonicalOrderUuid =
+          order.id || order.dbId || order.order_uuid || null;
         const paymentReference =
-          order.order_number || order.orderId || order.id || "";
+          order.order_number || order.orderId || "";
+
+        if (
+          effectiveCollectionType === "TODAY_INVOICE" &&
+          !canonicalOrderUuid
+        ) {
+          throw new Error(
+            `Missing database order UUID for ${
+              order.order_number || order.orderId || "this order"
+            }. Refresh the order data and try again.`
+          );
+        }
 
         const snapshot = await loadCentralPaymentSnapshot({
           customerAccountId,
@@ -889,6 +903,16 @@ const paymentCollected = isCredit ? "No" : "Yes";
           order,
           mode: allocationMode,
         });
+        const fullOrderReference =
+          order.order_number || order.orderId || paymentReference;
+        const deliveryAllocations = resolveDriverDeliveryAllocations({
+          effectiveCollectionType,
+          previewAllocations: allocationPreview.allocations,
+          orderUuid: canonicalOrderUuid,
+          invoiceReference: fullOrderReference,
+          allocatedAmount: paymentAmount,
+          customerBranchId,
+        });
 
         await postCanonicalCustomerPayment({
           customerAccountId,
@@ -903,13 +927,13 @@ const paymentCollected = isCredit ? "No" : "Yes";
           collectorStaffId: loggedInUser.staff_id || loggedInUser.id || null,
           collectorRole:
             loggedInUser.role || loggedInUser.access_level || "Driver",
-          orderId: null,
+          orderId: canonicalOrderUuid,
           paymentIntentId: `delivery:${
             order.id || order.orderId || order.order_number
           }:${collectionType}:${paymentAmount}`,
           notes: `Delivery collection - ${paymentType} - ${transactionReason}`,
           metadata: {
-            order_uuid: order.id || null,
+            order_uuid: canonicalOrderUuid,
             order_number: order.order_number || order.orderId || null,
             collection_type: collectionType,
             resolved_collection_type: resolvedCollectionType || null,
@@ -923,7 +947,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
             collector_username: loggedInUser.username || null,
             collector_staff_code: loggedInUser.staff_code || null,
           },
-          allocations: allocationPreview.allocations,
+          allocations: deliveryAllocations,
         });
 
         const { outstandingState } = await loadDriverCreditOutstanding({

@@ -5,7 +5,69 @@ import test from "node:test";
 import {
   applyDriverCollectionType,
   getDriverCashCollectionTypeSetup,
+  resolveDriverDeliveryAllocations,
 } from "./driverCashCollectionForm.js";
+
+test("TODAY_INVOICE uses one exact-order allocation with the same UUID as p_order_id", () => {
+  const orderUuid = "37c527c4-fdff-4a1a-9ebc-33124a5b6966";
+  const allocations = resolveDriverDeliveryAllocations({
+    effectiveCollectionType: "TODAY_INVOICE",
+    previewAllocations: [
+      {
+        invoiceReference: "ORD-1783300314589",
+        invoiceSourceId: "5fa0f648-1ac3-48c1-9999-25585f118c88",
+        allocatedAmount: 10,
+      },
+    ],
+    orderUuid,
+    invoiceReference: "ORD-1783300314589",
+    allocatedAmount: 43,
+    customerBranchId: "8f598571-db45-424b-9d23-1fe2fba98d78",
+  });
+
+  assert.deepEqual(allocations, [
+    {
+      invoiceReference: "ORD-1783300314589",
+      invoiceSourceId: orderUuid,
+      customerBranchId: "8f598571-db45-424b-9d23-1fe2fba98d78",
+      allocatedAmount: 43,
+    },
+  ]);
+  assert.notEqual(allocations[0].invoiceSourceId, allocations[0].invoiceReference);
+});
+
+test("TODAY_INVOICE rejects a readable order reference used as the UUID", () => {
+  assert.throws(
+    () =>
+      resolveDriverDeliveryAllocations({
+        effectiveCollectionType: "TODAY_INVOICE",
+        orderUuid: "ORD-1783300314589",
+        invoiceReference: "ORD-1783300314589",
+        allocatedAmount: 43,
+      }),
+    /database order UUID/
+  );
+});
+
+test("non-TODAY_INVOICE allocation flows remain unchanged", () => {
+  const previewAllocations = [
+    {
+      invoiceReference: "INV-PREVIOUS",
+      invoiceSourceId: "legacy-invoice-source",
+      allocatedAmount: 20,
+    },
+  ];
+
+  assert.strictEqual(
+    resolveDriverDeliveryAllocations({
+      effectiveCollectionType: "OUTSTANDING_PAYMENT",
+      previewAllocations,
+      orderUuid: "ORD-readable-not-a-uuid",
+      allocatedAmount: 20,
+    }),
+    previewAllocations
+  );
+});
 
 test("Today's Invoice is immediately ready after opening Cash Collection without toggling the collection type", () => {
   const { form, setup } = applyDriverCollectionType(
