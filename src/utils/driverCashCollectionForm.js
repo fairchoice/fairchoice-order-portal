@@ -1,5 +1,50 @@
 const asMoneyInput = (value) => String(Math.max(0, Number(value || 0)));
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const verifiedUuidOrNull = (value) => {
+  const normalized = String(value || "").trim();
+  return UUID_PATTERN.test(normalized) ? normalized : null;
+};
+
+export function resolveDriverDeliveryAllocations({
+  effectiveCollectionType,
+  previewAllocations = [],
+  orderUuid,
+  invoiceReference,
+  allocatedAmount,
+  customerBranchId = null,
+} = {}) {
+  if (String(effectiveCollectionType || "").toUpperCase() !== "TODAY_INVOICE") {
+    return previewAllocations;
+  }
+
+  const canonicalOrderUuid = verifiedUuidOrNull(orderUuid);
+  if (!canonicalOrderUuid) {
+    throw new Error("TODAY_INVOICE requires the database order UUID.");
+  }
+
+  const readableReference = String(invoiceReference || "").trim();
+  if (!readableReference) {
+    throw new Error("TODAY_INVOICE requires the readable order reference.");
+  }
+
+  const amount = Number(allocatedAmount || 0);
+  if (!(amount > 0)) {
+    throw new Error("TODAY_INVOICE allocation amount must be greater than zero.");
+  }
+
+  return [
+    {
+      invoiceReference: readableReference,
+      invoiceSourceId: canonicalOrderUuid,
+      customerBranchId: verifiedUuidOrNull(customerBranchId),
+      allocatedAmount: amount,
+    },
+  ];
+}
+
 export const normalizeDriverCollectionType = (value) => {
   const normalized = String(value || "")
     .trim()
