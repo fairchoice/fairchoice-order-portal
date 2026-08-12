@@ -13,7 +13,8 @@ export function hasPermission(user, permissionKey) {
     return permissionKey === "access_customer_portal";
   }
 
-  return user.permissions?.[permissionKey] === true;
+  const permissions = user.effective_permissions || user.permissions || {};
+  return permissions.all_access === true || permissions[permissionKey] === true;
 }
 
 export function requirePermission(

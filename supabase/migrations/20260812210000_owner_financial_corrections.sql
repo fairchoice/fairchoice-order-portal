@@ -149,7 +149,7 @@ begin
   from public.customer_ledger l
   where upper(coalesce(l.entry_type, l.transaction_type, '')) = 'INVOICE'
     and (
-      l.order_id = v_order.id
+      l.order_id::text = v_order.id::text
       or upper(trim(coalesce(l.order_number, ''))) = upper(trim(v_order.order_number))
       or upper(trim(coalesce(l.reference_no, ''))) = upper(trim(v_order.order_number))
     );
@@ -253,7 +253,7 @@ begin
       from public.customer_ledger l
       where upper(coalesce(l.entry_type, l.transaction_type, '')) = 'INVOICE'
         and (
-          l.order_id = v_order.id
+          l.order_id::text = v_order.id::text
           or upper(trim(coalesce(l.order_number, ''))) = upper(trim(v_order.order_number))
           or upper(trim(coalesce(l.reference_no, ''))) = upper(trim(v_order.order_number))
         )
@@ -317,7 +317,7 @@ begin
     updated_at = now()
   where upper(coalesce(entry_type, transaction_type, '')) = 'INVOICE'
     and (
-      order_id = v_order.id
+      order_id::text = v_order.id::text
       or upper(trim(coalesce(order_number, ''))) = upper(trim(v_order.order_number))
       or upper(trim(coalesce(reference_no, ''))) = upper(trim(v_order.order_number))
     );

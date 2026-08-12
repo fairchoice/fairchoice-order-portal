@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase";
 import {
+  getActiveStockLocations,
+  getProductLocationStock,
+  normalizeInventoryCountry,
+} from "../../services/locationStock";
+import {
   getMissingProductImageReason,
   getProductImageValue,
   hasRealProductImage,
@@ -18,7 +23,8 @@ const PRODUCT_COLUMNS = [
   ["Product Special Price", "cash_price"],
   ["VAT Price", "vat_price"],
   ["Carton Size", "carton_size"],
-  ["Stock", "stock"],
+  ["Wales Stock", "wales_stock"],
+  ["England Stock", "england_stock"],
   ["Low Stock Alert", "low_stock_alert"],
   ["Status", "status"],
   ["Available In Wales", "available_in_wales"],
@@ -35,9 +41,16 @@ const PRODUCT_COLUMNS = [
   ["England Special Price", "england_special_price"],
 ];
 
+const LOCATION_STOCK_FIELDS = new Set(["wales_stock", "england_stock"]);
+
 const EDITABLE_PRODUCT_FIELDS = PRODUCT_COLUMNS
   .map(([, field]) => field)
-  .filter((field) => field !== "id" && field !== "product_code");
+  .filter(
+    (field) =>
+      field !== "id" &&
+      field !== "product_code" &&
+      !LOCATION_STOCK_FIELDS.has(field)
+  );
 
 const PRODUCT_FIELD_LABELS = PRODUCT_COLUMNS.reduce((labels, [label, field]) => {
   labels[field] = label;
@@ -47,7 +60,8 @@ const PRODUCT_FIELD_LABELS = PRODUCT_COLUMNS.reduce((labels, [label, field]) => 
 const NUMBER_FIELDS = new Set([
   "cash_price",
   "vat_price",
-  "stock",
+  "wales_stock",
+  "england_stock",
   "low_stock_alert",
   "wales_special_price",
   "england_special_price",
@@ -99,6 +113,8 @@ const LEGACY_FIELD_ALIASES = {
   specialPrice: "cash_price",
   cartonSize: "carton_size",
   lowStockAlert: "low_stock_alert",
+  walesStock: "wales_stock",
+  englandStock: "england_stock",
   availableInWales: "available_in_wales",
   availableInEngland: "available_in_england",
   availableFromSupplier: "available_from_supplier",
@@ -669,6 +685,8 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
         const numberValue = toNumberValue(rawValue);
         if (numberValue === null) {
           errors.push({ rowNumber, field, message: `${label} must be numeric` });
+        } else if (LOCATION_STOCK_FIELDS.has(field) && numberValue < 0) {
+          errors.push({ rowNumber, field, message: `${label} cannot be negative` });
         } else {
           parsed[field] = numberValue;
         }
@@ -725,12 +743,60 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
       const workbook = XLSX.read(data);
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const headerRow = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        range: 0,
+        blankrows: false,
+      })[0] || [];
+      const normalizedHeaders = new Set(headerRow.map(normalizeHeader));
+      const requiredInventoryHeaders = ["Wales Stock", "England Stock"];
+      const missingInventoryHeaders = requiredInventoryHeaders.filter(
+        (header) => !normalizedHeaders.has(normalizeHeader(header))
+      );
+      if (missingInventoryHeaders.length) {
+        throw new Error(
+          `The workbook must contain both inventory columns: Wales Stock and England Stock. Missing: ${missingInventoryHeaders.join(", ")}. Export a fresh product workbook before importing.`
+        );
+      }
 
       const { data: dbProducts, error: dbError } = await supabase
         .from("products")
         .select("*");
 
       if (dbError) throw dbError;
+
+      const activeLocations = await getActiveStockLocations();
+      const locationsByCountry = activeLocations.reduce((map, location) => {
+        const country = normalizeInventoryCountry(location.country);
+        if (!country) return map;
+        if (!map[country]) map[country] = [];
+        map[country].push(location);
+        return map;
+      }, {});
+
+      const walesLocations = locationsByCountry.Wales || [];
+      const englandLocations = locationsByCountry.England || [];
+      if (walesLocations.length !== 1) {
+        throw new Error(
+          `Expected exactly one active Wales stock location, found ${walesLocations.length}.`
+        );
+      }
+      if (englandLocations.length !== 1) {
+        throw new Error(
+          `Expected exactly one active England stock location, found ${englandLocations.length}.`
+        );
+      }
+
+      const locationRows = await getProductLocationStock(
+        (dbProducts || []).map((product) => product.id)
+      );
+      const locationQtyByProductCountry = locationRows.reduce((map, row) => {
+        const country = normalizeInventoryCountry(row.stock_locations?.country);
+        if (!country || row.stock_locations?.active === false) return map;
+        if (!map[row.product_id]) map[row.product_id] = {};
+        map[row.product_id][country] = Number(row.qty ?? 0);
+        return map;
+      }, {});
 
       const byCode = new Map(
         (dbProducts || []).map((product) => [
@@ -839,7 +905,24 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
             });
           }
 
-          if (Object.keys(changes).length) {
+          const existingLocationQty = locationQtyByProductCountry[existing.id] || {};
+          const locationStockChanges = {
+            Wales: {
+              locationId: walesLocations[0].id,
+              oldQty: Number(existingLocationQty.Wales ?? 0),
+              newQty: Number(parsed.wales_stock ?? 0),
+            },
+            England: {
+              locationId: englandLocations[0].id,
+              oldQty: Number(existingLocationQty.England ?? 0),
+              newQty: Number(parsed.england_stock ?? 0),
+            },
+          };
+          const hasLocationStockChanges = Object.values(locationStockChanges).some(
+            (stock) => stock.oldQty !== stock.newQty
+          );
+
+          if (Object.keys(changes).length || hasLocationStockChanges) {
             Object.entries(changes).forEach(([field, newValue]) => {
               changedFields.push({
                 rowNumber,
@@ -852,14 +935,26 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
               });
             });
 
+            Object.entries(locationStockChanges).forEach(([country, stock]) => {
+              if (stock.oldQty === stock.newQty) return;
+              changedFields.push({
+                rowNumber,
+                productCode: parsed.product_code,
+                productName: parsed.product_name || existing.product_name || "",
+                field: country === "Wales" ? "wales_stock" : "england_stock",
+                fieldLabel: `${country} Stock`,
+                oldValue: stock.oldQty,
+                newValue: stock.newQty,
+              });
+            });
+
             updates.push({
               id: existing.id,
               rowNumber,
               productCode: parsed.product_code,
               productName: parsed.product_name || existing.product_name || "",
-              oldStock: Number(existing.stock || 0),
-              newStock: Number(parsed.stock || 0),
               changes,
+              locationStockChanges,
             });
           } else {
             unchangedCount += 1;
@@ -880,11 +975,18 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
           rowNumber,
           payload: {
             ...Object.fromEntries(
-              Object.entries(parsed).filter(([field]) => field !== "__importLabel")
+              Object.entries(parsed).filter(
+                ([field]) =>
+                  field !== "__importLabel" && !LOCATION_STOCK_FIELDS.has(field)
+              )
             ),
             ...getImportLabelFields(
               importLabelSource === "file" ? parsed.__importLabel : importLabel
             ),
+          },
+          locationStockValues: {
+            Wales: { locationId: walesLocations[0].id, qty: Number(parsed.wales_stock ?? 0) },
+            England: { locationId: englandLocations[0].id, qty: Number(parsed.england_stock ?? 0) },
           },
         });
       });
@@ -934,41 +1036,54 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     setImporting(true);
 
     try {
-      for (const item of productImportPreview.updates) {
-        const { error } = await supabase
-          .from("products")
-          .update(item.changes)
-          .eq("id", item.id);
+      const locationStockRows = [];
 
-        if (error) throw error;
+      for (const item of productImportPreview.updates) {
+        if (Object.keys(item.changes || {}).length) {
+          const { error } = await supabase
+            .from("products")
+            .update(item.changes)
+            .eq("id", item.id);
+
+          if (error) throw error;
+        }
+
+        Object.values(item.locationStockChanges || {}).forEach((stock) => {
+          if (stock.oldQty === stock.newQty) return;
+          locationStockRows.push({
+            product_id: item.id,
+            location_id: stock.locationId,
+            qty: stock.newQty,
+            updated_at: new Date().toISOString(),
+          });
+        });
       }
 
       if (productImportPreview.mode !== "update" && productImportPreview.creates.length) {
-        const payload = productImportPreview.creates.map((item) => {
+        for (const item of productImportPreview.creates) {
           const { id, ...productPayload } = item.payload;
-          return productPayload;
-        });
+          const { data: createdProduct, error } = await supabase
+            .from("products")
+            .insert(productPayload)
+            .select("id")
+            .single();
+          if (error) throw error;
 
-        const { error } = await supabase.from("products").insert(payload);
-        if (error) throw error;
+          Object.values(item.locationStockValues || {}).forEach((stock) => {
+            locationStockRows.push({
+              product_id: createdProduct.id,
+              location_id: stock.locationId,
+              qty: stock.qty,
+              updated_at: new Date().toISOString(),
+            });
+          });
+        }
       }
 
-      const stockMovements = productImportPreview.updates
-        .filter((item) => item.oldStock !== item.newStock)
-        .map((item) => ({
-          product_id: item.id,
-          movement_type: "IMPORT",
-          qty: item.newStock - item.oldStock,
-          stock_before: item.oldStock,
-          stock_after: item.newStock,
-          note: "Excel Import",
-        }));
-
-      if (stockMovements.length) {
+      if (locationStockRows.length) {
         const { error } = await supabase
-          .from("stock_movements")
-          .insert(stockMovements);
-
+          .from("product_location_stock")
+          .upsert(locationStockRows, { onConflict: "product_id,location_id" });
         if (error) throw error;
       }
 
@@ -1045,44 +1160,57 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     e.target.value = "";
   };
 
-  const handleExportExcel = () => {
-    const exportData = products.map((p) => ({
-      "Product ID": p.id,
-      "Product Code": p.productCode,
-      "Product Name": p.name,
-      "Main Category": p.category,
-      "Sub Category": p.subCategory,
-      Brand: p.brand,
-      Series: p.series,
-      "Cash Price": p.cashPrice,
-      "VAT Price": p.vatPrice,
-      "Carton Size": p.cartonSize,
-      Stock: p.stock,
-      "Low Stock Alert": p.lowStockAlert,
-      Status: p.active === false ? "Inactive" : "Active",
-      "Available In Wales": p.availableInWales,
-      "Available In England": p.availableInEngland,
-      "Available From Supplier": p.availableFromSupplier,
-      "Image URL": hasProductImage(p) ? getProductImageValue(p) : "",
-      New: p.isNew,
-      "Promotion Label": p.isPromotion,
-      Reduced: p.isReduced,
-      "Coming Soon": p.comingSoon,
-      Recommended: p.recommended,
-      "Top Seller": p.topSeller,
-      "Wales Special Price": p.walesSpecialPrice,
-      "England Special Price": p.englandSpecialPrice,
-    }));
+  const handleExportExcel = async () => {
+    try {
+      const productIds = products.map((product) => product.id).filter(Boolean);
+      const locationRows = await getProductLocationStock(productIds);
+      const stockByProductCountry = locationRows.reduce((map, row) => {
+        const country = normalizeInventoryCountry(row.stock_locations?.country);
+        if (!country || row.stock_locations?.active === false) return map;
+        if (!map[row.product_id]) map[row.product_id] = {};
+        map[row.product_id][country] = Number(row.qty ?? 0);
+        return map;
+      }, {});
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
+      const exportData = products.map((p) => ({
+        "Product ID": p.id,
+        "Product Code": p.productCode,
+        "Product Name": p.name,
+        "Main Category": p.category,
+        "Sub Category": p.subCategory,
+        Brand: p.brand,
+        Series: p.series,
+        "Cash Price": p.cashPrice,
+        "VAT Price": p.vatPrice,
+        "Carton Size": p.cartonSize,
+        "Wales Stock": Number(stockByProductCountry[p.id]?.Wales ?? 0),
+        "England Stock": Number(stockByProductCountry[p.id]?.England ?? 0),
+        "Low Stock Alert": p.lowStockAlert,
+        Status: p.active === false ? "Inactive" : "Active",
+        "Available In Wales": p.availableInWales,
+        "Available In England": p.availableInEngland,
+        "Available From Supplier": p.availableFromSupplier,
+        "Image URL": hasProductImage(p) ? getProductImageValue(p) : "",
+        New: p.isNew,
+        "Promotion Label": p.isPromotion,
+        Reduced: p.isReduced,
+        "Coming Soon": p.comingSoon,
+        Recommended: p.recommended,
+        "Top Seller": p.topSeller,
+        "Wales Special Price": p.walesSpecialPrice,
+        "England Special Price": p.englandSpecialPrice,
+      }));
 
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Products");
-
-    XLSX.writeFile(
-      workbook,
-      `fairchoice-products-${new Date().toISOString().slice(0, 10)}.xlsx`
-    );
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Products");
+      XLSX.writeFile(
+        workbook,
+        `fairchoice-products-${new Date().toISOString().slice(0, 10)}.xlsx`
+      );
+    } catch (error) {
+      alert("Product export failed: " + error.message);
+    }
   };
 
   const downloadProductTemplate = () => {

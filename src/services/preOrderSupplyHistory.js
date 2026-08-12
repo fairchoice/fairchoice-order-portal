@@ -86,6 +86,8 @@ export async function loadPreOrderSupplyHistory(user, { pageSize = 500, maxPages
         return {
           history: {},
           events: [],
+          available: false,
+          sourceVersion: "unavailable",
           warning: "Permanent Pre-order Supply history is awaiting migration.",
         };
       }
@@ -109,6 +111,8 @@ export async function loadPreOrderSupplyHistory(user, { pageSize = 500, maxPages
   return {
     history: Object.fromEntries(Object.entries(latest).filter(([, value]) => value !== null)),
     events: rows.map(normalizeEvent),
+    available: true,
+    sourceVersion: rpcName === "fc_list_preorder_supply_events_v1" ? "v1" : "v2",
     warning:
       rpcName === "fc_list_preorder_supply_events_v1"
         ? "Delivery-aware history is awaiting the latest migration."

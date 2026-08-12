@@ -36,6 +36,11 @@ import {
   calculateCartTotals,
   getOrderItemProductCode,
 } from "../../utils/orderTotals";
+import {
+  isFinanciallyVoided,
+  previewInvoiceFinancialCorrection,
+  voidDuplicateInvoiceFinancially,
+} from "../../services/financialCorrectionService";
 
 const getCreatedDate = (row) => row.created_at || row.invoice_date || row.date || "";
 const getReference = (row) =>
@@ -65,6 +70,14 @@ const getAmount = (row) =>
   row._freshOrder
     ? getInvoiceTotal(row._freshOrder)
     : Number(row.invoice_total ?? row.invoice_amount ?? row.amount ?? row.debit ?? 0);
+const isInvoiceFinanciallyVoided = (row = {}) =>
+  isFinanciallyVoided(row) ||
+  isFinanciallyVoided(row._freshOrder) ||
+  isFinanciallyVoided(row._ledgerRow);
+const getInvoiceDisplayStatus = (row = {}) =>
+  isInvoiceFinanciallyVoided(row)
+    ? "VOID"
+    : row.invoice_status || row.status || "UNPAID";
 const getOrderPaymentStatus = (order = {}, invoiceTotal = 0) => {
   const explicitStatus = String(order.invoice_status || order.payment_status || order.paymentStatus || "")
     .trim()
@@ -406,6 +419,11 @@ export default function InvoicesPortal() {
     lines: [],
   });
   const [amendOrder, setAmendOrder] = useState(null);
+  const [voidInvoiceRow, setVoidInvoiceRow] = useState(null);
+  const [voidPreview, setVoidPreview] = useState(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidLoading, setVoidLoading] = useState(false);
+  const [voidError, setVoidError] = useState("");
   const loggedInUser = JSON.parse(
     localStorage.getItem("loggedInUser") ||
       localStorage.getItem("fairchoice_user") ||
@@ -703,6 +721,92 @@ export default function InvoicesPortal() {
         sourceStatus: item.source_status || item.sourceStatus || "In Stock",
       })),
     });
+  };
+
+  const closeVoidInvoiceDialog = () => {
+    if (voidLoading) return;
+    setVoidInvoiceRow(null);
+    setVoidPreview(null);
+    setVoidReason("");
+    setVoidError("");
+  };
+
+  const openVoidInvoiceDialog = async (row) => {
+    if (!isNisstajAdmin) {
+      alert("Only nisstaj_admin can financially void an invoice.");
+      return;
+    }
+    if (String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE") {
+      alert("Return invoices cannot be voided with this correction.");
+      return;
+    }
+    if (isInvoiceFinanciallyVoided(row)) {
+      alert("This invoice is already financially voided.");
+      return;
+    }
+
+    setVoidInvoiceRow(row);
+    setVoidPreview(null);
+    setVoidReason("");
+    setVoidError("");
+    setVoidLoading(true);
+
+    try {
+      const preview = await previewInvoiceFinancialCorrection({
+        currentUser: loggedInUser,
+        orderNumber: getReference(row),
+      });
+      setVoidPreview(preview);
+      if (preview?.already_voided) {
+        setVoidError("This invoice is already financially voided.");
+      }
+    } catch (previewError) {
+      console.error("Invoice financial correction preview error:", previewError);
+      setVoidError(previewError.message || "Could not review this invoice correction.");
+    } finally {
+      setVoidLoading(false);
+    }
+  };
+
+  const confirmVoidInvoice = async () => {
+    if (!isNisstajAdmin) {
+      setVoidError("Only nisstaj_admin can financially void an invoice.");
+      return;
+    }
+    if (!voidInvoiceRow || !voidPreview || voidPreview.already_voided) return;
+
+    const reason = voidReason.trim();
+    if (!reason) {
+      setVoidError("Enter the reason this delivered invoice is a duplicate.");
+      return;
+    }
+
+    const reference = getReference(voidInvoiceRow);
+    const confirmed = window.confirm(
+      `Final confirmation: financially void invoice ${reference}? This keeps warehouse, inventory and order quantities unchanged, but rebuilds FIFO allocations.`
+    );
+    if (!confirmed) return;
+
+    setVoidLoading(true);
+    setVoidError("");
+    try {
+      await voidDuplicateInvoiceFinancially({
+        currentUser: loggedInUser,
+        orderNumber: reference,
+        reason,
+      });
+      setVoidInvoiceRow(null);
+      setVoidPreview(null);
+      setVoidReason("");
+      setVoidError("");
+      await loadInvoices();
+      alert(`Invoice ${reference} was financially voided and FIFO allocations were rebuilt.`);
+    } catch (voidActionError) {
+      console.error("Invoice financial void error:", voidActionError);
+      setVoidError(voidActionError.message || "Could not financially void this invoice.");
+    } finally {
+      setVoidLoading(false);
+    }
   };
 
   const saveManualInvoice = async () => {
@@ -2051,6 +2155,8 @@ const runInvoiceAction = async (row, action) => {
               ) : (
                 pagedInvoices.map((row) => {
                   const amount = getAmount(row);
+                  const displayStatus = getInvoiceDisplayStatus(row);
+                  const financiallyVoided = isInvoiceFinanciallyVoided(row);
 
                   return (
                     <tr key={row.id || getReference(row)} className="border-t border-slate-100">
@@ -2058,7 +2164,7 @@ const runInvoiceAction = async (row, action) => {
                       <td className="p-3">{getCustomer(row)}</td>
                       <td className="p-3">{getCreatedDate(row) ? new Date(getCreatedDate(row)).toLocaleDateString() : "-"}</td>
                       <td className="p-3 text-right font-bold">{formatCurrency(amount)}</td>
-                      <td className="p-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE" ? "bg-purple-50 text-purple-700" : "bg-blue-50 text-blue-700"}`}>{row.invoice_status || row.status || "UNPAID"}</span></td>
+                      <td className="p-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${financiallyVoided ? "bg-red-50 text-red-700" : String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE" ? "bg-purple-50 text-purple-700" : "bg-blue-50 text-blue-700"}`}>{displayStatus}</span></td>
                       <td className="p-3">
                         <div className="flex flex-wrap justify-end gap-2">
                           <button type="button" onClick={() => runInvoiceAction(row, previewInvoice)} className="bg-slate-100 text-slate-800 px-3 py-1 rounded-lg text-xs font-bold">View</button>
@@ -2066,6 +2172,9 @@ const runInvoiceAction = async (row, action) => {
                           <button type="button" onClick={() => runInvoiceAction(row, printInvoice)} className="bg-black text-white px-3 py-1 rounded-lg text-xs font-bold">Print</button>
                           {isAdminUser && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
+                          )}
+                          {isNisstajAdmin && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && !financiallyVoided && (
+                            <button type="button" onClick={() => openVoidInvoiceDialog(row)} className="bg-red-700 text-white px-3 py-1 rounded-lg text-xs font-bold">Void invoice</button>
                           )}
                         </div>
                       </td>
@@ -2116,6 +2225,43 @@ const runInvoiceAction = async (row, action) => {
           </div>
         </div>
       </div>
+
+      {voidInvoiceRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="void-invoice-title">
+          <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="void-invoice-title" className="text-xl font-extrabold text-slate-900">Financially void duplicate invoice</h3>
+                <p className="mt-1 text-sm text-slate-600">Invoice {formatDisplayOrderId(getReference(voidInvoiceRow))} · {getCustomer(voidInvoiceRow)}</p>
+              </div>
+              <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50" aria-label="Close void invoice dialog">Close</button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+              This action changes financial records only. Warehouse, inventory, delivered status and order quantities remain unchanged. A permanent before/after audit snapshot is retained.
+            </div>
+
+            {voidLoading && !voidPreview ? (
+              <p className="mt-4 text-sm font-bold text-slate-600">Reviewing invoice and payment allocations...</p>
+            ) : voidPreview ? (
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl border border-slate-200 p-3"><div className="text-xs font-bold uppercase text-slate-500">Invoice amount</div><div className="mt-1 font-extrabold">{formatCurrency(getAmount(voidInvoiceRow))}</div></div>
+                <div className="rounded-xl border border-slate-200 p-3"><div className="text-xs font-bold uppercase text-slate-500">Active allocations</div><div className="mt-1 font-extrabold">{Array.isArray(voidPreview.allocations) ? voidPreview.allocations.length : 0}</div></div>
+              </div>
+            ) : null}
+
+            {voidError && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{voidError}</div>}
+
+            <label className="mt-4 block text-sm font-bold text-slate-700" htmlFor="void-invoice-reason">Reason this invoice is a duplicate</label>
+            <textarea id="void-invoice-reason" value={voidReason} onChange={(event) => setVoidReason(event.target.value)} disabled={voidLoading || !voidPreview || voidPreview?.already_voided} rows="3" placeholder="Enter a clear audit reason" className="mt-2 w-full rounded-xl border border-slate-300 p-3 disabled:bg-slate-100" />
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-xl border border-slate-300 px-4 py-2 font-bold text-slate-700 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={confirmVoidInvoice} disabled={voidLoading || !voidPreview || voidPreview?.already_voided || !voidReason.trim()} className="rounded-xl bg-red-700 px-4 py-2 font-bold text-white disabled:bg-slate-400">{voidLoading ? "Voiding..." : "Void invoice financially"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

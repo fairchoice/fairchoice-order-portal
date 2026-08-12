@@ -47,6 +47,7 @@ export default function Warehouse({
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [countryFilter, setCountryFilter] = useState("All");
+  const [stableItemOrders, setStableItemOrders] = useState({});
 
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
@@ -263,25 +264,49 @@ const getProductSortValue = (item = {}, field) =>
     .trim()
     .toLowerCase();
 
-const getGroupedWarehouseItems = (items = []) =>
-  [...(items || [])].sort((a, b) => {
-    const rankDiff = getWarehouseStatusRank(a) - getWarehouseStatusRank(b);
-    if (rankDiff !== 0) return rankDiff;
+const getInitialWarehouseItemOrder = (items = []) => {
+  const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
+  return [...items].sort((left, right) => {
+    const rankDifference = getWarehouseStatusRank(left) - getWarehouseStatusRank(right);
+    if (rankDifference !== 0) return rankDifference;
 
-    const categoryDiff = getProductSortValue(a, "category").localeCompare(
-      getProductSortValue(b, "category")
-    );
-    if (categoryDiff !== 0) return categoryDiff;
-
-    const seriesDiff = getProductSortValue(a, "series").localeCompare(
-      getProductSortValue(b, "series")
-    );
-    if (seriesDiff !== 0) return seriesDiff;
-
-    return String(a.name || a.productName || "").localeCompare(
-      String(b.name || b.productName || "")
-    );
+    for (const field of ["series", "brand", "subCategory", "category", "name"]) {
+      const difference = getProductSortValue(left, field).localeCompare(
+        getProductSortValue(right, field),
+        "en-GB",
+        { numeric: true, sensitivity: "base" }
+      );
+      if (difference !== 0) return difference;
+    }
+    return itemKey(left).localeCompare(itemKey(right));
   });
+};
+
+const captureStableWarehouseItems = (order = {}) => {
+  const key = String(getOrderId(order) || "");
+  const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
+  setStableItemOrders((previous) => previous[key]
+    ? previous
+    : { ...previous, [key]: getInitialWarehouseItemOrder(order.items || []).map(itemKey) });
+};
+
+// Group once when an order is first opened in Warehouse, then preserve that
+// visual snapshot while staff change statuses. Re-entering Warehouse creates a
+// new component instance and therefore a fresh grouping snapshot.
+const getGroupedWarehouseItems = (orderId, items = []) => {
+  const key = String(orderId || "");
+  const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
+  const snapshot = stableItemOrders[key] || getInitialWarehouseItemOrder(items).map(itemKey);
+
+  const byId = new Map(items.map((item) => [itemKey(item), item]));
+  const result = snapshot.map((id) => byId.get(id)).filter(Boolean);
+  const known = new Set(snapshot);
+  const additions = getInitialWarehouseItemOrder(items.filter((item) => !known.has(itemKey(item))));
+  if (additions.length) {
+    result.push(...additions);
+  }
+  return result;
+};
 
   /*
     Invoice/order totals.
@@ -916,6 +941,7 @@ const updateWarehouseItem = async (order, item, changes) => {
     return;
   }
 
+  captureStableWarehouseItems(order);
   await updateOrderItem(order.orderId, item.dbId, changes);
   await logAction({
     user: loggedInUser,
@@ -1108,40 +1134,21 @@ const printCustomerDocumentForMode =
               <div className="text-right">Action</div>
             </div>
 
-            {getGroupedWarehouseItems(order.items).map((item) => {
+            {getGroupedWarehouseItems(orderId, order.items).map((item) => {
               const sourceStatus = getWarehouseStatus(item);
               const isInStock = sourceStatus === "In Stock";
               const isCannotSupply = sourceStatus === "Cannot Supply";
               const needsSupplier = !isInStock && !isCannotSupply;
-              const nextWarehouseStatus = isInStock
-                ? {
-                    label: "Cannot Supply",
-                    className: "bg-red-600 text-white",
-                    changes: {
-                      sourceStatus: "Cannot Supply",
-                      includeInPicking: false,
-                      pickedQty: 0,
-                    },
-                  }
-                : isCannotSupply
-                ? {
-                    label: "Pre Order",
-                    className: "bg-amber-600 text-white",
-                    changes: {
-                      sourceStatus: "Need Supplier",
-                      includeInPicking: false,
-                      pickedQty: 0,
-                    },
-                  }
-                : {
-                    label: "Available",
-                    className: "bg-green-600 text-white",
-                    changes: {
-                      sourceStatus: "In Stock",
-                      includeInPicking: true,
-                      pickedQty: getLineQty(item),
-                    },
-                  };
+              const availableChanges = {
+                sourceStatus: "In Stock",
+                includeInPicking: true,
+                pickedQty: getLineQty(item),
+              };
+              const cannotSupplyChanges = {
+                sourceStatus: "Cannot Supply",
+                includeInPicking: false,
+                pickedQty: 0,
+              };
 
               return (
                 <div
@@ -1168,18 +1175,27 @@ const printCustomerDocumentForMode =
                     {sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus}
                   </div>
 
-                  <div className="text-right">
+                  <div className="flex justify-end gap-2">
                     {!isReadyForDriver &&
                       hasPermission(loggedInUser, "can_move_to_warehouse") && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateWarehouseItem(order, item, nextWarehouseStatus.changes)
-                          }
-                          className={`${nextWarehouseStatus.className} ${btn}`}
-                        >
-                          {nextWarehouseStatus.label}
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            disabled={isInStock}
+                            onClick={() => updateWarehouseItem(order, item, availableChanges)}
+                            className={`bg-green-600 text-white disabled:cursor-not-allowed disabled:bg-slate-300 ${btn}`}
+                          >
+                            Available
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isCannotSupply}
+                            onClick={() => updateWarehouseItem(order, item, cannotSupplyChanges)}
+                            className={`bg-red-600 text-white disabled:cursor-not-allowed disabled:bg-slate-300 ${btn}`}
+                          >
+                            Cannot Supply
+                          </button>
+                        </>
                       )}
                   </div>
                 </div>

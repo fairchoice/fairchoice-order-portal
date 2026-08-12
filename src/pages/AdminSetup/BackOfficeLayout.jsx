@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { hasPermission } from "../../utils/permissions";
+import { canViewReturns } from "../../security/returnAuthorization";
 
 const defaultOpenSections = {
   Operations: true,
@@ -41,7 +42,7 @@ const navSections = [
         fetchOrdersBefore: true,
         permission: "access_driver",
       },
-      { label: "Returns", page: "returnsPortal", permission: "access_received_orders" },
+      { label: "Returns", page: "returnsPortal", permission: "returns.view" },
       {
         label: "Warehouse",
         page: "warehouse",
@@ -95,7 +96,7 @@ const navSections = [
         page: "supplierAccounts",
         permission: "page.supplier_accounts",
       },
-      { label: "Expenses", page: "expenses" },
+      { label: "Expenses", page: "expenses", permission: "expenses.view" },
       { label: "Branch Separation", page: "branchSeparation", permission: "can_edit_security" },
     ],
   },
@@ -105,6 +106,7 @@ const navSections = [
       { label: "Profit Portal", page: "profitPortal", permission: "access_reports" },
       { label: "Product Line Analysis", page: "productLineAnalysis", permission: "access_reports" },
       { label: "Sales Reports", page: "salesReports", permission: "access_reports" },
+      { label: "Purchase Planning", page: "purchasePlanning", permission: "access_reports" },
       { label: "Outstanding Customers", page: "outstandingCustomers", permission: "access_reports" },
       { label: "Collections Report", page: "collectionsReport", permission: "access_reports" },
       { label: "Driver Collections", page: "driverCollections", permission: "access_reports" },
@@ -128,7 +130,7 @@ const pagePermissions = {
   warehouse: "access_warehouse",
   preOrderSupply: "access_warehouse",
   driver: "access_driver",
-  returnsPortal: "access_received_orders",
+  returnsPortal: "returns.view",
   customerPortal: "access_customer_portal",
   customers: "access_customer_setup",
   categories: "access_product_setup",
@@ -145,10 +147,12 @@ const pagePermissions = {
   branchSeparation: "can_edit_security",
   weeklyAccount: "access_accounts",
   supplierAccounts: "page.supplier_accounts",
+  expenses: "expenses.view",
   invoicesPortal: "access_accounts",
   profitPortal: "access_reports",
   productLineAnalysis: "access_reports",
   salesReports: "access_reports",
+  purchasePlanning: "access_reports",
   outstandingCustomers: "access_reports",
   collectionsReport: "access_reports",
   driverCollections: "access_reports",
@@ -162,6 +166,7 @@ const pagePermissions = {
 };
 
 function canSeeItem(user, item) {
+  if (item.page === "returnsPortal") return canViewReturns(user);
   if (item.permission && !hasPermission(user, item.permission)) return false;
   if (!item.children?.length) return true;
   return item.children.some((child) => canSeeItem(user, child));
@@ -194,6 +199,7 @@ function canAccessPage(user, page) {
     return page === "customerPortal";
   }
 
+  if (page === "returnsPortal") return canViewReturns(user);
   const permission = pagePermissions[page];
   if (!permission) return true;
   return hasPermission(user, permission);

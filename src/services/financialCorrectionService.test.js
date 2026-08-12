@@ -30,7 +30,7 @@ test("migration is additive and does not auto-correct existing business rows", (
 
 test("duplicate invoice correction preserves operational order state", () => {
   const voidFunction = migrationSource.match(
-    /create or replace function public\.void_owner_duplicate_invoice_v1[\s\S]*?\nend;\n\$\$;/i
+    /create or replace function public\.void_owner_duplicate_invoice_v1[\s\S]*?\r?\nend;\r?\n\$\$;/i
   )?.[0] || "";
 
   assert.match(voidFunction, /financial_status\s*=\s*'VOID'/);
@@ -38,6 +38,16 @@ test("duplicate invoice correction preserves operational order state", () => {
   assert.doesNotMatch(voidFunction, /update\s+public\.order_items/i);
   assert.doesNotMatch(voidFunction, /update\s+public\.stock_/i);
   assert.doesNotMatch(voidFunction, /delete\s+from\s+public\.order_items/i);
+});
+
+test("invoice correction supports legacy bigint ledger order IDs", () => {
+  const invoiceFunctions = migrationSource.match(
+    /create or replace function public\.preview_owner_invoice_correction_v1[\s\S]*?create or replace function public\.preview_matched_legacy_payment_v1/i
+  )?.[0] || "";
+
+  assert.doesNotMatch(invoiceFunctions, /l\.order_id\s*=\s*v_order\.id/);
+  assert.match(invoiceFunctions, /l\.order_id::text\s*=\s*v_order\.id::text/);
+  assert.match(invoiceFunctions, /order_id::text\s*=\s*v_order\.id::text/);
 });
 
 test("duplicate invoice correction rebuilds financial allocation state", () => {
