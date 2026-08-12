@@ -64,6 +64,11 @@ set password_hash = extensions.crypt(password, extensions.gen_salt('bf', 12)),
 where nullif(password_hash, '') is null
   and nullif(password, '') is not null;
 
+-- Legacy schemas created password as NOT NULL. Remove that constraint only
+-- after every usable plaintext credential has been converted to a hash.
+alter table public.login_users
+  alter column password drop not null;
+
 update public.login_users
 set password = null,
     updated_at = now()
