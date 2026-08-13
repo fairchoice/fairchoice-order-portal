@@ -705,6 +705,90 @@ export default function InvoicesPortal() {
     });
   };
 
+<<<<<<< HEAD
+=======
+  const closeVoidInvoiceDialog = () => {
+    if (voidLoading) return;
+    setVoidInvoiceRow(null);
+    setVoidPreview(null);
+    setVoidReason("");
+    setVoidError("");
+  };
+
+  const openVoidInvoiceDialog = async (row) => {
+    if (!isNisstajAdmin) {
+      alert("Only nisstaj_admin can financially void an invoice.");
+      return;
+    }
+    if (String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE") {
+      alert("Return invoices cannot be voided with this correction.");
+      return;
+    }
+    setVoidInvoiceRow(row);
+    setVoidPreview(null);
+    setVoidReason("");
+    setVoidError("");
+    setVoidLoading(true);
+
+    try {
+      const preview = await previewInvoiceFinancialCorrection({
+        currentUser: loggedInUser,
+        orderNumber: getReference(row),
+      });
+      setVoidPreview(preview);
+      if (preview?.already_voided) {
+        setVoidError("Invoice and inventory are already reversed.");
+      }
+    } catch (previewError) {
+      console.error("Invoice financial correction preview error:", previewError);
+      setVoidError(previewError.message || "Could not review this invoice correction.");
+    } finally {
+      setVoidLoading(false);
+    }
+  };
+
+  const confirmVoidInvoice = async () => {
+    if (!isNisstajAdmin) {
+      setVoidError("Only nisstaj_admin can financially void an invoice.");
+      return;
+    }
+    if (!voidInvoiceRow || !voidPreview || voidPreview.already_voided) return;
+
+    const reason = voidReason.trim();
+    if (!reason) {
+      setVoidError("Enter the reason this delivered invoice is a duplicate.");
+      return;
+    }
+
+    const reference = getReference(voidInvoiceRow);
+    const confirmed = window.confirm(
+      "Void invoice and return stock?"
+    );
+    if (!confirmed) return;
+
+    setVoidLoading(true);
+    setVoidError("");
+    try {
+      await voidDuplicateInvoiceFinancially({
+        currentUser: loggedInUser,
+        orderNumber: reference,
+        reason,
+      });
+      setVoidInvoiceRow(null);
+      setVoidPreview(null);
+      setVoidReason("");
+      setVoidError("");
+      await loadInvoices();
+      alert(`Invoice ${reference} was voided and its deducted stock was returned.`);
+    } catch (voidActionError) {
+      console.error("Invoice financial void error:", voidActionError);
+      setVoidError(voidActionError.message || "Could not financially void this invoice.");
+    } finally {
+      setVoidLoading(false);
+    }
+  };
+
+>>>>>>> 81bcfe5 (Fix invoice void financial and inventory reversal)
   const saveManualInvoice = async () => {
     if (!selectedCustomer) {
       alert("Select customer.");
@@ -2067,6 +2151,18 @@ const runInvoiceAction = async (row, action) => {
                           {isAdminUser && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
                           )}
+<<<<<<< HEAD
+=======
+                          {isNisstajAdmin && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
+                            <button
+                              type="button"
+                              onClick={() => openVoidInvoiceDialog(row)}
+                              className="bg-red-700 text-white px-3 py-1 rounded-lg text-xs font-bold"
+                            >
+                              {financiallyVoided ? "Return stock" : "Void invoice"}
+                            </button>
+                          )}
+>>>>>>> 81bcfe5 (Fix invoice void financial and inventory reversal)
                         </div>
                       </td>
                     </tr>
@@ -2116,6 +2212,46 @@ const runInvoiceAction = async (row, action) => {
           </div>
         </div>
       </div>
+<<<<<<< HEAD
+=======
+
+      {voidInvoiceRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="void-invoice-title">
+          <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="void-invoice-title" className="text-xl font-extrabold text-slate-900">Void Invoice</h3>
+                <p className="mt-1 text-sm text-slate-600">Invoice {formatDisplayOrderId(getReference(voidInvoiceRow))} · {getCustomer(voidInvoiceRow)}</p>
+              </div>
+              <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50" aria-label="Close void invoice dialog">Close</button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+              This will void the invoice and return its stock to inventory.
+            </div>
+
+            {voidLoading && !voidPreview ? (
+              <p className="mt-4 text-sm font-bold text-slate-600">Reviewing invoice and payment allocations...</p>
+            ) : voidPreview ? (
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl border border-slate-200 p-3"><div className="text-xs font-bold uppercase text-slate-500">Invoice amount</div><div className="mt-1 font-extrabold">{formatCurrency(getAmount(voidInvoiceRow))}</div></div>
+                <div className="rounded-xl border border-slate-200 p-3"><div className="text-xs font-bold uppercase text-slate-500">Active allocations</div><div className="mt-1 font-extrabold">{Array.isArray(voidPreview.allocations) ? voidPreview.allocations.length : 0}</div></div>
+              </div>
+            ) : null}
+
+            {voidError && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{voidError}</div>}
+
+            <label className="mt-4 block text-sm font-bold text-slate-700" htmlFor="void-invoice-reason">Reason this invoice is a duplicate</label>
+            <textarea id="void-invoice-reason" value={voidReason} onChange={(event) => setVoidReason(event.target.value)} disabled={voidLoading || !voidPreview || voidPreview?.already_voided} rows="3" placeholder="Enter a clear audit reason" className="mt-2 w-full rounded-xl border border-slate-300 p-3 disabled:bg-slate-100" />
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-xl border border-slate-300 px-4 py-2 font-bold text-slate-700 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={confirmVoidInvoice} disabled={voidLoading || !voidPreview || voidPreview?.already_voided || !voidReason.trim()} className="rounded-xl bg-red-700 px-4 py-2 font-bold text-white disabled:bg-slate-400">{voidLoading ? "Processing..." : (voidPreview?.financial_already_voided ? "Return stock to inventory" : "Void invoice and return stock")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+>>>>>>> 81bcfe5 (Fix invoice void financial and inventory reversal)
     </div>
   );
 }
