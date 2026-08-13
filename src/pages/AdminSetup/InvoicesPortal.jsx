@@ -36,6 +36,11 @@ import {
   calculateCartTotals,
   getOrderItemProductCode,
 } from "../../utils/orderTotals";
+import {
+  isFinanciallyVoided,
+  previewInvoiceFinancialCorrection,
+  voidDuplicateInvoiceFinancially,
+} from "../../services/financialCorrectionService";
 
 const getCreatedDate = (row) => row.created_at || row.invoice_date || row.date || "";
 const getReference = (row) =>
@@ -65,6 +70,14 @@ const getAmount = (row) =>
   row._freshOrder
     ? getInvoiceTotal(row._freshOrder)
     : Number(row.invoice_total ?? row.invoice_amount ?? row.amount ?? row.debit ?? 0);
+const isInvoiceFinanciallyVoided = (row = {}) =>
+  isFinanciallyVoided(row) ||
+  isFinanciallyVoided(row._freshOrder) ||
+  isFinanciallyVoided(row._ledgerRow);
+const getInvoiceDisplayStatus = (row = {}) =>
+  isInvoiceFinanciallyVoided(row)
+    ? "VOID"
+    : row.invoice_status || row.status || "UNPAID";
 const getOrderPaymentStatus = (order = {}, invoiceTotal = 0) => {
   const explicitStatus = String(order.invoice_status || order.payment_status || order.paymentStatus || "")
     .trim()
@@ -406,6 +419,11 @@ export default function InvoicesPortal() {
     lines: [],
   });
   const [amendOrder, setAmendOrder] = useState(null);
+  const [voidInvoiceRow, setVoidInvoiceRow] = useState(null);
+  const [voidPreview, setVoidPreview] = useState(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidLoading, setVoidLoading] = useState(false);
+  const [voidError, setVoidError] = useState("");
   const loggedInUser = JSON.parse(
     localStorage.getItem("loggedInUser") ||
       localStorage.getItem("fairchoice_user") ||
@@ -705,8 +723,6 @@ export default function InvoicesPortal() {
     });
   };
 
-<<<<<<< HEAD
-=======
   const closeVoidInvoiceDialog = () => {
     if (voidLoading) return;
     setVoidInvoiceRow(null);
@@ -788,7 +804,6 @@ export default function InvoicesPortal() {
     }
   };
 
->>>>>>> 81bcfe5 (Fix invoice void financial and inventory reversal)
   const saveManualInvoice = async () => {
     if (!selectedCustomer) {
       alert("Select customer.");
@@ -2135,6 +2150,8 @@ const runInvoiceAction = async (row, action) => {
               ) : (
                 pagedInvoices.map((row) => {
                   const amount = getAmount(row);
+                  const displayStatus = getInvoiceDisplayStatus(row);
+                  const financiallyVoided = isInvoiceFinanciallyVoided(row);
 
                   return (
                     <tr key={row.id || getReference(row)} className="border-t border-slate-100">
@@ -2142,7 +2159,7 @@ const runInvoiceAction = async (row, action) => {
                       <td className="p-3">{getCustomer(row)}</td>
                       <td className="p-3">{getCreatedDate(row) ? new Date(getCreatedDate(row)).toLocaleDateString() : "-"}</td>
                       <td className="p-3 text-right font-bold">{formatCurrency(amount)}</td>
-                      <td className="p-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE" ? "bg-purple-50 text-purple-700" : "bg-blue-50 text-blue-700"}`}>{row.invoice_status || row.status || "UNPAID"}</span></td>
+                      <td className="p-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${financiallyVoided ? "bg-red-50 text-red-700" : String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE" ? "bg-purple-50 text-purple-700" : "bg-blue-50 text-blue-700"}`}>{displayStatus}</span></td>
                       <td className="p-3">
                         <div className="flex flex-wrap justify-end gap-2">
                           <button type="button" onClick={() => runInvoiceAction(row, previewInvoice)} className="bg-slate-100 text-slate-800 px-3 py-1 rounded-lg text-xs font-bold">View</button>
@@ -2151,8 +2168,6 @@ const runInvoiceAction = async (row, action) => {
                           {isAdminUser && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
                           )}
-<<<<<<< HEAD
-=======
                           {isNisstajAdmin && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button
                               type="button"
@@ -2162,7 +2177,6 @@ const runInvoiceAction = async (row, action) => {
                               {financiallyVoided ? "Return stock" : "Void invoice"}
                             </button>
                           )}
->>>>>>> 81bcfe5 (Fix invoice void financial and inventory reversal)
                         </div>
                       </td>
                     </tr>
@@ -2212,8 +2226,6 @@ const runInvoiceAction = async (row, action) => {
           </div>
         </div>
       </div>
-<<<<<<< HEAD
-=======
 
       {voidInvoiceRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="void-invoice-title">
@@ -2251,7 +2263,6 @@ const runInvoiceAction = async (row, action) => {
           </div>
         </div>
       )}
->>>>>>> 81bcfe5 (Fix invoice void financial and inventory reversal)
     </div>
   );
 }
