@@ -740,11 +740,6 @@ export default function InvoicesPortal() {
       alert("Return invoices cannot be voided with this correction.");
       return;
     }
-    if (isInvoiceFinanciallyVoided(row)) {
-      alert("This invoice is already financially voided.");
-      return;
-    }
-
     setVoidInvoiceRow(row);
     setVoidPreview(null);
     setVoidReason("");
@@ -758,7 +753,7 @@ export default function InvoicesPortal() {
       });
       setVoidPreview(preview);
       if (preview?.already_voided) {
-        setVoidError("This invoice is already financially voided.");
+        setVoidError("Invoice and inventory are already reversed.");
       }
     } catch (previewError) {
       console.error("Invoice financial correction preview error:", previewError);
@@ -783,7 +778,7 @@ export default function InvoicesPortal() {
 
     const reference = getReference(voidInvoiceRow);
     const confirmed = window.confirm(
-      `Final confirmation: financially void invoice ${reference}? This keeps warehouse, inventory and order quantities unchanged, but rebuilds FIFO allocations.`
+      "Void invoice and return stock?"
     );
     if (!confirmed) return;
 
@@ -800,7 +795,7 @@ export default function InvoicesPortal() {
       setVoidReason("");
       setVoidError("");
       await loadInvoices();
-      alert(`Invoice ${reference} was financially voided and FIFO allocations were rebuilt.`);
+      alert(`Invoice ${reference} was voided and its deducted stock was returned.`);
     } catch (voidActionError) {
       console.error("Invoice financial void error:", voidActionError);
       setVoidError(voidActionError.message || "Could not financially void this invoice.");
@@ -2173,8 +2168,14 @@ const runInvoiceAction = async (row, action) => {
                           {isAdminUser && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
                           )}
-                          {isNisstajAdmin && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && !financiallyVoided && (
-                            <button type="button" onClick={() => openVoidInvoiceDialog(row)} className="bg-red-700 text-white px-3 py-1 rounded-lg text-xs font-bold">Void invoice</button>
+                          {isNisstajAdmin && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
+                            <button
+                              type="button"
+                              onClick={() => openVoidInvoiceDialog(row)}
+                              className="bg-red-700 text-white px-3 py-1 rounded-lg text-xs font-bold"
+                            >
+                              {financiallyVoided ? "Return stock" : "Void invoice"}
+                            </button>
                           )}
                         </div>
                       </td>
@@ -2231,14 +2232,14 @@ const runInvoiceAction = async (row, action) => {
           <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 id="void-invoice-title" className="text-xl font-extrabold text-slate-900">Financially void duplicate invoice</h3>
+                <h3 id="void-invoice-title" className="text-xl font-extrabold text-slate-900">Void Invoice</h3>
                 <p className="mt-1 text-sm text-slate-600">Invoice {formatDisplayOrderId(getReference(voidInvoiceRow))} · {getCustomer(voidInvoiceRow)}</p>
               </div>
               <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50" aria-label="Close void invoice dialog">Close</button>
             </div>
 
             <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
-              This action changes financial records only. Warehouse, inventory, delivered status and order quantities remain unchanged. A permanent before/after audit snapshot is retained.
+              This will void the invoice and return its stock to inventory.
             </div>
 
             {voidLoading && !voidPreview ? (
@@ -2257,7 +2258,7 @@ const runInvoiceAction = async (row, action) => {
 
             <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-xl border border-slate-300 px-4 py-2 font-bold text-slate-700 disabled:opacity-50">Cancel</button>
-              <button type="button" onClick={confirmVoidInvoice} disabled={voidLoading || !voidPreview || voidPreview?.already_voided || !voidReason.trim()} className="rounded-xl bg-red-700 px-4 py-2 font-bold text-white disabled:bg-slate-400">{voidLoading ? "Voiding..." : "Void invoice financially"}</button>
+              <button type="button" onClick={confirmVoidInvoice} disabled={voidLoading || !voidPreview || voidPreview?.already_voided || !voidReason.trim()} className="rounded-xl bg-red-700 px-4 py-2 font-bold text-white disabled:bg-slate-400">{voidLoading ? "Processing..." : (voidPreview?.financial_already_voided ? "Return stock to inventory" : "Void invoice and return stock")}</button>
             </div>
           </div>
         </div>
