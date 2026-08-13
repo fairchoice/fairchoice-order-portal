@@ -279,14 +279,21 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
   const hydratedOrders = await hydrateOrdersWithFullOrderItems(orders || []);
   const orderInvoiceRows = hydratedOrders
     .filter((order) => deliveredStatuses.includes(String(order.status || "").trim().toLowerCase()))
+    .filter(
+      (order) =>
+        String(order.financial_status || "ACTIVE").trim().toUpperCase() !== "VOID"
+    )
     .map(mapOrderInvoice);
 
   if (!centralInvoices?.length) return orderInvoiceRows;
 
   const orderLookup = buildInvoiceReferenceLookup(orderInvoiceRows);
-  const mergedCentralInvoices = centralInvoices.map((invoice) =>
-    withOrderBackedInvoiceTotal(invoice, orderLookup)
-  );
+  const mergedCentralInvoices = centralInvoices
+    .filter(
+      (invoice) =>
+        String(invoice.financial_status || "ACTIVE").trim().toUpperCase() !== "VOID"
+    )
+    .map((invoice) => withOrderBackedInvoiceTotal(invoice, orderLookup));
   const mergedReferences = new Set(
     mergedCentralInvoices.flatMap((invoice) => getInvoiceReferenceCandidates(invoice))
   );

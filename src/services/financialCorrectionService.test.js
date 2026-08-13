@@ -70,3 +70,98 @@ test("service exposes preview before destructive correction calls", () => {
   assert.match(serviceSource, /previewLegacyPaymentLink/);
   assert.match(serviceSource, /linkMatchedLegacyPayment/);
 });
+
+test("customer credit invoice loader excludes financially voided delivered orders", async () => {
+  const source = fs.readFileSync(
+    new URL("./centralPaymentService.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    source,
+    /order\.financial_status[\s\S]{0,120}!==\s*"VOID"/,
+    "delivered order fallback must not resurrect financially voided invoices"
+  );
+  assert.match(
+    source,
+    /invoice\.financial_status[\s\S]{0,120}!==\s*"VOID"/,
+    "canonical invoice rows must exclude financial voids from Customer Credit"
+  );
+});
+
+test("canonical invoice sync preserves financial void instead of reissuing delivered invoice", async () => {
+  const migration = fs.readFileSync(
+    new URL("../../supabase/migrations/20260812231500_keep_financial_void_consistent.sql", import.meta.url),
+    "utf8"
+  );
+  assert.match(migration, /financial_status[\s\S]{0,100}=\s*'VOID'/i);
+  assert.match(migration, /status\s*=\s*'CANCELLED'/i);
+  assert.match(migration, /recalculate_central_payment_fifo/i);
+});
+
+test("emergency duplicate invoice void returns only recorded inventory deductions atomically", () => {
+  const migration = fs.readFileSync(
+    new URL("../../supabase/migrations/20260812233000_void_duplicate_invoice_restore_inventory.sql", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(migration, /update public\.product_location_stock[\s\S]*qty\s*=\s*v_stock_after/i);
+  assert.match(migration, /order_item_picking_events[\s\S]*reversed_at\s+is\s+null/i);
+  assert.match(migration, /stock_location_id\s+is\s+not\s+null/i);
+  assert.match(migration, /movement_type\s*=\s*'SALE'/i);
+  assert.match(migration, /movement_type, qty, stock_before, stock_after, note[\s\S]*'VOID_RETURN'/i);
+  assert.match(migration, /owner_inventory_reversals/i);
+  assert.match(migration, /duplicate_void_inventory_reversed_at/i);
+  assert.match(migration, /recalculate_central_payment_fifo/i);
+  assert.doesNotMatch(migration, /delete\s+from\s+public\.(orders|order_items|stock_movements)/i);
+});
+
+test("duplicate invoice void can safely finish stock return after an older financial-only void", () => {
+  const migration = fs.readFileSync(
+    new URL("../../supabase/migrations/20260812233000_void_duplicate_invoice_restore_inventory.sql", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(migration, /v_financial_already_voided/i);
+  assert.match(migration, /if\s+v_financial_already_voided\s+and\s+v_order\.duplicate_void_inventory_reversed_at\s+is\s+not\s+null/i);
+  assert.match(migration, /if\s+not\s+v_financial_already_voided\s+then/i);
+  assert.match(migration, /COMPLETE_DUPLICATE_INVENTORY_REVERSAL/i);
+});
+
+test("invoice void UI clearly warns that stock will be returned", () => {
+  const source = fs.readFileSync(
+    new URL("../pages/AdminSetup/InvoicesPortal.jsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(source, />Void Invoice</);
+  assert.match(source, /This will void the invoice and return its stock to inventory\./);
+  assert.match(source, /Void invoice and return stock\?/);
+  assert.match(source, /Void invoice and return stock/);
+  assert.doesNotMatch(source, /inventory and order quantities unchanged/i);
+});
+
+test("duplicate invoice void restores legacy sales to the order country location without guessing", () => {
+  const migration = fs.readFileSync(
+    new URL("../../supabase/migrations/20260813002000_void_duplicate_invoice_country_inventory_repair.sql", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(migration, /fc_resolve_order_inventory_country_v1\(v_order\.id\)/i);
+  assert.match(migration, /fc_normalize_inventory_country_v1\(sl\.country\)\s*=\s*v_order_country/i);
+  assert.match(migration, /reversal_source = 'LEGACY_COUNTRY_LOCATION'/i);
+  assert.match(migration, /v_country_location_count\s*<>\s*1/i);
+  assert.match(migration, /expected exactly one active % stock location/i);
+  assert.match(migration, /movement_type\s*=\s*'SALE'/i);
+  assert.match(migration, /upper\(trim\(coalesce\(sm\.note, ''\)\)\)\s*=\s*upper\(trim\(v_order\.order_number\)\)/i);
+});
+
+test("duplicate invoice void validates recorded picking country against order and location country", () => {
+  const migration = fs.readFileSync(
+    new URL("../../supabase/migrations/20260813002000_void_duplicate_invoice_country_inventory_repair.sql", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(migration, /fc_normalize_inventory_country_v1\(e\.inventory_country\) is distinct from v_order_country/i);
+  assert.match(migration, /v_location_country is distinct from v_order_country/i);
+  assert.match(migration, /abort the whole transaction instead of guessing/i);
+});
