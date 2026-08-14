@@ -187,7 +187,6 @@ function PaymentRecordsPanel({ archived, currentUser, onInvalidSessionError }) {
 
 function GlobalLedgerPanel({
   currentUser,
-  ownerPassword,
   onInvalidSessionError,
 }) {
   const [filters, setFilters] = useState({ search: "", method: "", status: "ACTIVE", transactionType: "", dateFrom: "", dateTo: "" });
@@ -198,14 +197,13 @@ function GlobalLedgerPanel({
   const [message, setMessage] = useState("");
 
   const load = async () => {
-    if (!isOwnerUser(currentUser) || !ownerPassword) return;
+    if (!isOwnerUser(currentUser)) return;
     setLoading(true);
     setMessage("");
     try {
       const data = await runOwnerFinancialRequest(currentUser, () =>
         listGlobalFinancialHistory({
           currentUser,
-          ownerPassword,
           filters,
           page,
         })
@@ -221,7 +219,7 @@ function GlobalLedgerPanel({
     }
   };
 
-  useEffect(() => { void load(); }, [filters, page, ownerPassword]);
+  useEffect(() => { void load(); }, [filters, page, currentUser]);
 
   const activeRows = useMemo(() => result.records.filter((row) => row.status === "ACTIVE"), [result.records]);
   const allSelected = activeRows.length > 0 && activeRows.every((row) => selected.includes(row.recordId));
@@ -233,7 +231,7 @@ function GlobalLedgerPanel({
     if (!String(reason || "").trim()) return;
     if (!window.confirm(`Archive ${selected.length} selected transaction(s)?`)) return;
     try {
-      const count = await bulkArchiveFinancialTransactions({ currentUser, ownerPassword, transactionIds: selected, reason });
+      const count = await bulkArchiveFinancialTransactions({ currentUser, transactionIds: selected, reason });
       setMessage(`${count} transaction(s) archived with a permanent audit trail.`);
       await load();
     } catch (error) {
@@ -247,10 +245,10 @@ function GlobalLedgerPanel({
     if (!String(reason || "").trim()) return;
     try {
       if (action === "restore") {
-        await restoreFinancialTransaction({ currentUser, ownerPassword, archiveId: row.archiveId, reason });
+        await restoreFinancialTransaction({ currentUser, archiveId: row.archiveId, reason });
       } else {
         if (!window.confirm("Permanently delete this archive record? This cannot be undone.")) return;
-        await permanentlyDeleteFinancialArchive({ currentUser, ownerPassword, archiveId: row.archiveId, reason });
+        await permanentlyDeleteFinancialArchive({ currentUser, archiveId: row.archiveId, reason });
       }
       await load();
     } catch (error) {
@@ -258,8 +256,6 @@ function GlobalLedgerPanel({
       setMessage(error.message || "Archive action failed.");
     }
   };
-
-  if (!ownerPassword) return null;
 
   return (
     <section className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -327,7 +323,7 @@ function ManualPaymentPanel({
           <input value={form.paidBy} onChange={(event) => onUpdateForm("paidBy", event.target.value)} placeholder="Who paid / discount beneficiary" className="rounded-xl border p-3" />
           <input value={form.externalReference} onChange={(event) => onUpdateForm("externalReference", event.target.value)} placeholder="Bank/reference number (optional)" className="rounded-xl border p-3" />
           <textarea value={form.notes} onChange={(event) => onUpdateForm("notes", event.target.value)} placeholder={form.transactionType === "DISCOUNT" ? "Compulsory detailed discount reason" : "Notes"} className="min-h-24 rounded-xl border p-3 md:col-span-2" />
-          <input type="password" value={ownerPassword} onChange={(event) => onOwnerPasswordChange(event.target.value)} placeholder="Owner financial password required" className="rounded-xl border border-blue-300 p-3 md:col-span-2" autoComplete="current-password" />
+          <input type="password" value={ownerPassword} onChange={(event) => onOwnerPasswordChange(event.target.value)} placeholder="nisstaj_admin login password required" className="rounded-xl border border-blue-300 p-3 md:col-span-2" autoComplete="current-password" />
         </div>
         {form.paymentMethod === "Bank Transfer" && form.transactionType === "PAYMENT" && (
           <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">
@@ -506,10 +502,20 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
       ),
     [snapshot]
   );
-  const pendingBankTransfers = payments.filter(
-    (payment) =>
-      payment.payment_method === "Bank Transfer" &&
-      payment.verification_status === "PENDING_VERIFICATION"
+  const pendingBankTransfers = useMemo(
+    () =>
+      [...(snapshot?.selectedAllPayments || snapshot?.allPayments || [])]
+        .filter(
+          (payment) =>
+            payment.payment_method === "Bank Transfer" &&
+            payment.verification_status === "PENDING_VERIFICATION"
+        )
+        .sort(
+          (left, right) =>
+            new Date(right.payment_date || right.created_at || 0) -
+            new Date(left.payment_date || left.created_at || 0)
+        ),
+    [snapshot]
   );
 
   const refreshSnapshot = async () => {
@@ -638,11 +644,6 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
   };
 
   const confirmBank = async (payment) => {
-    if (!ownerPassword) {
-      setError("Enter the Owner Financial Password in Manual Payment first.");
-      return;
-    }
-
     const note = window.prompt("Enter the compulsory bank verification note or bank statement reference.");
     if (!String(note || "").trim()) {
       setError("A bank verification note is compulsory.");
@@ -656,7 +657,6 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
         payment,
         customer: selectedCustomer,
         currentUser,
-        ownerPassword,
         note,
       });
       setSuccess("Bank transfer confirmed, audited and allocated to the oldest outstanding invoices.");
@@ -668,11 +668,6 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
   };
 
   const rejectBank = async (payment) => {
-    if (!ownerPassword) {
-      setError("Enter the Owner Financial Password in Manual Payment first.");
-      return;
-    }
-
     const reason = window.prompt(
       "Enter the compulsory rejection reason. The customer will not see this rejected payment."
     );
@@ -688,7 +683,6 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
       await rejectOwnerBankTransfer({
         payment,
         currentUser,
-        ownerPassword,
         reason,
       });
       setSuccess("Bank transfer rejected. It remains in internal history and has been removed from the customer display.");
@@ -827,7 +821,6 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
       {isNisstajAdmin && activeTab === "ledger" && (
         <GlobalLedgerPanel
           currentUser={currentUser}
-          ownerPassword={ownerPassword}
           onInvalidSessionError={handleInvalidSessionError}
         />
       )}

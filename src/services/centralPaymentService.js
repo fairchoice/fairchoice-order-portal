@@ -675,6 +675,7 @@ export async function loadCentralPaymentSnapshot({
     },
     selectedInvoices: selectedAllocatedInvoices,
     selectedPayments,
+    selectedAllPayments,
     selectedAllocations,
     selectedOpeningBalance,
     branchName: getBranchName(customer, selectedBranchId),
@@ -802,14 +803,16 @@ export async function confirmOwnerBankTransfer({
   payment,
   customer,
   currentUser,
-  ownerPassword,
   note,
 } = {}) {
   if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
     throw new Error("Only nisstaj_admin can confirm bank transfers.");
   }
   if (!payment?.id) throw new Error("Pending bank transfer is required.");
-  if (!ownerPassword) throw new Error("Owner financial password is required.");
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
   if (!String(note || "").trim()) {
     throw new Error("A bank verification note is compulsory.");
   }
@@ -833,15 +836,14 @@ export async function confirmOwnerBankTransfer({
     branchId: payment.customer_branch_id || "",
   });
 
-  const { data, error } = await supabase.rpc("confirm_owner_bank_transfer", {
-    p_owner_username: "nisstaj_admin",
-    p_owner_password: ownerPassword,
+  const { data, error } = await supabase.rpc("confirm_owner_bank_transfer_session_v1", {
+    p_username: fcSession.username,
+    p_session_token: fcSession.token,
     p_payment_id: payment.id,
     p_note: String(note).trim(),
-    p_allocations: preview.allocations,
   });
 
-  if (!error) return { payment: data, preview };
+  if (!error) return { ...(data || {}), preview };
   if (isMissingRpcError(error)) {
     throw new Error(
       "Bank confirmation is not installed. Review and apply the additive owner-security migration first."
@@ -853,14 +855,16 @@ export async function confirmOwnerBankTransfer({
 export async function rejectOwnerBankTransfer({
   payment,
   currentUser,
-  ownerPassword,
   reason,
 } = {}) {
   if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
     throw new Error("Only nisstaj_admin can reject bank transfers.");
   }
   if (!payment?.id) throw new Error("Pending bank transfer is required.");
-  if (!ownerPassword) throw new Error("Owner financial password is required.");
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
   if (!String(reason || "").trim()) {
     throw new Error("A bank rejection reason is compulsory.");
   }
@@ -871,14 +875,14 @@ export async function rejectOwnerBankTransfer({
     throw new Error("This bank transfer is not pending verification.");
   }
 
-  const { data, error } = await supabase.rpc("reject_owner_bank_transfer", {
-    p_owner_username: "nisstaj_admin",
-    p_owner_password: ownerPassword,
+  const { data, error } = await supabase.rpc("reject_owner_bank_transfer_session_v1", {
+    p_username: fcSession.username,
+    p_session_token: fcSession.token,
     p_payment_id: payment.id,
     p_reason: String(reason).trim(),
   });
 
-  if (!error) return { payment: data };
+  if (!error) return data || {};
   if (isMissingRpcError(error)) {
     throw new Error(
       "Bank rejection is not installed. Apply the supplied bank-transfer rejection migration first."
