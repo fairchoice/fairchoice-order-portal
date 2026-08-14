@@ -1,5 +1,6 @@
 import { supabase } from "./supabase.js";
 import { isOwnerUser } from "./ownerFinancialSecurity.js";
+import { getFcSessionState } from "./fcSession.js";
 
 const PAGE_SIZE = 20;
 
@@ -9,10 +10,12 @@ function requireOwner(currentUser) {
   }
 }
 
-function requireOwnerPassword(ownerPassword) {
-  if (!String(ownerPassword || "").trim()) {
-    throw new Error("Owner financial password is required.");
+function requireOwnerSession(currentUser) {
+  const session = getFcSessionState(currentUser);
+  if (!session.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
   }
+  return session;
 }
 
 export function buildLedgerFilters({
@@ -52,17 +55,17 @@ export function normalizeLedgerRecord(row = {}) {
 }
 
 export async function listGlobalFinancialHistory({
-  currentUser, ownerPassword, filters = {}, page = 1, pageSize = PAGE_SIZE,
+  currentUser, filters = {}, page = 1, pageSize = PAGE_SIZE,
 } = {}) {
   requireOwner(currentUser);
-  requireOwnerPassword(ownerPassword);
+  const session = requireOwnerSession(currentUser);
   const clean = buildLedgerFilters(filters);
   const currentPage = Math.max(1, Number(page || 1));
   const size = Math.min(100, Math.max(1, Number(pageSize || PAGE_SIZE)));
 
-  const { data, error } = await supabase.rpc("list_global_financial_history_v1", {
-    p_owner_username: currentUser.username,
-    p_owner_password: ownerPassword,
+  const { data, error } = await supabase.rpc("list_global_financial_history_session_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
     p_search: clean.search || null,
     p_payment_method: clean.method || null,
     p_status: clean.status || null,
@@ -86,16 +89,16 @@ export async function listGlobalFinancialHistory({
 }
 
 export async function bulkArchiveFinancialTransactions({
-  currentUser, ownerPassword, transactionIds, reason,
+  currentUser, transactionIds, reason,
 } = {}) {
   requireOwner(currentUser);
-  requireOwnerPassword(ownerPassword);
+  const session = requireOwnerSession(currentUser);
   const ids = [...new Set((transactionIds || []).filter(Boolean))];
   if (!ids.length) throw new Error("Select at least one active transaction.");
   if (!String(reason || "").trim()) throw new Error("Archive reason is required.");
-  const { data, error } = await supabase.rpc("owner_archive_financial_transactions", {
-    p_owner_username: currentUser.username,
-    p_owner_password: ownerPassword,
+  const { data, error } = await supabase.rpc("owner_archive_financial_transactions_session_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
     p_transaction_ids: ids,
     p_reason: String(reason).trim(),
   });
@@ -104,14 +107,14 @@ export async function bulkArchiveFinancialTransactions({
 }
 
 export async function restoreFinancialTransaction({
-  currentUser, ownerPassword, archiveId, reason,
+  currentUser, archiveId, reason,
 } = {}) {
   requireOwner(currentUser);
-  requireOwnerPassword(ownerPassword);
+  const session = requireOwnerSession(currentUser);
   if (!archiveId) throw new Error("Archive record is required.");
-  const { data, error } = await supabase.rpc("owner_restore_financial_transaction", {
-    p_owner_username: currentUser.username,
-    p_owner_password: ownerPassword,
+  const { data, error } = await supabase.rpc("owner_restore_financial_transaction_session_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
     p_archive_id: archiveId,
     p_reason: String(reason || "").trim() || null,
   });
@@ -120,15 +123,15 @@ export async function restoreFinancialTransaction({
 }
 
 export async function permanentlyDeleteFinancialArchive({
-  currentUser, ownerPassword, archiveId, reason,
+  currentUser, archiveId, reason,
 } = {}) {
   requireOwner(currentUser);
-  requireOwnerPassword(ownerPassword);
+  const session = requireOwnerSession(currentUser);
   if (!archiveId) throw new Error("Archive record is required.");
   if (!String(reason || "").trim()) throw new Error("Permanent delete reason is required.");
-  const { data, error } = await supabase.rpc("owner_delete_financial_archive", {
-    p_owner_username: currentUser.username,
-    p_owner_password: ownerPassword,
+  const { data, error } = await supabase.rpc("owner_delete_financial_archive_session_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
     p_archive_id: archiveId,
     p_reason: String(reason).trim(),
   });
