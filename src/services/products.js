@@ -43,10 +43,36 @@ const LEGACY_PRODUCT_SELECT_COLUMNS = PRODUCT_SELECT_COLUMNS.filter(
   (column) => column !== "product_special_price"
 );
 
+const PRODUCT_PAGE_SIZE = 500;
+
 const isMissingProductSpecialColumnError = (error) =>
   String(error?.message || "")
     .toLowerCase()
     .includes("product_special_price");
+
+async function loadAllProductRows(columns) {
+  const rows = [];
+
+  for (let from = 0; ; from += PRODUCT_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("products")
+      .select(columns.join(","))
+      .order("brand", { ascending: true })
+      .order("series", { ascending: true })
+      .order("product_name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + PRODUCT_PAGE_SIZE - 1);
+
+    if (error) return { data: null, error };
+
+    const page = data || [];
+    rows.push(...page);
+
+    if (page.length < PRODUCT_PAGE_SIZE) break;
+  }
+
+  return { data: rows, error: null };
+}
 
 function normalizeProduct(p, locationStocksByProduct = {}) {
   const productSpecialPrice = Number(
@@ -94,21 +120,10 @@ function normalizeProduct(p, locationStocksByProduct = {}) {
 }
 
 export async function getProducts() {
-  let { data, error } = await supabase
-    .from("products")
-    .select(PRODUCT_SELECT_COLUMNS.join(","))
-    .order("brand", { ascending: true })
-    .order("series", { ascending: true })
-    .order("product_name", { ascending: true });
+  let { data, error } = await loadAllProductRows(PRODUCT_SELECT_COLUMNS);
 
   if (error && isMissingProductSpecialColumnError(error)) {
-    const fallback = await supabase
-      .from("products")
-      .select(LEGACY_PRODUCT_SELECT_COLUMNS.join(","))
-      .order("brand", { ascending: true })
-      .order("series", { ascending: true })
-      .order("product_name", { ascending: true });
-
+    const fallback = await loadAllProductRows(LEGACY_PRODUCT_SELECT_COLUMNS);
     data = fallback.data;
     error = fallback.error;
   }
