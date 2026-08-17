@@ -76,6 +76,55 @@ const UNPAID_SEARCH_FIELDS = [
 const normalize = (value) => String(value || "").trim().toLowerCase();
 const isCashPayment = (row) => normalize(row.payment_type || row.payment_method) === "cash";
 const paymentAmount = (row) => Number(row.payment_amount ?? row.amount ?? row.credit ?? 0);
+const NON_COLLECTION_PAYMENT_MARKERS = [
+  "credit",
+  "return credit",
+  "credit note",
+  "refund",
+  "reversal",
+  "reversed",
+  "void",
+  "voided",
+];
+const INACTIVE_COLLECTION_STATUS_MARKERS = [
+  "pending",
+  "pending_verification",
+  "pending verification",
+  "rejected",
+  "voided",
+  "reversed",
+  "archived",
+  "deleted",
+  "inactive",
+  "cancelled",
+];
+const isGenuineIncomingPayment = (row = {}) => {
+  if (paymentAmount(row) <= 0) return false;
+
+  const paymentType = normalize(
+    row.payment_type || row.payment_method || row.metadata?.payment_type || row.metadata?.payment_method,
+  );
+  const transactionType = normalize(row.transaction_type || row.entry_type);
+  const lifecycleStatus = normalize(row.payment_status || row.status);
+  const verificationStatus = normalize(row.verification_status);
+
+  if (
+    INACTIVE_COLLECTION_STATUS_MARKERS.includes(lifecycleStatus) ||
+    INACTIVE_COLLECTION_STATUS_MARKERS.includes(verificationStatus)
+  ) {
+    return false;
+  }
+
+  if (NON_COLLECTION_PAYMENT_MARKERS.some((marker) => paymentType === marker || paymentType.includes(marker))) {
+    return false;
+  }
+
+  if (["refund", "return credit", "reversal", "void"].some((marker) => transactionType.includes(marker))) {
+    return false;
+  }
+
+  return true;
+};
 const collectorNameFor = (row) =>
   row.collector_name ||
   row.driver_name ||
@@ -250,13 +299,18 @@ export default function WeeklyAccount({ currentUser }) {
     [payments, startDate, endDate],
   );
 
-  const driverPayments = useMemo(
-    () => filteredPayments.filter((row) => collectorTypeFor(row) === "Driver"),
+  const collectionPayments = useMemo(
+    () => filteredPayments.filter(isGenuineIncomingPayment),
     [filteredPayments],
   );
+
+  const driverPayments = useMemo(
+    () => collectionPayments.filter((row) => collectorTypeFor(row) === "Driver"),
+    [collectionPayments],
+  );
   const salesRepPayments = useMemo(
-    () => filteredPayments.filter((row) => collectorTypeFor(row) === "Sales Rep"),
-    [filteredPayments],
+    () => collectionPayments.filter((row) => collectorTypeFor(row) === "Sales Rep"),
+    [collectionPayments],
   );
 
   const collectorOptions = useMemo(
@@ -279,13 +333,96 @@ export default function WeeklyAccount({ currentUser }) {
       handoverHistory,
     ],
   );
-  const optionsByType = useMemo(
-    () => ({
-      Driver: collectorOptions.filter((option) => option.type === "Driver"),
-      "Sales Rep": collectorOptions.filter((option) => option.type === "Sales Rep"),
-    }),
-    [collectorOptions],
-  );
+  const resolveCollectorOptionForRow = (row) => {
+    const type = collectorTypeFor(row);
+    const sameTypeOptions = collectorOptions.filter((option) => option.type === type);
+    const strictMatch = sameTypeOptions.find((option) =>
+      collectorOptionMatchesRow(option, row),
+    );
+    if (strictMatch) return strictMatch;
+
+    const rowName = normalize(collectorNameFor(row));
+    if (!rowName) return null;
+
+    return (
+      sameTypeOptions.find((option) =>
+        [
+          option.username,
+          option.staffName,
+          option.nameSnapshot,
+          ...(option.aliases || []),
+        ]
+          .map(normalize)
+          .filter(Boolean)
+          .includes(rowName),
+      ) || null
+    );
+  };
+
+  const handoverCollectorMatchesRow = (option, row) => {
+    if (!option || collectorTypeFor(row) !== option.type) return false;
+    if (collectorOptionMatchesRow(option, row)) return true;
+
+    const rowName = normalize(collectorNameFor(row));
+    if (!rowName) return false;
+
+    return [
+      option.username,
+      option.staffName,
+      option.nameSnapshot,
+      ...(option.aliases || []),
+    ]
+      .map(normalize)
+      .filter(Boolean)
+      .includes(rowName);
+  };
+
+  const optionsByType = useMemo(() => {
+    const buildOptions = (type, rows) => {
+      const options = new Map(
+        collectorOptions
+          .filter((option) => option.type === type)
+          .map((option) => [option.value, option]),
+      );
+
+      rows
+        .filter((row) => collectorTypeFor(row) === type)
+        .forEach((row) => {
+          const resolved = resolveCollectorOptionForRow(row);
+          if (resolved) {
+            options.set(resolved.value, resolved);
+            return;
+          }
+
+          const name = collectorNameFor(row);
+          const normalizedName = normalize(name);
+          if (!normalizedName) return;
+          const value = `legacy:${type}:${normalizedName}`;
+          if (!options.has(value)) {
+            options.set(value, {
+              value,
+              staffId: "",
+              type,
+              username: "",
+              staffName: "",
+              nameSnapshot: name,
+              label: name,
+              aliases: [normalizedName],
+              legacy: true,
+            });
+          }
+        });
+
+      return [...options.values()].sort((left, right) =>
+        left.label.localeCompare(right.label, undefined, { sensitivity: "base" }),
+      );
+    };
+
+    return {
+      Driver: buildOptions("Driver", driverPayments),
+      "Sales Rep": buildOptions("Sales Rep", salesRepPayments),
+    };
+  }, [collectorOptions, driverPayments, salesRepPayments]);
   const selectedCollector = useMemo(
     () =>
       optionsByType[collectorType].find(
@@ -340,20 +477,25 @@ export default function WeeklyAccount({ currentUser }) {
   }, [collectorStaffId, currentUser, endDate, startDate]);
 
   const totalsByCollector = (rows) => {
-    return collectorOptions
-      .map((option) => [
-        option.label,
-        rows
-          .filter((row) => collectorOptionMatchesRow(option, row))
-          .reduce((sum, row) => sum + paymentAmount(row), 0),
-      ])
+    const totals = new Map();
+
+    rows.forEach((row) => {
+      const matchedOption = collectorOptions.find((option) =>
+        collectorOptionMatchesRow(option, row),
+      );
+      const fallbackName = collectorNameFor(row) || "Unassigned";
+      const label = matchedOption?.label || fallbackName;
+      totals.set(label, (totals.get(label) || 0) + paymentAmount(row));
+    });
+
+    return [...totals.entries()]
       .filter(([, total]) => total !== 0)
       .sort((left, right) => right[1] - left[1]);
   };
 
   const cashHoldingRows = useMemo(() => {
     return collectorOptions.map((option) => {
-      const matchingCash = payments.filter(
+      const matchingCash = collectionPayments.filter(
         (row) =>
           isCashPayment(row) &&
           collectorOptionMatchesRow(option, row),
@@ -386,14 +528,14 @@ export default function WeeklyAccount({ currentUser }) {
         daysHolding: anchor ? Math.max(0, Math.floor((Date.now() - anchor.getTime()) / 86400000)) : 0,
       };
     }).sort((a, b) => b.holding - a.holding);
-  }, [collectorOptions, payments, approvedExpenseTotals, handoverHistory]);
+  }, [collectorOptions, collectionPayments, approvedExpenseTotals, handoverHistory]);
 
   const lastCollectorHandover = useMemo(
     () =>
       handoverHistory
         .filter(
           (row) =>
-            collectorOptionMatchesRow(selectedCollector, row),
+            handoverCollectorMatchesRow(selectedCollector, row),
         )
         .sort((a, b) => new Date(b.period_end || b.created_at) - new Date(a.period_end || a.created_at))[0],
     [handoverHistory, selectedCollector],
@@ -404,11 +546,11 @@ export default function WeeklyAccount({ currentUser }) {
     return new Date(0);
   }, [lastCollectorHandover]);
   const handoverPeriodEnd = new Date();
-  const selectedCashCollected = filteredPayments
+  const selectedCashCollected = collectionPayments
     .filter(
       (row) =>
         isCashPayment(row) &&
-        collectorOptionMatchesRow(selectedCollector, row),
+        handoverCollectorMatchesRow(selectedCollector, row),
     )
     .reduce((sum, row) => sum + paymentAmount(row), 0);
   const approvedExpenseDetailTotal = sumApprovedExpenseDetails(
@@ -418,7 +560,7 @@ export default function WeeklyAccount({ currentUser }) {
   const selectedCashHandedOver = handoverHistory
     .filter(
       (row) =>
-        collectorOptionMatchesRow(selectedCollector, row) &&
+        handoverCollectorMatchesRow(selectedCollector, row) &&
         dateInRange(row.handover_date || row.created_at, startDate, endDate),
     )
     .reduce((sum, row) => sum + Number(row.cash_received || 0), 0);
@@ -495,7 +637,7 @@ export default function WeeklyAccount({ currentUser }) {
   );
   const activeSearch = searchByTab[activeTab] || "";
   const searchedPayments = filterWeeklyAccountRows(
-    filteredPayments,
+    collectionPayments,
     searchByTab.total,
     PAYMENT_SEARCH_FIELDS,
   );
@@ -642,11 +784,63 @@ export default function WeeklyAccount({ currentUser }) {
 function CollectionSection({ rows, showSummary, money, formatDate }) {
   const total = rows.reduce((sum, row) => sum + paymentAmount(row), 0);
   const paymentCount = new Set(rows.map((row) => row.canonical_payment_key || row.id)).size;
-  return <>{showSummary && <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Paid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Payments" value={paymentCount} /><SummaryCard title="Total Collection" value={money(total)} /></div>}<PaymentTable rows={rows} money={money} formatDate={formatDate} /></>;
+  const totalsByType = ["Driver", "Sales Rep", "Office"].map((type) => [
+    type,
+    rows
+      .filter((row) => collectorTypeFor(row) === type)
+      .reduce((sum, row) => sum + paymentAmount(row), 0),
+  ]);
+
+  return (
+    <>
+      {showSummary && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <SummaryCard title="Paid Customers" value={new Set(rows.map((row) => row.customer_name)).size} />
+            <SummaryCard title="Payments" value={paymentCount} />
+            <SummaryCard title="Total Collection" value={money(total)} />
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {totalsByType.map(([type, amount]) => (
+              <MiniSummaryCard key={type} title={`${type} Collection`} value={money(amount)} />
+            ))}
+          </div>
+        </div>
+      )}
+      <PaymentTable rows={rows} money={money} formatDate={formatDate} />
+    </>
+  );
 }
 
 function CollectorCollectionSection({ rows, totals, title, showSummary, money, formatDate }) {
-  return <>{showSummary && <div className="grid grid-cols-1 gap-3 md:grid-cols-3">{totals.map(([name, total]) => <SummaryCard key={name} title={name} value={money(total)} />)}{totals.length === 0 && <SummaryCard title={title} value={money(0)} />}</div>}<PaymentTable rows={rows} money={money} formatDate={formatDate} /></>;
+  const [showCollectorTotals, setShowCollectorTotals] = useState(true);
+
+  return (
+    <>
+      {showSummary && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => setShowCollectorTotals((value) => !value)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+            >
+              {showCollectorTotals ? "Hide collector totals" : "View collector totals"}
+            </button>
+          </div>
+          {showCollectorTotals && (
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+              {totals.map(([name, total]) => (
+                <CompactCollectorCard key={name} title={name} value={money(total)} />
+              ))}
+              {totals.length === 0 && <CompactCollectorCard title={title} value={money(0)} />}
+            </div>
+          )}
+        </div>
+      )}
+      <PaymentTable rows={rows} money={money} formatDate={formatDate} />
+    </>
+  );
 }
 
 function PaymentTable({ rows, money, formatDate }) {
@@ -816,6 +1010,8 @@ function ExpenseDetail({ label, value }) {
 function Field({ label, children }) { return <label className="block"><span className="mb-1 block text-xs font-bold text-slate-600">{label}</span>{children}</label>; }
 function ReadOnlyValue({ value }) { return <input className="w-full rounded-lg border bg-slate-100 p-2.5 font-bold" value={value} readOnly />; }
 function SummaryCard({ title, value }) { return <div className="rounded-xl border bg-white p-4 shadow-sm"><div className="text-sm text-gray-500">{title}</div><div className="text-2xl font-bold">{value}</div></div>; }
+function MiniSummaryCard({ title, value }) { return <div className="rounded-lg border bg-white px-3 py-2 shadow-sm"><div className="text-xs text-gray-500">{title}</div><div className="text-lg font-bold">{value}</div></div>; }
+function CompactCollectorCard({ title, value }) { return <div className="min-w-0 rounded-lg border bg-white px-3 py-2 shadow-sm"><div className="truncate text-xs text-gray-500" title={title}>{title}</div><div className="mt-0.5 text-lg font-bold leading-tight">{value}</div></div>; }
 function Th({ children, right }) { return <th className={`whitespace-nowrap p-3 ${right ? "text-right" : "text-left"}`}>{children}</th>; }
 function Td({ children, right, bold, className = "" }) { return <td className={`whitespace-nowrap p-3 ${right ? "text-right" : "text-left"} ${bold ? "font-bold" : ""} ${className}`}>{children}</td>; }
 function StatusBadge({ value }) { const status = String(value || "").toUpperCase(); const style = status === "APPROVED" || status === "PAID" ? "bg-green-100 text-green-700" : status === "PENDING" || status.includes("PART") ? "bg-amber-100 text-amber-700" : status === "REJECTED" || status === "VOIDED" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-700"; return <span className={`rounded-full px-2 py-1 text-xs font-bold ${style}`}>{status}</span>; }
