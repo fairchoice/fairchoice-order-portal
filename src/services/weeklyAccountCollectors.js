@@ -16,7 +16,6 @@ export function normalizeCollectorType(value) {
 export function collectorStaffId(row = {}) {
   return String(
     row.collector_staff_id ||
-      row.paid_by_staff_id ||
       row.metadata?.collector_staff_id ||
       "",
   ).trim();
