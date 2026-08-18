@@ -4,6 +4,7 @@ import test from "node:test";
 import { isSupplyRecordStatus, normalizeSupplyStatus } from "./supplyStatus.js";
 
 const page = fs.readFileSync(new URL("../pages/PreOrderSupply.jsx", import.meta.url), "utf8");
+const workflow = fs.readFileSync(new URL("./preOrderSupplyAllocation.js", import.meta.url), "utf8");
 const migration = fs.readFileSync(
   new URL("../../supabase/migrations/20260801093000_preorder_supply_event_history.sql", import.meta.url),
   "utf8",
@@ -42,8 +43,8 @@ test("History is audit-only while active queues remain live-demand based", () =>
 });
 
 test("supplier attempts and bought quantities remain auditable", () => {
-  assert.match(page, /actionType === "NextSup"/);
-  assert.match(page, /actionType === "PartialBuy"/);
+  assert.match(workflow, /action\?\.actionType === "NextSup"/);
+  assert.match(workflow, /action\?\.actionType === "PartialBuy"/);
   assert.match(page, /batchId/);
   assert.match(migration, /supplier_id uuid/);
   assert.match(migration, /supplier_name text/);

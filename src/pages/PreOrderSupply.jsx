@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { logAction } from "../utils/auditLog";
 import { supabase } from "../services/supabase";
 import { supplierOptionsForSelection } from "../services/suppliers";
-import { allocateSupplierQuantity, isLivePreOrderDemandOrder } from "../services/preOrderSupplyAllocation";
+import {
+  allocateSupplierQuantity,
+  isLivePreOrderDemandOrder,
+  preOrderSupplyItemChanges,
+  preOrderWorkflowStage,
+  warehouseSupplyStage,
+} from "../services/preOrderSupplyAllocation";
 import {
   loadPreOrderSupplyHistory,
   recordPreOrderSupplyEvent,
@@ -38,24 +44,11 @@ const readJson = (key, fallback) => {
 
 const getItemKey = (order, item) =>
   `${order.orderId || order.order_number}:${item.dbId || item.id}`;
-const getItemQty = (item = {}) => Number(item.qty || item.quantity || 0);
+const getItemQty = (item = {}) => Number(item.qty ?? item.quantity ?? 0);
 const itemProductId = (item = {}) =>
   item.productId || item.product_id || item.product?.id || item.products?.id || item.id;
 
-const isPreOrderStatus = (value) =>
-  ["pre order", "preorder", "need supplier", "supply needed"].includes(
-    normalizeStatus(value),
-  );
-
-const displayStatus = (value) => {
-  const status = normalizeStatus(value);
-  if (["in stock", "available"].includes(status)) return "Bought";
-  if (["next supplier", "next supply", "supplier pending"].includes(status)) {
-    return "Next Supplier";
-  }
-  if (["cannot supply", "removed"].includes(status)) return "Cannot Supply";
-  return isPreOrderStatus(status) ? "Pre-order" : value || "Pre-order";
-};
+const isPreOrderStatus = (value) => warehouseSupplyStage(value) === "Pre-order";
 
 const deliveredStatuses = new Set([
   "delivered",
@@ -76,28 +69,6 @@ const historyDateKey = (event = {}) => {
     month: "2-digit",
     year: "numeric",
   }).format(date);
-};
-
-const statusChanges = (actionType, item, remainingQty) => {
-  const qty = getItemQty(item);
-  if (actionType === "Buy") {
-    return { sourceStatus: "In Stock", includeInPicking: true, pickedQty: qty };
-  }
-  if (actionType === "PartialBuy") {
-    return {
-      sourceStatus: "Next Supplier",
-      includeInPicking: false,
-      pickedQty: 0,
-      qty: Number(remainingQty || 0),
-    };
-  }
-  if (actionType === "NextSup") {
-    return { sourceStatus: "Next Supplier", includeInPicking: false, pickedQty: 0 };
-  }
-  if (actionType === "Remove") {
-    return { sourceStatus: "Cannot Supply", includeInPicking: false, pickedQty: 0 };
-  }
-  return { sourceStatus: "Need Supplier", includeInPicking: false, pickedQty: 0 };
 };
 
 function SupplierSelector({ suppliers, value, onChange, label = "Supplier" }) {
@@ -134,7 +105,7 @@ export default function PreOrderSupply({
   );
   const [tab, setTab] = useState("Pre-order Queue");
   const [pendingActions, setPendingActions] = useState(() => readJson(PENDING_KEY, []));
-  const [, setActionHistory] = useState({});
+  const [actionHistory, setActionHistory] = useState({});
   const [historyEvents, setHistoryEvents] = useState([]);
   const [historyWarning, setHistoryWarning] = useState("");
   const [suppliers, setSuppliers] = useState([]);
@@ -206,28 +177,22 @@ export default function PreOrderSupply({
     [products],
   );
 
-  // Working queues are based on live order demand plus unsynced local actions only.
-  // Shared history is audit-only and must never resurrect completed demand.
-  const latestActionByItem = useMemo(() => {
+  // Warehouse rows determine operational demand. Permanent events only retain the
+  // supplier workflow stage for live Pre-order rows and never resurrect completed demand.
+  const pendingActionByItem = useMemo(() => {
     const latest = {};
     for (const action of pendingActions) {
-      if (action.actionType === "Recall") delete latest[action.itemKey];
-      else latest[action.itemKey] = action;
+      latest[action.itemKey] = action;
     }
     return latest;
   }, [pendingActions]);
 
-  const allLines = useMemo(() => {
+  const warehouseLines = useMemo(() => {
     const result = [];
     for (const order of orders || []) {
       if (!isLivePreOrderDemandOrder(order)) continue;
       for (const item of order.items || []) {
         const key = getItemKey(order, item);
-        const latestAction = latestActionByItem[key];
-        const originalStatus = item.sourceStatus || item.source_status || item.status;
-        const effectiveStatus = latestAction?.newStatus || originalStatus || "In Stock";
-        const currentDisplayStatus = displayStatus(effectiveStatus);
-        if (!isPreOrderStatus(originalStatus) && !latestAction) continue;
         const product = productById.get(String(itemProductId(item))) || {};
         result.push({
           order,
@@ -241,16 +206,53 @@ export default function PreOrderSupply({
           customerName: order.companyName || order.customerName || "Unknown Customer",
           branchName: order.branchName || order.branch_name || "",
           orderNumber: order.orderId || order.order_number,
-          qty: Number(latestAction?.remainingQty ?? getItemQty(item)),
+          qty: getItemQty(item),
           originalQty: getItemQty(item),
-          status: effectiveStatus,
-          displayStatus: currentDisplayStatus,
-          latestAction,
+          status: item.sourceStatus || item.source_status || item.status || "In Stock",
         });
       }
     }
     return result;
-  }, [orders, productById, latestActionByItem]);
+  }, [orders, productById]);
+
+  const allLines = useMemo(
+    () =>
+      warehouseLines.flatMap((line) => {
+        const hasPendingAction = Object.prototype.hasOwnProperty.call(
+          pendingActionByItem,
+          line.itemKey,
+        );
+        const latestAction = hasPendingAction
+          ? pendingActionByItem[line.itemKey]
+          : actionHistory[line.itemKey];
+        const warehouseStage = warehouseSupplyStage(line.status);
+        if (!warehouseStage && !(hasPendingAction && latestAction?.actionType === "Recall")) {
+          return [];
+        }
+        const displayStatus = preOrderWorkflowStage(line.status, latestAction, {
+          pending: hasPendingAction,
+        });
+        return [{
+          ...line,
+          qty: Number(latestAction?.remainingQty ?? line.qty),
+          displayStatus,
+          latestAction,
+        }];
+      }),
+    [actionHistory, pendingActionByItem, warehouseLines],
+  );
+
+  const warehouseLineByItemKey = useMemo(
+    () => new Map(warehouseLines.map((line) => [line.itemKey, line])),
+    [warehouseLines],
+  );
+  const warehouseLineByItemId = useMemo(
+    () =>
+      new Map(
+        warehouseLines.map((line) => [String(line.item.dbId || line.item.id), line]),
+      ),
+    [warehouseLines],
+  );
 
   const groupedQueue = useMemo(() => {
     const stage = tab === "Next Supplier" ? "Next Supplier" : "Pre-order";
@@ -294,9 +296,11 @@ export default function PreOrderSupply({
         .filter((event) => event.actionType === "Recall" && event.recalledClientActionId)
         .map((event) => event.recalledClientActionId),
     );
+    const pendingClientIds = new Set(pendingActions.map((event) => event.clientActionId));
     const seen = new Set();
     const dateGroups = new Map();
 
+    const activeCannotSupplyItemKeys = new Set();
     for (const event of combinedEvents) {
       const identity = event.clientActionId || event.id;
       if (!identity || seen.has(identity) || reversedClientIds.has(identity)) continue;
@@ -305,6 +309,23 @@ export default function PreOrderSupply({
 
       const delivered = isDeliveryConfirmed(event);
       if (showHistory ? !delivered : delivered) continue;
+      if (!showHistory && !pendingClientIds.has(event.clientActionId)) {
+        if (event.actionType === "Remove") {
+          const warehouseLine = warehouseLineByItemKey.get(event.itemKey);
+          if (warehouseSupplyStage(warehouseLine?.status) !== "Cannot Supply") continue;
+        }
+        if (event.actionType === "Buy" || event.actionType === "PartialBuy") {
+          const boughtItemId =
+            event.actionType === "PartialBuy" ? event.addedItemId : event.itemId;
+          const warehouseLine = boughtItemId
+            ? warehouseLineByItemId.get(String(boughtItemId))
+            : warehouseLineByItemKey.get(event.itemKey);
+          if (!["in stock", "available"].includes(normalizeStatus(warehouseLine?.status))) {
+            continue;
+          }
+        }
+      }
+      if (event.actionType === "Remove") activeCannotSupplyItemKeys.add(event.itemKey);
 
       const dateKey = historyDateKey(event);
       const supplierName = event.supplierName || "Supplier not recorded";
@@ -313,6 +334,34 @@ export default function PreOrderSupply({
       records.push(event);
       supplierGroups.set(supplierName, records);
       dateGroups.set(dateKey, supplierGroups);
+    }
+
+    if (tab === "Cannot Supply") {
+      for (const line of allLines) {
+        if (
+          line.displayStatus !== "Cannot Supply" ||
+          activeCannotSupplyItemKeys.has(line.itemKey)
+        ) continue;
+        const dateKey = "Warehouse status";
+        const supplierName = "Supplier not recorded";
+        const supplierGroups = dateGroups.get(dateKey) || new Map();
+        const records = supplierGroups.get(supplierName) || [];
+        records.push({
+          id: `warehouse:${line.itemKey}`,
+          itemKey: line.itemKey,
+          itemId: line.item.dbId || line.item.id,
+          actionType: "WarehouseCannotSupply",
+          productId: itemProductId(line.item),
+          productName: line.productName,
+          customerId: line.order.customerAccountId || line.order.customer_account_id || null,
+          customerName: line.customerName,
+          branchName: line.branchName,
+          orderId: line.orderNumber,
+          quantity: line.qty,
+        });
+        supplierGroups.set(supplierName, records);
+        dateGroups.set(dateKey, supplierGroups);
+      }
     }
 
     return [...dateGroups.entries()].map(([date, supplierGroups]) => ({
@@ -328,7 +377,14 @@ export default function PreOrderSupply({
         }))
         .sort((a, b) => a.supplierName.localeCompare(b.supplierName)),
     }));
-  }, [historyEvents, pendingActions, tab]);
+  }, [
+    allLines,
+    historyEvents,
+    pendingActions,
+    tab,
+    warehouseLineByItemId,
+    warehouseLineByItemKey,
+  ]);
 
   const receivedOrderPreOrders = useMemo(
     () =>
@@ -353,16 +409,14 @@ export default function PreOrderSupply({
       const remainingQty =
         entry.remainingQty === undefined ? undefined : Number(entry.remainingQty || 0);
       const previousStatus = line.status || "Need Supplier";
-      const recalledStatus = line.latestAction?.previousStatus || "Need Supplier";
-      const changes =
-        actionType === "Recall"
-          ? {
-              sourceStatus: recalledStatus,
-              includeInPicking: false,
-              pickedQty: 0,
-              qty: Number(line.latestAction?.previousQty || line.originalQty || line.qty || 0),
-            }
-          : statusChanges(actionType, line.item, remainingQty);
+      const restoreQuantity = Number(
+        line.latestAction?.previousQty ?? line.originalQty ?? line.qty ?? 0,
+      );
+      const changes = preOrderSupplyItemChanges(actionType, {
+        quantity,
+        remainingQuantity: remainingQty,
+        restoreQuantity,
+      });
       return {
         id: `${line.itemKey}:${actionType}:${safeUuid()}`,
         clientActionId: safeUuid(),
@@ -382,7 +436,7 @@ export default function PreOrderSupply({
         previousQty: line.originalQty,
         remainingQty,
         previousStatus,
-        newStatus: changes.sourceStatus,
+        newStatus: changes?.sourceStatus || previousStatus,
         changes,
         itemSnapshot: {
           ...line.item,
@@ -468,7 +522,7 @@ export default function PreOrderSupply({
   };
 
   const recallRecord = (record) => {
-    const line = allLines.find((entry) => entry.itemKey === record.itemKey);
+    const line = warehouseLines.find((entry) => entry.itemKey === record.itemKey);
     if (!line) return alert("The related order item is no longer available for recall.");
     const recallLine = { ...line, latestAction: record };
     if (!window.confirm(`Recall ${record.productName || line.productName} for ${record.customerName || line.customerName}?`)) return;
@@ -483,9 +537,21 @@ export default function PreOrderSupply({
     setSyncing(true);
     const failed = [];
     const synced = {};
+    const queuedByClientActionId = new Map(
+      pendingActions.map((action) => [action.clientActionId, action]),
+    );
+    const persistedByClientActionId = new Map();
     for (const action of pendingActions) {
       try {
         let persistedAction = action;
+        if (
+          action.actionType === "Recall" &&
+          action.recalledClientActionId &&
+          queuedByClientActionId.has(action.recalledClientActionId) &&
+          !persistedByClientActionId.has(action.recalledClientActionId)
+        ) {
+          throw new Error("The recalled Buy must sync successfully before its Recall.");
+        }
         if (action.actionType === "PartialBuy") {
           if (typeof splitPreOrderItem === "function") {
             const added = await splitPreOrderItem(
@@ -502,15 +568,22 @@ export default function PreOrderSupply({
               persistedAction = { ...action, addedItemId: added?.id || added?.dbId || null };
             }
           }
-        } else if (action.actionType === "Recall" && action.recallAddedItemId) {
+        } else if (action.actionType === "Recall") {
+          const recalledAction = persistedByClientActionId.get(
+            action.recalledClientActionId,
+          );
+          const recallAddedItemId =
+            action.recallAddedItemId || recalledAction?.addedItemId || null;
           await updateOrderItem(action.orderId, action.itemId, action.changes);
-          await updateOrderItem(action.orderId, action.recallAddedItemId, {
-            sourceStatus: "Need Supplier",
-            includeInPicking: false,
-            pickedQty: 0,
-            qty: 0,
-          });
-        } else {
+          if (recallAddedItemId) {
+            await updateOrderItem(action.orderId, recallAddedItemId, {
+              sourceStatus: "Need Supplier",
+              includeInPicking: false,
+              pickedQty: 0,
+              qty: 0,
+            });
+          }
+        } else if (action.actionType !== "NextSup") {
           await updateOrderItem(action.orderId, action.itemId, action.changes);
         }
 
@@ -535,6 +608,7 @@ export default function PreOrderSupply({
         persistedAction = { ...persistedAction, syncStatus: "synced" };
         const savedEvent = await recordPreOrderSupplyEvent(persistedAction, loggedInUser);
         setHistoryEvents((current) => [savedEvent, ...current]);
+        persistedByClientActionId.set(action.clientActionId, persistedAction);
         synced[action.itemKey] = action.actionType === "Recall" ? null : persistedAction;
       } catch (error) {
         failed.push({ ...action, syncStatus: "failed", error: error.message });
@@ -724,7 +798,7 @@ export default function PreOrderSupply({
                         </div>
                       )}
                     </div>
-                    {tab !== "History" && (
+                    {tab !== "History" && record.actionType !== "WarehouseCannotSupply" && (
                       <button
                         type="button"
                         onClick={() => recallRecord(record)}
