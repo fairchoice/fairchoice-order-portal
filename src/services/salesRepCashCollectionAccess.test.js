@@ -51,7 +51,7 @@ test("unrelated staff remains denied", () => {
 });
 
 test("navigation and page use effective permissions while payment stays RPC secured", () => {
-  assert.match(customerOrder, /const permissions\s*=\s*activeUser\?\.effective_permissions\s*\|\|\s*activeUser\?\.permissions\s*\|\|\s*\{\}/);
+  assert.match(customerOrder, /canAccessPage\(activeUser, "page\.order\.sales_rep"\)/);
   assert.match(customerOrder, /hasFcPermission\([\s\S]*FC_PERMISSIONS\.PAYMENTS_COLLECT_CASH/);
   assert.doesNotMatch(customerOrder, /const canCollectCash\s*=[\s\S]{0,300}\["admin",\s*"superadmin"/);
   assert.match(customerOrder, /isSalesRep && canCollectCash && page === "salesCashCollection"/);

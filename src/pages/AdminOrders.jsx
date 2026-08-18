@@ -5,6 +5,7 @@ import { formatCurrency } from "../utils/currency";
 import { getPriceModeLabel, getProductPriceForMode } from "../utils/pricing";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import { supabase } from "../services/supabase";
+import { FC_PERMISSIONS } from "../security/fcPermissions";
 
 import { calculateDocumentTotals } from "../utils/documentTotals";
 
@@ -44,8 +45,6 @@ export default function AdminOrders({
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [countryFilter, setCountryFilter] = useState("All");
-  const isSuperAdmin =
-    loggedInUser?.role === "Super Admin" || loggedInUser?.access_level === "Super Admin";
 
   const receivedOrders = orders.filter(
     (order) => order.status === "Received" || order.status === "In Progress"
@@ -170,7 +169,7 @@ visibleOrders = visibleOrders.filter((order) => {
     if (
       !requirePermission(
         loggedInUser,
-        "can_change_order_status_in_progress",
+        FC_PERMISSIONS.ORDERS_STATUS_CHANGE,
         "You cannot change this order status."
       )
     ) {
@@ -190,7 +189,7 @@ visibleOrders = visibleOrders.filter((order) => {
   };
 
   const moveToWarehouse = async (orderId) => {
-    if (!requirePermission(loggedInUser, "can_move_to_warehouse", "You cannot move orders to warehouse.")) return;
+    if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_STATUS_CHANGE, "You cannot move orders to warehouse.")) return;
 
     const ok = window.confirm("Move this order to Warehouse Packing?");
     if (!ok) return;
@@ -208,7 +207,7 @@ visibleOrders = visibleOrders.filter((order) => {
   };
 
   const archiveOrder = async (orderId) => {
-    if (!requirePermission(loggedInUser, "can_archive_order", "You cannot archive orders.")) return;
+    if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_ARCHIVE, "You cannot archive orders.")) return;
 
     const ok = window.confirm(`Archive order ${formatDisplayOrderId(orderId)}?`);
     if (!ok) return;
@@ -227,7 +226,7 @@ visibleOrders = visibleOrders.filter((order) => {
   };
 
   const cancelOrder = async (orderId) => {
-    if (!requirePermission(loggedInUser, "can_cancel_order", "You cannot cancel orders.")) return;
+    if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_CANCEL, "You cannot cancel orders.")) return;
 
     const reason = window.prompt("Reason for cancellation?");
     if (!reason) return;
@@ -245,7 +244,7 @@ visibleOrders = visibleOrders.filter((order) => {
   };
 
   const restoreOrder = async (orderId) => {
-    if (!requirePermission(loggedInUser, "can_archive_order", "You cannot archive orders.")) return;
+    if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_ARCHIVE, "You cannot restore orders.")) return;
 
     const ok = window.confirm("Restore this order back to Received Orders?");
     if (!ok) return;
@@ -263,10 +262,7 @@ visibleOrders = visibleOrders.filter((order) => {
   };
 
   const deleteArchivedOrder = async (orderId) => {
-    if (!isSuperAdmin) {
-      alert("Only Super Admin can delete archived orders.");
-      return;
-    }
+    if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_DELETE, "You cannot permanently delete orders.")) return;
 
     const ok = window.confirm(
       `Permanently delete archived order ${formatDisplayOrderId(orderId)}? This cannot be undone.`
@@ -303,7 +299,7 @@ visibleOrders = visibleOrders.filter((order) => {
   };
 
   const openAddItemModal = (order) => {
-  if (!requirePermission(loggedInUser, "can_add_product_to_order", "You cannot add products to orders.")) return;
+  if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_ITEMS_CHANGE, "You cannot add products to orders.")) return;
 
   setSelectedOrder(order);
   setProductSearch("");
@@ -324,7 +320,7 @@ const filteredProducts = products.filter((p) => {
 });
 
 const confirmAddItem = async () => {
-  if (!requirePermission(loggedInUser, "can_add_product_to_order", "You cannot add products to orders.")) return;
+  if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_ITEMS_CHANGE, "You cannot add products to orders.")) return;
   if (!selectedOrder || !selectedProduct) return;
 
 
@@ -385,7 +381,7 @@ const printOrderPickingList = async (order) => {
 };
 
 const updatePreparedItem = async (order, item, changes) => {
-  if (!requirePermission(loggedInUser, "can_receive_order", "You cannot receive orders.")) return;
+  if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_RECEIVE, "You cannot receive orders.")) return;
 
   captureStableOrderItems(order);
   await updateOrderItem(order.orderId, item.dbId, changes);
@@ -529,7 +525,7 @@ const setOrderRefreshFilter = (orderId, field, value) => {
 };
 
 const bulkRefreshOrderPrices = async (order) => {
-  if (!requirePermission(loggedInUser, "can_receive_order", "You cannot update received order prices.")) return;
+  if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE, "You cannot update received order prices.")) return;
 
   const filter = refreshFilters[order.orderId] || {};
   const brand = normalizeText(filter.brand);
@@ -722,7 +718,7 @@ const bulkRefreshOrderPrices = async (order) => {
                     {expandedOrders[order.orderId] ? "Hide" : "View / Prepare"}
                   </button>
 
-                  {!showArchive && hasPermission(loggedInUser, "can_receive_order") && (
+                  {!showArchive && hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE) && (
                     <button
                       onClick={() => openPickingOrder(order)}
                       disabled={
@@ -737,7 +733,7 @@ const bulkRefreshOrderPrices = async (order) => {
                     </button>
                   )}
 
-                  {!showArchive && hasPermission(loggedInUser, "can_add_product_to_order") && (
+                  {!showArchive && hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_ITEMS_CHANGE) && (
                     <button
                       onClick={() => openAddItemModal(order)}
                       className={`bg-green-600 text-white ${btn}`}
@@ -823,7 +819,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
               min="0"
               className="received-qty-input"
               value={editedQty[item.dbId] ?? item.pickedQty ?? item.qty}
-              disabled={!hasPermission(loggedInUser, "can_receive_order")}
+              disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE)}
               onChange={(e) =>
                 setEditedQty((prev) => ({
                   ...prev,
@@ -833,7 +829,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
             />
           </div>
           <div className="received-update-cell">
-            {hasPermission(loggedInUser, "can_receive_order") && (
+            {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE) && (
               <button
                 onClick={() => {
                   const status =
@@ -879,7 +875,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
             <select
               className="received-status-select"
               value={item.sourceStatus || "In Stock"}
-              disabled={!hasPermission(loggedInUser, "can_receive_order")}
+              disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE)}
               onChange={(e) =>
                 updatePreparedItem(order, item, {
                   sourceStatus: e.target.value,
@@ -898,7 +894,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
           </div>
           <div className="received-line-total received-row-total">{formatCurrency(lineTotal)}</div>
           <div className="received-remove-cell">
-            {hasPermission(loggedInUser, "can_receive_order") && (
+            {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE) && (
               <button
                 disabled={item.includeInPicking === false}
                 onClick={() =>
@@ -922,7 +918,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                   <div className="flex flex-wrap justify-end gap-2 pt-3">
                     {!showArchive &&
                       order.status === "In Progress" &&
-                      hasPermission(loggedInUser, "can_change_order_status_in_progress") && (
+                      hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_STATUS_CHANGE) && (
                       <button
                         onClick={() => putBackToReceived(order.orderId)}
                         className={`bg-slate-500 text-white ${btn}`}
@@ -942,7 +938,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
 
                     {showArchive ? (
                       <div className="flex flex-wrap gap-2">
-                        {hasPermission(loggedInUser, "can_archive_order") && (
+                        {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_ARCHIVE) && (
                           <button
                             onClick={() => restoreOrder(order.orderId)}
                             className={`bg-green-600 text-white ${btn}`}
@@ -950,7 +946,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                             Restore
                           </button>
                         )}
-                        {isSuperAdmin && (
+                        {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_DELETE) && (
                           <button
                             onClick={() => deleteArchivedOrder(order.orderId)}
                             className={`bg-red-700 text-white ${btn}`}
@@ -961,7 +957,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                       </div>
                     ) : (
                       <>
-                        {hasPermission(loggedInUser, "can_archive_order") && (
+                        {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_ARCHIVE) && (
                         <button
                           onClick={() => archiveOrder(order.orderId)}
                           className={`bg-slate-600 text-white ${btn}`}
@@ -970,7 +966,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                         </button>
                         )}
 
-                        {hasPermission(loggedInUser, "can_cancel_order") && (
+                        {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_CANCEL) && (
                         <button
                           onClick={() => cancelOrder(order.orderId)}
                           className={`bg-red-600 text-white ${btn}`}
@@ -981,7 +977,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                       </>
                     )}
 
-                    {!showArchive && hasPermission(loggedInUser, "can_move_to_warehouse") && (
+                    {!showArchive && hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_STATUS_CHANGE) && (
                       <button
                         onClick={() => moveToWarehouse(order.orderId)}
                         className={`bg-purple-700 text-white ${btn}`}

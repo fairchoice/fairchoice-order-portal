@@ -20,7 +20,9 @@ import PricingRule from "./AdminSetup/PricingRule";
 import Suppliers from "./AdminSetup/Suppliers";
 import SupplierAccounts from "./AdminSetup/SupplierAccounts";
 import Staff from "./AdminSetup/Staff";
-import LoginConfig from "./AdminSetup/LoginConfig";
+import AccessControl from "./AdminSetup/AccessControl";
+import StaffLogin from "./AdminSetup/StaffLogin";
+import CustomerLogin from "./AdminSetup/CustomerLogin";
 import PriceManagement from "./AdminSetup/PriceManagement";
 
 import { formatCurrency } from "../utils/currency";
@@ -43,12 +45,18 @@ import {
 } from "../utils/invoicePaymentStatus";
 import { sortPrintItems } from "../utils/printItemSorting";
 import { FC_PERMISSIONS, hasFcPermission } from "../security/fcPermissions";
+import {
+  PAGE_BY_ROUTE,
+  PAGE_REGISTRY,
+  canAccessPage,
+  canPerform,
+} from "../security/accessControlRegistry";
 
 
 import BackOfficeLayout, {
   ComingSoonPlaceholder,
-  getComingSoonTitle,
 } from "./AdminSetup/BackOfficeLayout";
+import { getComingSoonTitle } from "./AdminSetup/backOfficePageHelpers";
 
 import Categories from "./AdminSetup/Categories";
 import Warehouse from "./Warehouse";
@@ -518,24 +526,15 @@ const loggedInUser =
   const normalizedRole = String(role || "")
     .replace(/[^a-z0-9]/gi, "")
     .toLowerCase();
-  const permissions = activeUser?.effective_permissions || activeUser?.permissions || {};
-
   const isAdmin = isAdminStaffRole(role);
-  const isSalesRep =
-    normalizedRole === "salesrep" ||
-    normalizedRole === "salesrepresentative" ||
-    normalizedRole === "sales" ||
-    permissions.access_sales_rep === true;
-  const isWarehouse =
-    normalizedRole === "warehouse" || permissions.access_warehouse === true;
-  const isDriver = normalizedRole === "driver" || permissions.access_driver === true;
+  const isSalesRep = canAccessPage(activeUser, "page.order.sales_rep");
+  const isWarehouse = canAccessPage(activeUser, "page.operations.warehouse");
+  const isDriver = canAccessPage(activeUser, "page.operations.driver");
   const canCollectCash = hasFcPermission(
     activeUser,
     FC_PERMISSIONS.PAYMENTS_COLLECT_CASH,
   );
-  const isCustomer =
-    normalizedRole === "customer" ||
-    (permissions.access_customer_portal === true && !isAdmin && !isSalesRep && !isWarehouse && !isDriver);
+  const isCustomer = normalizedRole === "customer";
   const activeUsername = String(
     activeUser?.username ||
       activeUser?.staff_username ||
@@ -546,7 +545,9 @@ const loggedInUser =
     .trim()
     .toLowerCase();
   const isNisstajAdmin = activeUsername === "nisstaj_admin";
-  const canManualCheckoutDiscount = isAdmin || isNisstajAdmin;
+  const canManualCheckoutDiscount = canPerform(activeUser, "orders.discount.change");
+  const defaultBackOfficePage =
+    PAGE_REGISTRY.find((item) => canAccessPage(activeUser, item.key))?.route || "order";
 
   
 
@@ -561,6 +562,7 @@ const loggedInUser =
  const [page, setPage] = useState(() =>
   resolveCustomerPortalPage({ hash: window.location.hash, ...portalRoleState })
  );
+ const [accessControlStaffId, setAccessControlStaffId] = useState("");
  const [pickingOrderId, setPickingOrderId] = useState(null);
 
   const [customerAccounts, setCustomerAccounts] = useState([]);
@@ -748,12 +750,6 @@ useEffect(() => {
   localStorage.setItem(cartStorageKey, JSON.stringify(cart));
   localStorage.removeItem(LEGACY_CART_KEY);
 }, [cart, cartStorageKey]);
-
-useEffect(() => {
-  if (!canManualCheckoutDiscount && Number(orderDiscountPercent || 0) > 0) {
-    setOrderDiscountPercent(0);
-  }
-}, [canManualCheckoutDiscount, orderDiscountPercent]);
 
 const applyCartPromotions = (cartLines) =>
   applyPromotionRulesToCart(cartLines, promotionRules, { products, priceMode });
@@ -1801,8 +1797,7 @@ useEffect(() => {
 
 useEffect(() => {
   const syncPageFromHash = () => {
-    setPage(
-      resolveCustomerPortalPage({
+    const resolvedPage = resolveCustomerPortalPage({
         hash: window.location.hash,
         isAdmin,
         isSalesRep,
@@ -1810,7 +1805,13 @@ useEffect(() => {
         isDriver,
         isCustomer,
         canCollectCash,
-      })
+      });
+    setPage(
+      isAdmin
+        ? (canAccessPage(activeUser, resolvedPage) ? resolvedPage : defaultBackOfficePage)
+        : !isSalesRep && !isWarehouse && !isDriver && !isCustomer
+        ? defaultBackOfficePage
+        : resolvedPage
     );
   };
 
@@ -1820,7 +1821,7 @@ useEffect(() => {
     window.clearTimeout(syncTimer);
     window.removeEventListener("hashchange", syncPageFromHash);
   };
-}, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash]);
+}, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash, defaultBackOfficePage]);
 
 useEffect(() => {
   const roleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash };
@@ -4166,8 +4167,10 @@ const backOfficeContent = comingSoonTitle ? (
       <StockReceipts products={products} fetchProducts={fetchProducts} />
     )}
 
-    {page === "staff" && <Staff />}
-    {page === "loginSetup" && <LoginConfig />}
+    {page === "staff" && <Staff currentUser={activeUser} onOpenAccessControl={(staffId) => { setAccessControlStaffId(staffId); setPage("accessControl"); }} />}
+    {page === "staffLogin" && <StaffLogin initialStaffId={accessControlStaffId} onOpenAccessControl={(staffId) => { setAccessControlStaffId(staffId); setPage("accessControl"); }} />}
+    {page === "customerLogin" && <CustomerLogin />}
+    {(page === "accessControl" || page === "loginSetup") && <AccessControl initialStaffId={accessControlStaffId} />}
     {page === "suppliers" && <Suppliers user={activeUser} />}
     {page === "pricingRule" && (
   <PricingRule
@@ -4199,9 +4202,13 @@ const backOfficeContent = comingSoonTitle ? (
   </>
 );
 
-const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
+const portalPageIsAllowed = page === "order" && !isCustomer
+  ? isSalesRep
+  : isCustomerPortalPageAllowed(page, portalRoleState);
 
-  if ((isAdmin || isWarehouse || isDriver) && page !== "order") {
+  const isBackOfficePage = Boolean(PAGE_BY_ROUTE[page]) || ["picking", "stockhistory", "stockreceipts", "loginSetup"].includes(page);
+
+  if (!isCustomer && isBackOfficePage && page !== "order") {
     return (
       <BackOfficeLayout
         page={page}
@@ -4336,7 +4343,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
           </div>
         )}
 
-        {(isAdmin || isSalesRep || isCustomer) && page === "order" && (
+        {(isSalesRep || isCustomer) && page === "order" && (
           <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
             
  <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
@@ -5371,7 +5378,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
           </div>
         )}
 
-      {page === "order" && (isAdmin || isSalesRep || isCustomer) && (
+      {page === "order" && (isSalesRep || isCustomer) && (
   <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-xl">
     <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
       <div className="min-w-0 shrink">

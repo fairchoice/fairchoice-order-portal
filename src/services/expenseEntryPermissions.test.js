@@ -16,6 +16,10 @@ const backOfficeSource = fs.readFileSync(
   new URL("../pages/AdminSetup/BackOfficeLayout.jsx", import.meta.url),
   "utf8",
 );
+const accessRegistrySource = fs.readFileSync(
+  new URL("../security/accessControlRegistry.js", import.meta.url),
+  "utf8",
+);
 
 const entryPermissions = {
   "expenses.view": true,
@@ -104,10 +108,7 @@ test("migration grants only entry permissions to active linked Driver and Sales 
   );
 });
 
-test("Expenses navigation and page access use expenses.view", () => {
-  assert.match(
-    backOfficeSource,
-    /\{\s*label:\s*"Expenses",\s*page:\s*"expenses",\s*permission:\s*"expenses\.view"\s*\}/,
-  );
-  assert.match(backOfficeSource, /expenses:\s*"expenses\.view"/);
+test("Expenses navigation and direct access use the centralized page key", () => {
+  assert.match(accessRegistrySource, /page\("page\.accounts\.expenses", "Expenses", "expenses"/);
+  assert.match(backOfficeSource, /PAGE_ACCESS_SECTIONS[\s\S]*registryCanAccessPage/);
 });

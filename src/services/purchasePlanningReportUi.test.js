@@ -18,10 +18,11 @@ const service = fs.readFileSync(
   new URL("purchasePlanningReport.js", import.meta.url),
   "utf8",
 );
+const registry = fs.readFileSync(new URL("../security/accessControlRegistry.js", import.meta.url), "utf8");
 
-test("Purchase Planning navigation and render use access_reports", () => {
-  assert.match(layout, /label:\s*"Purchase Planning"[\s\S]*page:\s*"purchasePlanning"[\s\S]*permission:\s*"access_reports"/);
-  assert.match(layout, /purchasePlanning:\s*"access_reports"/);
+test("Purchase Planning navigation and render use centralized page access", () => {
+  assert.match(registry, /page\("page\.reports\.purchase_planning", "Purchase Planning", "purchasePlanning"/);
+  assert.match(layout, /PAGE_ACCESS_SECTIONS[\s\S]*registryCanAccessPage/);
   assert.match(customerOrder, /page === "purchasePlanning"[\s\S]*<PurchasePlanningReport/);
 });
 

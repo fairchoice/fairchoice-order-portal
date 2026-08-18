@@ -14,6 +14,7 @@ const migration = fs.readFileSync(
 );
 const portal = fs.readFileSync(new URL("../pages/AdminSetup/ReturnsPortal.jsx", import.meta.url), "utf8");
 const layout = fs.readFileSync(new URL("../pages/AdminSetup/BackOfficeLayout.jsx", import.meta.url), "utf8");
+const accessRegistry = fs.readFileSync(new URL("./accessControlRegistry.js", import.meta.url), "utf8");
 
 const profile = (role, effectivePermissions, staffId = "shared-staff") => ({
   role,
@@ -97,9 +98,10 @@ test("permission validation occurs before the alias-role allowlist", () => {
   assert.ok(reversePermission >= 0 && reverseRole > reversePermission);
 });
 
-test("Returns UI and navigation use the shared role-and-permission predicates", () => {
+test("Returns UI uses action predicates while navigation uses centralized page access", () => {
   assert.match(portal, /canCurrentLoginApproveReturns\(currentUser\)/);
   assert.match(portal, /canCurrentLoginReverseReturns\(currentUser\)/);
   assert.match(portal, /canCurrentLoginReconcileReturns\(currentUser\)/);
-  assert.match(layout, /page === "returnsPortal"[\s\S]*canViewReturns\(user\)/);
+  assert.match(layout, /PAGE_ACCESS_SECTIONS[\s\S]*registryCanAccessPage/);
+  assert.match(accessRegistry, /page\("page\.operations\.returns", "Returns", "returnsPortal"/);
 });

@@ -42,9 +42,23 @@ export const FC_PERMISSIONS = Object.freeze({
   RETURNS_RECONCILE: "returns.reconcile",
   STAFF_MANAGE: "staff.manage",
   PERMISSIONS_MANAGE: "permissions.manage",
+  ORDERS_ARCHIVE: "orders.archive",
+  ORDERS_DELETE: "orders.delete",
+  ORDERS_ITEMS_CHANGE: "orders.items.change",
+  ORDERS_STATUS_CHANGE: "orders.status.change",
+  ORDERS_RECEIVE: "orders.receive",
+  ORDERS_QUANTITY_CHANGE: "orders.quantity.change",
+  ORDERS_AMOUNT_CHANGE: "orders.amount.change",
+  PAYMENTS_EDIT: "payments.edit",
+  PAYMENTS_REVERSE: "payments.reverse",
+  PAYMENTS_DELETE: "payments.delete",
+  INVOICES_AMEND: "invoices.amend",
+  INVOICES_VOID: "invoices.void",
+  INVOICES_FINANCIAL_VOID: "invoices.financial_void",
 });
 
+import { canPerform } from "./accessControlRegistry.js";
+
 export function hasFcPermission(user, permissionKey) {
-  const permissions = user?.effective_permissions || user?.permissions || {};
-  return permissions.all_access === true || permissions[permissionKey] === true;
+  return canPerform(user, permissionKey);
 }

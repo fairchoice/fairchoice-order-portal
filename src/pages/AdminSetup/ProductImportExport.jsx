@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase";
+import { canPerform } from "../../security/accessControlRegistry";
 import {
   getActiveStockLocations,
   getProductLocationStock,
@@ -228,6 +229,7 @@ const formatPreviewValue = (value) => {
 };
 
 export default function ProductImportExport({ products = [], fetchProducts }) {
+  const currentUser = JSON.parse(localStorage.getItem("loggedInUser") || localStorage.getItem("fairchoice_user") || "null");
   const [productOptions, setProductOptions] = useState([]);
   const [importing, setImporting] = useState(false);
   const [updatingCodes, setUpdatingCodes] = useState(false);
@@ -1009,6 +1011,10 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   };
 
   const confirmProductImport = async () => {
+    if (!canPerform(currentUser, "system.import_sensitive")) {
+      alert("You do not have permission to import sensitive product data.");
+      return;
+    }
     if (!productImportPreview) return;
 
     const validActionCount =
@@ -1161,6 +1167,10 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   };
 
   const handleExportExcel = async () => {
+    if (!canPerform(currentUser, "system.export_sensitive")) {
+      alert("You do not have permission to export sensitive product data.");
+      return;
+    }
     try {
       const productIds = products.map((product) => product.id).filter(Boolean);
       const locationRows = await getProductLocationStock(productIds);
