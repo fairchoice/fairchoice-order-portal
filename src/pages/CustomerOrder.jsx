@@ -76,6 +76,7 @@ import ReturnsPortal from "./AdminSetup/ReturnsPortal";
 import Customers from "./AdminSetup/Customers";
 import HomePageImages from "./AdminSetup/HomePageImages";
 import PurchasePlanningReport from "./reports/PurchasePlanningReport";
+import WarehouseActivityReport from "./reports/WarehouseActivityReport";
 
 import ProductCard, { ProductListRow } from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
@@ -4100,8 +4101,8 @@ const backOfficeContent = comingSoonTitle ? (
         orders={orders}
         printPickingList={printPickingList}
         changeOrderStatus={changeOrderStatus}
-        updateOrderItem={updateOrderItem}
         updateOrderExtraFields={updateOrderExtraFields}
+        refreshOrders={fetchOrders}
       />
     )}
 
@@ -4157,6 +4158,9 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "expenses" && <Expenses />}
     {page === "purchasePlanning" && (
       <PurchasePlanningReport products={products} currentUser={activeUser} />
+    )}
+    {page === "warehouseActivity" && (
+      <WarehouseActivityReport currentUser={activeUser} />
     )}
     {page === "stockhistory" && <StockHistory />}
     {page === "stockTaking" && (

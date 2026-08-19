@@ -6,6 +6,9 @@ import { ALL_REGISTERED_PERMISSION_KEYS } from "./accessControlRegistry.js";
 const migration = readFileSync(
   new URL("../../supabase/migrations/20260817232018_staff_access_control_registry.sql", import.meta.url),
   "utf8",
+) + readFileSync(
+  new URL("../../supabase/migrations/20260818225103_warehouse_operational_activity.sql", import.meta.url),
+  "utf8",
 );
 
 test("migration registers every centralized page and important-function key", () => {

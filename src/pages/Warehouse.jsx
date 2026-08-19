@@ -7,6 +7,8 @@ import { formatCurrency } from "../utils/currency";
 import { getOrderItemQty } from "../utils/orderTotals";
 import { sortPrintItems } from "../utils/printItemSorting";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
+import WarehousePreOrderPanel from "../components/WarehousePreOrderPanel";
+import { compareWarehouseProducts } from "../utils/warehouseProductSorting";
 
 import {
   calculateDocumentTotals,
@@ -36,8 +38,8 @@ export default function Warehouse({
   orders = [],
   printPickingList,
   changeOrderStatus,
-  updateOrderItem,
   updateOrderExtraFields,
+  refreshOrders,
 }) {
   const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
   const [drivers, setDrivers] = useState([]);
@@ -48,6 +50,7 @@ export default function Warehouse({
   const [toDate, setToDate] = useState("");
   const [countryFilter, setCountryFilter] = useState("All");
   const [stableItemOrders, setStableItemOrders] = useState({});
+  const [preOrderPanelOrderId, setPreOrderPanelOrderId] = useState(null);
 
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
@@ -254,30 +257,14 @@ const fetchDrivers = async () => {
     return 4;
   };
 
-const getProductSortValue = (item = {}, field) =>
-  String(
-    item[field] ||
-      item.product?.[field] ||
-      item[`product_${field}`] ||
-      ""
-  )
-    .trim()
-    .toLowerCase();
-
 const getInitialWarehouseItemOrder = (items = []) => {
   const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
   return [...items].sort((left, right) => {
     const rankDifference = getWarehouseStatusRank(left) - getWarehouseStatusRank(right);
     if (rankDifference !== 0) return rankDifference;
 
-    for (const field of ["series", "brand", "subCategory", "category", "name"]) {
-      const difference = getProductSortValue(left, field).localeCompare(
-        getProductSortValue(right, field),
-        "en-GB",
-        { numeric: true, sensitivity: "base" }
-      );
-      if (difference !== 0) return difference;
-    }
+    const productDifference = compareWarehouseProducts(left, right);
+    if (productDifference !== 0) return productDifference;
     return itemKey(left).localeCompare(itemKey(right));
   });
 };
@@ -930,30 +917,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   });
 };
 
-const updateWarehouseItem = async (order, item, changes) => {
-  if (
-    !requirePermission(
-      loggedInUser,
-      "can_move_to_warehouse",
-      "You cannot update warehouse order status."
-    )
-  ) {
-    return;
-  }
-
-  captureStableWarehouseItems(order);
-  await updateOrderItem(order.orderId, item.dbId, changes);
-  await logAction({
-    user: loggedInUser,
-    action_type: "Status changed",
-    page_module: "Warehouse",
-    order_id: order.orderId,
-    product_id: item.productId || item.id,
-    old_value: item.sourceStatus || "In Stock",
-    new_value: changes,
-  });
-};
-
 const printProtectedOrderForm = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
@@ -1106,6 +1069,18 @@ const printCustomerDocumentForMode =
             >
               {expandedOrders[orderId] ? "Hide" : "View Order"}
             </button>
+            {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
+              <button
+                type="button"
+                onClick={() => {
+                  captureStableWarehouseItems(order);
+                  setPreOrderPanelOrderId(orderId);
+                }}
+                className={`bg-amber-700 text-white ${btn}`}
+              >
+                Pre-Order Supply
+              </button>
+            )}
 
           </div>
         </div>
@@ -1127,11 +1102,10 @@ const printCustomerDocumentForMode =
 
         {expandedOrders[orderId] && (
           <div className="mt-3 space-y-3">
-            <div className="hidden md:grid grid-cols-[1fr_70px_140px_170px] border-b font-bold text-xs text-slate-600 px-3 py-2">
+            <div className="hidden md:grid grid-cols-[1fr_70px_140px] border-b font-bold text-xs text-slate-600 px-3 py-2">
               <div>Product</div>
               <div className="text-center">Qty</div>
               <div className="text-center">Status</div>
-              <div className="text-right">Action</div>
             </div>
 
             {getGroupedWarehouseItems(orderId, order.items).map((item) => {
@@ -1139,21 +1113,10 @@ const printCustomerDocumentForMode =
               const isInStock = sourceStatus === "In Stock";
               const isCannotSupply = sourceStatus === "Cannot Supply";
               const needsSupplier = !isInStock && !isCannotSupply;
-              const availableChanges = {
-                sourceStatus: "In Stock",
-                includeInPicking: true,
-                pickedQty: getLineQty(item),
-              };
-              const cannotSupplyChanges = {
-                sourceStatus: "Cannot Supply",
-                includeInPicking: false,
-                pickedQty: 0,
-              };
-
               return (
                 <div
                   key={item.id}
-                  className={`grid grid-cols-1 md:grid-cols-[1fr_70px_140px_170px] gap-2 md:gap-0 items-center border rounded-lg px-3 py-2 text-sm ${
+                  className={`grid grid-cols-1 md:grid-cols-[1fr_70px_140px] gap-2 md:gap-0 items-center border rounded-lg px-3 py-2 text-sm ${
                     item.includeInPicking === false ? "opacity-50 bg-slate-50" : ""
                   }`}
                 >
@@ -1175,29 +1138,6 @@ const printCustomerDocumentForMode =
                     {sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus}
                   </div>
 
-                  <div className="flex justify-end gap-2">
-                    {!isReadyForDriver &&
-                      hasPermission(loggedInUser, "can_move_to_warehouse") && (
-                        <>
-                          <button
-                            type="button"
-                            disabled={isInStock}
-                            onClick={() => updateWarehouseItem(order, item, availableChanges)}
-                            className={`bg-green-600 text-white disabled:cursor-not-allowed disabled:bg-slate-300 ${btn}`}
-                          >
-                            Available
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isCannotSupply}
-                            onClick={() => updateWarehouseItem(order, item, cannotSupplyChanges)}
-                            className={`bg-red-600 text-white disabled:cursor-not-allowed disabled:bg-slate-300 ${btn}`}
-                          >
-                            Cannot Supply
-                          </button>
-                        </>
-                      )}
-                  </div>
                 </div>
               );
             })}
@@ -1279,6 +1219,17 @@ const printCustomerDocumentForMode =
 
   return (
     <div className="p-4 space-y-4">
+      {preOrderPanelOrderId && (() => {
+        const panelOrder = warehouseOrders.find(
+          (order) => String(getOrderId(order)) === String(preOrderPanelOrderId),
+        );
+        return panelOrder ? <WarehousePreOrderPanel
+          order={panelOrder}
+          currentUser={loggedInUser}
+          refreshOrders={refreshOrders}
+          onClose={() => setPreOrderPanelOrderId(null)}
+        /> : null;
+      })()}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <h2 className="text-xl font-bold">Warehouse</h2>
 

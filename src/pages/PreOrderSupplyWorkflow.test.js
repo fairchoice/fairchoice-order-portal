@@ -133,3 +133,20 @@ test("the real partial split keeps remaining and bought order_items in Warehouse
   assert.match(source, /qty: allocatedQty,[\s\S]*picked_qty: allocatedQty,[\s\S]*source_status: "In Stock",[\s\S]*include_in_picking: true/);
   assert.match(source, /updatedItems\.push\([\s\S]*qty: allocatedQty/);
 });
+
+test("Cannot Supply exposes permanent Available and Recall Available operations", () => {
+  const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
+  assert.match(source, /recordWarehouseOperationalActivity/);
+  assert.match(source, /actionType = recall \? "Recall Available" : "Available"/);
+  assert.match(source, /referencedClientActionId: recall \? record\.clientActionId/);
+  assert.match(source, /recalledAvailableEventIds/);
+});
+
+test("all product-grouped Pre-Order tabs reuse Warehouse product sorting", () => {
+  const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
+  assert.match(source, /import \{ compareWarehouseProducts \} from "\.\.\/utils\/warehouseProductSorting"/);
+  assert.match(source, /subCategory: product\.subCategory \|\| product\.sub_category/);
+  assert.match(source, /\.sort\(compareWarehouseProducts\)/);
+  assert.match(source, /records: \[\.\.\.records\]\.sort\(\(left, right\) =>\s*compareWarehouseProducts/);
+  assert.doesNotMatch(source, /\.sort\(\(a, b\) => a\.productName\.localeCompare\(b\.productName\)\)/);
+});

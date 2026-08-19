@@ -146,6 +146,10 @@ export async function recordPreOrderSupplyEvent(action = {}, user) {
       itemSnapshot: action.itemSnapshot || null,
       changes: action.changes || null,
       branchName: action.branchName || null,
+      productCode: action.productCode || null,
+      country: action.country || null,
+      warehouseLocation: action.warehouseLocation || null,
+      reason: action.reason || null,
       allocation: action.quantity || 0,
       supplierAttempt: {
         supplierId: action.supplierId || null,
