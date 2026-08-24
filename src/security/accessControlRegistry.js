@@ -196,8 +196,19 @@ export function canPerform(user, permissionKey) {
 }
 
 export function canAccessPage(user, pageOrPermissionKey) {
-  const entry = PAGE_BY_ROUTE[pageOrPermissionKey];
+  const entry = PAGE_BY_ROUTE[pageOrPermissionKey] || PAGE_REGISTRY.find((item) => item.key === pageOrPermissionKey);
   const permissionKey = entry?.key || pageOrPermissionKey;
+  if (!isStaffUser(user) || user?.active === false) return false;
+  if (isMasterAdmin(user) || normalizeRole(user.role || user.access_level) === "Super Admin") return true;
+
+  // Page access has a role baseline. Important/sensitive actions still remain
+  // controlled exclusively by canPerform(), so order amount/discount/cancel/etc.
+  // are not granted by this fallback. This keeps warehouse operational pages
+  // available to current and future Warehouse staff even if their stored page
+  // permission map has not been explicitly populated yet.
+  const normalizedRole = normalizeRole(user.role || user.access_level);
+  if (entry?.defaultRoles?.includes(normalizedRole)) return true;
+
   return canPerform(user, permissionKey);
 }
 

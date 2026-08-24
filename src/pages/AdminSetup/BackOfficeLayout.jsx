@@ -172,10 +172,23 @@ export default function BackOfficeLayout({
   onLogout,
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const allowedSections = useMemo(
-    () => filterSectionsByPermission(currentUser),
-    [currentUser]
-  );
+  const allowedSections = useMemo(() => {
+    const sections = filterSectionsByPermission(currentUser);
+    if (!isWarehouse || isAdmin) return sections;
+
+    return sections
+      .map((section) => {
+        if (section.title === "Operations") return section;
+        if (section.title === "Accounts") {
+          return {
+            ...section,
+            items: section.items.filter((item) => item.key === "page.accounts.expenses"),
+          };
+        }
+        return { ...section, items: [] };
+      })
+      .filter((section) => section.items.length > 0);
+  }, [currentUser, isWarehouse, isAdmin]);
   const pageAllowed = canAccessBackOfficePage(currentUser, page);
 
   const roleLabel = useMemo(() => {
@@ -219,6 +232,12 @@ export default function BackOfficeLayout({
         </div>
       </div>
 
+      {onLogout && (
+        <button type="button" className="bo-logout bo-logout-top" onClick={onLogout}>
+          Logout
+        </button>
+      )}
+
       <nav className="bo-nav">
         {allowedSections.map((section) => (
           <NavSection
@@ -232,11 +251,6 @@ export default function BackOfficeLayout({
 
       <div className="bo-sidebar-footer">
         <div className="bo-role">{roleLabel}</div>
-        {onLogout && (
-          <button type="button" className="bo-logout" onClick={onLogout}>
-            Logout
-          </button>
-        )}
       </div>
     </aside>
   );

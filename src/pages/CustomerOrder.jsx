@@ -556,7 +556,10 @@ const loggedInUser =
       return item.key === "page.operations.driver" || item.key === "page.accounts.expenses";
     }
     if (activeDuty === "warehouse") {
-      return item.key.startsWith("page.operations.") && item.key !== "page.operations.driver";
+      return (
+        (item.key.startsWith("page.operations.") && item.key !== "page.operations.driver") ||
+        item.key === "page.accounts.expenses"
+      );
     }
     if (activeDuty === "admin") {
       return item.key !== "page.order.sales_rep" && item.key !== "page.operations.driver" && canAccessPage(activeUser, item.key);

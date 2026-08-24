@@ -462,15 +462,32 @@ export default function PreOrderSupply({
       .filter(Boolean),
   ), [pendingActions, warehouseEvents]);
 
-  const receivedOrderPreOrders = useMemo(
-    () =>
-      allLines.filter(
-        (line) =>
-          ["Received", "In Progress"].includes(line.order.status) &&
-          isPreOrderStatus(line.item.sourceStatus || line.item.source_status || line.item.status),
-      ),
-    [allLines],
-  );
+  const receivedOrderPreOrders = useMemo(() => {
+    const result = [];
+    for (const order of orders || []) {
+      if (!["Received", "In Progress"].includes(String(order?.status || "").trim())) continue;
+      for (const item of order.items || []) {
+        const status = item.sourceStatus || item.source_status || item.status;
+        if (!isPreOrderStatus(status)) continue;
+        const product = productById.get(String(itemProductId(item))) || {};
+        result.push({
+          order,
+          item,
+          itemKey: getItemKey(order, item),
+          productId: String(itemProductId(item) || item.productCode || item.name),
+          productName: item.name || item.productName || product.name || "Unnamed Product",
+          customerName: order.companyName || order.customerName || "Unknown Customer",
+          branchName: order.branchName || order.branch_name || "",
+          orderNumber: order.orderId || order.order_number,
+          qty: getItemQty(item),
+        });
+      }
+    }
+    return result.sort((left, right) =>
+      String(left.orderNumber || "").localeCompare(String(right.orderNumber || "")) ||
+      String(left.productName || "").localeCompare(String(right.productName || ""))
+    );
+  }, [orders, productById]);
 
   const selectedSupplier = (stage) => {
     const supplierId = stage === "Next Supplier" ? nextSupplierId : queueSupplierId;
