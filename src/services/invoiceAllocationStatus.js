@@ -198,18 +198,29 @@ export function resolveInvoiceRowFromAllocations({
     const payment = paymentsById.get(String(allocation.payment_id || ""));
     if (!payment || !isActiveInvoicePayment(payment)) return sum;
 
-    if (
-      customerAccountId &&
-      String(allocation.customer_account_id || "") !== customerAccountId
-    ) {
-      return sum;
-    }
-    if (
-      branchId &&
-      String(allocation.customer_branch_id || allocation.branch_id || "") !== branchId
-    ) {
-      return sum;
-    }
+const allocationCustomerAccountId = String(
+  allocation.customer_account_id || ""
+);
+
+if (
+  customerAccountId &&
+  allocationCustomerAccountId &&
+  allocationCustomerAccountId !== customerAccountId
+) {
+  return sum;
+}
+
+const allocationBranchId = String(
+  allocation.customer_branch_id || allocation.branch_id || ""
+);
+
+if (
+  branchId &&
+  allocationBranchId &&
+  allocationBranchId !== branchId
+) {
+  return sum;
+}
 
     const allocationSourceId = String(allocation.invoice_source_id || "").trim();
     const allocationReference = normalizeRef(allocation.invoice_reference);

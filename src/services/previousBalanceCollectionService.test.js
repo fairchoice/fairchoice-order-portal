@@ -12,7 +12,7 @@ const reconciliationMigrationUrl = new URL(
   import.meta.url
 );
 
-test("previous-balance parameters preserve account, branch and collector", () => {
+test("previous-balance parameters preserve account and branch while rejecting caller-supplied collector identity", () => {
   const params = buildPreviousBalanceRpcParams({
     customerAccountId: "7a673fb8-e01d-4165-8c12-3d243f5eb7b3",
     customerBranchId: "8f598571-db45-424b-9d23-1fe2fba98d78",
@@ -36,7 +36,8 @@ test("previous-balance parameters preserve account, branch and collector", () =>
     params.p_idempotency_key,
     "previous-balance-collection:80ca425d-0665-5aaf-93fd-d63a73476d08"
   );
-  assert.equal(params.p_collector_staff_id, "c935885a-9512-47da-866a-99c8428a826f");
+  assert.equal(params.p_collector_staff_id, undefined);
+  assert.equal(params.p_collector_role, undefined);
 });
 
 test("canonical writer is idempotent and creates one linked ledger payment", async () => {

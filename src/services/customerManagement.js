@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 import { getStoredCustomerStatus } from "../utils/customerStatus";
 import { isTestAccount } from "../utils/testAccountFiltering";
+import { getFcSessionState, readStoredFcProfile } from "./fcSession";
 
 const normaliseStatus = getStoredCustomerStatus;
 const normalisePriceMode = (mode) => {
@@ -83,6 +84,25 @@ export async function toggleCustomerActive(id, active) {
   return data;
 }
 
+export async function syncCustomerAddressToOrders({ customerAccountId = null, customerBranchId = null } = {}) {
+  if (!customerAccountId && !customerBranchId) return { orders_updated: 0 };
+
+  const session = getFcSessionState(readStoredFcProfile());
+  if (!session.valid) {
+    throw new Error("A valid FairChoice staff session is required to update existing order addresses.");
+  }
+
+  const { data, error } = await supabase.rpc("fc_sync_customer_address_to_orders_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
+    p_customer_account_id: customerAccountId,
+    p_customer_branch_id: customerBranchId,
+  });
+
+  if (error) throw error;
+  return Array.isArray(data) ? data[0] || { orders_updated: 0 } : data || { orders_updated: 0 };
+}
+
 export async function saveCustomerAccount(account) {
   const addressLine1 = account.address_line_1 || account.address || "";
   const fullAddress = [
@@ -133,6 +153,7 @@ export async function saveCustomerAccount(account) {
       .single();
 
     if (error) throw error;
+    await syncCustomerAddressToOrders({ customerAccountId: account.id });
     return data;
   }
 
@@ -166,6 +187,7 @@ export async function saveCustomerBranch(branch) {
       .single();
 
     if (error) throw error;
+    await syncCustomerAddressToOrders({ customerBranchId: branch.id });
     return data;
   }
 

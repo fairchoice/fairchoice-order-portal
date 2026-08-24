@@ -39,9 +39,13 @@ export function getWeeklyPaymentDateKey(row) {
 export function calculateWeeklyHandoverAmounts({
   cashCollected = 0,
   approvedExpenses = 0,
+  cashHandedOver = 0,
   cashReceived = 0,
 } = {}) {
-  const amountDue = Number(cashCollected || 0) - Number(approvedExpenses || 0);
+  const amountDue =
+    Number(cashCollected || 0) -
+    Number(approvedExpenses || 0) -
+    Number(cashHandedOver || 0);
   return {
     amountDue,
     difference: Number(cashReceived || 0) - amountDue,

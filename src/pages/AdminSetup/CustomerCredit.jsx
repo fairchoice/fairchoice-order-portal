@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
+import AllCreditOutstanding from "./AllCreditOutstanding";
 import {
   amendCustomerCreditPayment,
   loadCentralPaymentCustomers,
@@ -181,7 +182,7 @@ function DocumentActions({ row, restricted }) {
   );
 }
 
-export default function CustomerCredit({ readOnly = false }) {
+export default function CustomerCredit({ readOnly = false, initialView = "individual" }) {
   const [customers, setCustomers] = useState([]);
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -192,6 +193,7 @@ export default function CustomerCredit({ readOnly = false }) {
   const [selectionMessage, setSelectionMessage] = useState("");
   const [page, setPage] = useState(1);
   const [activeTab, setActiveTab] = useState("summary");
+  const [creditView, setCreditView] = useState(initialView === "all" ? "all" : "individual");
   const [historySort, setHistorySort] = useState("oldest");
   const [editingOpeningBalance, setEditingOpeningBalance] = useState(false);
   const [openingBalanceInput, setOpeningBalanceInput] = useState("");
@@ -765,6 +767,23 @@ export default function CustomerCredit({ readOnly = false }) {
     Boolean(snapshot) &&
     !hasCreditSnapshotActivity(snapshot);
 
+  if (creditView === "all") {
+    return (
+      <div className="w-full min-w-0 space-y-4 overflow-x-hidden p-2 sm:p-4">
+        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-extrabold text-slate-900">Customer Credit</h2>
+              <p className="text-sm text-slate-500">Total outstanding and ageing across every customer account.</p>
+            </div>
+            <button type="button" onClick={() => setCreditView("individual")} className="rounded-xl border border-blue-300 bg-blue-50 px-4 py-2 font-bold text-blue-700 hover:bg-blue-100">Individual Credit</button>
+          </div>
+        </div>
+        <AllCreditOutstanding customers={customers} />
+      </div>
+    );
+  }
+
   return (
     <div className="w-full min-w-0 space-y-3 overflow-x-hidden p-2 sm:space-y-4 sm:p-4">
       <div className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -778,11 +797,14 @@ export default function CustomerCredit({ readOnly = false }) {
             </p>
           </div>
 
-          {historyOnlyRole && (
-            <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
-              History-only access
-            </span>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => setCreditView("all")} className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-600">All Outstanding</button>
+            {historyOnlyRole && (
+              <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
+                History-only access
+              </span>
+            )}
+          </div>
         </div>
 
         <div className={`mt-4 grid min-w-0 grid-cols-1 gap-3 ${hasBranches ? "md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)]" : "md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"}`}>

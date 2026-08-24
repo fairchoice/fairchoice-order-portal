@@ -317,6 +317,7 @@ function OrderPickingSession({
       if (action === "in_stock" || action === "replace") {
         setStockRefreshNonce((value) => value + 1);
       }
+
       await logAction({
         user: currentUser,
         action_type: action === "replace" ? "Picking replacement saved" : "Picking status changed",
@@ -534,10 +535,19 @@ function OrderPickingSession({
               stock > 0 &&
               stock < remaining &&
               selectedQty === stock;
+            const currentSourceStatus = String(
+              item.sourceStatus || item.source_status || "In Stock"
+            ).trim().toLowerCase();
+            const isPreOrderOverride = [
+              "need supplier",
+              "pre-order",
+              "pre order",
+              "next supplier",
+            ].includes(currentSourceStatus);
             const canPickAll =
               remaining > 0 &&
-              !product?.inventoryLocationMissing &&
-              stock >= remaining;
+              (isPreOrderOverride ||
+                (!product?.inventoryLocationMissing && stock >= remaining));
 
             return (
               <article
