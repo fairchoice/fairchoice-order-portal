@@ -63,7 +63,7 @@ export default function LoginPage({ onLogin }) {
   setSubmittingLogin(true);
 
   try {
-    const { data, error } = await supabase.rpc("fc_login_v1", {
+    const { data, error } = await supabase.rpc("fc_login_v2", {
       p_username: username,
       p_password: cleanPassword,
     });
@@ -71,6 +71,11 @@ export default function LoginPage({ onLogin }) {
     if (error) {
       console.error("FC login error:", error);
       alert(error.message || "Invalid username or password");
+      return;
+    }
+
+    if (data?.ok === false) {
+      alert(data?.error || "Invalid username or password");
       return;
     }
 
@@ -85,6 +90,7 @@ export default function LoginPage({ onLogin }) {
       ...profile,
       fc_session_token: sessionToken,
       fc_session_expires_at: data?.expires_at || null,
+      fc_session_idle_expires_at: data?.idle_expires_at || null,
     };
 
     const { error: auditError } = await supabase

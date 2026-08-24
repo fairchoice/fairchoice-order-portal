@@ -2718,10 +2718,10 @@ export async function allocateCustomerPaymentToInvoices({
     .select("*")
     .order("created_at", { ascending: true });
 
-  if (customerName) {
-    query = query.eq("customer_name", customerName);
-  } else if (customerAccountId) {
+  if (customerAccountId) {
     query = query.eq("customer_account_id", customerAccountId);
+  } else if (customerName) {
+    query = query.eq("customer_name", customerName);
   } else {
     return [];
   }

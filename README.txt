@@ -1,12 +1,12 @@
-Replace these files:
-1. src/pages/AdminSetup/Driver.jsx
-2. src/pages/CustomerOrder.jsx
+Pre-order Queue live-demand fix
+
+Copy these files into the matching paths in:
+C:\Users\nisst\my-app\fairchoice-app
 
 Changes:
-- Driver/cash collection now requires an allocation choice.
-- Choices: Previous Balance Only, Today's Invoice Only, Previous Balance First then Today's Invoice, Today's Invoice First then Previous Balance.
-- Saved payment metadata records payment_applies_to.
-- Canonical payment allocations follow the selected order.
-- Customer statement uses the saved choice for same-day ordering.
-- View Order remains available for every invoice/order.
-- Download Invoice appears only when invoice status is PAID.
+- Working queue now accepts only current Received, In Progress, or Warehouse Packing orders.
+- Persistent Bought/Cannot Supply history remains audit-only and cannot repopulate the queue.
+- Stale local pending actions are removed when their source live order/item no longer exists.
+- If Received Orders and Warehouse are empty, Pre-order Queue and Next Supplier are empty.
+
+No SQL or migration is included.

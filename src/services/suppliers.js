@@ -39,6 +39,20 @@ export const SUPPLIER_LEDGER_TYPE_LABELS = Object.freeze({
   credit_adjustment: "Credit adjustment",
 });
 
+export function supplierLedgerTypeLabel(row = {}) {
+  if (
+    row.transaction_type === "payment" &&
+    row.description === "Supplier Payment"
+  ) {
+    return "Supplier Payment";
+  }
+  return (
+    SUPPLIER_LEDGER_TYPE_LABELS[row.transaction_type] ||
+    row.transaction_type ||
+    ""
+  );
+}
+
 const OPTIONAL_TEXT_FIELDS = [
   "contact_name",
   "company_legal_name",
@@ -462,8 +476,7 @@ export function printSupplierStatement({
           <td>${escapeHtml(
             row.is_opening_balance
               ? "Opening balance"
-              : SUPPLIER_LEDGER_TYPE_LABELS[row.transaction_type] ||
-                  row.transaction_type,
+              : supplierLedgerTypeLabel(row),
           )}</td>
           <td>${escapeHtml(row.reference || row.invoice_number || "")}</td>
           <td>${escapeHtml(row.description || "")}</td>

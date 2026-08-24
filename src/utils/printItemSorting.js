@@ -42,6 +42,22 @@ export const getPrintItemSubCategory = (item = {}) =>
     item.product?.subcategory
   );
 
+
+export const getPrintItemMainCategory = (item = {}) =>
+  firstSortValue(
+    item.main_category,
+    item.mainCategory,
+    item.category,
+    item.product_category,
+    item.productCategory,
+    item.products?.main_category,
+    item.products?.mainCategory,
+    item.products?.category,
+    item.product?.main_category,
+    item.product?.mainCategory,
+    item.product?.category
+  );
+
 export const getPrintItemName = (item = {}) =>
   firstSortValue(
     item.product_name,
@@ -78,28 +94,28 @@ const comparePrintText = (left, right) =>
     }
   );
 
+const getOperationalGroup = (item = {}) => {
+  const candidates = [
+    getPrintItemSeries(item),
+    getPrintItemBrand(item),
+    getPrintItemSubCategory(item),
+    getPrintItemMainCategory(item),
+  ];
+  const index = candidates.findIndex((value) => String(value || "").trim() !== "");
+  return {
+    rank: index === -1 ? candidates.length : index,
+    value: index === -1 ? "Other" : candidates[index],
+  };
+};
+
 export const comparePrintItems = (left = {}, right = {}) => {
+  const leftGroup = getOperationalGroup(left);
+  const rightGroup = getOperationalGroup(right);
   const comparisons = [
-    comparePrintText(
-      getPrintItemSeries(left),
-      getPrintItemSeries(right)
-    ),
-    comparePrintText(
-      getPrintItemBrand(left),
-      getPrintItemBrand(right)
-    ),
-    comparePrintText(
-      getPrintItemSubCategory(left),
-      getPrintItemSubCategory(right)
-    ),
-    comparePrintText(
-      getPrintItemName(left),
-      getPrintItemName(right)
-    ),
-    comparePrintText(
-      getPrintItemCode(left),
-      getPrintItemCode(right)
-    ),
+    leftGroup.rank - rightGroup.rank,
+    comparePrintText(leftGroup.value, rightGroup.value),
+    comparePrintText(getPrintItemName(left), getPrintItemName(right)),
+    comparePrintText(getPrintItemCode(left), getPrintItemCode(right)),
   ];
 
   return comparisons.find((result) => result !== 0) || 0;

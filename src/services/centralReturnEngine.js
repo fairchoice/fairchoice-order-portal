@@ -1,5 +1,7 @@
 import { supabase } from "./supabase";
-import { allocateCustomerPaymentToInvoices } from "./centralInvoiceEngine";
+import { getFcSessionState } from "./fcSession";
+import { findMatchingReturn } from "./returnDuplicateDetection.js";
+export { findMatchingReturn } from "./returnDuplicateDetection.js";
 
 export const RETURN_TYPES = [
   "Damaged",
@@ -76,12 +78,22 @@ const insertReturnHeader = async (payload) => {
   return data;
 };
 
-export async function createReturnRequest({ order, returnType, items, source, currentUser, notes = "" } = {}) {
+export async function createReturnRequest({ order, returnType, items, source, currentUser, notes = "", allowDuplicate = false } = {}) {
   if (!order) throw new Error("Order is required");
   if (!RETURN_TYPES.includes(returnType)) throw new Error("Valid return type is required");
 
   const returnItems = (items || []).map(normalizeReturnProduct).filter((item) => item.qty > 0);
   if (!returnItems.length) throw new Error("Add at least one return product");
+
+  if (!allowDuplicate) {
+    const existingReturns = await loadPotentialDuplicateReturns(order);
+    const matchingReturn = findMatchingReturn({ order, returnType, items: returnItems, existingReturns });
+    if (matchingReturn) {
+      const error = new Error(`A matching return already exists (${matchingReturn.return_number || matchingReturn.id}).`);
+      error.code = "MATCHING_RETURN_EXISTS";
+      throw error;
+    }
+  }
 
   const totals = calculateReturnTotals(returnItems);
   const returnNumber = `RET-${Date.now()}`;
@@ -123,121 +135,65 @@ export async function createReturnRequest({ order, returnType, items, source, cu
 
 export async function confirmReturnCredit({ returnRequest, currentUser } = {}) {
   if (!returnRequest) throw new Error("Return request is required");
+  if (!returnRequest.id) throw new Error("Return database ID is required");
+  const session = getFcSessionState(currentUser);
+  if (!session.valid) throw new Error("FC login session is missing or expired. Sign in again.");
 
-  const amount = Number(returnRequest.return_total || returnRequest.grandTotal || 0);
-  if (!amount || amount <= 0) throw new Error("Return credit amount is required");
-
-  const payload = {
-    customer_account_id: returnRequest.customer_account_id || null,
-    customer_branch_id: returnRequest.customer_branch_id || returnRequest.branch_id || null,
-    branch_id: returnRequest.branch_id || returnRequest.customer_branch_id || null,
-    branch_name: returnRequest.branch_name || null,
-    customer_name: returnRequest.customer_name,
-    entry_type: "PAYMENT",
-    transaction_type: "RETURN_CREDIT",
-    reference_no: returnRequest.return_number,
-    debit: 0,
-    credit: amount,
-    amount,
-    payment_type: "Return Credit",
-    payment_applies_to: "RETURN",
-    collection_source: "WAREHOUSE_RETURN_CONFIRMATION",
-    received_by: currentUser?.name || currentUser?.username || null,
-    received_by_role: currentUser?.role || null,
-    confirmed_by: currentUser?.name || currentUser?.username || null,
-    notes: `Return confirmed - ${returnRequest.return_type || "Return"}`,
-  };
-
-  const existing = await supabase
-    .from("customer_ledger")
-    .select("*")
-    .eq("reference_no", returnRequest.return_number)
-    .order("created_at", { ascending: true })
-    .limit(25);
-
-  if (existing.error) throw existing.error;
-
-  const existingRows = Array.isArray(existing.data) ? existing.data : [];
-  const existingCredit = existingRows.find((row) => {
-    const transactionType = String(row.transaction_type || "").toUpperCase();
-    const paymentType = String(row.payment_type || "").toUpperCase();
-    const paymentAppliesTo = String(row.payment_applies_to || "").toUpperCase();
-
-    return (
-      transactionType === "RETURN_CREDIT" ||
-      paymentType === "RETURN CREDIT" ||
-      paymentAppliesTo === "RETURN"
-    );
+  const { data, error } = await supabase.rpc("fc_approve_customer_return_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
+    p_return_id: returnRequest.id,
+    p_approval_note: returnRequest.approvalNote || null,
+    p_financial_disposition: returnRequest.financialDisposition,
   });
-
-  const query = existingCredit?.id
-    ? supabase.from("customer_ledger").update(payload).eq("id", existingCredit.id)
-    : supabase.from("customer_ledger").insert(payload);
-
-  const { data, error } = await query.select().single();
-
-  if (error) throw error;
-
-  // Keep a documentary return invoice in the invoice register while the
-  // RETURN_CREDIT row remains the only financial credit used for allocation.
-  // The documentary row carries zero debit/credit to avoid double-counting.
-  const returnInvoicePayload = {
-    customer_account_id: returnRequest.customer_account_id || null,
-    customer_branch_id: returnRequest.customer_branch_id || returnRequest.branch_id || null,
-    branch_id: returnRequest.branch_id || returnRequest.customer_branch_id || null,
-    branch_name: returnRequest.branch_name || null,
-    customer_name: returnRequest.customer_name,
-    entry_type: "RETURN_INVOICE",
-    transaction_type: "RETURN_INVOICE",
-    reference_no: returnRequest.return_number,
-    order_number: returnRequest.order_number || null,
-    description: `Return Invoice - ${returnRequest.return_type || "Return"}`,
-    debit: 0,
-    credit: 0,
-    amount,
-    invoice_amount: amount,
-    invoice_total: amount,
-    paid_amount: amount,
-    remaining_amount: 0,
-    invoice_status: "CREDITED",
-    payment_type: "Return Invoice",
-    payment_applies_to: "RETURN_DOCUMENT",
-    collection_source: "WAREHOUSE_RETURN_CONFIRMATION",
-    confirmed_by: currentUser?.name || currentUser?.username || null,
-    notes: `Return invoice for ${returnRequest.return_number}`,
-  };
-
-  const existingReturnInvoice = existingRows.find(
-    (row) => String(row.entry_type || "").toUpperCase() === "RETURN_INVOICE"
-  );
-
-  const returnInvoiceQuery = existingReturnInvoice?.id
-    ? supabase
-        .from("customer_ledger")
-        .update(returnInvoicePayload)
-        .eq("id", existingReturnInvoice.id)
-    : supabase.from("customer_ledger").insert(returnInvoicePayload);
-
-  const { error: returnInvoiceError } = await returnInvoiceQuery;
-  if (returnInvoiceError) throw returnInvoiceError;
-
-  const { error: returnUpdateError } = await supabase
-    .from("customer_returns")
-    .update({
-      status: "Confirmed",
-      confirmed_by: currentUser?.id || currentUser?.staff_id || null,
-      confirmed_by_name: currentUser?.name || currentUser?.username || null,
-      confirmed_by_role: currentUser?.role || null,
-      confirmed_at: new Date().toISOString(),
-    })
-    .eq("id", returnRequest.id);
-
-  if (returnUpdateError) throw returnUpdateError;
-
-  await allocateCustomerPaymentToInvoices({
-    customerAccountId: returnRequest.customer_account_id,
-    customerName: returnRequest.customer_name,
-  });
-
+  if (error) {
+    if (["42883", "PGRST202"].includes(String(error.code || ""))) {
+      throw new Error("Secure Return Approval service is not installed.");
+    }
+    throw error;
+  }
   return data;
+}
+
+export async function reverseReturnApproval({ returnRequest, currentUser, reason } = {}) {
+  if (!returnRequest?.id) throw new Error("Return database ID is required");
+  if (!String(reason || "").trim()) throw new Error("Reversal reason is required");
+  const session = getFcSessionState(currentUser);
+  if (!session.valid) throw new Error("FC login session is missing or expired. Sign in again.");
+  const { data, error } = await supabase.rpc("fc_reverse_customer_return_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
+    p_return_id: returnRequest.id,
+    p_reason: String(reason).trim(),
+  });
+  if (error) {
+    if (["42883", "PGRST202"].includes(String(error.code || ""))) {
+      throw new Error("Secure Return Reversal service is not installed.");
+    }
+    throw error;
+  }
+  return data;
+}
+
+export async function loadReturnFinancialReconciliation(currentUser) {
+  const session = getFcSessionState(currentUser);
+  if (!session.valid) throw new Error("FC login session is missing or expired. Sign in again.");
+  const { data, error } = await supabase.rpc("fc_list_customer_return_reconciliation_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
+  });
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
+export async function loadPotentialDuplicateReturns(order) {
+  const orderId = order?.dbId || order?.id || null;
+  if (!orderId) return [];
+  const { data, error } = await supabase
+    .from("customer_returns")
+    .select("*, customer_return_items(*)")
+    .eq("order_id", orderId)
+    .in("status", ["Pending Warehouse Confirmation", "Confirmed"]);
+  if (error) throw error;
+  return data || [];
 }

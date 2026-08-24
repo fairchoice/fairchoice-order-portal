@@ -6,9 +6,27 @@ import {
   canManageSupplierSetup,
   filterSuppliers,
   normalizeOptionalText,
+  supplierLedgerTypeLabel,
   supplierOptionsForSelection,
   validateSupplier,
 } from "./suppliers.js";
+
+test("automatic supplier payments have a distinct business label", () => {
+  assert.equal(
+    supplierLedgerTypeLabel({
+      transaction_type: "payment",
+      description: "Supplier Payment",
+    }),
+    "Supplier Payment",
+  );
+  assert.equal(
+    supplierLedgerTypeLabel({
+      transaction_type: "credit_adjustment",
+      description: "Manual correction",
+    }),
+    "Credit adjustment",
+  );
+});
 
 const migrationPath = fileURLToPath(
   new URL(

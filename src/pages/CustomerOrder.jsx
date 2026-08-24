@@ -20,7 +20,9 @@ import PricingRule from "./AdminSetup/PricingRule";
 import Suppliers from "./AdminSetup/Suppliers";
 import SupplierAccounts from "./AdminSetup/SupplierAccounts";
 import Staff from "./AdminSetup/Staff";
-import LoginConfig from "./AdminSetup/LoginConfig";
+import AccessControl from "./AdminSetup/AccessControl";
+import StaffLogin from "./AdminSetup/StaffLogin";
+import CustomerLogin from "./AdminSetup/CustomerLogin";
 import PriceManagement from "./AdminSetup/PriceManagement";
 
 import { formatCurrency } from "../utils/currency";
@@ -42,12 +44,19 @@ import {
   normalizeInvoicePaymentStatus,
 } from "../utils/invoicePaymentStatus";
 import { sortPrintItems } from "../utils/printItemSorting";
+import { FC_PERMISSIONS, hasFcPermission } from "../security/fcPermissions";
+import {
+  PAGE_BY_ROUTE,
+  PAGE_REGISTRY,
+  canAccessPage,
+  canPerform,
+} from "../security/accessControlRegistry";
 
 
 import BackOfficeLayout, {
   ComingSoonPlaceholder,
-  getComingSoonTitle,
 } from "./AdminSetup/BackOfficeLayout";
+import { getComingSoonTitle } from "./AdminSetup/backOfficePageHelpers";
 
 import Categories from "./AdminSetup/Categories";
 import Warehouse from "./Warehouse";
@@ -66,6 +75,8 @@ import OrderSalesInvoices from "./AdminSetup/OrderSalesInvoices";
 import ReturnsPortal from "./AdminSetup/ReturnsPortal";
 import Customers from "./AdminSetup/Customers";
 import HomePageImages from "./AdminSetup/HomePageImages";
+import PurchasePlanningReport from "./reports/PurchasePlanningReport";
+import WarehouseActivityReport from "./reports/WarehouseActivityReport";
 
 import ProductCard, { ProductListRow } from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
@@ -144,6 +155,16 @@ import {
   withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
 import { mergeAuthenticatedProfile } from "../services/fcSession";
+import {
+  CENTRAL_CART_ENABLED,
+  beginCentralCartSubmission,
+  cancelCentralCartSubmission,
+  finalizeCentralCartSubmission,
+  incrementCentralCartItem,
+  loadCentralCart,
+  removeCentralCartItem,
+  setCentralCartItemQuantity,
+} from "../services/customerCart";
 
 const LEGACY_CART_KEY = "fairchoice_cart";
 
@@ -506,26 +527,15 @@ const loggedInUser =
   const normalizedRole = String(role || "")
     .replace(/[^a-z0-9]/gi, "")
     .toLowerCase();
-  const permissions = activeUser?.permissions || {};
-
   const isAdmin = isAdminStaffRole(role);
-  const isSalesRep =
-    normalizedRole === "salesrep" ||
-    normalizedRole === "salesrepresentative" ||
-    normalizedRole === "sales" ||
-    permissions.access_sales_rep === true;
-  const isWarehouse =
-    normalizedRole === "warehouse" || permissions.access_warehouse === true;
-  const isDriver = normalizedRole === "driver" || permissions.access_driver === true;
-  const canCollectCash =
-    permissions.all_access === true ||
-    permissions["payments.collect_cash"] === true ||
-    ["admin", "superadmin", "driver", "salesrep", "salesrepresentative"].includes(
-      normalizedRole
-    );
-  const isCustomer =
-    normalizedRole === "customer" ||
-    (permissions.access_customer_portal === true && !isAdmin && !isSalesRep && !isWarehouse && !isDriver);
+  const isSalesRep = canAccessPage(activeUser, "page.order.sales_rep");
+  const isWarehouse = canAccessPage(activeUser, "page.operations.warehouse");
+  const isDriver = canAccessPage(activeUser, "page.operations.driver");
+  const canCollectCash = hasFcPermission(
+    activeUser,
+    FC_PERMISSIONS.PAYMENTS_COLLECT_CASH,
+  );
+  const isCustomer = normalizedRole === "customer";
   const activeUsername = String(
     activeUser?.username ||
       activeUser?.staff_username ||
@@ -536,7 +546,9 @@ const loggedInUser =
     .trim()
     .toLowerCase();
   const isNisstajAdmin = activeUsername === "nisstaj_admin";
-  const canManualCheckoutDiscount = isAdmin || isNisstajAdmin;
+  const canManualCheckoutDiscount = canPerform(activeUser, "orders.discount.change");
+  const defaultBackOfficePage =
+    PAGE_REGISTRY.find((item) => canAccessPage(activeUser, item.key))?.route || "order";
 
   
 
@@ -551,6 +563,7 @@ const loggedInUser =
  const [page, setPage] = useState(() =>
   resolveCustomerPortalPage({ hash: window.location.hash, ...portalRoleState })
  );
+ const [accessControlStaffId, setAccessControlStaffId] = useState("");
  const [pickingOrderId, setPickingOrderId] = useState(null);
 
   const [customerAccounts, setCustomerAccounts] = useState([]);
@@ -563,6 +576,8 @@ const loggedInUser =
     previousInvoiceNumber: "",
     previousInvoiceDate: "",
   });
+  const [salesReturnSubmitting, setSalesReturnSubmitting] = useState(false);
+  const [salesReturnCreated, setSalesReturnCreated] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const [selectedCustomerAccount, setSelectedCustomerAccount] = useState(null);
@@ -706,6 +721,16 @@ const [cart, setCart] = useState(() => {
   }
 });
 
+const cartRef = useRef(cart);
+const centralCartMutationQueueRef = useRef(Promise.resolve());
+const centralCartMutatingRef = useRef(false);
+const centralCartLoadedScopeRef = useRef("");
+const [centralCartId, setCentralCartId] = useState(null);
+
+useEffect(() => {
+  cartRef.current = cart;
+}, [cart]);
+
 useEffect(
   () => () => {
     if (productHighlightTimerRef.current) {
@@ -726,12 +751,6 @@ useEffect(() => {
   localStorage.setItem(cartStorageKey, JSON.stringify(cart));
   localStorage.removeItem(LEGACY_CART_KEY);
 }, [cart, cartStorageKey]);
-
-useEffect(() => {
-  if (!canManualCheckoutDiscount && Number(orderDiscountPercent || 0) > 0) {
-    setOrderDiscountPercent(0);
-  }
-}, [canManualCheckoutDiscount, orderDiscountPercent]);
 
 const applyCartPromotions = (cartLines) =>
   applyPromotionRulesToCart(cartLines, promotionRules, { products, priceMode });
@@ -1640,11 +1659,146 @@ useEffect(() => {
   });
 }, [priceMode, orderCountry, pricingSettings, promotionRules, products]);
 
+const getCentralCartScope = () => {
+  const customerAccountId = selectedCustomerAccount?.id || null;
+  const customerBranchId = selectedBranch?.id || null;
+  const branchCount = selectedCustomerAccount
+    ? getCustomerBranches(selectedCustomerAccount).filter((branch) => branch.active !== false).length
+    : 0;
+
+  if (!customerAccountId) return null;
+  if (branchCount > 0 && !customerBranchId) return null;
+
+  return { customerAccountId, customerBranchId };
+};
+
+const buildCartFromCentralItems = (items = []) => {
+  const normalCart = items
+    .map((serverItem) => {
+      const product = products.find(
+        (candidate) => String(candidate.id) === String(serverItem.product_id)
+      );
+      if (!product) return null;
+      return recalculateCartItemForPriceMode(
+        {
+          ...product,
+          sourceStatus:
+            Number(product.stock || 0) < Number(serverItem.quantity || 0)
+              ? "Need Supplier"
+              : "In Stock",
+          includeInPicking: true,
+          pickedQty: Math.min(
+            Number(product.stock || 0),
+            Number(serverItem.quantity || 0)
+          ),
+        },
+        Number(serverItem.quantity || 0)
+      );
+    })
+    .filter(Boolean);
+
+  return applyCartPromotions(normalCart);
+};
+
+const loadCentralCartForCurrentScope = async ({ seedLocal = false } = {}) => {
+  if (!CENTRAL_CART_ENABLED) return null;
+  const scope = getCentralCartScope();
+  if (!scope) return null;
+
+  const remote = await loadCentralCart({
+    profile: activeUser,
+    ...scope,
+  });
+
+  setCentralCartId(remote.cartId);
+
+  const localNormalCart = cartRef.current.filter((item) => !item.isPromotionFree);
+  if (seedLocal && remote.items.length === 0 && localNormalCart.length > 0) {
+    for (const item of localNormalCart) {
+      await setCentralCartItemQuantity({
+        profile: activeUser,
+        cartId: remote.cartId,
+        productId: item.id,
+        quantity: Number(item.qty || item.quantity || 0),
+      });
+    }
+    return loadCentralCartForCurrentScope({ seedLocal: false });
+  }
+
+  setCart(buildCartFromCentralItems(remote.items));
+  return remote;
+};
+
+const ensureCentralCartForCurrentScope = async () => {
+  if (!CENTRAL_CART_ENABLED) return null;
+  if (centralCartId) return centralCartId;
+  const remote = await loadCentralCartForCurrentScope({ seedLocal: true });
+  return remote?.cartId || null;
+};
+
+const queueCentralCartMutation = (mutation) => {
+  if (!CENTRAL_CART_ENABLED) return;
+
+  centralCartMutationQueueRef.current = centralCartMutationQueueRef.current
+    .catch(() => undefined)
+    .then(async () => {
+      centralCartMutatingRef.current = true;
+      try {
+        const cartId = await ensureCentralCartForCurrentScope();
+        if (!cartId) return;
+        await mutation(cartId);
+      } finally {
+        centralCartMutatingRef.current = false;
+      }
+    })
+    .catch((error) => {
+      console.error("Central cart sync error:", error);
+      setCartNotice("Cart kept on this device; server sync needs retry.");
+    });
+};
+
+useEffect(() => {
+  if (!CENTRAL_CART_ENABLED || products.length === 0) return;
+  const scope = getCentralCartScope();
+  if (!scope) {
+    setCentralCartId(null);
+    return;
+  }
+
+  const scopeKey = `${scope.customerAccountId}:${scope.customerBranchId || "ACCOUNT"}`;
+  if (centralCartLoadedScopeRef.current === scopeKey) return;
+  centralCartLoadedScopeRef.current = scopeKey;
+  setCentralCartId(null);
+
+  loadCentralCartForCurrentScope({ seedLocal: true }).catch((error) => {
+    centralCartLoadedScopeRef.current = "";
+    console.error("Central cart load error:", error);
+    setCartNotice("Using saved device cart; server cart could not be loaded.");
+  });
+}, [selectedCustomerAccount?.id, selectedBranch?.id, products.length]);
+
+useEffect(() => {
+  if (!CENTRAL_CART_ENABLED || !centralCartId) return undefined;
+
+  const refresh = () => {
+    if (document.visibilityState !== "visible" || centralCartMutatingRef.current) return;
+    loadCentralCartForCurrentScope().catch((error) =>
+      console.error("Central cart refresh error:", error)
+    );
+  };
+
+  const timer = window.setInterval(refresh, 15000);
+  window.addEventListener("focus", refresh);
+  return () => {
+    window.clearInterval(timer);
+    window.removeEventListener("focus", refresh);
+  };
+}, [centralCartId, selectedCustomerAccount?.id, selectedBranch?.id, products.length]);
+
 
 useEffect(() => {
   const syncPageFromHash = () => {
-    setPage(
-      resolveCustomerPortalPage({
+    const resolvedPage = resolveCustomerPortalPage({
         hash: window.location.hash,
         isAdmin,
         isSalesRep,
@@ -1652,7 +1806,13 @@ useEffect(() => {
         isDriver,
         isCustomer,
         canCollectCash,
-      })
+      });
+    setPage(
+      isAdmin
+        ? (canAccessPage(activeUser, resolvedPage) ? resolvedPage : defaultBackOfficePage)
+        : !isSalesRep && !isWarehouse && !isDriver && !isCustomer
+        ? defaultBackOfficePage
+        : resolvedPage
     );
   };
 
@@ -1662,10 +1822,10 @@ useEffect(() => {
     window.clearTimeout(syncTimer);
     window.removeEventListener("hashchange", syncPageFromHash);
   };
-}, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash]);
+}, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash, defaultBackOfficePage]);
 
 useEffect(() => {
-  const roleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer };
+  const roleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash };
 
   if (!isCustomerPortalPageAllowed(page, roleState)) return;
 
@@ -1673,7 +1833,7 @@ useEffect(() => {
   if (nextHash && window.location.hash !== nextHash) {
     window.history.replaceState(window.history.state, "", nextHash);
   }
-}, [page, isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer]);
+}, [page, isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash]);
 
 
 
@@ -2388,6 +2548,15 @@ const getHomepageSubtitle = (item) => {
       ),
     ]);
   });
+
+  queueCentralCartMutation((cartId) =>
+    incrementCentralCartItem({
+      profile: activeUser,
+      cartId,
+      productId: product.id,
+      delta: quantity,
+    })
+  );
 };
 
   const increaseQty = (id) => {
@@ -2409,6 +2578,14 @@ const getHomepageSubtitle = (item) => {
               : item
           )
       )
+    );
+    queueCentralCartMutation((cartId) =>
+      incrementCentralCartItem({
+        profile: activeUser,
+        cartId,
+        productId: id,
+        delta: 1,
+      })
     );
   };
 
@@ -2432,6 +2609,14 @@ const getHomepageSubtitle = (item) => {
           )
           .filter((item) => item.qty > 0)
       )
+    );
+    queueCentralCartMutation((cartId) =>
+      incrementCentralCartItem({
+        profile: activeUser,
+        cartId,
+        productId: id,
+        delta: -1,
+      })
     );
   };
 
@@ -2457,6 +2642,14 @@ const getHomepageSubtitle = (item) => {
           )
       )
     );
+    queueCentralCartMutation((cartId) =>
+      setCentralCartItemQuantity({
+        profile: activeUser,
+        cartId,
+        productId: id,
+        quantity,
+      })
+    );
   };
 
   const removeItem = (id) => {
@@ -2464,6 +2657,13 @@ const getHomepageSubtitle = (item) => {
       applyCartPromotions(
         oldCart.filter((item) => !item.isPromotionFree && item.id !== id)
       )
+    );
+    queueCentralCartMutation((cartId) =>
+      removeCentralCartItem({
+        profile: activeUser,
+        cartId,
+        productId: id,
+      })
     );
   };
 
@@ -3019,17 +3219,57 @@ const submitOrder = async () => {
     };
 
     let createdOrder;
-    try {
-      createdOrder = await createCustomerOrder(orderRequest);
-    } catch (error) {
-      if (!isOrderAuthError(error)) throw error;
+    const submittingCentralCartId = CENTRAL_CART_ENABLED
+      ? await ensureCentralCartForCurrentScope()
+      : null;
 
-      const refreshed = await supabase.auth.refreshSession();
-      if (refreshed.error || !refreshed.data.session) throw error;
-      createdOrder = await createCustomerOrder(orderRequest);
+    if (submittingCentralCartId) {
+      await centralCartMutationQueueRef.current.catch(() => undefined);
+      await beginCentralCartSubmission({
+        profile: activeUser,
+        cartId: submittingCentralCartId,
+        orderNumber: submissionOrderNumber,
+      });
+    }
+
+    try {
+      try {
+        createdOrder = await createCustomerOrder(orderRequest);
+      } catch (error) {
+        if (!isOrderAuthError(error)) throw error;
+
+        const refreshed = await supabase.auth.refreshSession();
+        if (refreshed.error || !refreshed.data.session) throw error;
+        createdOrder = await createCustomerOrder(orderRequest);
+      }
+    } catch (error) {
+      if (submittingCentralCartId) {
+        await cancelCentralCartSubmission({
+          profile: activeUser,
+          cartId: submittingCentralCartId,
+          orderNumber: submissionOrderNumber,
+        }).catch((cancelError) =>
+          console.error("Central cart submission rollback error:", cancelError)
+        );
+      }
+      throw error;
     }
 
     const { orderNumber } = createdOrder;
+
+    if (submittingCentralCartId) {
+      await finalizeCentralCartSubmission({
+        profile: activeUser,
+        cartId: submittingCentralCartId,
+        orderNumber,
+      }).catch((error) => {
+        // Do not fail an order that already exists. The cart RPC auto-recovers
+        // SUBMITTING carts when it later sees the matching order number.
+        console.error("Central cart finalization error:", error);
+      });
+      setCentralCartId(null);
+      centralCartLoadedScopeRef.current = "";
+    }
 
 const newOrder = {
     orderId: orderNumber,
@@ -3861,8 +4101,8 @@ const backOfficeContent = comingSoonTitle ? (
         orders={orders}
         printPickingList={printPickingList}
         changeOrderStatus={changeOrderStatus}
-        updateOrderItem={updateOrderItem}
         updateOrderExtraFields={updateOrderExtraFields}
+        refreshOrders={fetchOrders}
       />
     )}
 
@@ -3916,6 +4156,12 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "weeklyAccount" && <WeeklyAccount currentUser={activeUser} />}
     {page === "supplierAccounts" && <SupplierAccounts user={activeUser} />}
     {page === "expenses" && <Expenses />}
+    {page === "purchasePlanning" && (
+      <PurchasePlanningReport products={products} currentUser={activeUser} />
+    )}
+    {page === "warehouseActivity" && (
+      <WarehouseActivityReport currentUser={activeUser} />
+    )}
     {page === "stockhistory" && <StockHistory />}
     {page === "stockTaking" && (
       <StockTaking products={products} fetchProducts={fetchProducts} />
@@ -3925,8 +4171,10 @@ const backOfficeContent = comingSoonTitle ? (
       <StockReceipts products={products} fetchProducts={fetchProducts} />
     )}
 
-    {page === "staff" && <Staff />}
-    {page === "loginSetup" && <LoginConfig />}
+    {page === "staff" && <Staff currentUser={activeUser} onOpenAccessControl={(staffId) => { setAccessControlStaffId(staffId); setPage("accessControl"); }} />}
+    {page === "staffLogin" && <StaffLogin initialStaffId={accessControlStaffId} onOpenAccessControl={(staffId) => { setAccessControlStaffId(staffId); setPage("accessControl"); }} />}
+    {page === "customerLogin" && <CustomerLogin />}
+    {(page === "accessControl" || page === "loginSetup") && <AccessControl initialStaffId={accessControlStaffId} />}
     {page === "suppliers" && <Suppliers user={activeUser} />}
     {page === "pricingRule" && (
   <PricingRule
@@ -3958,9 +4206,13 @@ const backOfficeContent = comingSoonTitle ? (
   </>
 );
 
-const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
+const portalPageIsAllowed = page === "order" && !isCustomer
+  ? isSalesRep
+  : isCustomerPortalPageAllowed(page, portalRoleState);
 
-  if ((isAdmin || isWarehouse || isDriver) && page !== "order") {
+  const isBackOfficePage = Boolean(PAGE_BY_ROUTE[page]) || ["picking", "stockhistory", "stockreceipts", "loginSetup"].includes(page);
+
+  if (!isCustomer && isBackOfficePage && page !== "order") {
     return (
       <BackOfficeLayout
         page={page}
@@ -4095,7 +4347,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
           </div>
         )}
 
-        {(isAdmin || isSalesRep || isCustomer) && page === "order" && (
+        {(isSalesRep || isCustomer) && page === "order" && (
           <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
             
  <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
@@ -4970,6 +5222,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
       <h2 className="text-xl font-bold">Sales Rep Return</h2>
 
       <input
+        disabled={salesReturnSubmitting || salesReturnCreated}
         value={salesReturnCustomerSearch}
         onChange={(e) => setSalesReturnCustomerSearch(e.target.value)}
         placeholder="Search customer"
@@ -4977,6 +5230,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
       />
 
       <select
+        disabled={salesReturnSubmitting || salesReturnCreated}
         value={salesReturnForm.customerId}
         onChange={(e) =>
           setSalesReturnForm({
@@ -4997,6 +5251,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 
       {selectedSalesReturnBranches.length > 0 && (
         <select
+          disabled={salesReturnSubmitting || salesReturnCreated}
           value={salesReturnForm.branchId}
           onChange={(e) =>
             setSalesReturnForm({
@@ -5017,7 +5272,10 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        <input
+        <label className="space-y-1">
+          <span className="block text-xs font-bold text-slate-500">Previous Invoice Number</span>
+          <input
+          disabled={salesReturnSubmitting || salesReturnCreated}
           value={salesReturnForm.previousInvoiceNumber}
           onChange={(e) =>
             setSalesReturnForm({
@@ -5026,9 +5284,13 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
             })
           }
           placeholder="Previous invoice number"
-          className="w-full border rounded-xl p-3"
-        />
-        <input
+          className="w-full border rounded-xl p-3 disabled:bg-slate-100"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="block text-xs font-bold text-slate-500">Previous Invoice Date</span>
+          <input
+          disabled={salesReturnSubmitting || salesReturnCreated}
           type="date"
           value={salesReturnForm.previousInvoiceDate}
           onChange={(e) =>
@@ -5037,8 +5299,9 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
               previousInvoiceDate: e.target.value,
             })
           }
-          className="w-full border rounded-xl p-3"
-        />
+          className="w-full border rounded-xl p-3 disabled:bg-slate-100"
+          />
+        </label>
       </div>
 
       {salesReturnOrder ? (
@@ -5050,6 +5313,28 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
             catalogProducts={products.filter((product) => product.active)}
             allowCatalogProducts
             embedded
+            onSubmittingChange={setSalesReturnSubmitting}
+            onCreatedReturnChange={(createdReturn) => {
+              const created = Boolean(createdReturn?.id);
+              setSalesReturnCreated(created);
+              if (created) {
+                setSalesReturnForm((current) => ({
+                  ...current,
+                  branchId: "",
+                  previousInvoiceNumber: "",
+                  previousInvoiceDate: "",
+                }));
+              }
+            }}
+            onCreateAnother={() => {
+              setSalesReturnCreated(false);
+              setSalesReturnForm((current) => ({
+                ...current,
+                branchId: "",
+                previousInvoiceNumber: "",
+                previousInvoiceDate: "",
+              }));
+            }}
             onSaved={async () => {
               await fetchOrders();
               await fetchCustomerLedger();
@@ -5097,7 +5382,7 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
           </div>
         )}
 
-      {page === "order" && (isAdmin || isSalesRep || isCustomer) && (
+      {page === "order" && (isSalesRep || isCustomer) && (
   <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-xl">
     <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
       <div className="min-w-0 shrink">
@@ -5111,15 +5396,46 @@ const portalPageIsAllowed = isCustomerPortalPageAllowed(page, portalRoleState);
 
           {cart.length > 0 && (
             <button
-              onClick={() => {
-                if (window.confirm("Clear all cart items?")) {
-                  localStorage.removeItem(cartStorageKey);
-                  localStorage.removeItem(orderSubmissionStorageKey);
-                  setCart([]);
-                  setIsCartEditing(false);
-                  setOrderPaymentChoice("no_payment");
-                }
-              }}
+            onClick={async () => {
+  if (!window.confirm("Clear all cart items?")) return;
+
+  const itemsToClear = cartRef.current.filter(
+    (item) => !item.isPromotionFree
+  );
+
+  if (CENTRAL_CART_ENABLED) {
+    const cartId = await ensureCentralCartForCurrentScope();
+
+    if (cartId) {
+      await centralCartMutationQueueRef.current.catch(() => undefined);
+
+      centralCartMutatingRef.current = true;
+
+      try {
+        for (const item of itemsToClear) {
+          await removeCentralCartItem({
+            profile: activeUser,
+            cartId,
+            productId: item.id,
+          });
+        }
+      } catch (error) {
+        console.error("Central cart clear error:", error);
+        alert("Could not clear the server cart. Please try again.");
+        return;
+      } finally {
+        centralCartMutatingRef.current = false;
+      }
+    }
+  }
+
+  localStorage.removeItem(cartStorageKey);
+  localStorage.removeItem(orderSubmissionStorageKey);
+
+  setCart([]);
+  setIsCartEditing(false);
+  setOrderPaymentChoice("no_payment");
+}}
               className="text-xs text-red-600 underline mt-1"
             >
               Clear Cart
