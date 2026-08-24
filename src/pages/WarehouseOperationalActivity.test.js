@@ -31,7 +31,7 @@ test("Warehouse panel exposes only the simplified operational action matrix", ()
 test("Available and Recall Available remain a referenced permanent audit chain", () => {
   assert.match(preorder, />\s*Available\s*<\/button>/);
   assert.match(preorder, />\s*Recall\s*<\/button>/);
-  assert.match(preorder, /referencedEventId: recall \? record\.id/);
+  assert.match(preorder, /referencedEventId:\s*actionType === "Recall Available" \? line\.latestAction\?\.id/s);
   assert.match(preorder, /warehouseStatusOverrides\[itemId\] \|\| line\?\.status/);
   assert.match(panel, /event\.oldStatus === "Cannot Supply"/);
   assert.match(panel, /referencedEventId: referencedEvent\?\.id/);
@@ -86,4 +86,10 @@ test("supplier history is unioned into the monitor rather than duplicated", () =
   assert.match(migration, /from public\.preorder_supply_events p/);
   assert.doesNotMatch(migration, /insert into public\.warehouse_operational_events\([^)]*supplier_id/i);
   assert.match(migration, /'Pre-Order Supply'/);
+});
+
+test("supplier workflow transitions retain Next Supplier in the activity monitor", () => {
+  assert.match(migration, /when p\.action_type='NextSup' then 'Next Supplier'/);
+  assert.match(migration, /p\.action_type in \('Buy','PartialBuy','Remove'\)[\s\S]*then 'Next Supplier'/);
+  assert.match(migration, /original\.action_type='NextSup' then 'Recall Next Supplier'/);
 });

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildWarehouseActivityEvent,
   filterWarehouseActivity,
+  getPickingMismatchActivity,
   normalizeWarehouseStatus,
   summarizeWarehouseActivity,
 } from "./warehouseActivity.js";
@@ -27,6 +28,32 @@ test("activity payload retains operational analysis dimensions", () => {
   assert.equal(event.branch_name, "Cardiff");
   assert.equal(event.country, "Wales");
   assert.equal(event.source_module, "Pre-Order Supply");
+  assert.equal(event.quantity, 4);
+});
+
+test("Picking mismatch activity detects only opposite-status decisions", () => {
+  assert.deepEqual(
+    getPickingMismatchActivity({ itemStatus: "In Stock", action: "pre_order" }),
+    {
+      actionType: "Picking Mismatch",
+      oldStatus: "In Stock",
+      newStatus: "Pre-Order",
+      reason: "Picker selected Pre-Order for an item recorded as In Stock",
+      mismatchType: "IN_STOCK_TO_PRE_ORDER",
+    }
+  );
+  assert.deepEqual(
+    getPickingMismatchActivity({ itemStatus: "Need Supplier", action: "in_stock" }),
+    {
+      actionType: "Picking Mismatch",
+      oldStatus: "Pre-Order",
+      newStatus: "In Stock",
+      reason: "Picker found warehouse stock and picked an item recorded as Pre-Order",
+      mismatchType: "PRE_ORDER_TO_PICK",
+    }
+  );
+  assert.equal(getPickingMismatchActivity({ itemStatus: "In Stock", action: "in_stock" }), null);
+  assert.equal(getPickingMismatchActivity({ itemStatus: "Pre-Order", action: "pre_order" }), null);
 });
 
 test("Warehouse Activity filters and summary cover transitions and recalls", () => {

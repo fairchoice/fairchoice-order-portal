@@ -1,10 +1,5 @@
 const placeholderTitles = {
-  profitPortal: "Profit Portal",
-  productLineAnalysis: "Product Line Analysis",
   salesReports: "Sales Reports",
-  outstandingCustomers: "Outstanding Customers",
-  collectionsReport: "Collections Report",
-  driverCollections: "Driver Collections",
   auditLog: "Audit Log",
   importExport: "Import / Export",
   backupTools: "Backup Tools",

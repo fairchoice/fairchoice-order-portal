@@ -26,20 +26,20 @@ test("Warehouse variants map to canonical supply groups", () => {
 });
 
 test("Pre-order Supply uses supplier-first permanent workflow tabs", () => {
-  assert.match(page, /\["Pre-order Queue", "Next Supplier", "Bought", "Cannot Supply", "History", "Order Pre-orders"\]/);
+  assert.match(page, /\["Pre-order Queue", "Next Supplier", "Bought", "Cannot Supply", "Order Pre-orders"\]/);
   assert.match(page, /Select Supplier/);
   assert.match(page, /Confirm Buy/);
   assert.match(page, /Sync All/);
   assert.match(page, /supplierName/);
 });
 
-test("History is audit-only while active queues remain live-demand based", () => {
-  assert.match(page, /if \(!isLivePreOrderDemandOrder\(order\)\) continue/);
-  assert.match(page, /const showHistory = tab === "History"/);
-  assert.match(page, /showHistory\s*\?\s*historyEvents\s*:\s*\[\.\.\.pendingActions, \.\.\.historyEvents\]/);
-  assert.match(page, /showHistory \? !delivered : delivered/);
+test("active tabs remain live-demand based while permanent history stays off-screen", () => {
+  assert.match(page, /if \(!isActivePreOrderSupplyOrder\(order\)\) continue/);
+  assert.match(page, /const combinedEvents = \[\.\.\.pendingActions, \.\.\.historyEvents\]/);
+  assert.match(page, /if \(delivered\) continue/);
   assert.match(page, /tab === "Bought"[\s\S]*\["Buy", "PartialBuy"\]/);
-  assert.match(page, /tab === "Cannot Supply"[\s\S]*\["Remove"\]/);
+  assert.match(page, /tab === "Cannot Supply"[\s\S]*\["Remove", "Available", "Recall Available"\]/);
+  assert.doesNotMatch(page, /tab === "History"|historyDateKey|type="date"/);
 });
 
 test("supplier attempts and bought quantities remain auditable", () => {
@@ -60,7 +60,7 @@ test("duplicate retries cannot duplicate shared history", () => {
 });
 
 test("browser storage contains pending changes only", () => {
-  assert.match(page, /PENDING_KEY/);
+  assert.match(page, /PREORDER_SUPPLY_PENDING_KEY/);
   assert.doesNotMatch(page, /HISTORY_KEY/);
   assert.match(page, /historyWarning/);
 });

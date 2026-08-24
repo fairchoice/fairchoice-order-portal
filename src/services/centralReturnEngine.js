@@ -66,7 +66,7 @@ const insertReturnHeader = async (payload) => {
 
   if (error) {
     const fallback = { ...payload };
-    ["customer_account_id", "customer_branch_id", "branch_id", "branch_name", "created_by", "created_by_name", "created_by_role"].forEach(
+    ["customer_account_id", "customer_branch_id", "branch_id", "branch_name", "price_mode", "created_by", "created_by_name", "created_by_role"].forEach(
       (key) => delete fallback[key]
     );
     const retry = await supabase.from("customer_returns").insert(fallback).select().single();
@@ -78,7 +78,7 @@ const insertReturnHeader = async (payload) => {
   return data;
 };
 
-export async function createReturnRequest({ order, returnType, items, source, currentUser, notes = "", allowDuplicate = false } = {}) {
+export async function createReturnRequest({ order, returnType, items, source, currentUser, notes = "", priceMode, allowDuplicate = false } = {}) {
   if (!order) throw new Error("Order is required");
   if (!RETURN_TYPES.includes(returnType)) throw new Error("Valid return type is required");
 
@@ -109,6 +109,7 @@ export async function createReturnRequest({ order, returnType, items, source, cu
     branch_name: getBranchName(order) || null,
     customer_name: getCustomerName(order),
     return_type: returnType,
+    price_mode: priceMode || order.priceMode || order.price_mode || "vat",
     status: "Pending Warehouse Confirmation",
     source: source || "RETURN_PORTAL",
     total_qty: totals.qty,

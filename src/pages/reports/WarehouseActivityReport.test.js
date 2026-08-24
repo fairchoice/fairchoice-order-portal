@@ -5,6 +5,9 @@ import { canAccessPage } from "../../security/accessControlRegistry.js";
 import {
   emptyWarehouseActivityFilters,
   filterWarehouseActivity,
+  emptyReceivedOrderActivityFilters,
+  filterReceivedOrderActivity,
+  getReceivedOrderMismatchType,
   sumWarehouseActivityQuantity,
 } from "../../services/warehouseActivity.js";
 
@@ -43,4 +46,30 @@ test("report uses centralized routing and permission enforcement", () => {
   assert.equal(canAccessPage(allowed, "warehouseActivity"), true);
   assert.equal(canAccessPage(denied, "warehouseActivity"), false);
   assert.equal(canAccessPage({ ...denied, username: "nisstaj_admin" }, "warehouseActivity"), true);
+});
+
+
+test("Received Order Activities is a separate permanent Picking mismatch tab", () => {
+  for (const label of ["Received Order Activities","Total Picking Mismatches","Mismatch Quantity","Mismatch Type","Country / Location","Activity"]) {
+    assert.match(page, new RegExp(label));
+  }
+  assert.match(page, /loadReceivedOrderActivityReport/);
+  assert.match(page, /filterReceivedOrderActivity/);
+  assert.match(page, /Pre-Order → In Stock/);
+  assert.match(page, /In Stock → Pre-Order/);
+});
+
+test("Received Order mismatch filtering distinguishes both approved mismatch directions", () => {
+  const rows = [
+    { oldStatus: "Pre-Order", newStatus: "In Stock", quantity: 1, country: "Wales", timestamp: "2026-08-21T00:00:00Z" },
+    { oldStatus: "In Stock", newStatus: "Pre-Order", quantity: 2, country: "England", timestamp: "2026-08-21T00:00:00Z" },
+  ];
+  assert.equal(getReceivedOrderMismatchType(rows[0]), "Pre-Order → In Stock");
+  assert.equal(getReceivedOrderMismatchType(rows[1]), "In Stock → Pre-Order");
+  const filtered = filterReceivedOrderActivity(rows, {
+    ...emptyReceivedOrderActivityFilters,
+    mismatchType: "Pre-Order → In Stock",
+  });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].quantity, 1);
 });

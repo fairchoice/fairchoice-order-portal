@@ -1,5 +1,6 @@
 import { supabase } from "./supabase.js";
 import {
+  getActiveStockLocations,
   getCountryLocationStock,
   normalizeInventoryCountry,
   resolveOrderInventoryCountry,
@@ -526,6 +527,7 @@ export function buildPurchasePlanningRows({
         supplierName: displayText(product.supplierName || product.supplier_name, "Not assigned"),
         country,
         currentStock,
+        stockLocationId: stock?.locationId || null,
         stockLocationName: stock?.locationName || "",
         inventoryCompatibility: Boolean(stock?.legacyFallback),
         soldLast7: roundedQuantity(metric.soldLast7),
@@ -584,6 +586,7 @@ export function buildPurchasePlanningRows({
       supplierName: "Not assigned",
       country: seed.country || "Unassigned",
       currentStock: 0,
+      stockLocationId: null,
       stockLocationName: "Product master record unavailable",
       inventoryCompatibility: false,
       soldLast7: roundedQuantity(metric.soldLast7),
@@ -830,6 +833,37 @@ async function loadPagedOrders({ statuses = null, since = null } = {}) {
   return rows;
 }
 
+
+export async function loadPurchaseReceiptHistory({ days = 90 } = {}) {
+  const since = new Date(Date.now() - Math.max(1, Number(days) || 90) * DAY_MS).toISOString();
+  const { data, error } = await supabase.from("stock_receipts").select("id,product_id,supplier_name,invoice_number,purchase_type,qty_received,cost_price,total_cost,source_type,received_date").gte("received_date", since).order("received_date", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+export function attachPurchaseReceiptHistory(rows = [], receipts = []) {
+  const byProduct = new Map();
+  for (const receipt of receipts || []) { const key = String(receipt.product_id || ""); if (!key) continue; if (!byProduct.has(key)) byProduct.set(key, []); byProduct.get(key).push(receipt); }
+  return rows.map((row) => {
+    const history = byProduct.get(String(row.productId || "")) || []; const now = Date.now();
+    const within = (r, days) => { const t = new Date(r.received_date || 0).getTime(); return Number.isFinite(t) && t >= now - days * DAY_MS; };
+    const sumQty = (list) => roundedQuantity(list.reduce((sum, r) => sum + Math.max(0, numeric(r.qty_received)), 0));
+    const main = history.filter((r) => normalizeText(r.purchase_type) === "supplier invoice"); const topup = history.filter((r) => normalizeText(r.purchase_type) !== "supplier invoice");
+    return { ...row, receiptHistory: history, supplierPurchased30: sumQty(main.filter((r) => within(r, 30))), supplierPurchased90: sumQty(main.filter((r) => within(r, 90))), topUpReceived30: sumQty(topup.filter((r) => within(r, 30))), topUpReceived90: sumQty(topup.filter((r) => within(r, 90))) };
+  });
+}
+export async function loadPurchasePlanningLocations() { return getActiveStockLocations(); }
+export async function bookPurchaseStockIn({ productId, locationId, quantity, supplierName = "", invoiceNumber = "", costPrice = 0, purchaseType = "Supplier Invoice", notes = "" } = {}) {
+  const qty = Number(quantity); const cost = Number(costPrice || 0);
+  if (!productId) throw new Error("Select a product."); if (!locationId) throw new Error("Select a stock location."); if (!Number.isFinite(qty) || qty <= 0) throw new Error("Received quantity must be more than zero.");
+  const { data: existing, error: stockReadError } = await supabase.from("product_location_stock").select("id,qty,low_stock_alert").eq("product_id", productId).eq("location_id", locationId).maybeSingle(); if (stockReadError) throw stockReadError;
+  const stockBefore = numeric(existing?.qty); const stockAfter = roundedQuantity(stockBefore + qty);
+  const { data: receipt, error: receiptError } = await supabase.from("stock_receipts").insert({ product_id: productId, supplier_name: displayText(supplierName), invoice_number: displayText(invoiceNumber), purchase_type: purchaseType, payment_method: "Account", qty_received: qty, cost_price: cost, vat_applicable: false, vat_percent: 0, total_cost: roundedQuantity(qty * cost), notes: displayText(notes), source_type: "Purchase Planning Stock In", received_date: new Date().toISOString() }).select("id").single(); if (receiptError) throw receiptError;
+  const { error: locationError } = await supabase.from("product_location_stock").upsert({ product_id: productId, location_id: locationId, qty: stockAfter, low_stock_alert: numeric(existing?.low_stock_alert), updated_at: new Date().toISOString() }, { onConflict: "product_id,location_id" }); if (locationError) throw locationError;
+  const { error: movementError } = await supabase.from("stock_movements").insert({ product_id: productId, movement_type: "STOCK_IN", qty, stock_before: stockBefore, stock_after: stockAfter, note: `Purchase Planning Stock In${invoiceNumber ? ` / ${invoiceNumber}` : ""}` }); if (movementError) throw movementError;
+  const { error: layerError } = await supabase.from("inventory_layers").insert({ product_id: productId, stock_receipt_id: receipt.id, purchase_type: purchaseType, supplier_name: displayText(supplierName), invoice_number: displayText(invoiceNumber), qty_received: qty, qty_remaining: qty, cost_price: cost, vat_applicable: false, vat_percent: 0, total_cost: roundedQuantity(qty * cost), received_date: new Date().toISOString() }); if (layerError) throw layerError;
+  return { receiptId: receipt.id, stockBefore, stockAfter };
+}
+
 export async function loadPurchasePlanningReport({
   products = [],
   user,
@@ -886,16 +920,12 @@ export async function loadPurchasePlanningReport({
   // page.warehouse and must not be broadened for report users.
 
   const sales = aggregateDeliveredProductSales(salesOrders, now);
-  const purchases = aggregateActivePreOrderPurchases(historyEvents, openOrders, {
-    deliveryStateReliable: sourceStatus.preorderIncomingAvailable,
-  });
+  const purchases = aggregateActivePreOrderPurchases(historyEvents, openOrders, { deliveryStateReliable: sourceStatus.preorderIncomingAvailable });
   const outstanding = aggregateOutstandingPreOrders(openOrders);
-  return {
-    rows: buildPurchasePlanningRows({ products, sales, purchases, outstanding, sourceStatus }),
-    sourceStatus,
-    preOrderWarning: warnings.join(" "),
-    loadedAt: new Date().toISOString(),
-  };
+  let receiptHistory = []; let locations = [];
+  try { [receiptHistory, locations] = await Promise.all([loadPurchaseReceiptHistory({ days: 90 }), loadPurchasePlanningLocations()]); } catch (historyError) { warnings.push("Stock receipt history or locations could not be loaded."); }
+  const baseRows = buildPurchasePlanningRows({ products, sales, purchases, outstanding, sourceStatus });
+  return { rows: attachPurchaseReceiptHistory(baseRows, receiptHistory), locations, sourceStatus, preOrderWarning: warnings.join(" "), loadedAt: new Date().toISOString() };
 }
 
 export function safeCsvText(value) {

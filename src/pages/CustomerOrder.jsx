@@ -77,6 +77,11 @@ import Customers from "./AdminSetup/Customers";
 import HomePageImages from "./AdminSetup/HomePageImages";
 import PurchasePlanningReport from "./reports/PurchasePlanningReport";
 import WarehouseActivityReport from "./reports/WarehouseActivityReport";
+import ProfitAnalysisReport from "./reports/ProfitAnalysisReport";
+import ProductLineAnalysisReport from "./reports/ProductLineAnalysisReport";
+import SalesRouteAnalysisReport from "./reports/SalesRouteAnalysisReport";
+import SalesRouteSetup from "./AdminSetup/SalesRouteSetup";
+import { EXCEPTION_ORDER_REASONS, loadTodaysSalesRoute, NO_ORDER_REASONS, recordSalesRouteVisit } from "../services/salesRouteService";
 
 import ProductCard, { ProductListRow } from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
@@ -144,6 +149,11 @@ import {
   updateOrderStatus,
   updateOrderFields,
 } from "../services/orders";
+import {
+  clearPendingPreOrderActionsForOrder,
+  isActivePreOrderSupplyOrder,
+} from "../services/preOrderSupplyAllocation";
+import { reversePreOrderSupplyForReceivedOrder } from "../services/preOrderSupplyHistory";
 import {
   applyInvoicePaymentAllocations,
   createOrUpdateInvoiceForDeliveredOrder,
@@ -515,7 +525,7 @@ const loadSalesRepOutstanding = async ({
   };
 };
 
-export default function CustomerOrder({ userProfile, onLogout, onProfileRefresh }) {
+export default function CustomerOrder({ userProfile, onLogout, onProfileRefresh, activeDuty = "" }) {
 
 const loggedInUser =
   JSON.parse(localStorage.getItem("loggedInUser") || "null") ||
@@ -524,31 +534,43 @@ const loggedInUser =
 
   const activeUser = userProfile || loggedInUser || {};
   const role = normalizeStaffRole(activeUser?.role || activeUser?.access_level || "Customer");
-  const normalizedRole = String(role || "")
-    .replace(/[^a-z0-9]/gi, "")
-    .toLowerCase();
-  const isAdmin = isAdminStaffRole(role);
-  const isSalesRep = canAccessPage(activeUser, "page.order.sales_rep");
-  const isWarehouse = canAccessPage(activeUser, "page.operations.warehouse");
-  const isDriver = canAccessPage(activeUser, "page.operations.driver");
-  const canCollectCash = hasFcPermission(
-    activeUser,
-    FC_PERMISSIONS.PAYMENTS_COLLECT_CASH,
-  );
+  const normalizedRole = String(role || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
   const isCustomer = normalizedRole === "customer";
-  const activeUsername = String(
-    activeUser?.username ||
-      activeUser?.staff_username ||
-      activeUser?.email ||
-      activeUser?.name ||
-      ""
-  )
-    .trim()
-    .toLowerCase();
+  const activeUsername = String(activeUser?.username || activeUser?.staff_username || activeUser?.email || activeUser?.name || "").trim().toLowerCase();
   const isNisstajAdmin = activeUsername === "nisstaj_admin";
+  const dutyRestricted = Boolean(activeDuty) && !isNisstajAdmin && !isCustomer;
+  const isAdmin = isNisstajAdmin || (dutyRestricted ? activeDuty === "admin" : isAdminStaffRole(role));
+  const isSalesRep = isNisstajAdmin ? canAccessPage(activeUser, "page.order.sales_rep") : (dutyRestricted ? activeDuty === "sales_rep" : canAccessPage(activeUser, "page.order.sales_rep"));
+  const isWarehouse = dutyRestricted ? activeDuty === "warehouse" : canAccessPage(activeUser, "page.operations.warehouse");
+  const isDriver = dutyRestricted ? activeDuty === "driver" : canAccessPage(activeUser, "page.operations.driver");
+  const salesRouteMode = activeDuty === "sales_rep" && !isNisstajAdmin;
+  const canCollectCash = isSalesRep && hasFcPermission(activeUser, FC_PERMISSIONS.PAYMENTS_COLLECT_CASH);
   const canManualCheckoutDiscount = canPerform(activeUser, "orders.discount.change");
+  const basePermissions = activeUser?.effective_permissions || activeUser?.permissions || {};
+  const dutyAllowsPage = (item) => {
+    if (!dutyRestricted) return canAccessPage(activeUser, item.key);
+    if (activeDuty === "sales_rep") {
+      return item.key === "page.order.sales_rep" || item.key === "page.accounts.expenses";
+    }
+    if (activeDuty === "driver") {
+      return item.key === "page.operations.driver" || item.key === "page.accounts.expenses";
+    }
+    if (activeDuty === "warehouse") {
+      return item.key.startsWith("page.operations.") && item.key !== "page.operations.driver";
+    }
+    if (activeDuty === "admin") {
+      return item.key !== "page.order.sales_rep" && item.key !== "page.operations.driver" && canAccessPage(activeUser, item.key);
+    }
+    return false;
+  };
+  const dutyPermissions = dutyRestricted
+    ? Object.fromEntries(PAGE_REGISTRY.map((item) => [item.key, dutyAllowsPage(item)]))
+    : {};
+  const backOfficeUser = dutyRestricted
+    ? { ...activeUser, effective_permissions: { ...basePermissions, ...dutyPermissions, all_access: false } }
+    : activeUser;
   const defaultBackOfficePage =
-    PAGE_REGISTRY.find((item) => canAccessPage(activeUser, item.key))?.route || "order";
+    PAGE_REGISTRY.find((item) => canAccessPage(backOfficeUser, item.key))?.route || "orders";
 
   
 
@@ -560,13 +582,31 @@ const loggedInUser =
    isCustomer,
    canCollectCash,
  };
- const [page, setPage] = useState(() =>
-  resolveCustomerPortalPage({ hash: window.location.hash, ...portalRoleState })
- );
+ const [page, setPage] = useState(() => {
+   if (dutyRestricted) {
+     if (activeDuty === "sales_rep") return "order";
+     if (activeDuty === "warehouse") return "warehouse";
+     if (activeDuty === "driver") return "driver";
+     if (activeDuty === "admin") return defaultBackOfficePage;
+   }
+   return resolveCustomerPortalPage({ hash: window.location.hash, ...portalRoleState });
+ });
  const [accessControlStaffId, setAccessControlStaffId] = useState("");
  const [pickingOrderId, setPickingOrderId] = useState(null);
 
   const [customerAccounts, setCustomerAccounts] = useState([]);
+  const [salesRouteRows, setSalesRouteRows] = useState([]);
+  const [salesRouteLoading, setSalesRouteLoading] = useState(false);
+  const [activeRouteAssignmentId, setActiveRouteAssignmentId] = useState(null);
+  const [salesRouteExceptionMode, setSalesRouteExceptionMode] = useState(false);
+  const [showRouteExceptionForm, setShowRouteExceptionForm] = useState(false);
+  const [routeExceptionReason, setRouteExceptionReason] = useState("");
+  const [routeExceptionNote, setRouteExceptionNote] = useState("");
+  const [salesRouteCountryFilter, setSalesRouteCountryFilter] = useState("All");
+  const [salesRoutePage, setSalesRoutePage] = useState(1);
+  const [showNoOrderForm, setShowNoOrderForm] = useState(false);
+  const [noOrderReason, setNoOrderReason] = useState("");
+  const [noOrderNote, setNoOrderNote] = useState("");
   const [customerSearchTerm, setCustomerSearchTerm] = useState("");
   const [salesPaymentCustomerSearch, setSalesPaymentCustomerSearch] = useState("");
   const [salesReturnCustomerSearch, setSalesReturnCustomerSearch] = useState("");
@@ -684,6 +724,107 @@ useEffect(() => {
     show_manager_offer: true,
     show_super_offer: true,
   });
+
+const refreshSalesRoute = useCallback(async () => {
+  if (!salesRouteMode) return;
+  setSalesRouteLoading(true);
+  try {
+    setSalesRouteRows(await loadTodaysSalesRoute({ customers: activeCustomerAccounts, currentUser: activeUser }));
+  } catch (error) {
+    console.error("Sales route loading error:", error);
+    setSalesRouteRows([]);
+  } finally {
+    setSalesRouteLoading(false);
+  }
+}, [salesRouteMode, activeCustomerAccounts, activeUser?.staff_id, activeUser?.id]);
+
+useEffect(() => {
+  if (salesRouteMode && activeCustomerAccounts.length) void refreshSalesRoute();
+}, [salesRouteMode, activeCustomerAccounts.length, refreshSalesRoute]);
+
+const filteredSalesRouteRows = useMemo(() =>
+  salesRouteRows.filter((routeRow) =>
+    salesRouteCountryFilter === "All" ||
+    String(routeRow.branch?.country || routeRow.customer?.country || routeRow.customer?.account_country || "Unknown") === salesRouteCountryFilter
+  ), [salesRouteRows, salesRouteCountryFilter]
+);
+const salesRoutePageCount = Math.max(1, Math.ceil(filteredSalesRouteRows.length / 30));
+const currentSalesRoutePage = Math.min(salesRoutePage, salesRoutePageCount);
+const visibleSalesRouteRows = filteredSalesRouteRows.slice((currentSalesRoutePage - 1) * 30, currentSalesRoutePage * 30);
+useEffect(() => { setSalesRoutePage(1); }, [salesRouteCountryFilter, salesRouteRows.length]);
+
+const resetSalesRouteCustomer = useCallback(() => {
+  setSelectedCustomerId("");
+  setSelectedCustomerAccount(null);
+  setSelectedBranchId("");
+  setSelectedBranch(null);
+  setCompanyName("");
+  setActiveRouteAssignmentId(null);
+  setSalesRouteExceptionMode(false);
+  setShowRouteExceptionForm(false);
+  setRouteExceptionReason("");
+  setRouteExceptionNote("");
+  setCustomerDetailsExpanded(false);
+  setShowNoOrderForm(false);
+  setNoOrderReason("");
+  setNoOrderNote("");
+  setPage("order");
+}, []);
+
+const openSalesRouteCustomer = useCallback((routeRow) => {
+  const customer = routeRow?.customer;
+  if (!customer) return;
+  const branch = routeRow?.branch || null;
+  setSelectedCustomerId(customer.id);
+  setSelectedCustomerAccount(customer);
+  setSelectedBranchId(branch?.id || "");
+  setSelectedBranch(branch);
+  setCompanyName(customer.account_name || "");
+  setActiveRouteAssignmentId(routeRow.id);
+  setSalesRouteExceptionMode(false);
+  setRouteExceptionReason("");
+  setRouteExceptionNote("");
+  setCustomerDetailsExpanded(false);
+  setOrderPaymentChoice("no_payment");
+  const modes = getAllowedPriceModesForCustomer(customer, pricingSettings);
+  const defaultMode = String(customer.default_price_mode || "vat").toLowerCase();
+  setPriceMode(modes.includes(defaultMode) ? defaultMode : modes[0] || "vat");
+  setPage("order");
+}, [pricingSettings]);
+
+const confirmSalesRouteNoOrder = async () => {
+  if (!selectedCustomerAccount) return;
+  if (!noOrderReason) return alert("Select a No Order reason.");
+  if (noOrderReason === "Other" && !noOrderNote.trim()) return alert("Enter a note for Other.");
+  await recordSalesRouteVisit({
+    customerAccountId: selectedCustomerAccount.id,
+    customerBranchId: selectedBranch?.id || null,
+    staffId: activeUser?.staff_id || activeUser?.id || null,
+    staffName: activeUser?.staff_name || activeUser?.name || activeUser?.username || "",
+    outcome: "NO_ORDER",
+    reason: noOrderReason,
+    note: noOrderNote,
+    routeAssignmentId: activeRouteAssignmentId,
+  });
+  resetSalesRouteCustomer();
+  await refreshSalesRoute();
+};
+
+const confirmSalesRouteException = () => {
+  if (!routeExceptionReason) return alert("Select an exception reason.");
+  if (routeExceptionReason === "Other" && !routeExceptionNote.trim()) return alert("Enter a note for Other.");
+  setSelectedCustomerId("");
+  setSelectedCustomerAccount(null);
+  setSelectedBranchId("");
+  setSelectedBranch(null);
+  setCompanyName("");
+  setActiveRouteAssignmentId(null);
+  setSalesRouteExceptionMode(true);
+  setShowRouteExceptionForm(false);
+  setCustomerDetailsExpanded(true);
+  setPage("order");
+};
+
 
   const [products, setProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
@@ -1809,7 +1950,7 @@ useEffect(() => {
       });
     setPage(
       isAdmin
-        ? (canAccessPage(activeUser, resolvedPage) ? resolvedPage : defaultBackOfficePage)
+        ? (canAccessPage(backOfficeUser, resolvedPage) ? resolvedPage : defaultBackOfficePage)
         : !isSalesRep && !isWarehouse && !isDriver && !isCustomer
         ? defaultBackOfficePage
         : resolvedPage
@@ -2222,12 +2363,32 @@ const openBackOffice = async () => {
   }
 };
 
-  const changeOrderStatus = async (orderNumber, status) => {
+  const changeOrderStatus = async (
+    orderNumber,
+    status,
+    { preserveSupplyState = false } = {}
+  ) => {
     try {
       const existingOrder = orders.find(
         (order) => String(order.orderId) === String(orderNumber)
       );
+      if (
+        status === "Received" &&
+        existingOrder?.status !== "Received" &&
+        !preserveSupplyState
+      ) {
+        await reversePreOrderSupplyForReceivedOrder({
+          order: existingOrder,
+          user: loggedInUser,
+          updateOrderItem,
+          restorePreOrderSplit,
+        });
+      }
       const updatedOrder = await updateOrderStatus(orderNumber, status);
+
+      if (!isActivePreOrderSupplyOrder({ status })) {
+        clearPendingPreOrderActionsForOrder(orderNumber);
+      }
 
       if (shouldCreateInvoiceForStatus(status)) {
         await createOrUpdateInvoiceForDeliveredOrder({
@@ -3219,7 +3380,7 @@ const submitOrder = async () => {
     };
 
     let createdOrder;
-    const submittingCentralCartId = CENTRAL_CART_ENABLED
+    const submittingCentralCartId = CENTRAL_CART_ENABLED && !salesRouteMode
       ? await ensureCentralCartForCurrentScope()
       : null;
 
@@ -3294,6 +3455,20 @@ const newOrder = {
 
     setOrders((oldOrders) => [newOrder, ...oldOrders]);
 
+    if (salesRouteMode) {
+      await recordSalesRouteVisit({
+        customerAccountId: selectedCustomerAccount.id,
+        customerBranchId: selectedBranch?.id || null,
+        staffId: activeUser?.staff_id || activeUser?.id || null,
+        staffName: activeUser?.staff_name || activeUser?.name || activeUser?.username || "",
+        outcome: "ORDER_PLACED",
+        orderNumber,
+        reason: salesRouteExceptionMode ? `Exception order — ${routeExceptionReason}` : "",
+        note: salesRouteExceptionMode ? routeExceptionNote : "",
+        routeAssignmentId: activeRouteAssignmentId,
+      });
+    }
+
     localStorage.removeItem(cartStorageKey);
     localStorage.removeItem(orderSubmissionStorageKey);
 
@@ -3303,11 +3478,16 @@ const newOrder = {
     setOrderDiscountPercent(0);
 
     if (!isCustomer) {
-      setSelectedCustomerId("");
-      setSelectedCustomerAccount(null);
-      setSelectedBranchId("");
-      setSelectedBranch(null);
-      setCompanyName("");
+      if (salesRouteMode) {
+        resetSalesRouteCustomer();
+        await refreshSalesRoute();
+      } else {
+        setSelectedCustomerId("");
+        setSelectedCustomerAccount(null);
+        setSelectedBranchId("");
+        setSelectedBranch(null);
+        setCompanyName("");
+      }
     }
 
     await fetchProducts();
@@ -3484,7 +3664,7 @@ const { error } = await supabase
 if (error) {
   console.error("Order item update error:", error);
   alert("Could not update order item: " + error.message);
-  return;
+  return false;
 }
 
 const updatedOrderItems = (order?.items || []).map((currentItem) => {
@@ -3525,8 +3705,49 @@ const updatedOrderItems = (order?.items || []).map((currentItem) => {
 
 await saveOrderTotalsToDatabase(orderId, updatedOrderItems, order);
 await fetchOrders();
+return true;
+};
 
-
+const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restoreQty) => {
+  const order = orders.find((entry) => String(entry.orderId) === String(orderId));
+  const finalItems = (order?.items || []).map((item) => {
+    const itemId = String(item.dbId || item.id || "");
+    const changes = itemId === String(originalItemId)
+      ? { qty: restoreQty, pickedQty: 0, sourceStatus: "Need Supplier", includeInPicking: false }
+      : itemId === String(addedItemId)
+        ? { qty: 0, pickedQty: 0, sourceStatus: "Need Supplier", includeInPicking: false }
+        : null;
+    if (!changes) return item;
+    const merged = { ...item, ...changes };
+    const calculated = getCalculatedOrderItemForSave(merged, order);
+    return {
+      ...merged,
+      lineTotal: calculated.line_total, line_total: calculated.line_total,
+      netTotal: calculated.net_total, net_total: calculated.net_total,
+      grossTotal: calculated.gross_total, gross_total: calculated.gross_total,
+      vatTotal: calculated.vat_total, vat_total: calculated.vat_total,
+    };
+  });
+  const targets = finalItems.filter((item) =>
+    [String(originalItemId), String(addedItemId)].includes(String(item.dbId || item.id || "")),
+  );
+  if (!order || targets.length !== 2) return false;
+  for (const item of targets) {
+    const { error } = await supabase.from("order_items").update({
+      qty: Number(item.qty || 0),
+      picked_qty: 0,
+      source_status: "Need Supplier",
+      include_in_picking: false,
+      line_total: Number(item.line_total || 0).toFixed(2),
+      net_total: Number(item.net_total || 0).toFixed(2),
+      gross_total: Number(item.gross_total || 0).toFixed(2),
+      vat_amount: Number(item.vat_total || 0).toFixed(2),
+    }).eq("id", item.dbId || item.id);
+    if (error) return false;
+  }
+  await saveOrderTotalsToDatabase(orderId, finalItems, order);
+  await fetchOrders();
+  return true;
 };
 const addOrderItem = async (orderId, newItem) => {
   const order = orders.find((o) => o.orderId === orderId);
@@ -4113,6 +4334,7 @@ const backOfficeContent = comingSoonTitle ? (
         updateOrderItem={updateOrderItem}
         addOrderItem={addOrderItem}
         splitPreOrderItem={splitPreOrderItem}
+        restorePreOrderSplit={restorePreOrderSplit}
         refreshOrders={fetchOrders}
       />
     )}
@@ -4127,6 +4349,7 @@ const backOfficeContent = comingSoonTitle ? (
     )}
 
     {page === "customers" && <Customers />}
+    {page === "salesRouteSetup" && <SalesRouteSetup currentUser={activeUser} />}
     {page === "homePageImages" && <HomePageImages currentUser={activeUser} />}
 
     {page === "products" && (
@@ -4156,12 +4379,19 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "weeklyAccount" && <WeeklyAccount currentUser={activeUser} />}
     {page === "supplierAccounts" && <SupplierAccounts user={activeUser} />}
     {page === "expenses" && <Expenses />}
+    {page === "profitPortal" && (
+      <ProfitAnalysisReport currentUser={activeUser} />
+    )}
+    {page === "productLineAnalysis" && (
+      <ProductLineAnalysisReport currentUser={activeUser} />
+    )}
     {page === "purchasePlanning" && (
       <PurchasePlanningReport products={products} currentUser={activeUser} />
     )}
     {page === "warehouseActivity" && (
       <WarehouseActivityReport currentUser={activeUser} />
     )}
+    {page === "salesRouteAnalysis" && <SalesRouteAnalysisReport currentUser={activeUser} />}
     {page === "stockhistory" && <StockHistory />}
     {page === "stockTaking" && (
       <StockTaking products={products} fetchProducts={fetchProducts} />
@@ -4218,7 +4448,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         page={page}
         setPage={setPage}
         fetchOrders={fetchOrders}
-        currentUser={activeUser}
+        currentUser={backOfficeUser}
         isAdmin={isAdmin}
         isSalesRep={isSalesRep}
         isWarehouse={isWarehouse}
@@ -4292,7 +4522,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </div>
       )}
 
-      {(isAdmin || isSalesRep) && page === "order" && (
+      {isAdmin && page === "order" && (
         <button
           type="button"
           onClick={openBackOffice}
@@ -4304,41 +4534,48 @@ const portalPageIsAllowed = page === "order" && !isCustomer
 
       {isSalesRep && (
         <div className="customer-nav-buttons flex gap-1 sm:gap-2">
-          <button
-            onClick={goToCustomerHome}
-            className={`order-tab-btn btn-secondary bg-white text-blue-800 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}
-          >
-            Order
-          </button>
-
-          {canCollectCash && (
-            <button
-              onClick={() => setPage("salesCashCollection")}
-              className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}
-            >
-              Cash Collection
-            </button>
+          {salesRouteMode && (
+            <button onClick={resetSalesRouteCustomer} className="payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">Route</button>
           )}
-
-          <button
-            onClick={() => setPage("salesCreditHistory")}
-            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCreditHistory" ? "active" : ""}`}
-          >
-            Credit History
-          </button>
-
-          <button
-            onClick={() => setPage("salesReturn")}
-            className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesReturn" ? "active" : ""}`}
-          >
-            Return
-          </button>
+          <button onClick={() => setPage("order")} className={`order-tab-btn btn-secondary bg-white text-blue-800 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}>Order</button>
+          {salesRouteMode && <button onClick={() => setPage("expenses")} className={`payment-history-tab-btn bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "expenses" ? "active" : ""}`}>Expenses</button>}
+          {canCollectCash && (!salesRouteMode || selectedCustomerAccount) && (
+            <button onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesPaymentForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesCashCollection"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}>Collection</button>
+          )}
+          <button disabled={salesRouteMode && !selectedCustomerAccount} onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesReturnForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesReturn"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesReturn" ? "active" : ""}`}>Return</button>
+          {salesRouteMode && selectedCustomerAccount && !salesRouteExceptionMode && (
+            <button onClick={() => setShowNoOrderForm(true)} className="payment-history-tab-btn border border-amber-200 bg-amber-400 text-slate-950 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">No Order</button>
+          )}
         </div>
       )}
     </div>
   </div>
 
 </div>
+
+        {showRouteExceptionForm && salesRouteMode && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
+              <h3 className="text-xl font-bold">Exception Order — Outside Today’s Route</h3>
+              <p className="mt-1 text-sm text-slate-500">Use this only when an order must be taken from a customer who is not on today’s assigned route. The reason is recorded.</p>
+              <label className="mt-4 block text-sm font-bold">Reason<select className="mt-1 w-full rounded-xl border p-3" value={routeExceptionReason} onChange={(e) => setRouteExceptionReason(e.target.value)}><option value="">Select reason</option>{EXCEPTION_ORDER_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}</select></label>
+              <label className="mt-3 block text-sm font-bold">Note<textarea className="mt-1 w-full rounded-xl border p-3" rows="3" value={routeExceptionNote} onChange={(e) => setRouteExceptionNote(e.target.value)} placeholder="Optional note; required for Other" /></label>
+              <div className="mt-4 flex justify-end gap-2"><button onClick={() => setShowRouteExceptionForm(false)} className="rounded-xl border px-4 py-2 font-bold">Cancel</button><button onClick={confirmSalesRouteException} className="rounded-xl bg-red-600 px-4 py-2 font-bold text-white">Continue to Normal Order</button></div>
+            </div>
+          </div>
+        )}
+
+        {showNoOrderForm && salesRouteMode && selectedCustomerAccount && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
+              <h3 className="text-xl font-bold">Confirm Visit — No Order</h3>
+              <p className="mt-1 text-sm text-slate-500">{selectedCustomerAccount.account_name}{selectedBranch?.branch_name ? ` · ${selectedBranch.branch_name}` : ""}</p>
+              <label className="mt-4 block text-sm font-bold">Reason<select className="mt-1 w-full rounded-xl border p-3" value={noOrderReason} onChange={(e)=>setNoOrderReason(e.target.value)}><option value="">Select reason</option>{NO_ORDER_REASONS.map(reason=><option key={reason} value={reason}>{reason}</option>)}</select></label>
+              <label className="mt-3 block text-sm font-bold">Note<textarea className="mt-1 w-full rounded-xl border p-3" rows="3" value={noOrderNote} onChange={(e)=>setNoOrderNote(e.target.value)} placeholder="Optional note; required for Other" /></label>
+              <div className="mt-4 flex justify-end gap-2"><button onClick={()=>setShowNoOrderForm(false)} className="rounded-xl border px-4 py-2 font-bold">Cancel</button><button onClick={confirmSalesRouteNoOrder} className="rounded-xl bg-amber-500 px-4 py-2 font-bold text-slate-950">Confirm No Order</button></div>
+            </div>
+          </div>
+        )}
 
         {!portalPageIsAllowed && (
           <div className="m-4 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-slate-800">
@@ -4371,17 +4608,47 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         {!isCustomer && (
           <button
             type="button"
-            onClick={() => setCustomerDetailsExpanded(true)}
+            onClick={() => salesRouteMode && !salesRouteExceptionMode ? resetSalesRouteCustomer() : setCustomerDetailsExpanded(true)}
             className="min-h-11 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
           >
-            Change customer
+            {salesRouteMode && !salesRouteExceptionMode ? "Back to Route" : "Change customer"}
           </button>
         )}
       </div>
     </div>
   )}
 
-  {(!selectedCustomerAccount || customerDetailsExpanded) && (
+  {salesRouteMode && !selectedCustomerAccount && !salesRouteExceptionMode && (
+    <div className="mb-4 rounded-2xl border border-blue-200 bg-white p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div><h2 className="text-lg font-bold">Today’s Route</h2><p className="text-xs text-slate-500">Select the next customer. Completed visits remain marked.</p></div>
+        <div className="flex flex-wrap gap-2">
+          <select className="rounded-xl border px-3 py-2 text-xs font-bold" value={salesRouteCountryFilter} onChange={(e) => setSalesRouteCountryFilter(e.target.value)}><option value="All">All countries</option>{[...new Set(salesRouteRows.map((row) => row.branch?.country || row.customer?.country || row.customer?.account_country).filter(Boolean))].sort().map((c) => <option key={c} value={c}>{c}</option>)}</select>
+          <button onClick={() => setShowRouteExceptionForm(true)} className="rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white">Exception Order</button>
+          <button onClick={refreshSalesRoute} className="rounded-xl border px-3 py-2 text-xs font-bold">Refresh</button>
+        </div>
+      </div>
+      {salesRouteLoading ? <div className="p-5 text-center text-slate-500">Loading route…</div> : salesRouteRows.length ? (
+        <><div className="grid gap-2">{visibleSalesRouteRows.map((routeRow) => {
+          const completed = routeRow.status !== "NOT_VISITED";
+          return <button key={routeRow.id} disabled={completed} onClick={() => openSalesRouteCustomer(routeRow)} className={`grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-xl border p-3 text-left ${completed ? "bg-slate-100 opacity-70" : "bg-white hover:border-blue-600 hover:bg-blue-50"}`}>
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-950 text-white font-bold">{routeRow.visit_sequence || "•"}</span>
+            <span><strong className="block">{routeRow.customer.account_name}</strong><small className="text-slate-500">{routeRow.branch?.branch_name || "Main account"} · {routeRow.branch?.postcode || routeRow.customer.postcode || routeRow.customer.town_city || "Location not set"}</small></span>
+            <span className={`rounded-full px-2 py-1 text-xs font-bold ${completed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{completed ? (routeRow.status === "ORDER_PLACED" ? "Order placed" : "No order") : "Not visited"}</span>
+          </button>;
+        })}</div><div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3 text-xs"><span className="mr-auto text-slate-500">Showing {filteredSalesRouteRows.length ? (currentSalesRoutePage - 1) * 30 + 1 : 0}–{Math.min(currentSalesRoutePage * 30, filteredSalesRouteRows.length)} of {filteredSalesRouteRows.length} · max 30</span><button className="rounded-lg border px-3 py-1 disabled:opacity-40" disabled={currentSalesRoutePage <= 1} onClick={() => setSalesRoutePage((p) => Math.max(1, p - 1))}>Previous</button><span className="font-bold">Page {currentSalesRoutePage} / {salesRoutePageCount}</span><button className="rounded-lg border px-3 py-1 disabled:opacity-40" disabled={currentSalesRoutePage >= salesRoutePageCount} onClick={() => setSalesRoutePage((p) => Math.min(salesRoutePageCount, p + 1))}>Next</button></div></>
+      ) : <div className="rounded-xl bg-amber-50 p-5 text-center text-amber-900"><strong>No customers assigned to today’s route.</strong><div className="text-xs mt-1">Admin can add customers in Sales Route Setup.</div></div>}
+    </div>
+  )}
+
+  {salesRouteMode && salesRouteExceptionMode && (
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm">
+      <div><strong>Exception Order</strong><div className="text-xs text-red-800">{routeExceptionReason}{routeExceptionNote ? ` · ${routeExceptionNote}` : ""}</div></div>
+      <button onClick={resetSalesRouteCustomer} className="rounded-xl border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700">Cancel & Return to Route</button>
+    </div>
+  )}
+
+  {(!salesRouteMode || salesRouteExceptionMode || selectedCustomerAccount) && (!selectedCustomerAccount || customerDetailsExpanded) && (
   <div id="order-customer-details" className="transition-all duration-200">
   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3 text-sm font-bold">
 
@@ -4399,7 +4666,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 
   <div className="grid grid-cols-1 md:grid-cols-[minmax(150px,0.8fr)_minmax(230px,1.2fr)_minmax(230px,1fr)_minmax(120px,0.45fr)] gap-3 mb-3 items-end">
-   {!isCustomer && (
+   {!isCustomer && (!salesRouteMode || salesRouteExceptionMode) && (
   <div>
     <label className="font-bold text-sm block mb-1">
       Search
@@ -4414,7 +4681,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
     )}
 
-   {!isCustomer && (
+   {!isCustomer && (!salesRouteMode || salesRouteExceptionMode) && (
   <div>
     <label className="font-bold text-sm block mb-1">
       Customer Details
@@ -4478,7 +4745,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
 
     {(() => {
    const activeBranches = filteredBranchesForSelectedCustomer;
-   const showBranchSelector = !isCustomer || activeBranches.length > 1;
+   const showBranchSelector = !salesRouteMode && (!isCustomer || activeBranches.length > 1);
 
    if (!showBranchSelector && !showPriceModeSelector) return null;
 
@@ -5046,60 +5313,13 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         Sales Rep Cash Collection
       </h2>
 
-      <input
-        value={salesPaymentCustomerSearch}
-        onChange={(e) => setSalesPaymentCustomerSearch(e.target.value)}
-        placeholder="Search customer"
-        className="w-full border rounded-xl p-3"
-      />
-
-      <select
-        value={salesPaymentForm.customerId}
-        onChange={(e) =>
-          setSalesPaymentForm({
-            ...salesPaymentForm,
-            customerId: e.target.value,
-            branchId: "",
-          })
-        }
-        className="w-full border rounded-xl p-3"
-      >
-        <option value="">Select Customer</option>
-
-        {filteredSalesPaymentCustomers.map((customer) => (
-          <option
-            key={customer.id}
-            value={customer.id}
-          >
-            {customer.account_name}
-          </option>
-        ))}
-      </select>
-
-      {(() => {
-        if (!selectedSalesPaymentBranches.length) return null;
-
-        return (
-          <select
-            value={salesPaymentForm.branchId}
-            onChange={(e) =>
-              setSalesPaymentForm({
-                ...salesPaymentForm,
-                branchId: e.target.value,
-              })
-            }
-            className="w-full border rounded-xl p-3"
-          >
-            <option value="">Select Branch / Shop</option>
-            {selectedSalesPaymentBranches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
-                {branch.branch_name}
-                {branch.postcode ? ` - ${branch.postcode}` : ""}
-              </option>
-            ))}
-          </select>
-        );
-      })()}
+      {salesRouteMode ? (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount?.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
+      ) : <>
+        <input value={salesPaymentCustomerSearch} onChange={(e) => setSalesPaymentCustomerSearch(e.target.value)} placeholder="Search customer" className="w-full border rounded-xl p-3" />
+        <select value={salesPaymentForm.customerId} onChange={(e) => setSalesPaymentForm({ ...salesPaymentForm, customerId: e.target.value, branchId: "" })} className="w-full border rounded-xl p-3"><option value="">Select Customer</option>{filteredSalesPaymentCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.account_name}</option>)}</select>
+        {selectedSalesPaymentBranches.length > 0 && <select value={salesPaymentForm.branchId} onChange={(e) => setSalesPaymentForm({ ...salesPaymentForm, branchId: e.target.value })} className="w-full border rounded-xl p-3"><option value="">Select Branch / Shop</option>{selectedSalesPaymentBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.branch_name}{branch.postcode ? ` - ${branch.postcode}` : ""}</option>)}</select>}
+      </>}
 
       {selectedSalesPaymentCustomer && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -5221,55 +5441,13 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-3">
       <h2 className="text-xl font-bold">Sales Rep Return</h2>
 
-      <input
-        disabled={salesReturnSubmitting || salesReturnCreated}
-        value={salesReturnCustomerSearch}
-        onChange={(e) => setSalesReturnCustomerSearch(e.target.value)}
-        placeholder="Search customer"
-        className="w-full border rounded-xl p-3"
-      />
-
-      <select
-        disabled={salesReturnSubmitting || salesReturnCreated}
-        value={salesReturnForm.customerId}
-        onChange={(e) =>
-          setSalesReturnForm({
-            ...salesReturnForm,
-            customerId: e.target.value,
-            branchId: "",
-          })
-        }
-        className="w-full border rounded-xl p-3"
-      >
-        <option value="">Select Customer</option>
-        {filteredSalesReturnCustomers.map((customer) => (
-          <option key={customer.id} value={customer.id}>
-            {customer.account_name}
-          </option>
-        ))}
-      </select>
-
-      {selectedSalesReturnBranches.length > 0 && (
-        <select
-          disabled={salesReturnSubmitting || salesReturnCreated}
-          value={salesReturnForm.branchId}
-          onChange={(e) =>
-            setSalesReturnForm({
-              ...salesReturnForm,
-              branchId: e.target.value,
-            })
-          }
-          className="w-full border rounded-xl p-3"
-        >
-          <option value="">Select Branch / Shop</option>
-          {selectedSalesReturnBranches.map((branch) => (
-            <option key={branch.id} value={branch.id}>
-              {branch.branch_name}
-              {branch.postcode ? ` - ${branch.postcode}` : ""}
-            </option>
-          ))}
-        </select>
-      )}
+      {salesRouteMode ? (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount?.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
+      ) : <>
+        <input disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnCustomerSearch} onChange={(e) => setSalesReturnCustomerSearch(e.target.value)} placeholder="Search customer" className="w-full border rounded-xl p-3" />
+        <select disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnForm.customerId} onChange={(e) => setSalesReturnForm({ ...salesReturnForm, customerId: e.target.value, branchId: "" })} className="w-full border rounded-xl p-3"><option value="">Select Customer</option>{filteredSalesReturnCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.account_name}</option>)}</select>
+        {selectedSalesReturnBranches.length > 0 && <select disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnForm.branchId} onChange={(e) => setSalesReturnForm({ ...salesReturnForm, branchId: e.target.value })} className="w-full border rounded-xl p-3"><option value="">Select Branch / Shop</option>{selectedSalesReturnBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.branch_name}{branch.postcode ? ` - ${branch.postcode}` : ""}</option>)}</select>}
+      </>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         <label className="space-y-1">
@@ -5311,6 +5489,8 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             source="SALES_REP_PORTAL"
             currentUser={activeUser}
             catalogProducts={products.filter((product) => product.active)}
+            pricingSettings={pricingSettings}
+            country={orderCountry}
             allowCatalogProducts
             embedded
             onSubmittingChange={setSalesReturnSubmitting}
@@ -5525,6 +5705,8 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           source={isSalesRep ? "SALES_REP_PORTAL" : "CUSTOMER_PAYMENT_HISTORY"}
           currentUser={activeUser}
           catalogProducts={products.filter((product) => product.active)}
+          pricingSettings={pricingSettings}
+          country={orderCountry}
           allowCatalogProducts={isSalesRep && page === "salesReturn"}
           onClose={() => setReturnOrder(null)}
           onSaved={async () => {

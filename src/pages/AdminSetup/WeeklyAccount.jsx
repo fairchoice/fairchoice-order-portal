@@ -75,6 +75,12 @@ const UNPAID_SEARCH_FIELDS = [
 ];
 const normalize = (value) => String(value || "").trim().toLowerCase();
 const isCashPayment = (row) => normalize(row.payment_type || row.payment_method) === "cash";
+const isCreditSelection = (row = {}) => {
+  const type = normalize(row.payment_type || row.payment_method || row.metadata?.payment_type || row.metadata?.payment_method);
+  return type === "credit";
+};
+const weeklyInvoiceKey = (row = {}) => String(row.invoice_no || row.order_number || row.order_id || row.invoice_reference || row.id || "");
+const invoiceTotalValue = (row = {}) => Number(row.invoice_total || row.order_total || row.total_amount || row.invoice_amount || row.amount || 0);
 const paymentAmount = (row) => Number(row.payment_amount ?? row.amount ?? row.credit ?? 0);
 const NON_COLLECTION_PAYMENT_MARKERS = [
   "credit",
@@ -266,13 +272,51 @@ export default function WeeklyAccount({ currentUser }) {
         );
       });
 
+      // A Cash Collection choice of Credit means no money was collected. Keep it
+      // visible in Customers Didn’t Pay even if the collection workflow wrote a
+      // payment-shaped compatibility row. Do not count it in cash collection.
+      const creditSelections = (paymentsData || []).filter((row) => {
+        if (!isCreditSelection(row)) return false;
+        const eventDate = getWeeklyPaymentDate(row) || row.created_at || row.updated_at;
+        return eventDate && new Date(eventDate) >= weekStart;
+      });
+      const unpaidByInvoice = new Map(merged.map((row) => [weeklyInvoiceKey(row), row]));
+      creditSelections.forEach((row) => {
+        const key = weeklyInvoiceKey(row);
+        if (!key) return;
+        const existing = unpaidByInvoice.get(key);
+        if (existing) {
+          unpaidByInvoice.set(key, {
+            ...existing,
+            credit_selected_at: getWeeklyPaymentDate(row) || row.created_at || null,
+            credit_selected_by: collectorNameFor(row) || row.who_paid || row.paid_by || "",
+            credit_selected: true,
+          });
+          return;
+        }
+        const total = invoiceTotalValue(row);
+        if (total <= 0) return;
+        unpaidByInvoice.set(key, {
+          ...row,
+          entry_type: "INVOICE",
+          invoice_status: "CREDIT / UNPAID",
+          payment_amount: 0,
+          paid_amount: 0,
+          invoice_total: total,
+          delivered_at: row.delivered_at || getWeeklyPaymentDate(row) || row.created_at,
+          credit_selected_at: getWeeklyPaymentDate(row) || row.created_at || null,
+          credit_selected_by: collectorNameFor(row) || row.who_paid || row.paid_by || "",
+          credit_selected: true,
+        });
+      });
+
       setPayments(
         (paymentsData || []).filter(
           (row) => canViewTotalCollection || !isRestrictedCreditRecord(row),
         ),
       );
       setDrivers(driverResult.data || []);
-      setUnpaidInvoices(merged);
+      setUnpaidInvoices([...unpaidByInvoice.values()]);
       setHandoverHistory(history || []);
       setApprovedExpenseTotals(expenseTotals || []);
       setCollectorIdentities(identities || []);
@@ -861,7 +905,7 @@ function OutstandingTable({ rows, money, formatDate }) {
   const collected = (row) => Number(row.payment_amount || row.paid_amount || 0);
   const outstanding = (row) => Math.max(0, invoiceTotal(row) - collected(row));
   const outstandingValue = rows.reduce((sum, row) => sum + outstanding(row), 0);
-  return <><div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Unpaid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Outstanding Invoices" value={rows.length} /><SummaryCard title="Outstanding Value" value={money(outstandingValue)} /></div><PaginatedTable rows={rows} empty="No delivered credit invoices are outstanding." renderHeader={() => <tr className="bg-gray-100"><Th>Customer</Th><Th>Order No</Th><Th>Delivery Date</Th><Th right>Invoice Total</Th><Th right>Collected</Th><Th right>Outstanding</Th><Th>Driver / Sales Rep</Th><Th>Status</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-t"><Td>{row.customer_name || "-"}</Td><Td>{formatDisplayOrderId(row.invoice_no || row.order_number)}</Td><Td>{formatDate(row.delivered_at || row.created_at)}</Td><Td right>{money(invoiceTotal(row))}</Td><Td right>{money(collected(row))}</Td><Td right bold className="text-red-600">{money(outstanding(row))}</Td><Td>{row.driver_name || row.name || row.sales_rep_name || row.collected_by || "-"}</Td><Td><StatusBadge value={row.invoice_status || "OUTSTANDING"} /></Td></tr>} /></>;
+  return <><div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Unpaid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Outstanding Invoices" value={rows.length} /><SummaryCard title="Outstanding Value" value={money(outstandingValue)} /></div><PaginatedTable rows={rows} empty="No delivered credit invoices are outstanding." renderHeader={() => <tr className="bg-gray-100"><Th>Customer</Th><Th>Order No</Th><Th>Delivery Date</Th><Th right>Invoice Total</Th><Th right>Collected</Th><Th right>Outstanding</Th><Th>Driver / Sales Rep</Th><Th>Credit Selected</Th><Th>Status</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-t"><Td>{row.customer_name || "-"}</Td><Td>{formatDisplayOrderId(row.invoice_no || row.order_number)}</Td><Td>{formatDate(row.delivered_at || row.created_at)}</Td><Td right>{money(invoiceTotal(row))}</Td><Td right>{money(collected(row))}</Td><Td right bold className="text-red-600">{money(outstanding(row))}</Td><Td>{row.driver_name || row.name || row.sales_rep_name || row.collected_by || row.credit_selected_by || "-"}</Td><Td>{row.credit_selected ? `Yes${row.credit_selected_at ? ` · ${formatDate(row.credit_selected_at)}` : ""}` : "—"}</Td><Td><StatusBadge value={row.invoice_status || "OUTSTANDING"} /></Td></tr>} /></>;
 }
 
 function PaginatedTable({ rows, renderHeader, renderRow, empty }) {

@@ -51,7 +51,7 @@ export default function ReturnsPortal() {
     try {
       const { data, error: returnError } = await supabase
         .from("customer_returns")
-        .select("*")
+        .select("*, customer_return_items(*)")
         .order("created_at", { ascending: false });
 
       if (returnError) throw returnError;
@@ -255,21 +255,30 @@ export default function ReturnsPortal() {
                     <td className="p-3">{getDate(row) ? new Date(getDate(row)).toLocaleDateString() : "-"}</td>
                     <td className="p-3 text-right">
                       {isPendingReturn(row) ? (
-                        <button
-                          type="button"
-                          onClick={() => setApprovalModal({ row, note: "", financialDisposition: "" })}
-                          disabled={!canApproveReturns || approvingId === (row.id || getReference(row))}
-                          title={
-                            canApproveReturns
-                              ? "Review and approve this return"
-                              : "returns.approve permission is required"
-                          }
-                          className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                        >
-                          {approvingId === (row.id || getReference(row))
-                            ? "Approving..."
-                            : "Approve"}
-                        </button>
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setViewingId((value) => value === row.id ? null : row.id)}
+                            className="rounded-lg border px-3 py-2 text-xs font-bold"
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setApprovalModal({ row, note: "", financialDisposition: "" })}
+                            disabled={!canApproveReturns || approvingId === (row.id || getReference(row))}
+                            title={
+                              canApproveReturns
+                                ? "Review and approve this return"
+                                : "returns.approve permission is required"
+                            }
+                            className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                          >
+                            {approvingId === (row.id || getReference(row))
+                              ? "Approving..."
+                              : "Approve"}
+                          </button>
+                        </div>
                       ) : (
                         <div className="flex justify-end gap-2">
                           <button type="button" onClick={() => setViewingId((value) => value === row.id ? null : row.id)} className="rounded-lg border px-3 py-2 text-xs font-bold">View</button>
@@ -281,7 +290,11 @@ export default function ReturnsPortal() {
                     </td>
                   </tr>
                   {viewingId === row.id && (
-                    <tr className="border-t bg-slate-50"><td colSpan="9" className="p-4"><div className="grid gap-2 md:grid-cols-4"><div><b>Financial Effect:</b> {row.financial_disposition === "CUSTOMER_CREDIT" ? `Customer Credit ${formatCurrency(row.return_total)}` : row.financial_disposition === "NO_CREDIT" ? "No Financial Credit" : "Not recorded"}</div><div><b>Stock Effect:</b> Pending / Not processed</div><div><b>Approved By:</b> {row.confirmed_by_name || "-"}</div><div><b>Approved Date:</b> {row.confirmed_at ? new Date(row.confirmed_at).toLocaleString() : "-"}</div></div></td></tr>
+                    <tr className="border-t bg-slate-50">
+                      <td colSpan="9" className="p-4">
+                        <ReturnProductDetails row={row} />
+                      </td>
+                    </tr>
                   )}
                   </Fragment>
                 ))
@@ -313,6 +326,49 @@ export default function ReturnsPortal() {
   );
 }
 
+function ReturnProductDetails({ row }) {
+  const items = row.customer_return_items || row.items || [];
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2 md:grid-cols-5 text-sm">
+        <div><b>Price Mode:</b> {row.price_mode || "-"}</div>
+        <div><b>Financial Effect:</b> {row.financial_disposition === "CUSTOMER_CREDIT" ? `Customer Credit ${formatCurrency(row.return_total)}` : row.financial_disposition === "NO_CREDIT" ? "No Financial Credit" : "Pending approval"}</div>
+        <div><b>Stock Effect:</b> Pending / Not processed</div>
+        <div><b>Approved By:</b> {row.confirmed_by_name || "-"}</div>
+        <div><b>Approved Date:</b> {row.confirmed_at ? new Date(row.confirmed_at).toLocaleString() : "-"}</div>
+      </div>
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-100">
+            <tr>
+              <th className="p-2 text-left">Product Code</th>
+              <th className="p-2 text-left">Product</th>
+              <th className="p-2 text-right">Qty</th>
+              <th className="p-2 text-right">Unit Price</th>
+              <th className="p-2 text-right">Line Total</th>
+              <th className="p-2 text-left">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length ? items.map((item) => (
+              <tr key={item.id || `${item.product_id}-${item.product_code}`} className="border-t">
+                <td className="p-2">{item.product_code || "-"}</td>
+                <td className="p-2 font-semibold">{item.product_name || "-"}</td>
+                <td className="p-2 text-right">{Number(item.qty || item.quantity || 0)}</td>
+                <td className="p-2 text-right">{formatCurrency(Number(item.unit_price || item.price || 0))}</td>
+                <td className="p-2 text-right font-bold">{formatCurrency(Number(item.gross_total ?? item.net_total ?? item.line_total ?? 0))}</td>
+                <td className="p-2">{item.reason || row.return_type || "-"}</td>
+              </tr>
+            )) : (
+              <tr><td colSpan="6" className="p-3 text-center text-slate-500">No return product lines found.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function DialogShell({ children }) {
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">{children}</div></div>;
 }
@@ -323,7 +379,8 @@ function ReturnApprovalDialog({ state, busy, onChange, onCancel, onConfirm }) {
     <DialogShell>
       <h3 className="text-xl font-extrabold">Approve this return?</h3>
       <p className="mt-2 text-sm text-slate-600">This will create the selected customer financial effect and cannot be directly edited afterward.</p>
-      <div className="mt-4 grid grid-cols-2 gap-2 text-sm"><b>Return Number</b><span>{getReference(row)}</span><b>Customer</b><span>{getCustomer(row)}</span><b>Return Type</b><span>{row.return_type}</span><b>Quantity</b><span>{Number(row.total_qty || 0)}</span><b>Value</b><span>{formatCurrency(row.return_total)}</span><b>Stock Effect</b><span>Pending / Not processed</span></div>
+      <div className="mt-4 grid grid-cols-2 gap-2 text-sm"><b>Return Number</b><span>{getReference(row)}</span><b>Customer</b><span>{getCustomer(row)}</span><b>Return Type</b><span>{row.return_type}</span><b>Price Mode</b><span>{row.price_mode || "-"}</span><b>Quantity</b><span>{Number(row.total_qty || 0)}</span><b>Value</b><span>{formatCurrency(row.return_total)}</span><b>Stock Effect</b><span>Pending / Not processed</span></div>
+      <div className="mt-4"><ReturnProductDetails row={row} /></div>
       <label className="mt-4 block text-sm font-bold">Financial Effect</label>
       <select value={state.financialDisposition} onChange={(event) => onChange({ ...state, financialDisposition: event.target.value })} className="mt-1 w-full rounded-xl border p-3">
         <option value="">Select financial effect</option><option value="CUSTOMER_CREDIT">Customer Credit</option><option value="NO_CREDIT">No Financial Credit</option>

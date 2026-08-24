@@ -273,10 +273,15 @@ begin
       case
         when p.action_type='Recall' and original.action_type in ('Buy','PartialBuy') then 'In Stock'
         when p.action_type='Recall' and original.action_type='Remove' then 'Cannot Supply'
+        when p.action_type='Recall' and original.action_type='NextSup' then 'Next Supplier'
+        when p.action_type in ('Buy','PartialBuy','Remove')
+          and lower(regexp_replace(coalesce(p.previous_status,''),'[_-]+',' ','g'))='next supplier'
+          then 'Next Supplier'
         else coalesce(public.fc_normalize_warehouse_status_v1(p.previous_status),'Pre-Order')
       end,
       case
         when p.action_type in ('Buy','PartialBuy') then 'In Stock'
+        when p.action_type='NextSup' then 'Next Supplier'
         when p.action_type='Remove' then 'Cannot Supply'
         when p.action_type='Recall' then 'Pre-Order'
         else coalesce(public.fc_normalize_warehouse_status_v1(p.new_status),
@@ -288,6 +293,7 @@ begin
         when p.action_type='Remove' then 'Cannot Supply'
         when p.action_type='Recall' and original.action_type in ('Buy','PartialBuy') then 'Recall Bought'
         when p.action_type='Recall' and original.action_type='Remove' then 'Recall Cannot Supply'
+        when p.action_type='Recall' and original.action_type='NextSup' then 'Recall Next Supplier'
         else p.action_type
       end,
       p.metadata->>'reason',p.supplier_id,p.supplier_name,p.changed_by_staff_id,

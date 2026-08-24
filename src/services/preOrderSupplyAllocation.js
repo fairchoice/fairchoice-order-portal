@@ -46,10 +46,10 @@ export function warehouseSupplyStage(value) {
 export function preOrderWorkflowStage(warehouseStatus, action, { pending = false } = {}) {
   const warehouseStage = warehouseSupplyStage(warehouseStatus);
   if (action?.actionType === "Recall") return "Pre-order";
-  if (warehouseStage === "Cannot Supply") return warehouseStage;
   if (action?.actionType === "NextSup" || action?.actionType === "PartialBuy") {
     return "Next Supplier";
   }
+  if (warehouseStage === "Cannot Supply") return warehouseStage;
   if (pending && action?.actionType === "Buy") return "Bought";
   if (pending && action?.actionType === "Remove") return "Cannot Supply";
   return warehouseStage;
@@ -75,6 +75,12 @@ export function preOrderSupplyItemChanges(
     };
   }
   if (actionType === "NextSup") return null;
+  if (actionType === "Available") {
+    return { sourceStatus: "In Stock", includeInPicking: true, pickedQty: Number(quantity || 0) };
+  }
+  if (actionType === "Recall Available") {
+    return { sourceStatus: "Cannot Supply", includeInPicking: false, pickedQty: 0 };
+  }
   if (actionType === "Remove") {
     return { sourceStatus: "Cannot Supply", includeInPicking: false, pickedQty: 0 };
   }
@@ -95,6 +101,54 @@ export const LIVE_PREORDER_DEMAND_STATUSES = new Set([
   "Warehouse Packing",
 ]);
 
+export const ACTIVE_PREORDER_SUPPLY_STATUSES = new Set(["Warehouse Packing"]);
+
 export function isLivePreOrderDemandOrder(order = {}) {
   return LIVE_PREORDER_DEMAND_STATUSES.has(String(order?.status || "").trim());
+}
+
+export function isActivePreOrderSupplyOrder(order = {}) {
+  return ACTIVE_PREORDER_SUPPLY_STATUSES.has(String(order?.status || "").trim());
+}
+
+export function isWarehousePreOrderQueueLine(order = {}, displayStatus = "") {
+  return isActivePreOrderSupplyOrder(order) && displayStatus === "Pre-order";
+}
+
+export function isLivePreOrderSupplyEvent(
+  event = {},
+  liveItemKeys = new Set(),
+  liveItemIds = new Set(),
+) {
+  if (event.itemKey && liveItemKeys.has(String(event.itemKey))) return true;
+  return [event.itemId, event.orderItemId, event.addedItemId]
+    .filter(Boolean)
+    .some((id) => liveItemIds.has(String(id)));
+}
+
+export const PREORDER_SUPPLY_PENDING_KEY = "fairchoice_preorder_supply_pending";
+
+export function filterPendingPreOrderActionsForOrders(actions = [], orders = []) {
+  const liveOrderIds = new Set(
+    orders
+      .filter(isActivePreOrderSupplyOrder)
+      .map((order) => String(order.orderId || order.order_number || "")),
+  );
+  return actions.filter((action) => liveOrderIds.has(String(action.orderId || "")));
+}
+
+export function clearPendingPreOrderActionsForOrder(orderId, storage = globalThis.localStorage) {
+  if (!storage || !orderId) return;
+  let actions;
+  try {
+    actions = JSON.parse(storage.getItem(PREORDER_SUPPLY_PENDING_KEY) || "[]");
+  } catch {
+    storage.removeItem(PREORDER_SUPPLY_PENDING_KEY);
+    return;
+  }
+  const remaining = actions.filter(
+    (action) => String(action.orderId || "") !== String(orderId),
+  );
+  if (remaining.length) storage.setItem(PREORDER_SUPPLY_PENDING_KEY, JSON.stringify(remaining));
+  else storage.removeItem(PREORDER_SUPPLY_PENDING_KEY);
 }

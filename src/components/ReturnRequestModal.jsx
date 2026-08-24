@@ -10,6 +10,11 @@ import { formatCurrency } from "../utils/currency";
 import { getOrderItemQty } from "../utils/orderTotals";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import {
+  getPriceModeLabel,
+  getProductPriceDetailsForMode,
+  isVatPriceMode,
+} from "../utils/pricing";
+import {
   acquireReturnSubmissionLock,
   releaseReturnSubmissionLock,
 } from "../services/returnRequestSubmissionSafety";
@@ -18,6 +23,15 @@ const getOrderItems = (order = {}) => order.items || order.order_items || [];
 const getItemName = (item = {}) => item.name || item.productName || item.product_name || "Unnamed Product";
 const getItemCode = (item = {}) => item.productCode || item.product_code || item.code || "";
 const getItemPrice = (item = {}) => Number(item.price || item.unit_price || item.selectedPrice || 0);
+
+const RETURN_PRICE_MODES = [
+  { value: "vat", label: "Ex.VAT" },
+  { value: "server", label: "Inc.VAT" },
+  { value: "manager", label: "Manager Offer" },
+  { value: "super", label: "Admin Offer" },
+];
+
+const roundMoney = (value) => Number(Number(value || 0).toFixed(2));
 
 const normalizeCatalogProduct = (product = {}) => ({
   ...product,
@@ -39,12 +53,16 @@ export default function ReturnRequestModal({
   onSaved,
   catalogProducts = [],
   allowCatalogProducts = false,
+  pricingSettings = {},
+  country = "",
   embedded = false,
   onSubmittingChange,
   onCreatedReturnChange,
   onCreateAnother,
 }) {
+  const initialPriceMode = String(order?.priceMode || order?.price_mode || "vat").toLowerCase();
   const [returnType, setReturnType] = useState(RETURN_TYPES[0]);
+  const [priceMode, setPriceMode] = useState(initialPriceMode);
   const [search, setSearch] = useState("");
   const [lines, setLines] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -60,6 +78,61 @@ export default function ReturnRequestModal({
   const orderItems = allowCatalogProducts
     ? catalogProducts.map(normalizeCatalogProduct)
     : getOrderItems(order);
+  const resolvedCountry =
+    country ||
+    order?.country ||
+    order?.branchCountry ||
+    order?.branch_country ||
+    order?.delivery_country ||
+    "";
+
+  const findCatalogProduct = (item = {}) => {
+    const itemId = item.id || item.productId || item.product_id;
+    const itemCode = getItemCode(item);
+    return catalogProducts.find((product) => {
+      const productId = product.id || product.product_id;
+      const productCode = product.productCode || product.product_code || product.code || "";
+      return (itemId && String(productId) === String(itemId)) ||
+        (itemCode && String(productCode).toLowerCase() === String(itemCode).toLowerCase());
+    }) || null;
+  };
+
+  const getLineFinancials = (item = {}, qtyOverride) => {
+    const pricingProduct = findCatalogProduct(item) || item;
+    const details = getProductPriceDetailsForMode(
+      pricingProduct,
+      priceMode,
+      resolvedCountry,
+      pricingSettings
+    );
+    const fallbackPrice = getItemPrice(item);
+    const unitPrice = Number(details?.price || details?.unitPrice || fallbackPrice || 0);
+    const qty = Number(qtyOverride ?? item.returnQty ?? item.qty ?? item.quantity ?? 0);
+    const netTotal = roundMoney(unitPrice * qty);
+    const vatTotal = isVatPriceMode(priceMode)
+      ? roundMoney(Number(details?.vatAmount || 0) * qty)
+      : 0;
+    return {
+      unitPrice: roundMoney(unitPrice),
+      netTotal,
+      vatTotal,
+      grossTotal: roundMoney(netTotal + vatTotal),
+    };
+  };
+
+  const getPricedLine = (line = {}) => {
+    const financials = getLineFinancials(line);
+    return {
+      ...line,
+      price: financials.unitPrice,
+      selectedPrice: financials.unitPrice,
+      unit_price: financials.unitPrice,
+      net_total: financials.netTotal,
+      vat_total: financials.vatTotal,
+      gross_total: financials.grossTotal,
+      price_mode: priceMode,
+    };
+  };
   const filteredItems = useMemo(() => {
     const value = search.trim().toLowerCase();
     if (!value) return orderItems.slice(0, 10);
@@ -85,6 +158,7 @@ export default function ReturnRequestModal({
         productKey: productId,
         returnQty: 1,
         reason: RETURN_REASONS[0],
+        price_mode: priceMode,
       },
     ]);
   };
@@ -97,7 +171,7 @@ export default function ReturnRequestModal({
     setLines((old) => old.filter((_, lineIndex) => lineIndex !== index));
   };
 
-  const total = lines.reduce((sum, line) => sum + Number(line.returnQty || 0) * getItemPrice(line), 0);
+  const total = lines.reduce((sum, line) => sum + getLineFinancials(line).grossTotal, 0);
   const totalQty = lines.reduce((sum, line) => sum + Number(line.returnQty || 0), 0);
   const customerName = order.companyName || order.company_name || "Customer";
   const branchName = order.branchName || order.branch_name || "Not specified";
@@ -105,6 +179,10 @@ export default function ReturnRequestModal({
 
   const requestReturnConfirmation = () => {
     if (submitLockRef.current || createdReturnRef.current?.id || createdReturn?.id) return;
+    if (!priceMode) {
+      alert("Please select a Price Mode for this return.");
+      return;
+    }
     if (!lines.length) {
       alert("Please add at least one product to return.");
       return;
@@ -119,6 +197,7 @@ export default function ReturnRequestModal({
     onSubmittingChange?.(true);
 
     const referenceNotes = [
+      `Price mode: ${getPriceModeLabel(priceMode)}`,
       previousInvoiceNumber ? `Previous invoice: ${previousInvoiceNumber}` : "",
       previousInvoiceDate ? `Previous invoice date: ${previousInvoiceDate}` : "",
       notes,
@@ -129,7 +208,7 @@ export default function ReturnRequestModal({
       const matchingReturn = findMatchingReturn({
         order,
         returnType,
-        items: lines,
+        items: lines.map(getPricedLine),
         existingReturns,
       });
       if (
@@ -149,7 +228,8 @@ export default function ReturnRequestModal({
         source,
         currentUser,
         notes: referenceNotes,
-        items: lines,
+        items: lines.map(getPricedLine),
+        priceMode,
         allowDuplicate: Boolean(matchingReturn),
       });
       const receipt = {
@@ -159,6 +239,7 @@ export default function ReturnRequestModal({
         receiptProductCount: lines.length,
         receiptTotalQty: totalQty,
         receiptEstimatedCredit: Number(savedReturn.return_total ?? total),
+        receiptPriceMode: savedReturn.price_mode || priceMode,
         status: savedReturn.status || "Pending Warehouse Confirmation",
       };
       createdReturnRef.current = receipt;
@@ -167,6 +248,7 @@ export default function ReturnRequestModal({
       setSearch("");
       setNotes("");
       setReturnType(RETURN_TYPES[0]);
+      setPriceMode(initialPriceMode);
       setShowConfirmation(false);
       setSaving(false);
       onSubmittingChange?.(false);
@@ -189,6 +271,7 @@ export default function ReturnRequestModal({
     setSearch("");
     setNotes("");
     setReturnType(RETURN_TYPES[0]);
+    setPriceMode(initialPriceMode);
     setShowConfirmation(false);
     setSaving(false);
     onSubmittingChange?.(false);
@@ -213,6 +296,7 @@ export default function ReturnRequestModal({
         <dl className="grid grid-cols-1 gap-3 rounded-xl border bg-emerald-50 p-4 sm:grid-cols-2">
           <div><dt className="text-xs font-bold text-slate-500">Return No</dt><dd className="font-extrabold">{createdReturn.return_number}</dd></div>
           <div><dt className="text-xs font-bold text-slate-500">Status</dt><dd className="font-bold">{createdReturn.status}</dd></div>
+          <div><dt className="text-xs font-bold text-slate-500">Price Mode</dt><dd className="font-bold">{getPriceModeLabel(createdReturn.receiptPriceMode)}</dd></div>
           <div><dt className="text-xs font-bold text-slate-500">Customer</dt><dd className="font-bold">{createdReturn.receiptCustomerName}</dd></div>
           <div><dt className="text-xs font-bold text-slate-500">Products</dt><dd className="font-bold">{createdReturn.receiptProductCount}</dd></div>
           <div><dt className="text-xs font-bold text-slate-500">Total Qty</dt><dd className="font-bold">{createdReturn.receiptTotalQty}</dd></div>
@@ -248,6 +332,21 @@ export default function ReturnRequestModal({
           <select disabled={formLocked} value={returnType} onChange={(e) => setReturnType(e.target.value)} className="w-full border rounded-xl p-3 bg-white disabled:bg-slate-100">
             {RETURN_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
           </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-slate-500 mb-1">Price Mode</label>
+          <select
+            disabled={formLocked}
+            value={priceMode}
+            onChange={(e) => setPriceMode(e.target.value)}
+            className="w-full border rounded-xl p-3 bg-white font-bold disabled:bg-slate-100"
+          >
+            {RETURN_PRICE_MODES.map((mode) => (
+              <option key={mode.value} value={mode.value}>{mode.label}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-slate-500">Return value is calculated using the selected price mode.</p>
         </div>
 
         <div>
@@ -292,7 +391,7 @@ export default function ReturnRequestModal({
                   <div className="font-bold">{getItemName(line)}</div>
                   <div className="text-xs text-slate-500">
                     {!allowCatalogProducts && `Delivered: ${deliveredQty} | `}
-                    Price: {formatCurrency(getItemPrice(line))}
+                    Price ({getPriceModeLabel(priceMode)}): {formatCurrency(getLineFinancials(line).unitPrice)}
                   </div>
                 </div>
                 <input
@@ -336,6 +435,7 @@ export default function ReturnRequestModal({
                 <dt className="font-bold text-slate-500">Customer</dt><dd>{customerName}</dd>
                 <dt className="font-bold text-slate-500">Branch</dt><dd>{branchName}</dd>
                 <dt className="font-bold text-slate-500">Previous Invoice</dt><dd>{previousInvoiceNumber || "Not specified"}</dd>
+                <dt className="font-bold text-slate-500">Price Mode</dt><dd>{getPriceModeLabel(priceMode)}</dd>
                 <dt className="font-bold text-slate-500">Return Products</dt><dd>{lines.length}</dd>
                 <dt className="font-bold text-slate-500">Total Qty</dt><dd>{totalQty}</dd>
                 <dt className="font-bold text-slate-500">Estimated Credit</dt><dd>{formatCurrency(total)}</dd>

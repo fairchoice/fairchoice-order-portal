@@ -36,6 +36,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
     items: [
       page("page.admin.staff_setup", "Staff Setup", "staff"),
       page("page.admin.customer_setup", "Customer Setup", "customers"),
+      page("page.admin.sales_route_setup", "Sales Route Setup", "salesRouteSetup", ["Admin"]),
       {
         label: "Login",
         children: [
@@ -78,14 +79,12 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
   {
     title: "Reports",
     items: [
-      page("page.reports.profit", "Profit Portal", "profitPortal"),
+      page("page.reports.profit", "Profit Analysis", "profitPortal"),
       page("page.reports.product_line", "Product Line Analysis", "productLineAnalysis"),
       page("page.reports.sales", "Sales Report", "salesReports"),
       page("page.reports.purchase_planning", "Purchase Planning", "purchasePlanning"),
       page("page.reports.warehouse_activity", "Warehouse Activity", "warehouseActivity"),
-      page("page.reports.outstanding_customer", "Outstanding Customer", "outstandingCustomers"),
-      page("page.reports.collections", "Collections Report", "collectionsReport"),
-      page("page.reports.driver_collection", "Driver Collection", "driverCollections"),
+      page("page.reports.sales_route", "Sales Route Analysis", "salesRouteAnalysis", ["Admin"]),
     ],
   },
   {

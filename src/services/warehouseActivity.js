@@ -3,6 +3,8 @@ import { supabase } from "./supabase.js";
 
 export const WAREHOUSE_STATUSES = Object.freeze(["In Stock", "Pre-Order", "Cannot Supply"]);
 
+export const PICKING_MISMATCH_ACTION = "Picking Mismatch";
+
 export const emptyWarehouseActivityFilters = Object.freeze({
   dateFrom: "",
   dateTo: "",
@@ -15,6 +17,17 @@ export const emptyWarehouseActivityFilters = Object.freeze({
   oldStatus: "All",
   newStatus: "All",
   supplier: "All",
+});
+
+export const emptyReceivedOrderActivityFilters = Object.freeze({
+  dateFrom: "",
+  dateTo: "",
+  country: "All",
+  staff: "All",
+  product: "All",
+  customer: "All",
+  orderNumber: "",
+  mismatchType: "All",
 });
 
 const safeUuid = () => {
@@ -80,6 +93,33 @@ export const normalizeWarehouseActivity = (row = {}) => ({
   metadata: row.metadata || {},
 });
 
+export function getPickingMismatchActivity({ itemStatus, action } = {}) {
+  const oldStatus = normalizeWarehouseStatus(itemStatus);
+  const normalizedAction = String(action || "").trim().toLowerCase();
+
+  if (oldStatus === "In Stock" && normalizedAction === "pre_order") {
+    return {
+      actionType: PICKING_MISMATCH_ACTION,
+      oldStatus: "In Stock",
+      newStatus: "Pre-Order",
+      reason: "Picker selected Pre-Order for an item recorded as In Stock",
+      mismatchType: "IN_STOCK_TO_PRE_ORDER",
+    };
+  }
+
+  if (oldStatus === "Pre-Order" && normalizedAction === "in_stock") {
+    return {
+      actionType: PICKING_MISMATCH_ACTION,
+      oldStatus: "Pre-Order",
+      newStatus: "In Stock",
+      reason: "Picker found warehouse stock and picked an item recorded as Pre-Order",
+      mismatchType: "PRE_ORDER_TO_PICK",
+    };
+  }
+
+  return null;
+}
+
 export function buildWarehouseActivityEvent({ order = {}, item = {}, ...activity } = {}) {
   return {
     client_action_id: activity.clientActionId || safeUuid(),
@@ -96,6 +136,8 @@ export function buildWarehouseActivityEvent({ order = {}, item = {}, ...activity
       order.customer_country || order.customerCountry || order.branch_country ||
       order.branchCountry || order.delivery_country || order.country || null,
     warehouse_location: activity.warehouseLocation || null,
+    quantity: Number(activity.quantity ?? item.qty ?? item.quantity ?? 0),
+    old_status: normalizeWarehouseStatus(activity.oldStatus),
     new_status: normalizeWarehouseStatus(activity.newStatus),
     action_type: activity.actionType,
     reason: activity.reason || null,
@@ -147,6 +189,20 @@ export async function loadWarehouseActivityReport(user, { dateFrom = "", dateTo 
   return (data || []).map(normalizeWarehouseActivity);
 }
 
+
+export async function loadReceivedOrderActivityReport(user, { dateFrom = "", dateTo = "" } = {}) {
+  const session = sessionArgs(user);
+  const { data, error } = await supabase.rpc("fc_list_received_order_activity_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
+    p_date_from: dateFrom ? `${dateFrom}T00:00:00` : null,
+    p_date_to: dateTo ? `${dateTo}T23:59:59.999` : null,
+    p_page_size: 5000,
+  });
+  if (error) throw error;
+  return (data || []).map(normalizeWarehouseActivity);
+}
+
 const optionValues = (rows, field) =>
   [...new Set(rows.map((row) => String(row[field] || "").trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));
@@ -178,6 +234,44 @@ export function filterWarehouseActivity(rows = [], filters = emptyWarehouseActiv
       matches(row.newStatus, filters.newStatus) && matches(row.supplierName, filters.supplier) &&
       (!orderSearch || String(row.orderNumber || "").toLowerCase().includes(orderSearch));
   });
+}
+
+export function getReceivedOrderActivityFilterOptions(rows = []) {
+  return {
+    countries: optionValues(rows, "country"),
+    staff: optionValues(rows, "staffName"),
+    products: optionValues(rows, "productName"),
+    customers: optionValues(rows, "customerName"),
+  };
+}
+
+export function getReceivedOrderMismatchType(row = {}) {
+  if (row.oldStatus === "In Stock" && row.newStatus === "Pre-Order") return "In Stock → Pre-Order";
+  if (row.oldStatus === "Pre-Order" && row.newStatus === "In Stock") return "Pre-Order → In Stock";
+  return "Other";
+}
+
+export function filterReceivedOrderActivity(rows = [], filters = emptyReceivedOrderActivityFilters) {
+  const matches = (field, expected) => expected === "All" || String(field || "") === expected;
+  const orderSearch = String(filters.orderNumber || "").trim().toLowerCase();
+  const from = filters.dateFrom ? new Date(`${filters.dateFrom}T00:00:00`).getTime() : null;
+  const to = filters.dateTo ? new Date(`${filters.dateTo}T23:59:59.999`).getTime() : null;
+  return rows.filter((row) => {
+    const timestamp = new Date(row.timestamp || 0).getTime();
+    return (!from || timestamp >= from) && (!to || timestamp <= to) &&
+      matches(row.country, filters.country) && matches(row.staffName, filters.staff) &&
+      matches(row.productName, filters.product) && matches(row.customerName, filters.customer) &&
+      (filters.mismatchType === "All" || getReceivedOrderMismatchType(row) === filters.mismatchType) &&
+      (!orderSearch || String(row.orderNumber || "").toLowerCase().includes(orderSearch));
+  });
+}
+
+export function summarizeReceivedOrderActivity(rows = []) {
+  return {
+    total: rows.length,
+    inStockToPreOrder: rows.filter((row) => row.oldStatus === "In Stock" && row.newStatus === "Pre-Order").length,
+    preOrderToInStock: rows.filter((row) => row.oldStatus === "Pre-Order" && row.newStatus === "In Stock").length,
+  };
 }
 
 export const sumWarehouseActivityQuantity = (rows = []) =>

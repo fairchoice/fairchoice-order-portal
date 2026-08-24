@@ -4,6 +4,7 @@ import {
   getCustomerAccounts,
   saveCustomerAccount,
   saveCustomerBranch,
+  syncCustomerAddressToOrders,
 } from "../../services/customerManagement";
 import { supabase } from "../../services/supabase";
 import CustomerForm from "./CustomerForm";
@@ -330,7 +331,7 @@ export default function Customers() {
     XLSX.writeFile(workbook, "fairchoice-customer-import-template.xlsx");
   };
 
-  const parseCustomerAccountRow = (row, rowNumber) => {
+  const parseCustomerAccountRow = (row, rowNumber, mode = "import") => {
     const errors = [];
     const country = normalize(row.Country || row.country);
     const creditLimit = toNumber(row["Credit Limit"] ?? row.credit_limit);
@@ -346,7 +347,7 @@ export default function Customers() {
     if (!COUNTRY_VALUES.has(country.toLowerCase())) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Country", message: "Country must be Wales or England" });
     }
-    if (!DEFAULT_PRICE_MODES.has(defaultPriceMode.toLowerCase())) {
+    if (mode !== "update" && !DEFAULT_PRICE_MODES.has(defaultPriceMode.toLowerCase())) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Default Price Mode", message: "Default Price Mode must be Ex.VAT or Inc.VAT" });
     }
     if (creditLimit === null) {
@@ -423,7 +424,7 @@ export default function Customers() {
     };
   };
 
-  const handleCustomerImportFile = async (event) => {
+  const handleCustomerImportFile = async (event, mode = "import") => {
     const file = event.target.files[0];
     event.target.value = "";
     if (!file) return;
@@ -449,10 +450,18 @@ export default function Customers() {
           (customer.customer_branches || []).map((branch) => [String(branch.id), branch])
         )
       );
+      const existingBranchesByCustomerAndName = new Map(
+        customers.flatMap((customer) =>
+          (customer.customer_branches || []).map((branch) => [
+            `${String(customer.id)}::${normalizeKey(branch.branch_name)}`,
+            branch,
+          ])
+        )
+      );
 
       accountRows.forEach((rawRow, index) => {
         const rowNumber = index + 2;
-        const { row, errors: rowErrors } = parseCustomerAccountRow(rawRow, rowNumber);
+        const { row, errors: rowErrors } = parseCustomerAccountRow(rawRow, rowNumber, mode);
         errors.push(...rowErrors);
         if (rowErrors.length) return;
 
@@ -462,25 +471,66 @@ export default function Customers() {
             errors.push({ rowNumber, sheet: "Customer Accounts", field: "Customer Account ID", message: "Invalid Customer Account ID" });
             return;
           }
-          accountUpdates.push(row);
+          accountUpdates.push({
+            ...row,
+            id: existing.id,
+            ...(mode === "update" ? { default_price_mode: existing.default_price_mode } : {}),
+          });
+          return;
+        }
+
+        const existingByName = existingAccountsByName.get(normalizeKey(row.account_name));
+        if (existingByName) {
+          accountUpdates.push({
+            ...row,
+            id: existingByName.id,
+            ...(mode === "update" ? { default_price_mode: existingByName.default_price_mode } : {}),
+          });
+          return;
+        }
+
+        if (mode === "update") {
+          errors.push({ rowNumber, sheet: "Customer Accounts", field: "Customer Name", message: "No existing customer matched this exact Customer Name" });
           return;
         }
 
         accountCreates.push(row);
       });
 
-      branchRows.forEach((rawRow, index) => {
+      if (mode !== "update") branchRows.forEach((rawRow, index) => {
         const rowNumber = index + 2;
         const { row, errors: rowErrors } = parseCustomerBranchRow(rawRow, rowNumber);
         errors.push(...rowErrors);
         if (rowErrors.length) return;
 
         if (row.id) {
-          if (!existingBranchesById.has(String(row.id))) {
+          const existingBranch = existingBranchesById.get(String(row.id));
+          if (!existingBranch) {
             errors.push({ rowNumber, sheet: "Customer Branches", field: "Branch ID", message: "Invalid Branch ID" });
             return;
           }
-          branchUpdates.push(row);
+          branchUpdates.push({ ...row, id: existingBranch.id });
+          return;
+        }
+
+        const matchedCustomer =
+          existingAccountsById.get(String(row.customer_account_id || "")) ||
+          existingAccountsByName.get(normalizeKey(row.customer_name));
+        const existingBranch = matchedCustomer
+          ? existingBranchesByCustomerAndName.get(`${String(matchedCustomer.id)}::${normalizeKey(row.branch_name)}`)
+          : null;
+
+        if (existingBranch) {
+          branchUpdates.push({
+            ...row,
+            id: existingBranch.id,
+            customer_account_id: matchedCustomer.id,
+          });
+          return;
+        }
+
+        if (mode === "update") {
+          errors.push({ rowNumber, sheet: "Customer Branches", field: "Branch Name", message: "No existing branch matched this customer and exact Branch Name" });
           return;
         }
 
@@ -502,8 +552,9 @@ export default function Customers() {
       });
 
       setCustomerImportPreview({
+        mode,
         customersChecked: accountRows.length,
-        branchesChecked: branchRows.length,
+        branchesChecked: mode === "update" ? 0 : branchRows.length,
         accountCreates,
         accountUpdates,
         branchCreates,
@@ -556,7 +607,9 @@ export default function Customers() {
         `Customers updated: ${customerImportPreview.accountUpdates.length}`,
         `Branches created: ${customerImportPreview.branchCreates.length}`,
         `Branches updated: ${customerImportPreview.branchUpdates.length}`,
-        "Apply these changes now?",
+        customerImportPreview.mode === "update"
+          ? "Update matched customer accounts and refresh existing order addresses now? Branch sheet changes will be ignored."
+          : "Apply these changes now?",
       ].join("\n")
     );
 
@@ -572,6 +625,7 @@ export default function Customers() {
         const { error } = await supabase.from("customer_accounts").update(payload).eq("id", id);
         if (error) throw error;
         await saveImportedOpeningBalance(account.account_name, opening_balance);
+        await syncCustomerAddressToOrders({ customerAccountId: id });
       }
 
       for (const account of customerImportPreview.accountCreates) {
@@ -590,6 +644,7 @@ export default function Customers() {
         const { id, customer_name, email, ...payload } = branch;
         const { error } = await supabase.from("customer_branches").update(payload).eq("id", id);
         if (error) throw error;
+        await syncCustomerAddressToOrders({ customerBranchId: id });
       }
 
       for (const branch of customerImportPreview.branchCreates) {
@@ -789,11 +844,21 @@ export default function Customers() {
               <input
                 type="file"
                 accept=".xlsx,.csv"
-                onChange={handleCustomerImportFile}
+                onChange={(event) => handleCustomerImportFile(event, "import")}
                 disabled={importingCustomers}
                 className="hidden"
               />
               Import Customers
+            </label>
+            <label className="flex h-9 cursor-pointer items-center rounded-full bg-indigo-700 px-4 text-sm font-bold text-white hover:bg-indigo-800">
+              <input
+                type="file"
+                accept=".xlsx,.csv"
+                onChange={(event) => handleCustomerImportFile(event, "update")}
+                disabled={importingCustomers}
+                className="hidden"
+              />
+              Update Customers
             </label>
             <button
               type="button"
