@@ -57,7 +57,17 @@ async function loadInBatches(customers, onProgress) {
 function buildRow(customer, snapshot, error = null) {
   const now = new Date();
   const summary = snapshot?.customerSummary || {};
-  const totalOutstanding = numberValue(summary.outstandingBalance, summary.outstanding);
+  const accountSummary = snapshot?.accountHistory?.summary || {};
+  const transactions = snapshot?.transactionHistory || [];
+  const latestTransactionBalance = transactions.length
+    ? numberValue(transactions[transactions.length - 1]?.running_balance, transactions[transactions.length - 1]?.runningBalance)
+    : NaN;
+  const totalOutstanding = Math.max(0, numberValue(
+    accountSummary.closingBalance,
+    Number.isFinite(latestTransactionBalance) ? latestTransactionBalance : undefined,
+    summary.outstandingBalance,
+    summary.outstanding
+  ));
   const buckets = { current: 0, "8_14": 0, "15_30": 0, "31_60": 0, "61_90": 0, "90_plus": 0 };
   let invoiceOutstanding = 0;
   let oldestDate = null;
@@ -88,6 +98,7 @@ function buildRow(customer, snapshot, error = null) {
     customerId: customer.id,
     customerName: customer.account_name || customer.company_name || customer.customer_code || "Unnamed customer",
     customerCode: customer.customer_code || "",
+    country: customer.country || customer.customer_country || customer.address_country || customer.customer_branches?.[0]?.country || "",
     creditLimit,
     totalOutstanding,
     outstandingInvoices,
@@ -110,6 +121,7 @@ export default function AllCreditOutstanding({ customers = [] }) {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [search, setSearch] = useState("");
+  const [countryFilter, setCountryFilter] = useState("All");
   const [ageFilter, setAgeFilter] = useState("All");
   const [sort, setSort] = useState("outstanding_desc");
   const [page, setPage] = useState(1);
@@ -129,6 +141,7 @@ export default function AllCreditOutstanding({ customers = [] }) {
     const needle = search.trim().toLowerCase();
     const result = rows.filter((row) => {
       if (needle && !`${row.customerName} ${row.customerCode}`.toLowerCase().includes(needle)) return false;
+      if (countryFilter !== "All" && String(row.country || "").trim().toLowerCase() !== countryFilter.toLowerCase()) return false;
       if (ageFilter === "8+") return row.oldestDays >= 8;
       if (ageFilter === "15+") return row.oldestDays >= 15;
       if (ageFilter === "30+") return row.oldestDays >= 30;
@@ -143,7 +156,7 @@ export default function AllCreditOutstanding({ customers = [] }) {
       if (sort === "name") return a.customerName.localeCompare(b.customerName);
       return b.totalOutstanding - a.totalOutstanding;
     });
-  }, [rows, search, ageFilter, sort]);
+  }, [rows, search, countryFilter, ageFilter, sort]);
 
   const totals = useMemo(() => filtered.reduce((sum, row) => ({
     outstanding: sum.outstanding + row.totalOutstanding,
@@ -158,7 +171,7 @@ export default function AllCreditOutstanding({ customers = [] }) {
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const activePage = Math.min(page, pageCount);
   const visible = filtered.slice((activePage - 1) * PAGE_SIZE, activePage * PAGE_SIZE);
-  useEffect(() => setPage(1), [search, ageFilter, sort]);
+  useEffect(() => setPage(1), [search, countryFilter, ageFilter, sort]);
 
   return <section className="space-y-4">
     <div className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -166,8 +179,9 @@ export default function AllCreditOutstanding({ customers = [] }) {
         <div><h3 className="text-xl font-extrabold text-slate-900">Total Credit Outstanding</h3><p className="text-sm text-slate-500">All customer credit in one view, with ageing and payment-flow indicators.</p></div>
         <button type="button" onClick={refresh} disabled={loading} className="rounded-xl bg-slate-800 px-4 py-2 font-bold text-white disabled:opacity-50">{loading ? `Loading ${progress.done}/${progress.total}` : "Refresh"}</button>
       </div>
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search customer" className="rounded-xl border p-3" />
+        <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} className="rounded-xl border p-3"><option value="All">All Countries</option><option value="England">England</option><option value="Wales">Wales</option></select>
         <select value={ageFilter} onChange={(e) => setAgeFilter(e.target.value)} className="rounded-xl border p-3"><option>All</option><option value="8+">Age 8+ days</option><option value="15+">Age 15+ days</option><option value="30+">Age 30+ days</option><option value="60+">Age 60+ days</option><option value="90+">Age 90+ days</option></select>
         <select value={sort} onChange={(e) => setSort(e.target.value)} className="rounded-xl border p-3"><option value="outstanding_desc">Highest outstanding first</option><option value="outstanding_asc">Lowest outstanding first</option><option value="age_desc">Oldest debt first</option><option value="age_asc">Newest debt first</option><option value="name">Customer name</option></select>
       </div>
