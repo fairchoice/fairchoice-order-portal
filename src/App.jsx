@@ -111,17 +111,20 @@ export default function App() {
     return <LoginPage onLogin={handleLogin} />;
   }
 
+  const normalizedRole = normalizeRole(profile.role || profile.access_level);
+  const effectiveDuty = normalizedRole === "Brand Partner" ? "admin" : activeDuty;
+
   const selectDuty = (duty) => {
     localStorage.setItem(DUTY_KEY, duty);
     setActiveDuty(duty);
   };
 
-  if (profile && !isCustomerProfile(profile) && !isMasterAdmin(profile) && !activeDuty) {
+  if (profile && !isCustomerProfile(profile) && !isMasterAdmin(profile) && !effectiveDuty) {
     const duties = [
       canAccessPage(profile, "page.order.sales_rep") && ["sales_rep", "Sales Rep", "Today’s route, orders and expenses"],
       canAccessPage(profile, "page.operations.warehouse") && ["warehouse", "Warehouse", "Warehouse operations only"],
       canAccessPage(profile, "page.operations.driver") && ["driver", "Driver", "Driver portal and expenses only"],
-      ["Admin", "Super Admin"].includes(normalizeRole(profile.role || profile.access_level)) && ["admin", "Admin", "Your permitted Back Office functions (Sales Rep and Driver excluded)"],
+      ["Admin", "Super Admin"].includes(normalizedRole) && ["admin", "Admin", "Your permitted Back Office functions (Sales Rep and Driver excluded)"],
     ].filter(Boolean);
     return (
       <div className="min-h-screen bg-slate-100 p-4 flex items-center justify-center">
@@ -138,13 +141,12 @@ export default function App() {
     );
   }
 
-
   return (
     <CustomerOrder
       userProfile={profile}
       onLogout={handleLogout}
       onProfileRefresh={handleLogin}
-      activeDuty={activeDuty}
+      activeDuty={effectiveDuty}
     />
   );
 }
