@@ -79,6 +79,7 @@ import PurchasePlanningReport from "./reports/PurchasePlanningReport";
 import WarehouseActivityReport from "./reports/WarehouseActivityReport";
 import ProfitAnalysisReport from "./reports/ProfitAnalysisReport";
 import ProductLineAnalysisReport from "./reports/ProductLineAnalysisReport";
+import BrandPerformanceReport from "./reports/BrandPerformanceReport";
 import SalesRouteAnalysisReport from "./reports/SalesRouteAnalysisReport";
 import SalesRouteSetup from "./AdminSetup/SalesRouteSetup";
 import { EXCEPTION_ORDER_REASONS, loadTodaysSalesRoute, NO_ORDER_REASONS, recordSalesRouteVisit } from "../services/salesRouteService";
@@ -4388,6 +4389,7 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "productLineAnalysis" && (
       <ProductLineAnalysisReport currentUser={activeUser} />
     )}
+    {page === "brandPerformance" && <BrandPerformanceReport currentUser={activeUser} />}
     {page === "purchasePlanning" && (
       <PurchasePlanningReport products={products} currentUser={activeUser} />
     )}
