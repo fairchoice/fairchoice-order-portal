@@ -32,6 +32,30 @@ export default function LoginPage({ onLogin }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [sendingReset, setSendingReset] = useState(false);
+  const [lockoutRetryAt, setLockoutRetryAt] = useState(null);
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+  const [loginMessage, setLoginMessage] = useState("");
+
+  useEffect(() => {
+    if (!lockoutRetryAt) {
+      setLockoutSeconds(0);
+      return undefined;
+    }
+
+    const updateCountdown = () => {
+      const remaining = Math.max(0, Math.ceil((new Date(lockoutRetryAt).getTime() - Date.now()) / 1000));
+      setLockoutSeconds(remaining);
+      if (remaining <= 0) {
+        setLockoutRetryAt(null);
+        setPassword("");
+        setLoginMessage("Login lock expired. You can try again now.");
+      }
+    };
+
+    updateCountdown();
+    const timer = window.setInterval(updateCountdown, 1000);
+    return () => window.clearInterval(timer);
+  }, [lockoutRetryAt]);
 
   useEffect(() => {
     const recoveryInUrl =
@@ -51,33 +75,46 @@ export default function LoginPage({ onLogin }) {
     return () => data.subscription.unsubscribe();
   }, []);
 
-    const submitLogin = async () => {
-  const username = login.trim().toLowerCase();
-  const cleanPassword = password;
+  const submitLogin = async () => {
+    const username = login.trim().toLowerCase();
+    const cleanPassword = password;
 
-  if (!username || !cleanPassword) {
-    alert("Username and password are required");
-    return;
-  }
-
-  setSubmittingLogin(true);
-
-  try {
-    const { data, error } = await supabase.rpc("fc_login_v2", {
-      p_username: username,
-      p_password: cleanPassword,
-    });
-
-    if (error) {
-      console.error("FC login error:", error);
-      alert(error.message || "Invalid username or password");
+    if (lockoutSeconds > 0) {
+      setLoginMessage("This login is temporarily locked. Please wait for the countdown before trying again.");
       return;
     }
 
-    if (data?.ok === false) {
-      alert(data?.error || "Invalid username or password");
+    if (!username || !cleanPassword) {
+      setLoginMessage("Username and password are required.");
       return;
     }
+
+    setSubmittingLogin(true);
+    setLoginMessage("");
+
+    try {
+      const { data, error } = await supabase.rpc("fc_login_v2", {
+        p_username: username,
+        p_password: cleanPassword,
+      });
+
+      if (error) {
+        console.error("FC login error:", error);
+        setLoginMessage(error.message || "Invalid username or password.");
+        return;
+      }
+
+      if (data?.ok === false) {
+        const retryAt = data?.retry_at ? new Date(data.retry_at) : null;
+        if (retryAt && !Number.isNaN(retryAt.getTime()) && retryAt.getTime() > Date.now()) {
+          setLockoutRetryAt(retryAt.toISOString());
+          setPassword("");
+          setLoginMessage("Too many failed login attempts. This account is temporarily locked.");
+        } else {
+          setLoginMessage(data?.error || "Invalid username or password.");
+        }
+        return;
+      }
 
     const profile = data?.profile;
     const sessionToken = data?.session_token;
@@ -121,15 +158,21 @@ export default function LoginPage({ onLogin }) {
     localStorage.setItem("loginPortal", "staff");
 
     setPassword("");
+    setLockoutRetryAt(null);
+    setLoginMessage("");
     onLogin(loggedInUser);
   } catch (error) {
     console.error("Unexpected FC login error:", error);
-    alert(`Login failed: ${error.message}`);
+    setLoginMessage(`Login failed: ${error.message}`);
   } finally {
     setSubmittingLogin(false);
   }
 };
 
+
+  const lockoutCountdown = lockoutSeconds > 0
+    ? `${Math.floor(lockoutSeconds / 60)}:${String(lockoutSeconds % 60).padStart(2, "0")}`
+    : "";
 
   const resetPassword = async () => {
     setSendingReset(true);
@@ -283,7 +326,7 @@ export default function LoginPage({ onLogin }) {
               className="input-box mb-3"
               placeholder="Username or email"
               value={login}
-              onChange={(e) => setLogin(e.target.value)}
+              onChange={(e) => { setLogin(e.target.value); if (lockoutSeconds <= 0) setLoginMessage(""); }}
               onKeyDown={(e) => e.key === "Enter" && submitLogin()}
             />
 
@@ -292,16 +335,25 @@ export default function LoginPage({ onLogin }) {
               type="password"
               placeholder="Password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); if (lockoutSeconds <= 0) setLoginMessage(""); }}
               onKeyDown={(e) => e.key === "Enter" && submitLogin()}
             />
 
+            {loginMessage && (
+              <div className={`mb-4 rounded-xl border p-3 text-sm font-bold ${lockoutSeconds > 0 ? "border-red-200 bg-red-50 text-red-800" : "border-blue-200 bg-blue-50 text-blue-800"}`}>
+                <div>{loginMessage}</div>
+                {lockoutSeconds > 0 && (
+                  <div className="mt-1">Try again in <span className="font-extrabold">{lockoutCountdown}</span>.</div>
+                )}
+              </div>
+            )}
+
             <button
               onClick={submitLogin}
-              disabled={submittingLogin}
+              disabled={submittingLogin || lockoutSeconds > 0}
               className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold disabled:bg-slate-300"
             >
-              {submittingLogin ? "Signing in..." : "Login"}
+              {submittingLogin ? "Signing in..." : lockoutSeconds > 0 ? `Locked - ${lockoutCountdown}` : "Login"}
             </button>
 
             <button
@@ -310,7 +362,7 @@ export default function LoginPage({ onLogin }) {
               disabled={sendingReset}
               className="w-full mt-3 text-sm font-bold text-blue-700 disabled:text-slate-400"
             >
-              {sendingReset ? "Opening help..." : "Password Help"}
+              {sendingReset ? "Opening help..." : lockoutSeconds > 0 ? "Locked out? Password Help" : "Password Help"}
             </button>
 
             <button
