@@ -18,8 +18,8 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
   {
     title: "Order",
     items: [
-      page("page.order.sales_rep", "Sales Rep Order", "order", ["Sales Rep", "Brand Partner"], { readOnly: true }),
-      page("page.order.sales_invoice", "Sales Invoice", "orderSalesInvoices", STAFF_ROLES.filter((role) => role !== "Super Admin"), { readOnly: true }),
+      page("page.order.sales_rep", "Order Form", "order", ["Sales Rep", "Brand Partner"], { readOnly: true }),
+      page("page.order.sales_invoice", "Sales Invoice", "orderSalesInvoices", STAFF_ROLES.filter((role) => !["Super Admin", "Brand Partner"].includes(role)), { readOnly: true }),
     ],
   },
   {
@@ -73,7 +73,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
       page("page.accounts.invoices", "Invoices", "invoicesPortal"),
       page("page.accounts.weekly", "Weekly Account", "weeklyAccount"),
       page("page.accounts.supplier_accounts", "Supplier Accounts", "supplierAccounts"),
-      page("page.accounts.expenses", "Expenses", "expenses", STAFF_ROLES.filter((role) => role !== "Super Admin")),
+      page("page.accounts.expenses", "Expenses", "expenses", STAFF_ROLES.filter((role) => !["Super Admin", "Brand Partner"].includes(role))),
       page("page.accounts.branch_separation", "Branch Separation", "branchSeparation"),
     ],
   },
@@ -205,12 +205,16 @@ export function canAccessPage(user, pageOrPermissionKey) {
   if (!isStaffUser(user) || user?.active === false) return false;
   if (isMasterAdmin(user) || normalizeRole(user.role || user.access_level) === "Super Admin") return true;
 
+  const normalizedRole = normalizeRole(user.role || user.access_level);
+  if (normalizedRole === "Brand Partner") {
+    return ["page.order.sales_rep", "page.reports.brand_performance"].includes(permissionKey);
+  }
+
   // Page access has a role baseline. Important/sensitive actions still remain
   // controlled exclusively by canPerform(), so order amount/discount/cancel/etc.
   // are not granted by this fallback. This keeps warehouse operational pages
   // available to current and future Warehouse staff even if their stored page
   // permission map has not been explicitly populated yet.
-  const normalizedRole = normalizeRole(user.role || user.access_level);
   if (entry?.defaultRoles?.includes(normalizedRole)) return true;
 
   return canPerform(user, permissionKey);
@@ -219,6 +223,9 @@ export function canAccessPage(user, pageOrPermissionKey) {
 export function getRoleDefaultPermissionKeys(role) {
   const normalized = normalizeRole(role);
   if (normalized === "Super Admin") return [...ALL_REGISTERED_PERMISSION_KEYS];
+  if (normalized === "Brand Partner") {
+    return ["page.order.sales_rep", "page.reports.brand_performance"];
+  }
   return PAGE_REGISTRY.filter((item) => item.defaultRoles.includes(normalized)).map((item) => item.key);
 }
 
