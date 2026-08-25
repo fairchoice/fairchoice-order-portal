@@ -537,6 +537,7 @@ const loggedInUser =
   const role = normalizeStaffRole(activeUser?.role || activeUser?.access_level || "Customer");
   const normalizedRole = String(role || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
   const isCustomer = normalizedRole === "customer";
+  const isBrandPartner = normalizedRole === "brandpartner" || normalizedRole === "partner";
   const activeUsername = String(activeUser?.username || activeUser?.staff_username || activeUser?.email || activeUser?.name || "").trim().toLowerCase();
   const isNisstajAdmin = activeUsername === "nisstaj_admin";
   const dutyRestricted = Boolean(activeDuty) && !isNisstajAdmin && !isCustomer;
@@ -563,6 +564,9 @@ const loggedInUser =
       );
     }
     if (activeDuty === "admin") {
+      if (isBrandPartner) {
+        return ["page.order.sales_rep", "page.reports.brand_performance"].includes(item.key);
+      }
       return item.key !== "page.order.sales_rep" && item.key !== "page.operations.driver" && canAccessPage(activeUser, item.key);
     }
     return false;
@@ -2290,7 +2294,9 @@ const openBackOffice = async () => {
     active: activeUser?.active !== false,
   });
 
-  if (!isAdminStaffRole(activeUser?.role || activeUser?.access_level)) {
+  const brandPartnerAdminDuty = isBrandPartner && activeDuty === "admin";
+
+  if (!brandPartnerAdminDuty && !isAdminStaffRole(activeUser?.role || activeUser?.access_level)) {
     console.warn("[BackOfficeNavigation] access denied", {
       reason: "non_admin_role",
       role: activeUser?.role || activeUser?.access_level || null,
@@ -2327,7 +2333,7 @@ const openBackOffice = async () => {
     const staffProfile = buildLegacyStaffProfile(loginResult.data, staffResult.data);
     const access = resolveBackOfficeAccess(staffProfile);
 
-    if (!access.allowed) {
+    if (!access.allowed && !brandPartnerAdminDuty) {
       console.warn("[BackOfficeNavigation] access denied", {
         staffId: staffProfile?.staff_id || null,
         loginUserId,
@@ -4441,8 +4447,10 @@ const backOfficeContent = comingSoonTitle ? (
   </>
 );
 
+const brandPartnerReadOnlyOrder = isBrandPartner && activeDuty === "admin";
+
 const portalPageIsAllowed = page === "order" && !isCustomer
-  ? isSalesRep
+  ? (isSalesRep || brandPartnerReadOnlyOrder)
   : isCustomerPortalPageAllowed(page, portalRoleState);
 
   const isBackOfficePage = Boolean(PAGE_BY_ROUTE[page]) || ["picking", "stockhistory", "stockreceipts", "loginSetup"].includes(page);
@@ -4589,7 +4597,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         )}
 
-        {(isSalesRep || isCustomer) && page === "order" && (
+        {(isSalesRep || isCustomer || brandPartnerReadOnlyOrder) && page === "order" && (
           <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
             
  <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
