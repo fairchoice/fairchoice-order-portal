@@ -7,6 +7,7 @@ export const STAFF_ROLES = Object.freeze([
   "Sales Rep",
   "Driver",
   "Warehouse",
+  "Brand Partner",
   "Super Admin",
 ]);
 
@@ -17,7 +18,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
   {
     title: "Order",
     items: [
-      page("page.order.sales_rep", "Sales Rep Order", "order", ["Sales Rep"]),
+      page("page.order.sales_rep", "Sales Rep Order", "order", ["Sales Rep", "Brand Partner"], { readOnly: true }),
       page("page.order.sales_invoice", "Sales Invoice", "orderSalesInvoices", STAFF_ROLES.filter((role) => role !== "Super Admin"), { readOnly: true }),
     ],
   },
@@ -81,7 +82,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
     items: [
       page("page.reports.profit", "Profit Analysis", "profitPortal"),
       page("page.reports.product_line", "Product Line Analysis", "productLineAnalysis"),
-      page("page.reports.brand_performance", "Brand Performance", "brandPerformance"),
+      page("page.reports.brand_performance", "Brand Performance", "brandPerformance", ["Brand Partner"], { readOnly: true }),
       page("page.reports.sales", "Sales Report", "salesReports"),
       page("page.reports.purchase_planning", "Purchase Planning", "purchasePlanning"),
       page("page.reports.warehouse_activity", "Warehouse Activity", "warehouseActivity"),
@@ -171,6 +172,8 @@ export function normalizeRole(role) {
     salesrepresentative: "Sales Rep",
     driver: "Driver",
     warehouse: "Warehouse",
+    brandpartner: "Brand Partner",
+    partner: "Brand Partner",
     superadmin: "Super Admin",
     customer: "Customer",
   };
