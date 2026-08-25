@@ -23,7 +23,19 @@ export default function Cart({
   paymentChoice,
   onPaymentChoiceChange,
   paymentChoiceValid = false,
+  readOnly = false,
 }) {
+  let storedRole = "";
+  if (typeof window !== "undefined") {
+    try {
+      const storedUser = JSON.parse(localStorage.getItem("loggedInUser") || "null") ||
+        JSON.parse(localStorage.getItem("fairchoice_user") || "null") || {};
+      storedRole = String(storedUser.role || storedUser.access_level || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+    } catch {
+      storedRole = "";
+    }
+  }
+  const partnerReadOnly = readOnly || storedRole === "brandpartner";
   const paidCart = cart.filter((item) => !item.isPromotionFree);
   const promotionLines = cart.filter((item) => item.isPromotionFree);
 
@@ -155,24 +167,33 @@ export default function Cart({
           </div>
         )}
 
-        <PaymentChoiceSelector
-          choice={paymentChoice}
-          onChoiceChange={onPaymentChoiceChange}
-        />
+        {!partnerReadOnly && (
+          <PaymentChoiceSelector
+            choice={paymentChoice}
+            onChoiceChange={onPaymentChoiceChange}
+          />
+        )}
+
+        {partnerReadOnly && (
+          <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-center text-sm font-bold text-blue-800">
+            READ ONLY — Brand Partner users can view the order form and products, but cannot place orders.
+          </div>
+        )}
 
         <button
           type="button"
           onClick={() => {
+            if (partnerReadOnly) return;
             if (window.confirm("Submit this order?")) {
               onSubmit();
             }
           }}
-          disabled={paidCart.length === 0 || isSubmitting || !paymentChoiceValid}
+          disabled={partnerReadOnly || paidCart.length === 0 || isSubmitting || !paymentChoiceValid}
           className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {isSubmitting ? "Submitting..." : "Submit Order"}
+          {partnerReadOnly ? "Read Only — Order Disabled" : isSubmitting ? "Submitting..." : "Submit Order"}
         </button>
-        {!paymentChoiceValid && paidCart.length > 0 && (
+        {!partnerReadOnly && !paymentChoiceValid && paidCart.length > 0 && (
           <p className="mt-2 text-center text-xs font-bold text-amber-700">Select how you would like to continue before submitting.</p>
         )}
       </div>
