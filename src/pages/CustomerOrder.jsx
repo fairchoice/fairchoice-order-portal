@@ -4750,7 +4750,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
 
     {(() => {
    const activeBranches = filteredBranchesForSelectedCustomer;
-   const showBranchSelector = !salesRouteMode && (!isCustomer || activeBranches.length > 1);
+   const showBranchSelector = (!salesRouteMode || salesRouteExceptionMode) && (!isCustomer || activeBranches.length > 1);
 
    if (!showBranchSelector && !showPriceModeSelector) return null;
 
