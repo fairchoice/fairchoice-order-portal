@@ -16,6 +16,7 @@ export function normalizeStaffRole(role) {
   if (normalized === "accountant") return "Accountant";
   if (normalized === "warehouse") return "Warehouse";
   if (normalized === "driver") return "Driver";
+  if (normalized === "brandpartner" || normalized === "partner") return "Brand Partner";
   if (normalized === "customer") return "Customer";
   return String(role || "Staff").trim() || "Staff";
 }
@@ -62,8 +63,9 @@ export function resolveBackOfficeAccess(profile) {
   if (!profile.login_user_id || !profile.staff_id) {
     return { allowed: false, reason: "This staff login is not linked to an individual staff record." };
   }
-  if (!isAdminStaffRole(profile.role)) {
-    return { allowed: false, reason: "Back Office access is restricted to active administrators." };
+  const role = normalizeStaffRole(profile.role);
+  if (!["Admin", "Super Admin", "Brand Partner"].includes(role)) {
+    return { allowed: false, reason: "Back Office access is restricted to authorised staff." };
   }
 
   return { allowed: true, reason: "" };
