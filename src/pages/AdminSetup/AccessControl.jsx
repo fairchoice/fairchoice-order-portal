@@ -22,9 +22,17 @@ const emptySelection = {
   last_login_at: null,
   permission_keys: [],
   new_password: "",
+  brand_access: "",
 };
 
 const flattenItems = (items = []) => items.flatMap((item) => item.children || [item]);
+
+const BRAND_REPORT_OPTIONS = [
+  { value: "", label: "No brand report" },
+  { value: "Lost Mary", label: "Lost Mary" },
+  { value: "IVG", label: "IVG (future)" },
+  { value: "OTHER", label: "Other / future brand" },
+];
 
 export default function AccessControl({ initialStaffId = "" }) {
   const currentUser = useMemo(() => readStoredFcProfile(), []);
@@ -125,6 +133,18 @@ export default function AccessControl({ initialStaffId = "" }) {
       setError(rpcError.message || "Access changes could not be saved.");
       return;
     }
+    if (selected.role === "Brand Partner") {
+      const { error: brandError } = await supabase.rpc("fc_save_brand_partner_access_v1", {
+        p_username: session.username,
+        p_session_token: session.token,
+        p_target_staff_id: selected.staff_id,
+        p_brand: selected.brand_access || null,
+      });
+      if (brandError && !String(brandError.message || "").toLowerCase().includes("could not find the function")) {
+        setError(brandError.message || "Brand report access could not be saved.");
+        return;
+      }
+    }
     await loadAccess();
     alert("Access Control saved. The staff member will receive the new access on their next login.");
   };
@@ -167,6 +187,21 @@ export default function AccessControl({ initialStaffId = "" }) {
                 <Info label="Role" value={selected.role || "-"} />
               </div>
               <div className="mt-2 text-xs text-slate-500">Login and onboarding details are managed separately under Login → Staff Login.</div>
+              {selected.role === "Brand Partner" && (
+                <div className="my-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+                  <label className="block text-sm font-extrabold text-slate-900">Brand Report Access</label>
+                  <p className="mb-2 text-xs text-slate-600">Choose the single brand this partner can view. Brand Partner access is read-only.</p>
+                  <select
+                    value={selected.brand_access || ""}
+                    disabled={protectedMaster}
+                    onChange={(event) => updateSelected("brand_access", event.target.value)}
+                    className="w-full max-w-md rounded-xl border border-indigo-300 bg-white p-3"
+                  >
+                    {BRAND_REPORT_OPTIONS.map((option) => <option key={option.value || "none"} value={option.value}>{option.label}</option>)}
+                  </select>
+                  {selected.brand_access && <div className="mt-2 text-xs font-bold text-indigo-800">Only {selected.brand_access === "OTHER" ? "the assigned future brand" : selected.brand_access} Brand Performance will be visible.</div>}
+                </div>
+              )}
               {protectedMaster && <div className="my-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-bold text-blue-900">Nisstaj_admin is the protected master Admin. Every current and future registered permission is granted automatically.</div>}
               <div className="my-4 flex flex-wrap gap-2">
                 <button type="button" disabled={protectedMaster} onClick={applyRoleDefaults} className="rounded-xl bg-blue-700 px-4 py-2 font-bold text-white disabled:bg-slate-300">Apply Role Defaults</button>
