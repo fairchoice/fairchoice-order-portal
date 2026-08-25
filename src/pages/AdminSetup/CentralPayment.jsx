@@ -323,14 +323,18 @@ function ManualPaymentPanel({
           <input value={form.paidBy} onChange={(event) => onUpdateForm("paidBy", event.target.value)} placeholder="Who paid / discount beneficiary" className="rounded-xl border p-3" />
           <input value={form.externalReference} onChange={(event) => onUpdateForm("externalReference", event.target.value)} placeholder="Bank/reference number (optional)" className="rounded-xl border p-3" />
           <textarea value={form.notes} onChange={(event) => onUpdateForm("notes", event.target.value)} placeholder={form.transactionType === "DISCOUNT" ? "Compulsory detailed discount reason" : "Notes"} className="min-h-24 rounded-xl border p-3 md:col-span-2" />
-          <input type="password" value={ownerPassword} onChange={(event) => onOwnerPasswordChange(event.target.value)} placeholder="nisstaj_admin login password required" className="rounded-xl border border-blue-300 p-3 md:col-span-2" autoComplete="current-password" />
+          {form.transactionType === "DISCOUNT" && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-bold text-blue-800 md:col-span-2">
+              Authorised by the current nisstaj_admin FC session. No separate financial password is required.
+            </div>
+          )}
         </div>
         {form.paymentMethod === "Bank Transfer" && form.transactionType === "PAYMENT" && (
           <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">
             Bank transfers are recorded as Pending Verification. They are not allocated and do not reduce the customer balance until the owner confirms them against the bank statement.
           </div>
         )}
-        <button type="button" onClick={onSave} disabled={saving || !selectedCustomer || branchSelectionRequired || Number(form.amount || 0) <= 0 || (form.transactionType === "DISCOUNT" && !ownerPassword)} className="mt-4 w-full rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:bg-slate-300">
+        <button type="button" onClick={onSave} disabled={saving || !selectedCustomer || branchSelectionRequired || Number(form.amount || 0) <= 0} className="mt-4 w-full rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:bg-slate-300">
           {saving ? "Saving..." : form.transactionType === "DISCOUNT" ? "Save audited discount" : "Save owner payment"}
         </button>
       </section>

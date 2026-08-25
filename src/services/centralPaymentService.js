@@ -714,15 +714,11 @@ export async function createCentralPayment({
   if (!accountId) throw new Error("Select a customer before saving a transaction.");
   if (paymentAmount <= 0) throw new Error("Amount must be greater than zero.");
   if (type === "DISCOUNT" && !String(notes || "").trim()) throw new Error("A detailed discount reason is compulsory.");
-  if (type === "DISCOUNT") {
-    if (actor !== "nisstaj_admin") {
-      throw new Error("Only nisstaj_admin can post Central Payment discounts.");
-    }
-    if (!ownerPassword) throw new Error("Owner financial password is required.");
+  if (type === "DISCOUNT" && actor !== "nisstaj_admin") {
+    throw new Error("Only nisstaj_admin can post Central Payment discounts.");
   }
-  const fcSession =
-    type === "PAYMENT" ? getFcSessionState(currentUser) : null;
-  if (type === "PAYMENT" && !fcSession.valid) {
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
     throw new Error(
       fcSession.expired
         ? "FC session is invalid or expired. Please sign in again."
@@ -737,7 +733,18 @@ export async function createCentralPayment({
   if (activeDuplicate) return { duplicate: true, payment: activeDuplicate, allocations: [] };
 
   const snapshot = await loadCentralPaymentSnapshot({ customerAccountId: accountId, customerName: customer?.account_name, customer, selectedBranchId: customerBranchId || "" });
-  const preview = buildPaymentPreview({ invoices: snapshot.invoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
+  const canonicalInvoicesResult = await safeSelect("customer_invoices", (query) =>
+    query
+      .select("*")
+      .eq("customer_account_id", accountId)
+      .neq("status", "CANCELLED")
+      .order("invoice_date", { ascending: true })
+  );
+  if (canonicalInvoicesResult.error) throw canonicalInvoicesResult.error;
+  const allocationInvoices = canonicalInvoicesResult.data?.length
+    ? canonicalInvoicesResult.data
+    : snapshot.invoices;
+  const preview = buildPaymentPreview({ invoices: allocationInvoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
   const isPendingBank = type === "PAYMENT" && paymentMethod === "Bank Transfer";
 
   if (type === "PAYMENT") {
@@ -777,7 +784,30 @@ export async function createCentralPayment({
     }
   }
 
-  const { data, error } = await supabase.rpc("post_owner_central_transaction", {
+  const { data, error } = await supabase.rpc("post_owner_central_discount_v2", {
+    p_fc_username: fcSession.username,
+    p_fc_session_token: fcSession.token,
+    p_customer_account_id: accountId,
+    p_customer_branch_id: customerBranchId || null,
+    p_payment_date: paymentDate || new Date().toISOString(),
+    p_amount: paymentAmount,
+    p_paid_by: paidBy || "",
+    p_external_reference: String(externalReference || "").trim() || null,
+    p_notes: notes || "",
+    p_idempotency_key: idempotencyKey,
+    p_allocations: preview.allocations,
+  });
+  if (!error) {
+    notifyCanonicalPaymentPosted(data);
+    return { ...(data || {}), preview };
+  }
+  if (!isMissingRpcError(error)) throw error;
+
+  // Temporary compatibility fallback until the session-authorised discount RPC is installed.
+  if (!ownerPassword) {
+    throw new Error("Session-authorised Central Payment discount is not installed yet. Apply the latest additive migration first.");
+  }
+  const legacy = await supabase.rpc("post_owner_central_transaction", {
     p_owner_username: "nisstaj_admin",
     p_owner_password: ownerPassword,
     p_customer_account_id: accountId,
@@ -792,12 +822,9 @@ export async function createCentralPayment({
     p_idempotency_key: idempotencyKey,
     p_allocations: preview.allocations,
   });
-  if (!error) {
-    notifyCanonicalPaymentPosted(data);
-    return { ...(data || {}), preview };
-  }
-  if (isMissingRpcError(error)) throw new Error("Protected Central Payment is not installed. Review and apply the additive owner-security migration first.");
-  throw error;
+  if (legacy.error) throw legacy.error;
+  notifyCanonicalPaymentPosted(legacy.data);
+  return { ...(legacy.data || {}), preview };
 }
 
 export async function confirmOwnerBankTransfer({
