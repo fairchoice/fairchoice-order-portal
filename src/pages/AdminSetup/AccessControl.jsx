@@ -44,6 +44,8 @@ export default function AccessControl({ initialStaffId = "" }) {
   const [statusFilter, setStatusFilter] = useState("");
   const [loading, setLoading] = useState(session.valid);
   const [saving, setSaving] = useState(false);
+  const [brandTeam, setBrandTeam] = useState([]);
+  const [brandTeamLoading, setBrandTeamLoading] = useState(false);
   const [error, setError] = useState(session.valid ? "" : "Your secure staff session has expired. Sign in again.");
 
   const loadAccess = useCallback(async () => {
@@ -144,9 +146,53 @@ export default function AccessControl({ initialStaffId = "" }) {
         setError(brandError.message || "Brand report access could not be saved.");
         return;
       }
+      if (selected.brand_access && selected.brand_access !== "OTHER") {
+        const { error: teamError } = await supabase.rpc("fc_save_brand_partner_staff_assignments_v1", {
+          p_username: session.username,
+          p_session_token: session.token,
+          p_brand: selected.brand_access,
+          p_staff_ids: brandTeam.filter((row) => row.assigned).map((row) => row.staff_id),
+        });
+        if (teamError) {
+          setError(teamError.message || "Brand team assignments could not be saved.");
+          return;
+        }
+      }
     }
     await loadAccess();
     alert("Access Control saved. The staff member will receive the new access on their next login.");
+  };
+
+  const loadBrandTeam = useCallback(async (brand) => {
+    const cleanBrand = String(brand || "").trim();
+    if (!session.valid || !cleanBrand || cleanBrand === "OTHER") {
+      setBrandTeam([]);
+      return;
+    }
+    setBrandTeamLoading(true);
+    const { data, error: teamError } = await supabase.rpc("fc_brand_partner_staff_snapshot_v1", {
+      p_username: session.username,
+      p_session_token: session.token,
+      p_brand: cleanBrand,
+    });
+    setBrandTeamLoading(false);
+    if (teamError) {
+      setError(teamError.message || "Brand team could not be loaded.");
+      return;
+    }
+    setBrandTeam(Array.isArray(data?.staff) ? data.staff : []);
+  }, [session.token, session.username, session.valid]);
+
+  useEffect(() => {
+    if (selected.role !== "Brand Partner") {
+      setBrandTeam([]);
+      return;
+    }
+    void loadBrandTeam(selected.brand_access);
+  }, [loadBrandTeam, selected.brand_access, selected.role, selected.staff_id]);
+
+  const toggleBrandTeamMember = (staffId) => {
+    setBrandTeam((rows) => rows.map((row) => row.staff_id === staffId ? { ...row, assigned: !row.assigned } : row));
   };
 
   const functionGroups = groupImportantFunctionPermissions();
@@ -200,6 +246,23 @@ export default function AccessControl({ initialStaffId = "" }) {
                     {BRAND_REPORT_OPTIONS.map((option) => <option key={option.value || "none"} value={option.value}>{option.label}</option>)}
                   </select>
                   {selected.brand_access && <div className="mt-2 text-xs font-bold text-indigo-800">Only {selected.brand_access === "OTHER" ? "the assigned future brand" : selected.brand_access} Brand Performance will be visible.</div>}
+                  {selected.brand_access && selected.brand_access !== "OTHER" && (
+                    <div className="mt-4 border-t border-indigo-200 pt-4">
+                      <div className="text-sm font-extrabold text-slate-900">Assigned FairChoice Team</div>
+                      <p className="mb-2 text-xs text-slate-600">Select the staff whose brand activity should be attributed to {selected.brand_access}. Brand Performance totals still include all {selected.brand_access} product activity.</p>
+                      {brandTeamLoading ? <div className="text-sm text-slate-500">Loading staff...</div> : (
+                        <div className="grid max-h-56 gap-2 overflow-y-auto md:grid-cols-2">
+                          {brandTeam.map((row) => (
+                            <label key={row.staff_id} className="flex items-center gap-2 rounded-lg border bg-white p-2">
+                              <input type="checkbox" checked={Boolean(row.assigned)} onChange={() => toggleBrandTeamMember(row.staff_id)} />
+                              <span><span className="block text-sm font-bold">{row.staff_name}</span><span className="block text-xs text-slate-500">{row.username || row.role} · {row.role}</span></span>
+                            </label>
+                          ))}
+                          {!brandTeam.length && <div className="text-sm text-slate-500">No active staff available.</div>}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               {protectedMaster && <div className="my-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-bold text-blue-900">Nisstaj_admin is the protected master Admin. Every current and future registered permission is granted automatically.</div>}
