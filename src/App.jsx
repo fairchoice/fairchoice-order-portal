@@ -12,7 +12,7 @@ import {
 
 const SESSION_KEY = "fairchoice_user";
 const LAST_ACTIVE_KEY = "fairchoice_last_active";
-const SESSION_TIMEOUT = 10 * 60 * 1000; // Customer portal timeout only
+const SESSION_TIMEOUT = 10 * 60 * 1000; // All authenticated FairChoice portals
 const DUTY_KEY = "fairchoice_staff_duty";
 
 function clearLegacyProfileStorage() {
@@ -36,7 +36,8 @@ function loadCompatibleProfile() {
     const lastActive = Number(localStorage.getItem(LAST_ACTIVE_KEY) || 0);
 
     if (!savedProfile) return null;
-    if (isCustomerProfile(savedProfile) && (!lastActive || Date.now() - lastActive > SESSION_TIMEOUT)) {
+    if (!lastActive || Date.now() - lastActive > SESSION_TIMEOUT) {
+      clearLegacyProfileStorage();
       return null;
     }
 
@@ -50,6 +51,7 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [activeDuty, setActiveDuty] = useState(() => localStorage.getItem(DUTY_KEY) || "");
+  const [loginPageKey, setLoginPageKey] = useState(0);
 
   useEffect(() => {
     const compatibleProfile = loadCompatibleProfile();
@@ -73,29 +75,36 @@ export default function App() {
     localStorage.removeItem(DUTY_KEY);
     setActiveDuty("");
     setProfile(null);
+    setLoginPageKey((value) => value + 1);
   };
 
   useEffect(() => {
-    if (!profile || !isCustomerProfile(profile)) return;
+    if (!profile) return undefined;
 
     const updateActivity = () => localStorage.setItem(LAST_ACTIVE_KEY, Date.now().toString());
     const checkTimeout = () => {
       const lastActive = Number(localStorage.getItem(LAST_ACTIVE_KEY) || 0);
-      if (Date.now() - lastActive > SESSION_TIMEOUT) {
+      if (!lastActive || Date.now() - lastActive > SESSION_TIMEOUT) {
+        // Automatic timeout clears authentication only. Keep DUTY_KEY so staff
+        // re-authenticate and return to the same duty instead of choosing it again.
         clearLegacyProfileStorage();
         setProfile(null);
-        alert("You have been logged out after 10 minutes of inactivity.");
+        setLoginPageKey((value) => value + 1);
       }
     };
-    window.addEventListener("click", updateActivity);
-    window.addEventListener("keydown", updateActivity);
-    window.addEventListener("touchstart", updateActivity);
-    const timer = setInterval(checkTimeout, 15000);
+
+    updateActivity();
+    const activityEvents = ["pointerdown", "keydown", "touchstart", "scroll", "wheel"];
+    activityEvents.forEach((eventName) =>
+      window.addEventListener(eventName, updateActivity, { passive: true })
+    );
+    const timer = window.setInterval(checkTimeout, 15000);
+
     return () => {
-      window.removeEventListener("click", updateActivity);
-      window.removeEventListener("keydown", updateActivity);
-      window.removeEventListener("touchstart", updateActivity);
-      clearInterval(timer);
+      activityEvents.forEach((eventName) =>
+        window.removeEventListener(eventName, updateActivity)
+      );
+      window.clearInterval(timer);
     };
   }, [profile]);
 
@@ -108,7 +117,7 @@ export default function App() {
   }
 
   if (!profile) {
-    return <LoginPage onLogin={handleLogin} />;
+    return <LoginPage key={loginPageKey} onLogin={handleLogin} />;
   }
 
   const normalizedRole = normalizeRole(profile.role || profile.access_level);
@@ -140,7 +149,6 @@ export default function App() {
       </div>
     );
   }
-
 
   return (
     <CustomerOrder
