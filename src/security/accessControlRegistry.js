@@ -81,6 +81,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
     title: "Reports",
     items: [
       page("page.reports.profit", "Profit Analysis", "profitPortal"),
+      page("page.reports.total_credit_outstanding", "Total Credit Outstanding", "totalCreditOutstanding"),
       page("page.reports.product_line", "Product Line Analysis", "productLineAnalysis"),
       page("page.reports.brand_performance", "Brand Performance", "brandPerformance", ["Brand Partner"], { readOnly: true }),
       page("page.reports.sales", "Sales Report", "salesReports"),
