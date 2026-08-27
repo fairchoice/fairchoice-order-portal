@@ -2706,6 +2706,40 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
   }
 
   if (error) throw error;
+
+  // customer_invoices is protected by RLS. Do not insert into it directly
+  // from the browser. Use the existing SECURITY DEFINER sync RPC so the
+  // canonical invoice is created/updated from the authoritative order row.
+  let canonicalOrderUuid = [
+    order.id,
+    order.dbId,
+    order.order_uuid,
+    order.order_id,
+  ]
+    .map((value) => String(value || "").trim())
+    .find((value) => UUID_PATTERN.test(value));
+
+  if (!canonicalOrderUuid) {
+    const { data: orderRow, error: orderLookupError } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("order_number", referenceNo)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (orderLookupError) throw orderLookupError;
+    canonicalOrderUuid = orderRow?.id || null;
+  }
+
+  if (canonicalOrderUuid) {
+    const { error: invoiceSyncError } = await supabase.rpc(
+      "sync_customer_invoice_from_order_v1",
+      { p_order_id: canonicalOrderUuid }
+    );
+    if (invoiceSyncError) throw invoiceSyncError;
+  }
+
   return data;
 }
 

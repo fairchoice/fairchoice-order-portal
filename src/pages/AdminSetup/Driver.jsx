@@ -878,6 +878,20 @@ const paymentCollected = isCredit ? "No" : "Yes";
           );
         }
 
+        // Guarantee the delivered order has a canonical customer_invoices row
+        // before building TODAY_INVOICE / PART_PAYMENT allocations. This also
+        // repairs older delivered orders whose legacy ledger invoice exists but
+        // canonical invoice creation was previously missed.
+        await createOrUpdateInvoiceForDeliveredOrder({
+          order,
+          confirmedBy:
+            order.delivered_confirmed_by ||
+            order.confirmedBy ||
+            collectorName ||
+            null,
+          currentUser: loggedInUser,
+        });
+
         const snapshot = await loadCentralPaymentSnapshot({
           customerAccountId,
           customerName:
