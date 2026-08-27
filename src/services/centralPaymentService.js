@@ -242,7 +242,7 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
       reference_no: order.order_number || order.orderId || invoiceReference,
       order_number: order.order_number || order.orderId || invoiceReference,
       order_id: order.id,
-      invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
+      invoice_date: order.delivered_at || order.delivery_confirmed_at || order.created_at || order.updated_at,
       invoice_total: invoiceTotal,
       invoice_amount: invoiceTotal,
       amount: invoiceTotal,

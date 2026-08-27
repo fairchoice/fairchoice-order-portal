@@ -80,6 +80,7 @@ import WarehouseActivityReport from "./reports/WarehouseActivityReport";
 import ProfitAnalysisReport from "./reports/ProfitAnalysisReport";
 import ProductLineAnalysisReport from "./reports/ProductLineAnalysisReport";
 import BrandPerformanceReport from "./reports/BrandPerformanceReport";
+import AllCreditOutstanding from "./AdminSetup/AllCreditOutstanding";
 import SalesRouteAnalysisReport from "./reports/SalesRouteAnalysisReport";
 import SalesRouteSetup from "./AdminSetup/SalesRouteSetup";
 import { EXCEPTION_ORDER_REASONS, loadTodaysSalesRoute, NO_ORDER_REASONS, recordSalesRouteVisit } from "../services/salesRouteService";
@@ -4392,6 +4393,7 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "profitPortal" && (
       <ProfitAnalysisReport currentUser={activeUser} />
     )}
+    {page === "totalCreditOutstanding" && <AllCreditOutstanding customers={customers} />}
     {page === "productLineAnalysis" && (
       <ProductLineAnalysisReport currentUser={activeUser} />
     )}

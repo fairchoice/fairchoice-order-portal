@@ -154,6 +154,7 @@ export default function PreOrderSupply({
     let active = true;
 
     const refreshSharedHistory = async () => {
+      if (syncing) return;
       try {
         const { history, events, warning } = await loadPreOrderSupplyHistory(loggedInUser);
         if (!active) return;
@@ -179,7 +180,7 @@ export default function PreOrderSupply({
       window.removeEventListener("focus", refreshSharedHistory);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [loggedInUser]);
+  }, [loggedInUser, syncing]);
 
   useEffect(() => {
     let active = true;
@@ -663,144 +664,169 @@ export default function PreOrderSupply({
   const syncPendingActions = async () => {
     if (syncing || pendingActions.length === 0) return;
     setSyncing(true);
-    const failed = [];
-    const failedItemKeys = new Set();
-    const synced = {};
-    const queuedByClientActionId = new Map(
-      pendingActions.map((action) => [action.clientActionId, action]),
-    );
-    const persistedByClientActionId = new Map();
-    for (const action of pendingActions) {
-      try {
-        if (failedItemKeys.has(action.itemKey)) {
-          throw new Error("An earlier pending change for this item failed.");
-        }
-        let persistedAction = action;
-        if (
-          action.actionType === "Recall" &&
-          action.recalledClientActionId &&
-          queuedByClientActionId.has(action.recalledClientActionId) &&
-          !persistedByClientActionId.has(action.recalledClientActionId)
-        ) {
-          throw new Error("The recalled Buy must sync successfully before its Recall.");
-        }
-        if (["Available", "Recall Available"].includes(action.actionType)) {
-          const line = warehouseLineByItemKey.get(action.itemKey) ||
-            warehouseLineByItemId.get(String(action.itemId));
-          if (!line) throw new Error("The related order item is no longer in the active workflow.");
-          const savedWarehouseEvent = await recordWarehouseOperationalActivity({
-            order: line.order,
-            item: line.item,
-            actionType: action.actionType,
-            newStatus: action.newStatus,
-            sourceModule: "Pre-Order Supply",
-            referencedEventId: action.referencedEventId,
-            referencedClientActionId: action.referencedClientActionId,
-          }, loggedInUser);
-          setWarehouseEvents((current) => [savedWarehouseEvent, ...current]);
-          setWarehouseStatusOverrides((current) => ({
-            ...current,
-            [String(savedWarehouseEvent.orderItemId || action.itemId)]: savedWarehouseEvent.newStatus,
-          }));
-          synced[action.itemKey] = null;
-          continue;
-        }
-        if (action.actionType === "PartialBuy") {
-          if (typeof splitPreOrderItem === "function") {
-            const added = await splitPreOrderItem(
-              action.orderId,
-              action.itemId,
-              action.quantity,
-              action.remainingQty,
-            );
-            if (!added) throw new Error("The partial Buy split did not complete.");
-            persistedAction = { ...action, addedItemId: added?.id || added?.dbId || null };
-          } else {
-            const updated = await updateOrderItem(action.orderId, action.itemId, action.changes);
-            if (updated === false) throw new Error("The remaining Pre-Order quantity did not update.");
-            if (typeof addOrderItem === "function") {
-              const added = await addOrderItem(action.orderId, action.itemSnapshot);
-              if (!added) throw new Error("The bought split quantity was not created.");
-              persistedAction = { ...action, addedItemId: added?.id || added?.dbId || null };
-            }
-          }
-        } else if (action.actionType === "Recall") {
-          const recalledAction = persistedByClientActionId.get(
-            action.recalledClientActionId,
-          );
-          const recallAddedItemId =
-            action.recallAddedItemId || recalledAction?.addedItemId || null;
-          if (recallAddedItemId && typeof restorePreOrderSplit === "function") {
-            const restored = await restorePreOrderSplit(
-              action.orderId,
-              action.itemId,
-              recallAddedItemId,
-              Number(action.previousQty || action.quantity || 0),
-            );
-            if (restored === false) throw new Error("The recalled partial Buy did not restore.");
-          } else {
-            const restored = await updateOrderItem(action.orderId, action.itemId, action.changes);
-            if (restored === false) throw new Error("The recalled Pre-Order quantity did not restore.");
-          }
-          if (recallAddedItemId && typeof restorePreOrderSplit !== "function") {
-            const cleared = await updateOrderItem(action.orderId, recallAddedItemId, {
-              sourceStatus: "Need Supplier",
-              includeInPicking: false,
-              pickedQty: 0,
-              qty: 0,
-            });
-            if (cleared === false) throw new Error("The recalled bought split did not clear.");
-          }
-        } else if (action.actionType !== "NextSup") {
-          const updated = await updateOrderItem(action.orderId, action.itemId, action.changes);
-          if (updated === false) throw new Error("The Warehouse item did not update.");
-        }
 
-        await logAction({
-          user: loggedInUser,
-          action_type: `Pre-order Supply ${action.actionType}`,
-          page_module: "Pre-order Supply",
-          order_id: action.orderId,
-          product_id: action.productId,
-          old_value: action.previousStatus,
-          new_value: {
-            supplierId: action.supplierId,
-            supplierName: action.supplierName,
-            customerName: action.customerName,
-            branchName: action.branchName,
-            quantity: action.quantity,
-            remainingQty: action.remainingQty,
-            status: action.newStatus,
-            batchId: action.batchId,
-          },
-        });
-        persistedAction = { ...persistedAction, syncStatus: "synced" };
-        const savedEvent = await recordPreOrderSupplyEvent(persistedAction, loggedInUser);
-        setHistoryEvents((current) => [savedEvent, ...current]);
-        persistedByClientActionId.set(action.clientActionId, persistedAction);
-        synced[action.itemKey] = action.actionType === "Recall" ? null : persistedAction;
-      } catch (error) {
-        failedItemKeys.add(action.itemKey);
-        failed.push({ ...action, syncStatus: "failed", error: error.message });
-      }
+    const failed = [];
+    const synced = {};
+    const persistedByClientActionId = new Map();
+    const groupedActions = new Map();
+
+    // Actions for one order item must stay sequential (for example Buy -> Recall),
+    // but unrelated order items can sync in parallel.
+    for (const action of pendingActions) {
+      const key = String(action.itemKey || action.itemId || action.clientActionId);
+      const group = groupedActions.get(key) || [];
+      group.push(action);
+      groupedActions.set(key, group);
     }
-    setActionHistory((current) => {
-      const next = { ...current };
-      for (const [key, value] of Object.entries(synced)) {
-        if (value === null) delete next[key];
-        else next[key] = value;
+
+    const syncAction = async (action) => {
+      let persistedAction = action;
+
+      if (["Available", "Recall Available"].includes(action.actionType)) {
+        const line = warehouseLineByItemKey.get(action.itemKey) ||
+          warehouseLineByItemId.get(String(action.itemId));
+        if (!line) throw new Error("The related order item is no longer in the active workflow.");
+        const savedWarehouseEvent = await recordWarehouseOperationalActivity({
+          order: line.order,
+          item: line.item,
+          actionType: action.actionType,
+          newStatus: action.newStatus,
+          sourceModule: "Pre-Order Supply",
+          referencedEventId: action.referencedEventId,
+          referencedClientActionId: action.referencedClientActionId,
+        }, loggedInUser);
+        setWarehouseEvents((current) => [savedWarehouseEvent, ...current]);
+        setWarehouseStatusOverrides((current) => ({
+          ...current,
+          [String(savedWarehouseEvent.orderItemId || action.itemId)]: savedWarehouseEvent.newStatus,
+        }));
+        synced[action.itemKey] = null;
+        return;
       }
-      return next;
-    });
-    setPendingActions(failed);
-    setSyncing(false);
-    if (failed.length === 0) {
-      localStorage.removeItem(PREORDER_SUPPLY_PENDING_KEY);
-      if (typeof refreshOrders === "function") await refreshOrders();
-      const { history, events, warning } = await loadPreOrderSupplyHistory(loggedInUser);
-      setHistoryWarning(warning || "");
-      setActionHistory(history || {});
-      setHistoryEvents(events || []);
+
+      if (action.actionType === "PartialBuy") {
+        if (typeof splitPreOrderItem === "function") {
+          const added = await splitPreOrderItem(
+            action.orderId,
+            action.itemId,
+            action.quantity,
+            action.remainingQty,
+          );
+          if (!added) throw new Error("The partial Buy split did not complete.");
+          persistedAction = { ...action, addedItemId: added?.id || added?.dbId || null };
+        } else {
+          const updated = await updateOrderItem(action.orderId, action.itemId, action.changes);
+          if (updated === false) throw new Error("The remaining Pre-Order quantity did not update.");
+          if (typeof addOrderItem === "function") {
+            const added = await addOrderItem(action.orderId, action.itemSnapshot);
+            if (!added) throw new Error("The bought split quantity was not created.");
+            persistedAction = { ...action, addedItemId: added?.id || added?.dbId || null };
+          }
+        }
+      } else if (action.actionType === "Recall") {
+        const recalledAction = persistedByClientActionId.get(action.recalledClientActionId);
+        const recallAddedItemId = action.recallAddedItemId || recalledAction?.addedItemId || null;
+        if (recallAddedItemId && typeof restorePreOrderSplit === "function") {
+          const restored = await restorePreOrderSplit(
+            action.orderId,
+            action.itemId,
+            recallAddedItemId,
+            Number(action.previousQty || action.quantity || 0),
+          );
+          if (restored === false) throw new Error("The recalled partial Buy did not restore.");
+        } else {
+          const restored = await updateOrderItem(action.orderId, action.itemId, action.changes);
+          if (restored === false) throw new Error("The recalled Pre-Order quantity did not restore.");
+        }
+        if (recallAddedItemId && typeof restorePreOrderSplit !== "function") {
+          const cleared = await updateOrderItem(action.orderId, recallAddedItemId, {
+            sourceStatus: "Need Supplier",
+            includeInPicking: false,
+            pickedQty: 0,
+            qty: 0,
+          });
+          if (cleared === false) throw new Error("The recalled bought split did not clear.");
+        }
+      } else if (action.actionType !== "NextSup") {
+        const updated = await updateOrderItem(action.orderId, action.itemId, action.changes);
+        if (updated === false) throw new Error("The Warehouse item did not update.");
+      }
+
+      await logAction({
+        user: loggedInUser,
+        action_type: `Pre-order Supply ${action.actionType}`,
+        page_module: "Pre-order Supply",
+        order_id: action.orderId,
+        product_id: action.productId,
+        old_value: action.previousStatus,
+        new_value: {
+          supplierId: action.supplierId,
+          supplierName: action.supplierName,
+          customerName: action.customerName,
+          branchName: action.branchName,
+          quantity: action.quantity,
+          remainingQty: action.remainingQty,
+          status: action.newStatus,
+          batchId: action.batchId,
+        },
+      });
+
+      persistedAction = { ...persistedAction, syncStatus: "synced" };
+      const savedEvent = await recordPreOrderSupplyEvent(persistedAction, loggedInUser);
+      setHistoryEvents((current) => [savedEvent, ...current]);
+      persistedByClientActionId.set(action.clientActionId, persistedAction);
+      synced[action.itemKey] = action.actionType === "Recall" ? null : persistedAction;
+    };
+
+    const groups = [...groupedActions.values()];
+    let nextGroupIndex = 0;
+    const worker = async () => {
+      while (nextGroupIndex < groups.length) {
+        const group = groups[nextGroupIndex++];
+        let groupFailed = false;
+        for (const action of group) {
+          if (groupFailed) {
+            failed.push({
+              ...action,
+              syncStatus: "failed",
+              error: "An earlier pending change for this item failed.",
+            });
+            continue;
+          }
+          try {
+            await syncAction(action);
+          } catch (error) {
+            groupFailed = true;
+            failed.push({ ...action, syncStatus: "failed", error: error.message });
+          }
+        }
+      }
+    };
+
+    try {
+      const workerCount = Math.min(4, groups.length);
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+      setActionHistory((current) => {
+        const next = { ...current };
+        for (const [key, value] of Object.entries(synced)) {
+          if (value === null) delete next[key];
+          else next[key] = value;
+        }
+        return next;
+      });
+      setPendingActions(failed);
+
+      if (failed.length === 0) {
+        localStorage.removeItem(PREORDER_SUPPLY_PENDING_KEY);
+        if (typeof refreshOrders === "function") await refreshOrders();
+        const { history, events, warning } = await loadPreOrderSupplyHistory(loggedInUser);
+        setHistoryWarning(warning || "");
+        setActionHistory(history || {});
+        setHistoryEvents(events || []);
+      }
+    } finally {
+      setSyncing(false);
     }
   };
 

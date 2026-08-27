@@ -718,7 +718,7 @@ const bulkRefreshOrderPrices = async (order) => {
                     {expandedOrders[order.orderId] ? "Hide" : "View / Prepare"}
                   </button>
 
-                  {!showArchive && hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE) && (
+                  {!showArchive && (
                     <button
                       onClick={() => openPickingOrder(order)}
                       disabled={
