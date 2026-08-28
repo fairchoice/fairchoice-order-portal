@@ -38,6 +38,8 @@ import ReturnRequestModal from "../../components/ReturnRequestModal";
 
 const COMPLETED_COLLECTION_STORAGE_KEY =
   "fairchoice_driver_completed_collection_orders";
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const loadCompletedCollectionOrderIds = () => {
   try {
@@ -892,7 +894,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
           currentUser: loggedInUser,
         });
 
-        const snapshot = await loadCentralPaymentSnapshot({
+        const snapshotOptions = {
           customerAccountId,
           customerName:
             order.companyName || order.company_name || "Unknown Customer",
@@ -900,7 +902,37 @@ const paymentCollected = isCredit ? "No" : "Yes";
             (customer) => String(customer.id) === String(customerAccountId)
           ),
           selectedBranchId: customerBranchId || "",
-        });
+        };
+
+        let snapshot = await loadCentralPaymentSnapshot(snapshotOptions);
+
+        // Outstanding collection must allocate only against saved canonical
+        // invoices. Older delivered orders can still appear in the snapshot as
+        // order-backed invoice rows from before canonical invoice sync existed.
+        // Repair those rows first, then reload the snapshot so FIFO sees the
+        // true remaining balance and never tries to allocate to a paid invoice.
+        if (effectiveCollectionType === "OUTSTANDING_PAYMENT") {
+          const legacyOrderIds = [
+            ...new Set(
+              (snapshot.invoices || [])
+                .filter((invoice) => invoice.source === "orders")
+                .map((invoice) => invoice.order_id || invoice.orderId || invoice.id)
+                .map((value) => String(value || "").trim())
+                .filter((value) => UUID_PATTERN.test(value))
+            ),
+          ];
+
+          if (legacyOrderIds.length) {
+            for (const orderId of legacyOrderIds) {
+              const { error: invoiceSyncError } = await supabase.rpc(
+                "sync_customer_invoice_from_order_v1",
+                { p_order_id: orderId }
+              );
+              if (invoiceSyncError) throw invoiceSyncError;
+            }
+            snapshot = await loadCentralPaymentSnapshot(snapshotOptions);
+          }
+        }
 
         const allocationMode = getDriverCashCollectionTypeSetup({
           collectionType,
