@@ -4554,7 +4554,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           )}
           <button onClick={() => setPage("order")} className={`order-tab-btn btn-secondary bg-white text-blue-800 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}>Order</button>
           {salesRouteMode && <button onClick={() => setPage("expenses")} className={`payment-history-tab-btn bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "expenses" ? "active" : ""}`}>Expenses</button>}
-          {canCollectCash && (!salesRouteMode || selectedCustomerAccount) && (
+          {canCollectCash && (
             <button onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesPaymentForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesCashCollection"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}>Collection</button>
           )}
           <button disabled={salesRouteMode && !selectedCustomerAccount} onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesReturnForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesReturn"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesReturn" ? "active" : ""}`}>Return</button>
@@ -5328,8 +5328,8 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         Sales Rep Cash Collection
       </h2>
 
-      {salesRouteMode ? (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount?.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
+      {salesRouteMode && selectedCustomerAccount ? (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
       ) : <>
         <input value={salesPaymentCustomerSearch} onChange={(e) => setSalesPaymentCustomerSearch(e.target.value)} placeholder="Search customer" className="w-full border rounded-xl p-3" />
         <select value={salesPaymentForm.customerId} onChange={(e) => setSalesPaymentForm({ ...salesPaymentForm, customerId: e.target.value, branchId: "" })} className="w-full border rounded-xl p-3"><option value="">Select Customer</option>{filteredSalesPaymentCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.account_name}</option>)}</select>
