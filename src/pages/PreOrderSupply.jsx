@@ -24,6 +24,8 @@ import {
 import { compareWarehouseProducts } from "../utils/warehouseProductSorting";
 
 const TABS = ["Pre-order Queue", "Next Supplier", "Bought", "Cannot Supply", "Order Pre-orders"];
+const PREORDER_SUPPLY_ORDER_SNAPSHOT_KEY = "fc_preorder_supply_order_snapshot_v1";
+const MAX_SYNC_PRODUCTS = 30;
 
 const normalizeStatus = (value) =>
   String(value || "")
@@ -116,22 +118,41 @@ export default function PreOrderSupply({
   const [buyQty, setBuyQty] = useState({});
   const [allocations, setAllocations] = useState({});
   const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const [orderSnapshot, setOrderSnapshot] = useState(() => readJson(PREORDER_SUPPLY_ORDER_SNAPSHOT_KEY, null));
 
   useEffect(() => {
     localStorage.setItem(PREORDER_SUPPLY_PENDING_KEY, JSON.stringify(pendingActions));
   }, [pendingActions]);
 
   useEffect(() => {
+    if (!Array.isArray(orders) || orders.length === 0) return;
+    const snapshot = { savedAt: new Date().toISOString(), orders };
+    setOrderSnapshot(snapshot);
+    try {
+      localStorage.setItem(PREORDER_SUPPLY_ORDER_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    } catch {
+      // Keep the in-memory snapshot even if browser storage is temporarily full.
+    }
+  }, [orders]);
+
+  const effectiveOrders = useMemo(() => {
+    if (Array.isArray(orders) && orders.length > 0) return orders;
+    if (pendingActions.length > 0 && Array.isArray(orderSnapshot?.orders)) return orderSnapshot.orders;
+    return orders || [];
+  }, [orderSnapshot, orders, pendingActions.length]);
+
+  useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setPendingActions((current) => {
-        const filtered = filterPendingPreOrderActionsForOrders(current, orders);
+        const filtered = filterPendingPreOrderActionsForOrders(current, effectiveOrders);
         return filtered.length === current.length && filtered.every((entry, index) => entry === current[index])
           ? current
           : filtered;
       });
     }, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [orders]);
+  }, [effectiveOrders]);
 
   useEffect(() => {
     let active = true;
@@ -215,7 +236,7 @@ export default function PreOrderSupply({
 
   const warehouseLines = useMemo(() => {
     const result = [];
-    for (const order of orders || []) {
+    for (const order of effectiveOrders || []) {
       if (!isActivePreOrderSupplyOrder(order)) continue;
       for (const item of order.items || []) {
         const key = getItemKey(order, item);
@@ -240,7 +261,7 @@ export default function PreOrderSupply({
       }
     }
     return result;
-  }, [orders, productById]);
+  }, [effectiveOrders, productById]);
 
   const allLines = useMemo(
     () =>
@@ -456,6 +477,21 @@ export default function PreOrderSupply({
     warehouseEvents,
   ]);
 
+  const boughtTodayTotal = useMemo(() => {
+    if (tab !== "Bought") return 0;
+    const today = new Date().toISOString().slice(0, 10);
+    const combined = [...pendingActions, ...historyEvents];
+    const recalled = new Set(combined.filter((event) => event.actionType === "Recall" && event.recalledClientActionId).map((event) => event.recalledClientActionId));
+    const seen = new Set();
+    return combined.reduce((sum, event) => {
+      const id = event.clientActionId || event.id;
+      const stamp = String(event.timestamp || event.createdAt || event.created_at || "").slice(0, 10);
+      if (!id || seen.has(id) || recalled.has(id) || !["Buy", "PartialBuy"].includes(event.actionType) || stamp !== today) return sum;
+      seen.add(id);
+      return sum + Number(event.quantity || 0);
+    }, 0);
+  }, [historyEvents, pendingActions, tab]);
+
   const recalledAvailableEventIds = useMemo(() => new Set(
     [...warehouseEvents, ...pendingActions]
       .filter((event) => event.actionType === "Recall Available")
@@ -465,7 +501,7 @@ export default function PreOrderSupply({
 
   const receivedOrderPreOrders = useMemo(() => {
     const result = [];
-    for (const order of orders || []) {
+    for (const order of effectiveOrders || []) {
       if (!["Received", "In Progress"].includes(String(order?.status || "").trim())) continue;
       for (const item of order.items || []) {
         const status = item.sourceStatus || item.source_status || item.status;
@@ -488,7 +524,7 @@ export default function PreOrderSupply({
       String(left.orderNumber || "").localeCompare(String(right.orderNumber || "")) ||
       String(left.productName || "").localeCompare(String(right.productName || ""))
     );
-  }, [orders, productById]);
+  }, [effectiveOrders, productById]);
 
   const selectedSupplier = (stage) => {
     const supplierId = stage === "Next Supplier" ? nextSupplierId : queueSupplierId;
@@ -665,6 +701,7 @@ export default function PreOrderSupply({
     if (syncing || pendingActions.length === 0) return;
     setSyncing(true);
 
+    setSyncMessage("");
     const failed = [];
     const synced = {};
     const persistedByClientActionId = new Map();
@@ -672,8 +709,16 @@ export default function PreOrderSupply({
 
     // Actions for one order item must stay sequential (for example Buy -> Recall),
     // but unrelated order items can sync in parallel.
+    const selectedItemKeys = [];
+    const selectedItemKeySet = new Set();
     for (const action of pendingActions) {
       const key = String(action.itemKey || action.itemId || action.clientActionId);
+      if (!selectedItemKeySet.has(key)) {
+        if (selectedItemKeys.length >= MAX_SYNC_PRODUCTS) continue;
+        selectedItemKeys.push(key);
+        selectedItemKeySet.add(key);
+      }
+      if (!selectedItemKeySet.has(key)) continue;
       const group = groupedActions.get(key) || [];
       group.push(action);
       groupedActions.set(key, group);
@@ -815,11 +860,20 @@ export default function PreOrderSupply({
         }
         return next;
       });
-      setPendingActions(failed);
+      const untouched = pendingActions.filter((action) => !selectedItemKeySet.has(String(action.itemKey || action.itemId || action.clientActionId)));
+      const remaining = [...failed, ...untouched];
+      setPendingActions(remaining);
+      const syncedCount = pendingActions.length - untouched.length - failed.length;
+      setSyncMessage(failed.length > 0
+        ? `Synced ${syncedCount}. Failed ${failed.length}. ${failed[0]?.error || "Retry when signal improves."}`
+        : `Synced ${syncedCount}. ${untouched.length > 0 ? `${untouched.length} changes remain for the next batch.` : "All changes are up to date."}`);
 
-      if (failed.length === 0) {
+      if (typeof refreshOrders === "function") {
+        try { await refreshOrders(); } catch { /* preserve the cached warehouse snapshot */ }
+      }
+
+      if (remaining.length === 0) {
         localStorage.removeItem(PREORDER_SUPPLY_PENDING_KEY);
-        if (typeof refreshOrders === "function") await refreshOrders();
         const { history, events, warning } = await loadPreOrderSupplyHistory(loggedInUser);
         setHistoryWarning(warning || "");
         setActionHistory(history || {});
@@ -847,7 +901,10 @@ export default function PreOrderSupply({
               <div key={group.productId} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                 <button
                   type="button"
-                  onClick={() => setExpandedProduct(open ? null : group.productId)}
+                  onClick={() => {
+                    if (open) setExpandedProduct(null);
+                    else openAllocation(group);
+                  }}
                   className="flex w-full items-center justify-between gap-2 text-left"
                 >
                   <span className="min-w-0 truncate text-sm font-extrabold text-slate-900">
@@ -956,6 +1013,11 @@ export default function PreOrderSupply({
 
   const renderActiveEvents = () => (
     <div className="space-y-4">
+      {tab === "Bought" && (
+        <div className="rounded-xl bg-white p-3 text-sm font-extrabold text-slate-900 shadow-sm">
+          Bought today: {boughtTodayTotal} items
+        </div>
+      )}
       {activeSupplierGroups.map(({ supplierName, records }) => (
             <details
               key={supplierName}
@@ -1038,7 +1100,7 @@ export default function PreOrderSupply({
       <div className="mb-2 flex items-center justify-between gap-2 rounded-xl bg-white p-3 shadow-sm">
         <div>
           <h2 className="text-base font-extrabold text-slate-900">Pre-order Supply</h2>
-          <div className="text-xs font-bold text-amber-700">Pending changes: {pendingActions.length}</div>
+          <div className="text-xs font-bold text-amber-700">Pending changes: {pendingActions.length} · Sync batch: max {MAX_SYNC_PRODUCTS} products</div>
         </div>
         <button
           type="button"
@@ -1049,6 +1111,12 @@ export default function PreOrderSupply({
           {syncing ? "Syncing..." : "Sync All"}
         </button>
       </div>
+
+      {syncMessage && (
+        <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs font-semibold text-blue-900">
+          {syncMessage}
+        </div>
+      )}
 
       {historyWarning && (
         <div className="mb-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-900">
