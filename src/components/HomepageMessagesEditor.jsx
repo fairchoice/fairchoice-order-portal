@@ -11,12 +11,26 @@ const blankMessage = () => ({
   targetType: "main_category",
   targetValue: "",
   message: "",
-  messageStyle: "warning",
+  messageStyle: "info_blue",
   active: true,
   startDate: "",
   endDate: "",
-  sortOrder: 0,
+  sortOrder: 3,
 });
+
+
+const NOTICE_COLOURS = [
+  { value: "info_blue", label: "Blue", swatch: "bg-blue-100 text-blue-950 border-blue-400" },
+  { value: "navy", label: "Navy", swatch: "bg-slate-100 text-slate-950 border-slate-700" },
+  { value: "success_green", label: "Green", swatch: "bg-green-100 text-green-950 border-green-500" },
+  { value: "teal", label: "Teal", swatch: "bg-teal-100 text-teal-950 border-teal-500" },
+  { value: "warning_amber", label: "Amber", swatch: "bg-amber-100 text-amber-950 border-amber-500" },
+  { value: "orange", label: "Orange", swatch: "bg-orange-100 text-orange-950 border-orange-500" },
+  { value: "danger_red", label: "Red", swatch: "bg-red-100 text-red-950 border-red-500" },
+  { value: "purple", label: "Purple", swatch: "bg-purple-100 text-purple-950 border-purple-500" },
+  { value: "pink", label: "Pink", swatch: "bg-pink-100 text-pink-950 border-pink-500" },
+  { value: "plain", label: "White", swatch: "bg-white text-slate-950 border-slate-400" },
+];
 
 const targetChoices = (options, targetType) => {
   if (targetType === "main_category") return options.mainCategories || [];
@@ -30,6 +44,7 @@ const newClientId = () =>
   `homepage-message-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 function HomepageMessageRow({ initialMessage, options, onSaved, onDeleted }) {
+  const [expanded, setExpanded] = useState(Boolean(initialMessage.isDraft));
   const [form, setForm] = useState(() => ({ ...initialMessage }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -59,15 +74,25 @@ function HomepageMessageRow({ initialMessage, options, onSaved, onDeleted }) {
     }
     setBusy(true);
     setError("");
+
+    let saved;
     try {
-      const saved = await saveHomepageMessage({
+      saved = await saveHomepageMessage({
         ...form,
         id: form.isDraft ? null : form.id,
       });
       setForm(saved);
-      await onSaved(saved, form.isDraft);
+      setError("");
     } catch (saveError) {
       setError(saveError.message || "Message could not be saved.");
+      setBusy(false);
+      return;
+    }
+
+    try {
+      await onSaved(saved, form.isDraft);
+    } catch (reloadError) {
+      console.warn("Homepage notice saved but refresh failed:", reloadError);
     } finally {
       setBusy(false);
     }
@@ -99,9 +124,29 @@ function HomepageMessageRow({ initialMessage, options, onSaved, onDeleted }) {
     }
   };
 
+  const priority = Number(form.sortOrder || 3);
+  const priorityMeta = priority <= 1
+    ? { label: "P1 Important", badge: "bg-red-100 text-red-800 border-red-300" }
+    : priority === 2
+      ? { label: "P2 Promotion", badge: "bg-orange-100 text-orange-800 border-orange-300" }
+      : { label: "P3 General", badge: "bg-slate-100 text-slate-700 border-slate-300" };
+
   return (
-    <article className="rounded-2xl border bg-white p-4 shadow-sm">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <article className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
+        aria-expanded={expanded}
+      >
+        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-black ${priorityMeta.badge}`}>{priorityMeta.label}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-extrabold text-slate-900">{form.message || "New customer notice"}</span>
+        <span className="hidden text-xs font-bold text-slate-500 sm:inline">{form.targetType.replaceAll("_", " ")} · {form.targetValue || "No target"}</span>
+        <span className={`rounded-full px-2 py-1 text-[11px] font-black ${form.active ? "bg-green-100 text-green-800" : "bg-slate-100 text-slate-500"}`}>{form.active ? "Active" : "Inactive"}</span>
+        <span className="text-xs font-extrabold text-blue-700">{expanded ? "Hide ▲" : "View ▼"}</span>
+      </button>
+      {expanded && (
+      <div className="grid grid-cols-1 gap-3 border-t bg-slate-50/40 p-4 md:grid-cols-2 xl:grid-cols-4">
         <label className="text-sm font-bold text-slate-700">
           Target type
           <select
@@ -161,27 +206,34 @@ function HomepageMessageRow({ initialMessage, options, onSaved, onDeleted }) {
             </select>
           </label>
         )}
+        <div className="text-sm font-bold text-slate-700 md:col-span-2 xl:col-span-2">
+          Notice colour
+          <div className="mt-1 grid grid-cols-5 gap-1.5">
+            {NOTICE_COLOURS.map((colour) => (
+              <button
+                key={colour.value}
+                type="button"
+                onClick={() => setField("messageStyle", colour.value)}
+                className={`min-h-10 rounded-lg border-2 px-2 py-1 text-xs font-extrabold ${colour.swatch} ${form.messageStyle === colour.value ? "ring-2 ring-blue-600 ring-offset-1" : ""}`}
+                aria-pressed={form.messageStyle === colour.value}
+              >
+                {colour.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <label className="text-sm font-bold text-slate-700">
-          Style
+          Priority
           <select
-            value={form.messageStyle}
-            onChange={(event) => setField("messageStyle", event.target.value)}
+            value={priority <= 1 ? 1 : priority === 2 ? 2 : 3}
+            onChange={(event) => setField("sortOrder", Number(event.target.value))}
             className="mt-1 w-full rounded-xl border bg-white p-3 font-normal"
           >
-            <option value="info">Info</option>
-            <option value="warning">Warning</option>
-            <option value="success">Success</option>
-            <option value="danger">Danger</option>
+            <option value={1}>P1 — Important / Tax / Legal</option>
+            <option value={2}>P2 — Promotion / Offer</option>
+            <option value={3}>P3 — General Information</option>
           </select>
-        </label>
-        <label className="text-sm font-bold text-slate-700">
-          Sort order
-          <input
-            type="number"
-            value={form.sortOrder}
-            onChange={(event) => setField("sortOrder", Number(event.target.value))}
-            className="mt-1 w-full rounded-xl border p-3 font-normal"
-          />
+          <span className="mt-1 block text-xs font-normal text-slate-500">P1 displays before P2 and P3.</span>
         </label>
         <label className="text-sm font-bold text-slate-700 md:col-span-2 xl:col-span-4">
           Message
@@ -242,8 +294,9 @@ function HomepageMessageRow({ initialMessage, options, onSaved, onDeleted }) {
           </button>
         </div>
       </div>
+      )}
       {error && (
-        <p className="mt-3 rounded-xl bg-red-50 p-3 text-sm font-bold text-red-800" role="alert">
+        <p className="m-4 rounded-xl bg-red-50 p-3 text-sm font-bold text-red-800" role="alert">
           {error}
         </p>
       )}
@@ -309,8 +362,12 @@ export default function HomepageMessagesEditor({
           options={options}
           onSaved={async (saved) => {
             if (message.clientId) removeDraft(message);
-            await onReload(saved);
             setSuccessMessage("Notice published successfully.");
+            try {
+              await onReload(saved);
+            } catch (reloadError) {
+              console.warn("Homepage notices refresh failed after save:", reloadError);
+            }
           }}
           onDeleted={async (deleted) => {
             if (deleted.clientId || deleted.isDraft) removeDraft(deleted);

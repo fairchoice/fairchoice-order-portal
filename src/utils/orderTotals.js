@@ -176,17 +176,98 @@ export const calculateCartOrderItems = (cart = [], options = {}) => {
     lineTotals.reduce((sum, lineTotal) => sum + Number(lineTotal || 0), 0)
   );
 
-  const promotionDiscountAmount = roundMoney(
+  const cartPromotionDiscountAmount = roundMoney(
     (cart || []).reduce(
       (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
-      Number(options.promotionDiscountAmount || 0)
+      0
     )
   );
-
-  const promotionAllocations = allocatePennies(
-    Math.min(subtotal, promotionDiscountAmount),
-    lineTotals
+  const optionPromotionDiscountAmount = roundMoney(
+    Number(options.promotionDiscountAmount || 0)
   );
+  const promotionDiscountAmount =
+    optionPromotionDiscountAmount > 0
+      ? optionPromotionDiscountAmount
+      : cartPromotionDiscountAmount;
+
+  const normalizedName = (value) => String(value || "").trim().toLowerCase();
+  const promotionLines = (cart || []).filter(
+    (item) => item?.isPromotionFree && Number(item?.promotionDiscountAmount || 0) > 0
+  );
+  const promotionAllocations = lineTotals.map(() => 0);
+  const remainingLineTotals = [...lineTotals];
+  let remainingPromotionDiscount = Math.min(subtotal, promotionDiscountAmount);
+
+  const allocatePromotionLine = (promotionLine, requestedAmount) => {
+    if (requestedAmount <= 0) return 0;
+
+    const discountedNames = (
+      promotionLine?.discountedProductNames ||
+      promotionLine?.discounted_product_names ||
+      []
+    )
+      .map(normalizedName)
+      .filter(Boolean);
+    const promotionSeries = normalizedName(promotionLine?.series);
+    const promotionBrand = normalizedName(promotionLine?.brand);
+
+    let eligibleIndexes = paidItems
+      .map((item, index) => ({ item, index }))
+      .filter(({ item, index }) => {
+        if (remainingLineTotals[index] <= 0) return false;
+        const itemName = normalizedName(item?.name || item?.productName || item?.product_name);
+        if (discountedNames.length > 0) return discountedNames.includes(itemName);
+
+        const itemSeries = normalizedName(item?.series);
+        const itemBrand = normalizedName(item?.brand);
+        if (promotionSeries && itemSeries === promotionSeries) {
+          return !promotionBrand || itemBrand === promotionBrand;
+        }
+        return false;
+      })
+      .map(({ index }) => index);
+
+    // Legacy/manual discounts may not carry target metadata. Preserve the old
+    // behaviour as a fallback instead of dropping the discount.
+    if (eligibleIndexes.length === 0) {
+      eligibleIndexes = remainingLineTotals
+        .map((value, index) => ({ value, index }))
+        .filter(({ value }) => value > 0)
+        .map(({ index }) => index);
+    }
+
+    const weights = eligibleIndexes.map((index) => remainingLineTotals[index]);
+    const available = roundMoney(weights.reduce((sum, value) => sum + Number(value || 0), 0));
+    const amount = Math.min(roundMoney(requestedAmount), available);
+    if (amount <= 0 || available <= 0) return 0;
+
+    const allocations = allocatePennies(amount, weights);
+    eligibleIndexes.forEach((index, allocationIndex) => {
+      const allocated = Math.min(
+        remainingLineTotals[index],
+        Number(allocations[allocationIndex] || 0)
+      );
+      promotionAllocations[index] = roundMoney(promotionAllocations[index] + allocated);
+      remainingLineTotals[index] = roundMoney(remainingLineTotals[index] - allocated);
+    });
+
+    return roundMoney(allocations.reduce((sum, value) => sum + Number(value || 0), 0));
+  };
+
+  for (const promotionLine of promotionLines) {
+    if (remainingPromotionDiscount <= 0) break;
+    const lineDiscount = Math.min(
+      remainingPromotionDiscount,
+      Number(promotionLine?.promotionDiscountAmount || 0)
+    );
+    const allocated = allocatePromotionLine(promotionLine, lineDiscount);
+    remainingPromotionDiscount = roundMoney(remainingPromotionDiscount - allocated);
+  }
+
+  if (remainingPromotionDiscount > 0) {
+    allocatePromotionLine({}, remainingPromotionDiscount);
+  }
+
   const netBeforeCheckoutDiscounts = lineTotals.map((lineTotal, index) =>
     roundMoney(Math.max(0, lineTotal - promotionAllocations[index]))
   );
@@ -283,12 +364,19 @@ export const calculateCartTotals = (cart = [], options = {}) => {
     paidItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0)
   );
 
-  const promotionDiscountAmount = roundMoney(
+  const cartPromotionDiscountAmount = roundMoney(
     (cart || []).reduce(
       (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
-      Number(options.promotionDiscountAmount || 0)
+      0
     )
   );
+  const optionPromotionDiscountAmount = roundMoney(
+    Number(options.promotionDiscountAmount || 0)
+  );
+  const promotionDiscountAmount =
+    optionPromotionDiscountAmount > 0
+      ? optionPromotionDiscountAmount
+      : cartPromotionDiscountAmount;
 
   const netBeforeDiscount = roundMoney(
     Math.max(0, subtotal - promotionDiscountAmount)

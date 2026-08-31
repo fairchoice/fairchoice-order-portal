@@ -684,7 +684,7 @@ test("only nisstaj_admin receives the Weekly Account total summary", () => {
   );
   assert.match(
     weeklyAccountSource,
-    /\{showSummary && <div[\s\S]*?<SummaryCard title="Total Collection" value=\{money\(total\)\}/,
+    /\{showSummary && \([\s\S]*?<SummaryCard title="Total Collection" value=\{money\(total\)\}/,
   );
   assert.doesNotMatch(
     weeklyAccountSource,
@@ -695,7 +695,7 @@ test("only nisstaj_admin receives the Weekly Account total summary", () => {
 test("summary gating preserves payment rows and handover arithmetic", () => {
   assert.match(
     weeklyAccountSource,
-    /\{showSummary && <div[\s\S]*?\}<PaymentTable rows=\{rows\}/,
+    /\{showSummary && \([\s\S]*?\)\}[\s\S]*?<PaymentTable rows=\{rows\}/,
   );
   assert.match(
     weeklyAccountSource,
@@ -783,3 +783,4 @@ test("nisstaj_sales receives cash collection permission through an idempotent mi
   assert.match(source, /on conflict \(staff_id, permission_key\)/);
   assert.match(source, /allowed = true/);
 });
+

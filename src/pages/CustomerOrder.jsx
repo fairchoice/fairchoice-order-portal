@@ -606,6 +606,7 @@ const loggedInUser =
   const [customerAccounts, setCustomerAccounts] = useState([]);
   const [salesRouteRows, setSalesRouteRows] = useState([]);
   const [salesRouteLoading, setSalesRouteLoading] = useState(false);
+  const [showSalesRouteModal, setShowSalesRouteModal] = useState(false);
   const [activeRouteAssignmentId, setActiveRouteAssignmentId] = useState(null);
   const [salesRouteExceptionMode, setSalesRouteExceptionMode] = useState(false);
   const [showRouteExceptionForm, setShowRouteExceptionForm] = useState(false);
@@ -795,6 +796,7 @@ const openSalesRouteCustomer = useCallback((routeRow) => {
   setRouteExceptionNote("");
   setCustomerDetailsExpanded(false);
   setOrderPaymentChoice("no_payment");
+  setShowSalesRouteModal(false);
   const modes = getAllowedPriceModesForCustomer(customer, pricingSettings);
   const defaultMode = String(customer.default_price_mode || "vat").toLowerCase();
   setPriceMode(modes.includes(defaultMode) ? defaultMode : modes[0] || "vat");
@@ -841,6 +843,7 @@ const confirmSalesRouteException = () => {
   const [homepageItems, setHomepageItems] = useState([]);
   const [homepageMessages, setHomepageMessages] = useState([]);
   const [homepageLoading, setHomepageLoading] = useState(false);
+  const [homepageSalesMetrics, setHomepageSalesMetrics] = useState({});
   const [showHomepage, setShowHomepage] = useState(true);
   const [homepageSelectionType, setHomepageSelectionType] = useState("");
   const [homepageBrowseTitle, setHomepageBrowseTitle] = useState("");
@@ -1430,25 +1433,33 @@ const getPrice = (product) =>
 const normalizeHomepageCategoryType = (value) =>
   String(value || "main_category").trim().toLowerCase();
 
+
+const HOMEPAGE_PROMOTION_TARGET_SEPARATOR = "::";
+const parseHomepagePromotionDestination = (rawValue) => {
+  const value = String(rawValue || "").trim();
+  const [type, ...rest] = value.split(HOMEPAGE_PROMOTION_TARGET_SEPARATOR);
+  if (["main_category", "sub_category", "brand", "product"].includes(type) && rest.length) {
+    return { type, value: rest.join(HOMEPAGE_PROMOTION_TARGET_SEPARATOR) };
+  }
+  return { type: "promotion_flag", value };
+};
+
 const normalizeHomepagePromotionTarget = (value) =>
   String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 
 const productMatchesHomepagePromotion = (product, targetValue) => {
-  const target = normalizeHomepagePromotionTarget(targetValue);
+  const destination = parseHomepagePromotionDestination(targetValue);
+  if (destination.type === "main_category") return String(product.category || "") === destination.value;
+  if (destination.type === "sub_category") return String(product.subCategory || "") === destination.value;
+  if (destination.type === "brand") return String(product.brand || "") === destination.value;
+  if (destination.type === "product") return String(product.id || "") === String(destination.value);
 
-  if (target === "promotion" || target === "is_promotion") {
-    return product.isPromotion === true;
-  }
-
+  const target = normalizeHomepagePromotionTarget(destination.value);
+  if (target === "promotion" || target === "is_promotion") return product.isPromotion === true;
   if (target === "new" || target === "is_new") return product.isNew === true;
-  if (target === "reduced" || target === "is_reduced") {
-    return product.isReduced === true;
-  }
+  if (target === "reduced" || target === "is_reduced") return product.isReduced === true;
   if (target === "recommended") return product.recommended === true;
-  if (target === "top_seller" || target === "top seller") {
-    return product.topSeller === true;
-  }
-
+  if (target === "top_seller" || target === "top seller") return product.topSeller === true;
   return false;
 };
 
@@ -1692,18 +1703,12 @@ const openProductDetails = (product) => {
 
 const openCustomerCart = () => {
   recordCustomerPortalView("cart");
-  document.querySelector(".cart-panel")?.scrollIntoView({
-    behavior: "smooth",
-    block: "start",
-  });
+  changeCartEditing(true);
 };
 
 const openCustomerCheckout = () => {
   recordCustomerPortalView("checkout");
-  document.querySelector(".checkout-section")?.scrollIntoView({
-    behavior: "smooth",
-    block: "start",
-  });
+  changeCartEditing(true);
 };
 
 const openHomepageItem = (item) => {
@@ -1740,10 +1745,45 @@ const openHomepageItem = (item) => {
     return;
   }
 
-  if (categoryType === "promotion") {
+  if (categoryType === "flavour") {
     setSelectedCategory("All Products");
     setSelectedSubCategory("All Sub Categories");
-    setHomepagePromotionTarget(item.targetValue || "");
+    setSelectedBrand("All Brands");
+    setSelectedSeries("All Series");
+    setSearch(item.targetValue || "");
+    return;
+  }
+
+  if (categoryType === "promotion") {
+    const destination = parseHomepagePromotionDestination(item.targetValue);
+    setHomepagePromotionTarget("");
+    setSearch("");
+    setSelectedCategory("All Products");
+    setSelectedSubCategory("All Sub Categories");
+    setSelectedBrand("All Brands");
+    setSelectedSeries("All Series");
+
+    if (destination.type === "main_category") {
+      setSelectedCategory(destination.value || "All Products");
+      return;
+    }
+    if (destination.type === "sub_category") {
+      const parentCategory = products.find((product) => product.subCategory === destination.value)?.category || "All Products";
+      setSelectedCategory(parentCategory);
+      setSelectedSubCategory(destination.value || "All Sub Categories");
+      return;
+    }
+    if (destination.type === "brand") {
+      setSelectedBrand(destination.value || "All Brands");
+      return;
+    }
+    if (destination.type === "product") {
+      const product = products.find((candidate) => String(candidate.id) === String(destination.value));
+      if (product) openProductDetails(product);
+      return;
+    }
+
+    setHomepagePromotionTarget(destination.value || "");
     return;
   }
 
@@ -1994,7 +2034,6 @@ useEffect(() => {
     }
 
   
-    fetchProducts();
     fetchPricingSettings();
     refreshPromotionRules();
     refreshProductDisplayMessages();
@@ -2140,10 +2179,116 @@ useEffect(() => {
     setHomepageLoading(false);
   };
 
+  const fetchHomepageSalesAnalytics = async () => {
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
+    try {
+      const { data, error } = await supabase
+        .from("orders")
+        .select(`
+          id,
+          created_at,
+          status,
+          customer_country,
+          order_items(
+            product_id,
+            product_code,
+            product_name,
+            flavour,
+            qty,
+            line_total
+          )
+        `)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(2000);
+
+      if (error) throw error;
+
+      const metrics = {};
+      const now = Date.now();
+      const currentCountry = normalizeCountry(orderCountry);
+
+      for (const order of data || []) {
+        if (!isDeliveredInvoiceStatus(order.status)) continue;
+
+        const soldCountry = normalizeCountry(order.customer_country || "");
+        if (currentCountry && soldCountry && soldCountry !== currentCountry) continue;
+
+        const createdAt = new Date(order.created_at || 0).getTime();
+        const ageDays = Number.isFinite(createdAt)
+          ? Math.max(0, (now - createdAt) / (24 * 60 * 60 * 1000))
+          : 90;
+
+        for (const item of order.order_items || []) {
+          const aliases = [
+            item.product_id ? `id:${String(item.product_id)}` : "",
+            item.product_code ? `code:${String(item.product_code).trim().toLowerCase()}` : "",
+            item.product_name ? `name:${String(item.product_name).trim().toLowerCase()}` : "",
+          ].filter(Boolean);
+          if (!aliases.length) continue;
+
+          let metric = aliases.map((key) => metrics[key]).find(Boolean);
+          if (!metric) {
+            metric = {
+              units90: 0,
+              units30: 0,
+              units7: 0,
+              revenue90: 0,
+              orders90: 0,
+            };
+          }
+          aliases.forEach((key) => { metrics[key] = metric; });
+
+          const qty = Math.max(0, Number(item.qty || 0));
+          if (!qty) continue;
+          metric.units90 += qty;
+          metric.orders90 += 1;
+          metric.revenue90 += Math.max(0, Number(item.line_total || 0));
+          if (ageDays <= 30) metric.units30 += qty;
+          if (ageDays <= 7) metric.units7 += qty;
+        }
+      }
+
+      Object.values(metrics).forEach((metric) => {
+        metric.velocityScore =
+          Number(metric.units90 || 0) +
+          Number(metric.units30 || 0) * 1.5 +
+          Number(metric.units7 || 0) * 3;
+      });
+
+      setHomepageSalesMetrics(metrics);
+    } catch (error) {
+      console.error("Homepage sales analytics loading error:", error);
+      setHomepageSalesMetrics({});
+    }
+  };
+
   useEffect(() => {
     if (!supabase) return;
+    // Load the visible ordering experience first. Products were previously
+    // requested once here and again by the mount effect, which delayed entry.
     void Promise.all([fetchProducts(), fetchHomepageContent()]);
   }, [orderCountry]);
+
+  useEffect(() => {
+    if (!supabase || (!isCustomer && !isSalesRep)) return undefined;
+
+    // Sales analytics power the homepage ranking carousels, but they are not
+    // required for the first paint. Defer the 90-day order scan until the
+    // browser is idle so header, products and homepage content appear first.
+    const loadAnalytics = () => {
+      void fetchHomepageSalesAnalytics();
+    };
+
+    if (typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(loadAnalytics, { timeout: 1500 });
+      return () => window.cancelIdleCallback?.(idleId);
+    }
+
+    const timerId = window.setTimeout(loadAnalytics, 250);
+    return () => window.clearTimeout(timerId);
+  }, [orderCountry, isCustomer, isSalesRep]);
 
   const fetchPricingSettings = async () => {
     const { data, error } = await supabase
@@ -4480,6 +4625,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     <div className="customer-portal-shell min-h-screen bg-slate-100 p-4 pb-40">
       <div className="customer-portal-container max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
         
+        {!((isSalesRep || isCustomer) && page === "order") && (
         <div className="portal-header customer-header bg-gradient-to-r from-blue-950 to-blue-700 text-white px-6 py-5">
   <div className="portal-header-inner flex items-start justify-between w-full gap-4">
     <div className="portal-brand-block flex items-start gap-3">
@@ -4557,7 +4703,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           {canCollectCash && (
             <button onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesPaymentForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesCashCollection"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}>Collection</button>
           )}
-          <button disabled={salesRouteMode && !selectedCustomerAccount} onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesReturnForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesReturn"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesReturn" ? "active" : ""}`}>Return</button>
+          <button onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesReturnForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesReturn"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesReturn" ? "active" : ""}`}>Return</button>
           {salesRouteMode && selectedCustomerAccount && !salesRouteExceptionMode && (
             <button onClick={() => setShowNoOrderForm(true)} className="payment-history-tab-btn border border-amber-200 bg-amber-400 text-slate-950 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">No Order</button>
           )}
@@ -4567,6 +4713,91 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 
 </div>
+        )}
+
+        {showSalesRouteModal && salesRouteMode && (
+          <div
+            className="fixed inset-0 z-[90] flex items-end bg-slate-950/60 p-0 sm:items-center sm:justify-center sm:p-4"
+            onMouseDown={(event) => event.target === event.currentTarget && setShowSalesRouteModal(false)}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="sales-route-modal-title"
+              className="flex max-h-[88vh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-3xl sm:rounded-3xl"
+            >
+              <div className="flex items-start justify-between gap-3 border-b px-4 py-4">
+                <div>
+                  <h2 id="sales-route-modal-title" className="text-xl font-black text-slate-900 sm:text-2xl">Today’s Route</h2>
+                  <p className="mt-1 text-sm text-slate-500">Tap a customer to start their order. Completed visits remain marked.</p>
+                </div>
+                <button type="button" onClick={() => setShowSalesRouteModal(false)} className="min-h-11 rounded-xl border border-slate-300 px-4 text-sm font-bold text-slate-700">Close</button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 border-b bg-slate-50 px-4 py-3">
+                <select
+                  className="min-h-11 rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold"
+                  value={salesRouteCountryFilter}
+                  onChange={(event) => setSalesRouteCountryFilter(event.target.value)}
+                >
+                  <option value="All">All countries</option>
+                  {[...new Set(salesRouteRows.map((row) => row.branch?.country || row.customer?.country || row.customer?.account_country).filter(Boolean))].sort().map((country) => (
+                    <option key={country} value={country}>{country}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => { setShowSalesRouteModal(false); setShowRouteExceptionForm(true); }}
+                  className="min-h-11 rounded-xl bg-red-600 px-4 text-sm font-black text-white"
+                >
+                  Exception Order
+                </button>
+                <button type="button" onClick={refreshSalesRoute} className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold">Refresh</button>
+              </div>
+
+              <div className="overflow-y-auto p-3 sm:p-4">
+                {salesRouteLoading ? (
+                  <div className="p-8 text-center text-slate-500">Loading route…</div>
+                ) : salesRouteRows.length ? (
+                  <>
+                    <div className="grid gap-2">
+                      {visibleSalesRouteRows.map((routeRow) => {
+                        const completed = routeRow.status !== "NOT_VISITED";
+                        return (
+                          <button
+                            key={routeRow.id}
+                            type="button"
+                            disabled={completed}
+                            onClick={() => openSalesRouteCustomer(routeRow)}
+                            className={`grid min-h-[72px] grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl border p-3 text-left sm:grid-cols-[44px_minmax(0,1fr)_auto] ${completed ? "bg-slate-100 opacity-70" : "bg-white hover:border-blue-600 hover:bg-blue-50"}`}
+                          >
+                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-950 text-base font-black text-white">{routeRow.visit_sequence || "•"}</span>
+                            <span className="min-w-0">
+                              <strong className="block truncate text-base text-slate-900">{routeRow.customer.account_name}</strong>
+                              <span className="mt-0.5 block truncate text-sm text-slate-500">{routeRow.branch?.branch_name || "Main account"} · {routeRow.branch?.postcode || routeRow.customer.postcode || routeRow.customer.town_city || "Location not set"}</span>
+                            </span>
+                            <span className={`col-start-2 w-fit rounded-full px-2.5 py-1 text-xs font-bold sm:col-start-auto ${completed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{completed ? (routeRow.status === "ORDER_PLACED" ? "Order placed" : "No order") : "Tap to order"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3 text-xs">
+                      <span className="mr-auto text-slate-500">Showing {filteredSalesRouteRows.length ? (currentSalesRoutePage - 1) * 30 + 1 : 0}–{Math.min(currentSalesRoutePage * 30, filteredSalesRouteRows.length)} of {filteredSalesRouteRows.length}</span>
+                      <button className="min-h-10 rounded-lg border px-3 disabled:opacity-40" disabled={currentSalesRoutePage <= 1} onClick={() => setSalesRoutePage((pageNumber) => Math.max(1, pageNumber - 1))}>Previous</button>
+                      <span className="font-bold">{currentSalesRoutePage} / {salesRoutePageCount}</span>
+                      <button className="min-h-10 rounded-lg border px-3 disabled:opacity-40" disabled={currentSalesRoutePage >= salesRoutePageCount} onClick={() => setSalesRoutePage((pageNumber) => Math.min(salesRoutePageCount, pageNumber + 1))}>Next</button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-2xl bg-amber-50 p-6 text-center text-amber-900">
+                    <strong className="text-base">No customers assigned to today’s route.</strong>
+                    <div className="mt-1 text-sm">Admin can add customers in Sales Route Setup.</div>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
 
         {showRouteExceptionForm && salesRouteMode && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -4601,65 +4832,102 @@ const portalPageIsAllowed = page === "order" && !isCustomer
 
         {(isSalesRep || isCustomer || brandPartnerReadOnlyOrder) && page === "order" && (
           <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
-            
- <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
-  {selectedCustomerAccount && (
-    <div className="mb-3 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="grid min-w-0 flex-1 grid-cols-1 gap-1 text-sm sm:grid-cols-3 sm:gap-3">
-        <p className="truncate"><span className="font-bold">Customer:</span> {selectedCustomerAccount.account_name}</p>
-        <p className="truncate"><span className="font-bold">Branch:</span> {selectedBranch?.branch_name || "Main account"}</p>
-        <p className="truncate"><span className="font-bold">Country:</span> {orderCountry}</p>
-      </div>
-      <div className="flex shrink-0 flex-wrap gap-2">
-        <button
-          type="button"
-          aria-expanded={customerDetailsExpanded}
-          aria-controls="order-customer-details"
-          onClick={() => setCustomerDetailsExpanded((expanded) => !expanded)}
-          className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700"
-        >
-          {customerDetailsExpanded ? "Hide details" : "View details"}
-        </button>
-        {!isCustomer && (
-          <button
-            type="button"
-            onClick={() => salesRouteMode && !salesRouteExceptionMode ? resetSalesRouteCustomer() : setCustomerDetailsExpanded(true)}
-            className="min-h-11 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
-          >
-            {salesRouteMode && !salesRouteExceptionMode ? "Back to Route" : "Change customer"}
-          </button>
-        )}
-      </div>
-    </div>
-  )}
 
-  {salesRouteMode && !selectedCustomerAccount && !salesRouteExceptionMode && (
-    <div className="mb-4 rounded-2xl border border-blue-200 bg-white p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div><h2 className="text-lg font-bold">Today’s Route</h2><p className="text-xs text-slate-500">Select the next customer. Completed visits remain marked.</p></div>
-        <div className="flex flex-wrap gap-2">
-          <select className="rounded-xl border px-3 py-2 text-xs font-bold" value={salesRouteCountryFilter} onChange={(e) => setSalesRouteCountryFilter(e.target.value)}><option value="All">All countries</option>{[...new Set(salesRouteRows.map((row) => row.branch?.country || row.customer?.country || row.customer?.account_country).filter(Boolean))].sort().map((c) => <option key={c} value={c}>{c}</option>)}</select>
-          <button onClick={() => setShowRouteExceptionForm(true)} className="rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white">Exception Order</button>
-          <button onClick={refreshSalesRoute} className="rounded-xl border px-3 py-2 text-xs font-bold">Refresh</button>
-        </div>
-      </div>
-      {salesRouteLoading ? <div className="p-5 text-center text-slate-500">Loading route…</div> : salesRouteRows.length ? (
-        <><div className="grid gap-2">{visibleSalesRouteRows.map((routeRow) => {
-          const completed = routeRow.status !== "NOT_VISITED";
-          return <button key={routeRow.id} disabled={completed} onClick={() => openSalesRouteCustomer(routeRow)} className={`grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-xl border p-3 text-left ${completed ? "bg-slate-100 opacity-70" : "bg-white hover:border-blue-600 hover:bg-blue-50"}`}>
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-950 text-white font-bold">{routeRow.visit_sequence || "•"}</span>
-            <span><strong className="block">{routeRow.customer.account_name}</strong><small className="text-slate-500">{routeRow.branch?.branch_name || "Main account"} · {routeRow.branch?.postcode || routeRow.customer.postcode || routeRow.customer.town_city || "Location not set"}</small></span>
-            <span className={`rounded-full px-2 py-1 text-xs font-bold ${completed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{completed ? (routeRow.status === "ORDER_PLACED" ? "Order placed" : "No order") : "Not visited"}</span>
-          </button>;
-        })}</div><div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3 text-xs"><span className="mr-auto text-slate-500">Showing {filteredSalesRouteRows.length ? (currentSalesRoutePage - 1) * 30 + 1 : 0}–{Math.min(currentSalesRoutePage * 30, filteredSalesRouteRows.length)} of {filteredSalesRouteRows.length} · max 30</span><button className="rounded-lg border px-3 py-1 disabled:opacity-40" disabled={currentSalesRoutePage <= 1} onClick={() => setSalesRoutePage((p) => Math.max(1, p - 1))}>Previous</button><span className="font-bold">Page {currentSalesRoutePage} / {salesRoutePageCount}</span><button className="rounded-lg border px-3 py-1 disabled:opacity-40" disabled={currentSalesRoutePage >= salesRoutePageCount} onClick={() => setSalesRoutePage((p) => Math.min(salesRoutePageCount, p + 1))}>Next</button></div></>
-      ) : <div className="rounded-xl bg-amber-50 p-5 text-center text-amber-900"><strong>No customers assigned to today’s route.</strong><div className="text-xs mt-1">Admin can add customers in Sales Route Setup.</div></div>}
-    </div>
-  )}
+            <div className="lg:col-span-4">
+                <HomeCategoryGrid
+                  headerOnly
+                  items={homepageCategoryCards}
+                  loading={false}
+                  search={search}
+                  productResultCount={0}
+                  onSearchChange={updateHomepageSearch}
+                  onBrowse={openHomepageItem}
+                  onHome={goToCustomerHome}
+                  cartItemCount={cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + Number(item.qty || 0), 0)}
+                  onCartClick={openCustomerCart}
+                  menuItems={
+                    isSalesRep
+                      ? [
+                          { label: "Route", hidden: !salesRouteMode, onClick: () => setShowSalesRouteModal(true) },
+                          { label: "Order", onClick: () => setPage("order") },
+                          { label: "Expenses", hidden: !salesRouteMode, onClick: () => setPage("expenses") },
+                          { label: "Cash Collection", hidden: !canCollectCash, onClick: () => { if (salesRouteMode && selectedCustomerAccount) { setSalesPaymentForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); } setPage("salesCashCollection"); } },
+                          { label: "Return", onClick: () => { if (salesRouteMode && selectedCustomerAccount) { setSalesReturnForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); } setPage("salesReturn"); } },
+                          { label: "No Order", hidden: !salesRouteMode || !selectedCustomerAccount || salesRouteExceptionMode, onClick: () => setShowNoOrderForm(true) },
+                          { label: "Back Office", hidden: !(isAdminStaffRole(activeUser?.role || activeUser?.access_level) || (isBrandPartner && activeDuty === "admin")), divider: true, onClick: openBackOffice },
+                          { label: "Logout", divider: true, danger: true, onClick: async () => { if (window.confirm("Log out now?")) await onLogout?.(); } },
+                        ]
+                      : isCustomer
+                      ? [
+                          { label: "Order", onClick: goToCustomerHome },
+                          { label: "Payment History", onClick: async () => { await fetchCustomerLedger(); recordCustomerPortalView("paymentHistory", "paymentHistory"); setPage("paymentHistory"); } },
+                          { label: "Logout", divider: true, danger: true, onClick: async () => { if (window.confirm("Log out now?")) await onLogout?.(); } },
+                        ]
+                      : []
+                  }
+                />
+              </div>
+
+            {selectedCustomerAccount && (
+              <div className="lg:col-span-4 overflow-x-auto border-y border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 [scrollbar-width:none] sm:px-4">
+                <div className="flex min-w-max items-center gap-5 font-semibold">
+                  <span><strong>Credit Limit:</strong> {formatCurrency(selectedCustomerAccount?.credit_limit)}</span>
+                  <span><strong>Credit Balance:</strong> {formatCurrency(getCreditBalance(selectedCustomerAccount, customerLedger, customerOpeningBalance))}</span>
+                  <span><strong>Customer:</strong> {selectedCustomerAccount.account_name}</span>
+                  <span><strong>Branch:</strong> {selectedBranch?.branch_name || "Main account"}</span>
+                  <span><strong>Address:</strong> {getCustomerAddress(selectedCustomerAccount, selectedBranch)}</span>
+                </div>
+              </div>
+            )}
+
+            {!showHomepage && (
+            <div className="lg:col-span-4">
+<ProductFilters
+  search={search}
+  setSearch={(value) => {
+    setSearch(value);
+    if (String(value || "").trim()) setShowHomepage(false);
+  }}
+  selectedCategory={selectedCategory}
+  browseTitle={homepageBrowseTitle}
+  brands={brands}
+  selectedBrand={selectedBrand}
+  seriesList={seriesList}
+  selectedSeries={selectedSeries}
+  subCategories={subCategories}
+  selectedSubCategory={selectedSubCategory}
+
+  setSelectedSubCategory={(value) => {
+    setShowHomepage(false);
+    setSelectedSubCategory(value);
+    setSelectedBrand("All Brands");
+    setSelectedSeries("All Series");
+  }}
+
+  setSelectedBrand={(value) => {
+    setShowHomepage(false);
+    setSelectedBrand(value);
+    setSelectedSeries("All Series");
+  }}
+
+  setSelectedSeries={(value) => {
+    setShowHomepage(false);
+    setSelectedSeries(value);
+  }}
+  resultCount={filteredProducts.length}
+  onBackToCategories={goToCustomerHome}
+  onClearAll={() => setProductPage(1)}
+/>
+
+            </div>
+            )}
+
+ <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
 
   {salesRouteMode && salesRouteExceptionMode && (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm">
       <div><strong>Exception Order</strong><div className="text-xs text-red-800">{routeExceptionReason}{routeExceptionNote ? ` · ${routeExceptionNote}` : ""}</div></div>
-      <button onClick={resetSalesRouteCustomer} className="rounded-xl border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700">Cancel & Return to Route</button>
+      <button onClick={() => { resetSalesRouteCustomer(); setShowSalesRouteModal(true); }} className="rounded-xl border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700">Cancel & Return to Route</button>
     </div>
   )}
 
@@ -4868,37 +5136,8 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
   )}
 
+
 {!showHomepage && (
-<>
-<ProductFilters
-  search={search}
-  setSearch={setSearch}
-  selectedCategory={selectedCategory}
-  browseTitle={homepageBrowseTitle}
-  brands={brands}
-  selectedBrand={selectedBrand}
-  seriesList={seriesList}
-  selectedSeries={selectedSeries}
-  subCategories={subCategories}
-  selectedSubCategory={selectedSubCategory}
-
-  setSelectedSubCategory={(value) => {
-    setSelectedSubCategory(value);
-    setSelectedBrand("All Brands");
-    setSelectedSeries("All Series");
-  }}
-
-  setSelectedBrand={(value) => {
-    setSelectedBrand(value);
-    setSelectedSeries("All Series");
-  }}
-
-  setSelectedSeries={setSelectedSeries}
-  resultCount={filteredProducts.length}
-  onBackToCategories={goToCustomerHome}
-  onClearAll={() => setProductPage(1)}
-/>
-
 <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
     {["grid", "list"].map((view) => (
       <button
@@ -4915,14 +5154,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
       </button>
     ))}
   </div>
-</>
 )}
 
 </div>
 
-            <div className="lg:col-span-3">
+            <div className="lg:col-span-4">
               {showHomepage ? (
                 <HomeCategoryGrid
+                  hideHeader
                   items={homepageCategoryCards}
                   loading={homepageLoading || productsLoading}
                   search={search}
@@ -4932,6 +5171,47 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                   onHome={goToCustomerHome}
                   cartItemCount={cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + Number(item.qty || 0), 0)}
                   onCartClick={openCustomerCart}
+                  products={products}
+                  salesMetrics={homepageSalesMetrics}
+                  getProductPrice={getPrice}
+                  onProductClick={openProductDetails}
+                  menuItems={
+                    isSalesRep
+                      ? [
+                          { label: "Route", hidden: !salesRouteMode, onClick: () => setShowSalesRouteModal(true) },
+                          { label: "Order", onClick: () => setPage("order") },
+                          { label: "Expenses", hidden: !salesRouteMode, onClick: () => setPage("expenses") },
+                          {
+                            label: "Cash Collection",
+                            hidden: !canCollectCash,
+                            onClick: () => {
+                              if (salesRouteMode && selectedCustomerAccount) {
+                                setSalesPaymentForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" }));
+                              }
+                              setPage("salesCashCollection");
+                            },
+                          },
+                          {
+                            label: "Return",
+                            onClick: () => {
+                              if (salesRouteMode && selectedCustomerAccount) {
+                                setSalesReturnForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" }));
+                              }
+                              setPage("salesReturn");
+                            },
+                          },
+                          { label: "No Order", hidden: !salesRouteMode || !selectedCustomerAccount || salesRouteExceptionMode, onClick: () => setShowNoOrderForm(true) },
+                          {
+                            label: "Logout",
+                            divider: true,
+                            danger: true,
+                            onClick: async () => {
+                              if (window.confirm("Log out now?")) await onLogout?.();
+                            },
+                          },
+                        ]
+                      : []
+                  }
                 >
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 md:gap-3">
                     {homepageVisibleSearchProducts.map((product) => {
@@ -5086,32 +5366,37 @@ const portalPageIsAllowed = page === "order" && !isCustomer
               )}
             </div>
 
-           <Cart
-            cart={cart}
-            total={finalTotal}
-            originalTotal={cartTotals.subtotal}
-            orderDiscountPercent={effectiveOrderDiscountPercent}
-            setOrderDiscountPercent={setOrderDiscountPercent}
-            discountAmount={discountAmount}
-            promotionDiscountAmount={promotionDiscountAmount}
-            canDiscount={canManualCheckoutDiscount}
-            priceMode={priceMode}
-            onSubmit={submitOrder}
-            isSubmitting={isSubmittingOrder}
-            onIncrease={increaseQty}
-            onDecrease={decreaseQty}
-            onRemove={removeItem}
-            onChangeQty={changeQty}
-            editing={isCartEditing}
-            onEditingChange={changeCartEditing}
-            onItemEdited={rememberCartProduct}
-            paymentChoice={orderPaymentChoice}
-            onPaymentChoiceChange={(choice) => {
-              setOrderPaymentChoice(choice);
-            }}
-            paymentChoiceValid={orderPaymentChoiceValid}
-            submitOrder={submitOrder}
-          />
+           {isCartEditing && (
+             <div className="lg:col-span-4">
+               <Cart
+                cart={cart}
+                total={finalTotal}
+                originalTotal={cartTotals.subtotal}
+                orderDiscountPercent={effectiveOrderDiscountPercent}
+                setOrderDiscountPercent={setOrderDiscountPercent}
+                discountAmount={discountAmount}
+                promotionDiscountAmount={promotionDiscountAmount}
+                canDiscount={canManualCheckoutDiscount}
+                priceMode={priceMode}
+                onSubmit={submitOrder}
+                isSubmitting={isSubmittingOrder}
+                onIncrease={increaseQty}
+                onDecrease={decreaseQty}
+                onRemove={removeItem}
+                onChangeQty={changeQty}
+                editing
+                onEditingChange={changeCartEditing}
+                onItemEdited={rememberCartProduct}
+                paymentChoice={orderPaymentChoice}
+                onPaymentChoiceChange={(choice) => {
+                  setOrderPaymentChoice(choice);
+                }}
+                paymentChoiceValid={orderPaymentChoiceValid}
+                reviewMode
+                hideSubmit
+              />
+             </div>
+           )}
           </div>
         )}
 
@@ -5328,7 +5613,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         Sales Rep Cash Collection
       </h2>
 
-      {salesRouteMode && selectedCustomerAccount ? (
+      {salesRouteMode ? (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
       ) : <>
         <input value={salesPaymentCustomerSearch} onChange={(e) => setSalesPaymentCustomerSearch(e.target.value)} placeholder="Search customer" className="w-full border rounded-xl p-3" />
@@ -5456,7 +5741,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-3">
       <h2 className="text-xl font-bold">Sales Rep Return</h2>
 
-      {salesRouteMode ? (
+      {salesRouteMode && selectedCustomerAccount ? (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount?.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
       ) : <>
         <input disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnCustomerSearch} onChange={(e) => setSalesReturnCustomerSearch(e.target.value)} placeholder="Search customer" className="w-full border rounded-xl p-3" />
@@ -5578,83 +5863,82 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         )}
 
       {page === "order" && (isSalesRep || isCustomer) && (
-  <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-xl">
+  <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-xl sm:p-3">
     <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
-      <div className="min-w-0 shrink">
-        <div className="text-xs text-slate-500">
-          {cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + item.qty, 0)} Items
-        </div>
-
-        <div className="font-bold text-xl">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-[88px] shrink-0">
+          <div className="text-xs text-slate-500">
+            {cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + item.qty, 0)} Items
+          </div>
+          <div className="whitespace-nowrap text-lg font-bold sm:text-xl">
             {formatCurrency(finalTotal)}
           </div>
-
           {cart.length > 0 && (
             <button
-            onClick={async () => {
-  if (!window.confirm("Clear all cart items?")) return;
-
-  const itemsToClear = cartRef.current.filter(
-    (item) => !item.isPromotionFree
-  );
-
-  if (CENTRAL_CART_ENABLED) {
-    const cartId = await ensureCentralCartForCurrentScope();
-
-    if (cartId) {
-      await centralCartMutationQueueRef.current.catch(() => undefined);
-
-      centralCartMutatingRef.current = true;
-
-      try {
-        for (const item of itemsToClear) {
-          await removeCentralCartItem({
-            profile: activeUser,
-            cartId,
-            productId: item.id,
-          });
-        }
-      } catch (error) {
-        console.error("Central cart clear error:", error);
-        alert("Could not clear the server cart. Please try again.");
-        return;
-      } finally {
-        centralCartMutatingRef.current = false;
-      }
-    }
-  }
-
-  localStorage.removeItem(cartStorageKey);
-  localStorage.removeItem(orderSubmissionStorageKey);
-
-  setCart([]);
-  setIsCartEditing(false);
-  setOrderPaymentChoice("no_payment");
-}}
-              className="text-xs text-red-600 underline mt-1"
+              onClick={async () => {
+                if (!window.confirm("Clear all cart items?")) return;
+                const itemsToClear = cartRef.current.filter((item) => !item.isPromotionFree);
+                if (CENTRAL_CART_ENABLED) {
+                  const cartId = await ensureCentralCartForCurrentScope();
+                  if (cartId) {
+                    await centralCartMutationQueueRef.current.catch(() => undefined);
+                    centralCartMutatingRef.current = true;
+                    try {
+                      for (const item of itemsToClear) {
+                        await removeCentralCartItem({ profile: activeUser, cartId, productId: item.id });
+                      }
+                    } catch (error) {
+                      console.error("Central cart clear error:", error);
+                      alert("Could not clear the server cart. Please try again.");
+                      return;
+                    } finally {
+                      centralCartMutatingRef.current = false;
+                    }
+                  }
+                }
+                localStorage.removeItem(cartStorageKey);
+                localStorage.removeItem(orderSubmissionStorageKey);
+                setCart([]);
+                setIsCartEditing(false);
+                setOrderPaymentChoice("no_payment");
+              }}
+              className="mt-0.5 text-[11px] text-red-600 underline"
             >
               Clear Cart
             </button>
           )}
-           </div>
+        </div>
 
-      <div className="flex shrink-0 items-center gap-2">
-        {cart.length > 0 && (
-          <button
-            type="button"
-            onClick={() => changeCartEditing(!isCartEditing)}
-            className="min-h-12 rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 sm:px-5"
-          >
-            {isCartEditing ? "Done" : "Edit Cart"}
-          </button>
-        )}
-      <button
-        type="button"
-        onClick={openCustomerCheckout}
-        className="min-h-12 rounded-xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700 sm:px-6"
-      >
-        Checkout
-      </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm("Submit this order?")) submitOrder();
+          }}
+          disabled={cart.filter((item) => !item.isPromotionFree).length === 0 || isSubmittingOrder || !orderPaymentChoiceValid}
+          className="min-h-10 shrink-0 rounded-xl border-2 border-orange-400 bg-slate-700 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
+        >
+          {isSubmittingOrder ? "Submitting..." : "Submit Order"}
+        </button>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <button
+          type="button"
+          onClick={goToCustomerHome}
+          className="min-h-10 rounded-xl border-2 border-blue-950 bg-blue-950 px-2.5 py-2 text-xs font-bold text-white hover:bg-blue-800 sm:px-4 sm:text-sm"
+        >
+          <span aria-hidden="true">⌂</span> Home
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (isCartEditing) changeCartEditing(false);
+            else openCustomerCheckout();
+          }}
+          className="min-h-10 rounded-xl bg-green-600 px-2.5 py-2 text-xs font-bold text-white hover:bg-green-700 sm:px-4 sm:text-sm"
+        >
+          {isCartEditing ? "Close Cart" : "Checkout"}
+        </button>
       </div>
     </div>
   </div>
@@ -5662,14 +5946,6 @@ const portalPageIsAllowed = page === "order" && !isCustomer
 
 {(isCustomer || isSalesRep || (isAdmin && page === "order")) && (
   <div className="fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] right-3 z-50 flex gap-2 sm:right-4">
-    <button
-      type="button"
-      aria-label="Go to home"
-      onClick={goToCustomerHome}
-      className="inline-flex min-h-11 items-center gap-2 rounded-xl border-2 border-blue-950 bg-blue-950 px-4 py-2 text-sm font-extrabold text-white shadow-sm hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
-    >
-      <span aria-hidden="true">⌂</span> Home
-    </button>
     <button
       type="button"
       aria-label="Scroll to top"

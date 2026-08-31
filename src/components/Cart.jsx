@@ -24,6 +24,8 @@ export default function Cart({
   onPaymentChoiceChange,
   paymentChoiceValid = false,
   readOnly = false,
+  reviewMode = false,
+  hideSubmit = false,
 }) {
   let storedRole = "";
   if (typeof window !== "undefined") {
@@ -49,11 +51,11 @@ export default function Cart({
   const vatMode = isVatPriceMode(priceMode);
 
   return (
-    <div className="cart-panel bg-slate-50 border rounded-3xl p-3 md:p-4 sticky bottom-3 md:top-4 z-40 shadow-lg">
+    <div className={`cart-panel bg-slate-50 border rounded-3xl p-3 md:p-4 z-40 shadow-lg ${reviewMode ? "" : "sticky bottom-3 md:top-4"}`}>
       <div className="flex items-center justify-between gap-3 mb-3">
         <h3 className="cart-title font-bold text-xl">Cart</h3>
 
-        {paidCart.length > 0 && (
+        {!reviewMode && paidCart.length > 0 && (
           <button
             type="button"
             onClick={() => onEditingChange?.(!editing)}
@@ -180,19 +182,21 @@ export default function Cart({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={() => {
-            if (partnerReadOnly) return;
-            if (window.confirm("Submit this order?")) {
-              onSubmit();
-            }
-          }}
-          disabled={partnerReadOnly || paidCart.length === 0 || isSubmitting || !paymentChoiceValid}
-          className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {partnerReadOnly ? "Read Only — Order Disabled" : isSubmitting ? "Submitting..." : "Submit Order"}
-        </button>
+        {!hideSubmit && (
+          <button
+            type="button"
+            onClick={() => {
+              if (partnerReadOnly) return;
+              if (window.confirm("Submit this order?")) {
+                onSubmit();
+              }
+            }}
+            disabled={partnerReadOnly || paidCart.length === 0 || isSubmitting || !paymentChoiceValid}
+            className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {partnerReadOnly ? "Read Only — Order Disabled" : isSubmitting ? "Submitting..." : "Submit Order"}
+          </button>
+        )}
         {!partnerReadOnly && !paymentChoiceValid && paidCart.length > 0 && (
           <p className="mt-2 text-center text-xs font-bold text-amber-700">Select how you would like to continue before submitting.</p>
         )}

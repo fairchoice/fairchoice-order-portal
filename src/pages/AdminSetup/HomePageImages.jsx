@@ -17,32 +17,48 @@ const emptyOptions = {
   products: [],
 };
 
+const HOME_TABS = [
+  { id: "cards", label: "Home Page Cards" },
+  { id: "promotion", label: "Top Promotion" },
+  { id: "deals", label: "Deal / Advertisement" },
+  { id: "notices", label: "Customer Product Notices" },
+];
+
 const getRequestedTab = () => {
   if (typeof window === "undefined") return "cards";
-  const queryTab = new URLSearchParams(window.location.search).get("tab");
-  return window.location.hash.toLowerCase() === "#home-content-notices" ||
-    String(queryTab || "").toLowerCase() === "notices"
-    ? "notices"
-    : "cards";
+  const queryTab = String(new URLSearchParams(window.location.search).get("tab") || "").toLowerCase();
+  const hashTab = String(window.location.hash || "").toLowerCase().replace("#home-content-", "");
+  const requested = HOME_TABS.find((tab) => tab.id === queryTab || tab.id === hashTab);
+  return requested?.id || "cards";
 };
 
 const newClientId = () =>
   globalThis.crypto?.randomUUID?.() ||
   `homepage-item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-const newHomepageItem = () => ({
+const newHomepageItem = (section = "cards") => ({
   id: null,
   isDraft: true,
   clientId: newClientId(),
-  title: "",
+  title: section === "promotion" ? "Top Promotion" : section === "deals" ? "Deal of the Day" : "",
   description: "",
   subDescription: "",
   image: "",
-  categoryType: "main_category",
+  categoryType: section === "promotion" || section === "deals" ? "promotion" : "main_category",
   targetValue: "",
-  sortOrder: 0,
+  sortOrder: section === "promotion" ? -100 : section === "deals" ? 100 : 0,
   active: true,
 });
+
+const getSectionItems = (items, section) => {
+  const promotionItems = (items || []).filter((item) => item.categoryType === "promotion");
+  if (section === "promotion") return promotionItems.filter((item) => Number(item.sortOrder) < 0);
+  if (section === "deals") return promotionItems.filter((item) => Number(item.sortOrder) >= 0).slice(0, 1);
+  if (section === "cards") {
+    return (items || []).filter((item) => !["promotion", "brand"].includes(item.categoryType));
+  }
+  return [];
+};
 
 export default function HomePageImages({ currentUser }) {
   const [activeTab, setActiveTab] = useState(getRequestedTab);
@@ -165,14 +181,11 @@ export default function HomePageImages({ currentUser }) {
       </div>
 
       <div
-        className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+        className="grid grid-cols-2 gap-2 md:grid-cols-4"
         role="tablist"
         aria-label="Home page content sections"
       >
-        {[
-          { id: "cards", label: "Home Page Cards" },
-          { id: "notices", label: "Customer Product Notices" },
-        ].map((tab) => {
+        {HOME_TABS.map((tab) => {
           const selected = activeTab === tab.id;
           return (
             <button
@@ -185,8 +198,8 @@ export default function HomePageImages({ currentUser }) {
               onClick={() => setActiveTab(tab.id)}
               className={
                 selected
-                  ? "min-h-14 rounded-2xl border border-blue-950 bg-blue-950 px-5 py-3 text-base font-extrabold text-white shadow-sm"
-                  : "min-h-14 rounded-2xl border-2 border-slate-300 bg-white px-5 py-3 text-base font-extrabold text-slate-900 shadow-sm hover:border-blue-400"
+                  ? "min-h-14 rounded-2xl border-2 border-orange-400 bg-[#172b63] px-4 py-3 text-sm font-extrabold text-white shadow-sm ring-2 ring-orange-100 sm:text-base"
+                  : "min-h-14 rounded-2xl border-2 border-slate-300 bg-white px-4 py-3 text-sm font-extrabold text-slate-900 shadow-sm hover:border-orange-300 hover:bg-orange-50 sm:text-base"
               }
             >
               {tab.label}
@@ -201,64 +214,74 @@ export default function HomePageImages({ currentUser }) {
         </div>
       )}
 
-      {!loading && activeTab === "cards" && (
+      {!loading && ["cards", "promotion", "deals"].includes(activeTab) && (
         <div
-          id="home-content-cards-panel"
+          id={`home-content-${activeTab}-panel`}
           role="tabpanel"
-          aria-labelledby="home-content-cards-tab"
+          aria-labelledby={`home-content-${activeTab}-tab`}
           className="space-y-4"
         >
           <div className="flex flex-col gap-3 rounded-2xl border bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 className="text-xl font-extrabold text-slate-900">
-                Home Page Cards
+                {activeTab === "cards" && "Home Page Cards"}
+                {activeTab === "promotion" && "Top Promotion"}
+                {activeTab === "deals" && "Deal / Advertisement"}
               </h3>
               <p className="mt-1 text-sm text-slate-600">
-                Edit navigation targets, images and ordering. Images must be
-                JPG, PNG or WEBP and no larger than 5 MB.
+                {activeTab === "cards" && "Manage the main category cards shown on the customer homepage."}
+                {activeTab === "promotion" && "Add multiple top promotions. They appear as a compact horizontal promotion carousel at the top of the homepage."}
+                {activeTab === "deals" && "Use one promotion or advertisement here. Its own title is shown on the customer homepage."}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() =>
-                setDrafts((current) => [...current, newHomepageItem()])
-              }
-              className="min-h-11 w-full rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white sm:w-auto"
-            >
-              Add New Home Item
-            </button>
+            {!(activeTab === "deals" && (getSectionItems(items, "deals").length > 0 || drafts.some((draft) => draft.categoryType === "promotion" && Number(draft.sortOrder) >= 0))) && (
+              <button
+                type="button"
+                onClick={() => setDrafts((current) => {
+                  const draft = newHomepageItem(activeTab);
+                  if (activeTab === "promotion") {
+                    const existingTopCount = getSectionItems(items, "promotion").length;
+                    const draftTopCount = current.filter((entry) => entry.categoryType === "promotion" && Number(entry.sortOrder) < 0).length;
+                    draft.sortOrder = -100 + existingTopCount + draftTopCount;
+                  }
+                  return [...current, draft];
+                })}
+                className="min-h-11 w-full rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white sm:w-auto"
+              >
+                {activeTab === "cards" ? "Add New Home Item" : activeTab === "promotion" ? "Add Top Promotion" : activeTab === "deals" ? "Add Advertisement" : "Add Home Item"}
+              </button>
+            )}
           </div>
 
           {itemsError && (
-            <div
-              role="alert"
-              className="rounded-2xl border border-red-200 bg-red-50 p-5 font-bold text-red-800"
-            >
+            <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-5 font-bold text-red-800">
               {itemsError}
             </div>
           )}
 
-          {[...drafts, ...items].map((item) => (
+          {[...drafts.filter((draft) => {
+            if (activeTab === "promotion") return draft.categoryType === "promotion" && Number(draft.sortOrder) < 0;
+            if (activeTab === "deals") return draft.categoryType === "promotion" && Number(draft.sortOrder) >= 0;
+            return !["promotion", "brand"].includes(draft.categoryType);
+          }), ...getSectionItems(items, activeTab)].map((item) => (
             <HomePageContentItemEditor
               key={item.id || item.clientId}
               item={item}
               targetOptions={targetOptions}
               onSaved={async () => {
                 if (item.isDraft) {
-                  setDrafts((current) =>
-                    current.filter(
-                      (draft) => draft.clientId !== item.clientId
-                    )
-                  );
+                  setDrafts((current) => current.filter((draft) => draft.clientId !== item.clientId));
                 }
                 await loadItems();
               }}
               onDelete={deleteItem}
+              displayMode={activeTab === "promotion" ? "hero" : activeTab === "deals" ? "deal" : "standard"}
             />
           ))}
-          {items.length === 0 && drafts.length === 0 && !itemsError && (
+
+          {getSectionItems(items, activeTab).length === 0 && drafts.length === 0 && !itemsError && (
             <div className="rounded-2xl border border-dashed bg-white p-5 text-slate-600">
-              No home items are configured.
+              No items are configured for this section yet.
             </div>
           )}
         </div>

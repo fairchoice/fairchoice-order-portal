@@ -91,7 +91,8 @@ test("previous invoice date remains in submitted notes", () => {
   assert.match(modal, /previousInvoiceDate \? `Previous invoice date: \$\{previousInvoiceDate\}`/);
 });
 
-test("estimated credit remains quantity multiplied by current item price", () => {
-  assert.match(modal, /Number\(line\.returnQty \|\| 0\) \* getItemPrice\(line\)/);
+test("estimated credit uses the current priced-line gross total", () => {
+  assert.match(modal, /const total = lines\.reduce\(\(sum, line\) => sum \+ getLineFinancials\(line\)\.grossTotal, 0\)/);
   assert.match(modal, /\{formatCurrency\(total\)\}/);
 });
+
