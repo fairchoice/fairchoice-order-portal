@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { supabase } from "../services/supabase";
+import { isActiveProduct } from "../services/products";
 import { supplierOptionsForSelection } from "../services/suppliers";
 import { getActiveStockLocations } from "../services/locationStock";
 import {
@@ -437,7 +438,6 @@ const [bulkLabelFilters, setBulkLabelFilters] = useState({
   subCategory: "",
   supplier: "",
   country: "",
-  status: "all",
 });
 const [bulkLabelLoaded, setBulkLabelLoaded] = useState(false);
 const [bulkLabelSelectedIds, setBulkLabelSelectedIds] = useState([]);
@@ -469,7 +469,7 @@ const filteredAdminProducts = (products || []).filter((p) => {
     String(p.brand || "").toLowerCase().includes(keyword) ||
     String(p.series || "").toLowerCase().includes(keyword);
 
-  const isActive = p.active !== false;
+  const isActive = isActiveProduct(p);
 
   const matchesStatus =
     statusFilter === "all" ||
@@ -593,6 +593,7 @@ const getServerPreview = (product = {}, vatPriceOverride) =>
   );
 
 const priceManagementProducts = (products || []).filter((product) => {
+  if (!isActiveProduct(product)) return false;
   const search = priceSearch.trim().toLowerCase();
   const matchesBrand = !priceBrand || String(product.brand || "") === priceBrand;
   const matchesSeries = !priceSeries || String(product.series || "") === priceSeries;
@@ -745,6 +746,7 @@ const uniqueProductValues = (field) =>
   [
     ...new Set(
       (products || [])
+        .filter(isActiveProduct)
         .map((product) => String(product?.[field] || "").trim())
         .filter(Boolean)
     ),
@@ -761,7 +763,6 @@ const setBulkLabelFilter = (field, value) => {
 
 const bulkLabelFilteredProducts = bulkLabelLoaded
   ? (products || []).filter((product) => {
-      const isActive = product.active !== false;
       const supplierName = String(
         product.supplierName || product.supplier_name || ""
       );
@@ -785,9 +786,7 @@ const bulkLabelFilteredProducts = bulkLabelLoaded
         (!bulkLabelFilters.supplier ||
           supplierName === bulkLabelFilters.supplier) &&
         matchesCountry &&
-        (bulkLabelFilters.status === "all" ||
-          (bulkLabelFilters.status === "active" && isActive) ||
-          (bulkLabelFilters.status === "inactive" && !isActive))
+        isActiveProduct(product)
       );
     })
   : [];
@@ -1628,6 +1627,7 @@ const updateProductLabel = (labelValue) => {
               {[
                 ...new Set(
                   (products || [])
+                    .filter(isActiveProduct)
                     .map((product) =>
                       String(product.supplierName || product.supplier_name || "").trim()
                     )
@@ -1652,15 +1652,9 @@ const updateProductLabel = (labelValue) => {
               <option value="england">England</option>
             </select>
 
-            <select
-              className="input-box"
-              value={bulkLabelFilters.status}
-              onChange={(e) => setBulkLabelFilter("status", e.target.value)}
-            >
-              <option value="all">Active and Inactive</option>
-              <option value="active">Active Only</option>
-              <option value="inactive">Inactive Only</option>
-            </select>
+            <div className="input-box flex items-center bg-slate-100 text-slate-600 font-bold">
+              Active products only
+            </div>
 
             <button
               type="button"
@@ -1929,7 +1923,7 @@ const updateProductLabel = (labelValue) => {
         {pagedProducts.map((p) => {
           const stock = Number(p.stock || 0);
           const lowStockAlert = Number(p.lowStockAlert || 0);
-          const isActive = p.active !== false;
+          const isActive = isActiveProduct(p);
 
           return (
             <tr key={p.id} className="border hover:bg-slate-50">

@@ -73,7 +73,7 @@ export default function BulkToDatabase({
         <input
           value={bulkNewPrice}
           onChange={(e) => setBulkNewPrice(e.target.value)}
-          placeholder="New Price"
+          placeholder="New Ex.VAT Price"
           type="number"
           step="0.01"
           className="border rounded-xl px-4 py-3 min-w-[220px]"
@@ -93,7 +93,7 @@ export default function BulkToDatabase({
         </div>
 
         <div className="font-bold text-slate-700">
-          New Margin: {bulkPreview.serverMargin}%
+          New Margin: {bulkPreview.exVatMargin}%
         </div>
       </div>
 

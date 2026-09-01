@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase";
+import { isActiveProduct } from "../../services/products";
 import { canPerform } from "../../security/accessControlRegistry";
 import {
   getActiveStockLocations,
@@ -274,7 +275,6 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
 
   useEffect(() => {
     fetchProductOptions();
-    fetchDisplayMessages();
   }, []);
 
   const fetchProductOptions = async () => {
@@ -351,15 +351,16 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     }
 
     resetDisplayMessageForm();
-    fetchDisplayMessages();
   };
 
   const getProductValue = (product, camelField, dbField = camelField) =>
     product?.[camelField] ?? product?.[dbField] ?? "";
 
+  const activeProducts = (products || []).filter(isActiveProduct);
+
   const displayMessageTargetOptions = (() => {
     if (displayMessageForm.target_type === "product") {
-      return (products || [])
+      return activeProducts
         .map((product) => ({
           value: String(product.id || ""),
           label: `${getProductValue(product, "name", "product_name")}${getProductValue(product, "productCode", "product_code") ? ` (${getProductValue(product, "productCode", "product_code")})` : ""}`,
@@ -378,7 +379,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
 
     return [
       ...new Set(
-        (products || [])
+        activeProducts
           .map((product) => getProductValue(product, camelField, dbField))
           .map((value) => String(value || "").trim())
           .filter(Boolean)
@@ -405,7 +406,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   };
 
   useEffect(() => {
-    const imageCandidates = (products || []).filter(hasRealProductImage);
+    const imageCandidates = activeProducts.filter(hasRealProductImage);
     if (!imageCandidates.length) return;
 
     let cancelled = false;
@@ -444,7 +445,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   }, [products]);
 
   useEffect(() => {
-    const debugProducts = (products || []).filter((product) => {
+    const debugProducts = activeProducts.filter((product) => {
       const name = String(getProductValue(product, "name", "product_name")).toLowerCase();
       return (
         name.includes("lost mary 6k cola lime") ||
@@ -480,7 +481,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   const uniqueProductValues = (camelField, dbField = camelField) =>
     [
       ...new Set(
-        (products || [])
+        activeProducts
           .map((product) =>
             String(getProductValue(product, camelField, dbField)).trim()
           )
@@ -502,7 +503,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     }));
   };
 
-  const filteredImageProducts = (products || []).filter((product) => {
+  const filteredImageProducts = activeProducts.filter((product) => {
     const search = imageFilters.search.trim().toLowerCase();
     const productCode = String(getProductValue(product, "productCode", "product_code"));
     const productName = String(getProductValue(product, "name", "product_name"));
@@ -527,7 +528,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     );
   });
 
-  const filteredMissingCodeProducts = (products || []).filter((product) => {
+  const filteredMissingCodeProducts = activeProducts.filter((product) => {
     const search = missingCodeFilters.search.trim().toLowerCase();
     const productId = String(getProductValue(product, "id"));
     const productCode = getCurrentProductCode(product);
@@ -1271,7 +1272,6 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
           ["import", "Import File"],
           ["codes", "Bulk Product Code"],
           ["images", "Add Images"],
-          ["messages", "Display Message"],
           ["missingCodes", "Missing Product Code"],
         ].map(([key, label]) => (
           <button
@@ -1394,178 +1394,6 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
             </div>
           )}
         </div>
-        )}
-
-        {activeSection === "messages" && (
-          <div className="bg-white rounded-2xl shadow-sm p-5">
-            <h3 className="text-xl font-bold mb-4">Display Message</h3>
-            {displayMessageSetupError && (
-              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
-                {displayMessageSetupError}
-              </div>
-            )}
-            <p className="mb-3 text-sm text-slate-600">
-              Use Main Category for a broad group, or choose Brand / Series for a more specific group message.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-              <select
-                className="input-box"
-                value={displayMessageForm.target_type}
-                onChange={(event) =>
-                  setDisplayMessageForm({
-                    ...displayMessageForm,
-                    target_type: event.target.value,
-                    target_value: "",
-                  })
-                }
-              >
-                <option value="main_category">Main Category</option>
-                <option value="sub_category">Sub Category</option>
-                <option value="brand">Brand</option>
-                <option value="series">Series</option>
-                <option value="product">Individual Product</option>
-              </select>
-
-              <select
-                className="input-box"
-                value={displayMessageForm.target_value}
-                onChange={(event) =>
-                  setDisplayMessageForm({
-                    ...displayMessageForm,
-                    target_value: event.target.value,
-                  })
-                }
-              >
-                <option value="">Select target</option>
-                {displayMessageTargetOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-
-              <input
-                className="input-box md:col-span-2"
-                value={displayMessageForm.message}
-                maxLength={120}
-                onChange={(event) =>
-                  setDisplayMessageForm({
-                    ...displayMessageForm,
-                    message: event.target.value,
-                  })
-                }
-                placeholder="Due to shipment issue IVG price has gone up"
-              />
-
-              <select
-                className="input-box"
-                value={displayMessageForm.color}
-                onChange={(event) =>
-                  setDisplayMessageForm({
-                    ...displayMessageForm,
-                    color: event.target.value,
-                  })
-                }
-              >
-                <option value="red">Red</option>
-                <option value="navy">Navy Blue</option>
-              </select>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-2 text-sm font-bold">
-                <input
-                  type="checkbox"
-                  checked={displayMessageForm.active}
-                  onChange={(event) =>
-                    setDisplayMessageForm({
-                      ...displayMessageForm,
-                      active: event.target.checked,
-                    })
-                  }
-                />
-                Active
-              </label>
-              <button
-                type="button"
-                onClick={saveDisplayMessage}
-                disabled={Boolean(displayMessageSetupError)}
-                className="bg-blue-600 text-white px-5 py-3 rounded-xl font-bold disabled:bg-slate-300"
-              >
-                {displayMessageForm.id ? "Update Message" : "Save Message"}
-              </button>
-              {displayMessageForm.id && (
-                <button
-                  type="button"
-                  onClick={resetDisplayMessageForm}
-                  className="border px-5 py-3 rounded-xl font-bold"
-                >
-                  Cancel Edit
-                </button>
-              )}
-            </div>
-
-            <div className="mt-5 overflow-x-auto">
-              <table className="w-full text-sm border">
-                <thead className="bg-slate-800 text-white">
-                  <tr>
-                    <th className="p-2 text-left">Target</th>
-                    <th className="p-2 text-left">Message</th>
-                    <th className="p-2 text-left">Colour</th>
-                    <th className="p-2 text-left">Status</th>
-                    <th className="p-2 text-left">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayMessages.map((message) => (
-                    <tr key={message.id} className="border-t">
-                      <td className="p-2">
-                        {message.target_type.replaceAll("_", " ")}: {message.target_value}
-                      </td>
-                      <td className="p-2 font-bold">{message.message}</td>
-                      <td className="p-2">{message.color}</td>
-                      <td className="p-2">{message.active ? "Active" : "Hidden"}</td>
-                      <td className="p-2">
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setDisplayMessageForm(message)}
-                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const { error } = await supabase
-                                .from("product_display_messages")
-                                .update({ active: !message.active })
-                                .eq("id", message.id);
-                              if (error) {
-                                alert("Message update failed: " + error.message);
-                                return;
-                              }
-                              fetchDisplayMessages();
-                            }}
-                            className="bg-slate-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                          >
-                            {message.active ? "Hide" : "Show"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {displayMessages.length === 0 && (
-                    <tr>
-                      <td className="p-4 text-center text-slate-500" colSpan={5}>
-                        No display messages yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
         )}
 
         {activeSection === "codes" && (

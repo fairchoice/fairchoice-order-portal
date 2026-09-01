@@ -715,7 +715,7 @@ export default function PriceManagement({
           {selectedSingleProduct && (
             <div className="mt-4 font-bold text-slate-700">
               Current Price: £{vatPrice(selectedSingleProduct).toFixed(2)}
-              {" "} | Current Margin: {selectedSingleCurrent?.serverMargin}%
+              {" "} | Current Margin: {selectedSingleCurrent?.exVatMargin}%
             </div>
           )}
 
@@ -723,7 +723,7 @@ export default function PriceManagement({
             <input
               value={singleNewPrice}
               onChange={(e) => setSingleNewPrice(e.target.value)}
-              placeholder="New Price"
+              placeholder="New Ex.VAT Price"
               type="number"
               step="0.01"
               className="border rounded-xl px-4 py-3 min-w-[220px]"
@@ -743,7 +743,7 @@ export default function PriceManagement({
             </div>
 
             <div className="font-bold text-slate-700">
-              New Margin: {singlePreview.serverMargin}%
+              New Margin: {singlePreview.exVatMargin}%
             </div>
           </div>
 
@@ -812,7 +812,7 @@ export default function PriceManagement({
                           £{vatPrice(singleViewProduct.updatedProduct).toFixed(2)}
                         </td>
                         <td className="border p-3 text-right">
-                          {updatedPreview.serverMargin}%
+                          {updatedPreview.exVatMargin}%
                         </td>
                       </tr>
                     );
