@@ -73,7 +73,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
       page("page.accounts.invoices", "Invoices", "invoicesPortal"),
       page("page.accounts.weekly", "Weekly Account", "weeklyAccount"),
       page("page.accounts.supplier_accounts", "Supplier Accounts", "supplierAccounts"),
-      page("page.accounts.expenses", "Expenses", "expenses", STAFF_ROLES.filter((role) => !["Super Admin", "Brand Partner"].includes(role))),
+      page("page.accounts.expenses", "Expenses", "expenses", ["Accounts", "Accountant", "Warehouse"]),
       page("page.accounts.branch_separation", "Branch Separation", "branchSeparation"),
     ],
   },
