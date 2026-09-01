@@ -7,10 +7,20 @@ const HISTORY_PAGE_SIZE = 50;
 const money = (value) => formatCurrency(Number(value || 0));
 const numberValue = (...values) => {
   for (const value of values) {
+    if (value === undefined || value === null || value === "") continue;
     const number = Number(value);
     if (Number.isFinite(number)) return number;
   }
   return 0;
+};
+
+const optionalNumberValue = (...values) => {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
 };
 const dateValue = (...values) => {
   for (const value of values) {
@@ -69,15 +79,29 @@ function buildRow(customer, snapshot, error = null) {
   const summary = snapshot?.customerSummary || {};
   const accountSummary = snapshot?.accountHistory?.summary || {};
   const transactions = snapshot?.accountHistory?.transactions || snapshot?.transactionHistory || [];
-  const latestTransactionBalance = transactions.length
-    ? numberValue(transactions[transactions.length - 1]?.running_balance, transactions[transactions.length - 1]?.runningBalance)
-    : NaN;
-  const totalOutstanding = Math.max(0, numberValue(
-    accountSummary.closingBalance,
-    Number.isFinite(latestTransactionBalance) ? latestTransactionBalance : undefined,
-    summary.outstandingBalance,
-    summary.outstanding
-  ));
+  const latestTransaction = [...transactions]
+    .filter((transaction) =>
+      optionalNumberValue(transaction?.running_balance, transaction?.runningBalance) !== null
+    )
+    .sort((a, b) =>
+      (dateValue(b.transaction_date, b.ordering_timestamp, b.created_at, b.updated_at)?.getTime() || 0) -
+      (dateValue(a.transaction_date, a.ordering_timestamp, a.created_at, a.updated_at)?.getTime() || 0)
+    )[0];
+  const latestTransactionBalance = latestTransaction
+    ? optionalNumberValue(latestTransaction.running_balance, latestTransaction.runningBalance)
+    : null;
+
+  // Customer Credit is the canonical source for the account outstanding balance.
+  // Do not let an empty/zero-ish history fallback hide a real outstanding balance.
+  const totalOutstanding = Math.max(
+    0,
+    numberValue(
+      summary.outstandingBalance,
+      summary.outstanding,
+      accountSummary.closingBalance,
+      latestTransactionBalance
+    )
+  );
   const buckets = { current: 0, "8_14": 0, "15_30": 0, "31_60": 0, "61_90": 0, "90_plus": 0 };
   let invoiceOutstanding = 0;
   let oldestDate = null;
