@@ -2,276 +2,89 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { hasPermission, requirePermission } from "../../utils/permissions";
 import { logAction } from "../../utils/auditLog";
+import { normalizeRole } from "../../security/accessControlRegistry";
 
 const PRICING_PASSWORD_SETTING_KEY = "pricing_super_admin_password";
 
 export default function Pricing() {
-  const [form, setForm] = useState({
-    vat_percent: 20,
-    server_discount_percent: 0,
-    manager_discount_percent: 0,
-    admin_offer_discount_percent: 0,
-  });
-
+  const [form, setForm] = useState({ vat_percent: 20, server_discount_percent: 0, manager_discount_percent: 0, admin_offer_discount_percent: 0 });
   const [saving, setSaving] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [pricingUnlocked, setPricingUnlocked] = useState(false);
   const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
   const [superAdminPassword, setSuperAdminPassword] = useState("");
+  const [showResetPasswordPrompt, setShowResetPasswordPrompt] = useState(false);
+  const [newPricingPassword, setNewPricingPassword] = useState("");
+  const [confirmPricingPassword, setConfirmPricingPassword] = useState("");
+  const [resettingPassword, setResettingPassword] = useState(false);
   const loggedInUser = JSON.parse(localStorage.getItem("loggedInUser") || "null");
+  const isSuperAdmin = normalizeRole(loggedInUser?.role || loggedInUser?.access_level) === "Super Admin";
 
-  useEffect(() => {
-    loadPricing();
-  }, []);
+  useEffect(() => { loadPricing(); }, []);
 
   async function loadPricing() {
-    const { data, error } = await supabase
-      .from("pricing_settings")
-      .select("*")
-      .eq("id", 1)
-      .single();
-
-    if (!error && data) {
-      setForm({
-        vat_percent: Number(data.vat_percent ?? 20),
-        server_discount_percent: Number(data.server_discount_percent ?? 0),
-        manager_discount_percent: Number(data.manager_discount_percent ?? 0),
-        admin_offer_discount_percent: Number(
-          data.admin_offer_discount_percent ?? data.super_discount_percent ?? 0
-        ),
-      });
-    }
+    const { data, error } = await supabase.from("pricing_settings").select("*").eq("id", 1).single();
+    if (!error && data) setForm({ vat_percent: Number(data.vat_percent ?? 20), server_discount_percent: Number(data.server_discount_percent ?? 0), manager_discount_percent: Number(data.manager_discount_percent ?? 0), admin_offer_discount_percent: Number(data.admin_offer_discount_percent ?? data.super_discount_percent ?? 0) });
   }
 
-  function updateField(field, value) {
-    if (!pricingUnlocked) return;
-
-    setForm((old) => ({
-      ...old,
-      [field]: value,
-    }));
-  }
+  function updateField(field, value) { if (!pricingUnlocked) return; setForm((old) => ({ ...old, [field]: value })); }
 
   async function unlockPricing() {
-    if (
-      !requirePermission(
-        loggedInUser,
-        "can_edit_pricing",
-        "You cannot edit pricing."
-      )
-    ) {
-      setShowPasswordPrompt(false);
-      setSuperAdminPassword("");
-      return;
-    }
-
+    if (!requirePermission(loggedInUser, "can_edit_pricing", "You cannot edit pricing.")) { setShowPasswordPrompt(false); setSuperAdminPassword(""); return; }
     const enteredPassword = superAdminPassword;
-
-    if (!enteredPassword) {
-      alert("Enter Super Admin password");
-      return;
-    }
-
+    if (!enteredPassword) { alert("Enter Super Admin password"); return; }
     setUnlocking(true);
-
-    const { data, error } = await supabase
-      .from("app_security_settings")
-      .select("value")
-      .eq("key", PRICING_PASSWORD_SETTING_KEY)
-      .eq("active", true)
-      .maybeSingle();
-
+    const { data, error } = await supabase.from("app_security_settings").select("value").eq("key", PRICING_PASSWORD_SETTING_KEY).eq("active", true).maybeSingle();
     setUnlocking(false);
-
-    if (error || !data?.value) {
-      setSuperAdminPassword("");
-      alert("Pricing unlock password is not configured.");
-      return;
-    }
-
-    if (enteredPassword !== data.value) {
-      setSuperAdminPassword("");
-      alert("Incorrect Super Admin password");
-      return;
-    }
-
-    setPricingUnlocked(true);
-    setShowPasswordPrompt(false);
-    setSuperAdminPassword("");
+    if (error || !data?.value) { setSuperAdminPassword(""); alert("Pricing unlock password is not configured."); return; }
+    if (enteredPassword !== data.value) { setSuperAdminPassword(""); alert("Incorrect Super Admin password"); return; }
+    setPricingUnlocked(true); setShowPasswordPrompt(false); setSuperAdminPassword("");
   }
 
-  function cancelUnlockPricing() {
-    setShowPasswordPrompt(false);
-    setSuperAdminPassword("");
+  function cancelUnlockPricing() { setShowPasswordPrompt(false); setSuperAdminPassword(""); }
+  function cancelResetPricingPassword() { setShowResetPasswordPrompt(false); setNewPricingPassword(""); setConfirmPricingPassword(""); }
+
+  async function resetPricingPassword() {
+    if (!isSuperAdmin) { alert("Only Super Admin can reset the Pricing password."); return; }
+    if (!requirePermission(loggedInUser, "can_edit_pricing", "You cannot edit pricing.")) { cancelResetPricingPassword(); return; }
+    const nextPassword = newPricingPassword.trim();
+    if (nextPassword.length < 6) { alert("Use at least 6 characters for the new Pricing password."); return; }
+    if (nextPassword !== confirmPricingPassword.trim()) { alert("New password and confirmation do not match."); return; }
+    if (!window.confirm("Reset the Pricing edit password?")) return;
+    setResettingPassword(true);
+    const { error } = await supabase.from("app_security_settings").upsert({ key: PRICING_PASSWORD_SETTING_KEY, value: nextPassword, active: true }, { onConflict: "key" });
+    setResettingPassword(false);
+    if (error) { alert("Pricing password reset failed: " + error.message); return; }
+    await logAction({ user: loggedInUser, action_type: "Pricing password reset", page_module: "Pricing", old_value: null, new_value: { key: PRICING_PASSWORD_SETTING_KEY } });
+    setPricingUnlocked(true); cancelResetPricingPassword(); alert("Pricing password reset. Pricing is now unlocked.");
   }
 
   async function savePricing() {
     if (!pricingUnlocked) return;
-    if (
-      !requirePermission(
-        loggedInUser,
-        "can_edit_pricing",
-        "You cannot edit pricing."
-      )
-    ) {
-      return;
-    }
-
+    if (!requirePermission(loggedInUser, "can_edit_pricing", "You cannot edit pricing.")) return;
     if (!window.confirm("Save pricing settings?")) return;
-
     setSaving(true);
-
-    const payload = {
-      id: 1,
-      vat_percent: Number(form.vat_percent || 0),
-      server_discount_percent: Number(form.server_discount_percent || 0),
-      manager_discount_percent: Number(form.manager_discount_percent || 0),
-      admin_offer_discount_percent: Number(
-        form.admin_offer_discount_percent || 0
-      ),
-      super_discount_percent: Number(form.admin_offer_discount_percent || 0),
-    };
-
-    const { error } = await supabase
-      .from("pricing_settings")
-      .upsert(payload, { onConflict: "id" });
-
+    const payload = { id: 1, vat_percent: Number(form.vat_percent || 0), server_discount_percent: Number(form.server_discount_percent || 0), manager_discount_percent: Number(form.manager_discount_percent || 0), admin_offer_discount_percent: Number(form.admin_offer_discount_percent || 0), super_discount_percent: Number(form.admin_offer_discount_percent || 0) };
+    const { error } = await supabase.from("pricing_settings").upsert(payload, { onConflict: "id" });
     setSaving(false);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
+    if (error) { alert(error.message); return; }
     alert("Pricing settings saved.");
-
-    await logAction({
-      user: loggedInUser,
-      action_type: "Pricing changed",
-      page_module: "Pricing",
-      old_value: null,
-      new_value: payload,
-    });
+    await logAction({ user: loggedInUser, action_type: "Pricing changed", page_module: "Pricing", old_value: null, new_value: payload });
   }
 
-  return (
-    <div>
-      <h1 className="text-2xl font-bold mb-1">Pricing</h1>
-      <p className="text-sm text-slate-600 mb-6">
-        Manage Ex.VAT, Inc.VAT, Manager Offer and Admin Offer percentage rules.
-      </p>
-
-      <div className="bg-white rounded-2xl border p-5 max-w-3xl">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <PriceInput
-            label="Ex.VAT / VAT %"
-            help="Default VAT calculation. Example: GBP 10 + 20% = GBP 12"
-            value={form.vat_percent}
-            disabled={!pricingUnlocked}
-            onChange={(v) => updateField("vat_percent", v)}
-          />
-
-          <PriceInput
-            label="Inc.VAT Discount %"
-            help="Applied after VAT, then fair-quarter rounded. Example: GBP 10 + 20% VAT = GBP 12, then 2% off = GBP 11.76"
-            value={form.server_discount_percent}
-            disabled={!pricingUnlocked}
-            onChange={(v) => updateField("server_discount_percent", v)}
-          />
-
-          <PriceInput
-            label="Manager Discount %"
-            help="Applied after VAT, then fair-quarter rounded, same as Inc.VAT."
-            value={form.manager_discount_percent}
-            disabled={!pricingUnlocked}
-            onChange={(v) => updateField("manager_discount_percent", v)}
-          />
-
-          <PriceInput
-            label="Admin Offer %"
-            help="Applied before VAT, then VAT is added after."
-            value={form.admin_offer_discount_percent}
-            disabled={!pricingUnlocked}
-            onChange={(v) => updateField("admin_offer_discount_percent", v)}
-          />
-        </div>
-
-        <div className="mt-6 flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={() => setShowPasswordPrompt(true)}
-            disabled={pricingUnlocked || !hasPermission(loggedInUser, "can_edit_pricing")}
-            className="bg-slate-700 text-white font-bold px-6 py-3 rounded-xl disabled:bg-slate-400"
-          >
-            {pricingUnlocked ? "Pricing Unlocked" : "Edit Pricing"}
-          </button>
-
-          <button
-            onClick={savePricing}
-            disabled={saving || !pricingUnlocked}
-            className="bg-blue-700 text-white font-bold px-6 py-3 rounded-xl disabled:bg-slate-400"
-          >
-            {saving ? "Saving..." : "Save Pricing"}
-          </button>
-        </div>
-      </div>
-
-      {showPasswordPrompt && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl border p-5 w-full max-w-md">
-            <h2 className="text-xl font-bold mb-4">Super Admin Password</h2>
-
-            <input
-              type="password"
-              className="border rounded-xl p-3 w-full font-bold"
-              value={superAdminPassword}
-              onChange={(e) => setSuperAdminPassword(e.target.value)}
-              autoFocus
-            />
-
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={cancelUnlockPricing}
-                className="bg-slate-200 text-slate-800 font-bold px-5 py-3 rounded-xl"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={unlockPricing}
-                disabled={unlocking}
-                className="bg-blue-700 text-white font-bold px-5 py-3 rounded-xl disabled:bg-slate-400"
-              >
-                {unlocking ? "Checking..." : "Confirm"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  return <div>
+    <h1 className="text-2xl font-bold mb-1">Pricing</h1><p className="text-sm text-slate-600 mb-6">Manage Ex.VAT, Inc.VAT, Manager Offer and Admin Offer percentage rules.</p>
+    <div className="bg-white rounded-2xl border p-5 max-w-3xl"><div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <PriceInput label="Ex.VAT / VAT %" help="Default VAT calculation. Example: GBP 10 + 20% = GBP 12" value={form.vat_percent} disabled={!pricingUnlocked} onChange={(v) => updateField("vat_percent", v)} />
+      <PriceInput label="Inc.VAT Discount %" help="Applied after VAT, then fair-quarter rounded. Example: GBP 10 + 20% VAT = GBP 12, then 2% off = GBP 11.76" value={form.server_discount_percent} disabled={!pricingUnlocked} onChange={(v) => updateField("server_discount_percent", v)} />
+      <PriceInput label="Manager Discount %" help="Applied after VAT, then fair-quarter rounded, same as Inc.VAT." value={form.manager_discount_percent} disabled={!pricingUnlocked} onChange={(v) => updateField("manager_discount_percent", v)} />
+      <PriceInput label="Admin Offer %" help="Applied before VAT, then VAT is added after." value={form.admin_offer_discount_percent} disabled={!pricingUnlocked} onChange={(v) => updateField("admin_offer_discount_percent", v)} />
+    </div><div className="mt-6 flex flex-wrap gap-3"><button type="button" onClick={() => setShowPasswordPrompt(true)} disabled={pricingUnlocked || !hasPermission(loggedInUser, "can_edit_pricing")} className="bg-slate-700 text-white font-bold px-6 py-3 rounded-xl disabled:bg-slate-400">{pricingUnlocked ? "Pricing Unlocked" : "Edit Pricing"}</button><button onClick={savePricing} disabled={saving || !pricingUnlocked} className="bg-blue-700 text-white font-bold px-6 py-3 rounded-xl disabled:bg-slate-400">{saving ? "Saving..." : "Save Pricing"}</button></div></div>
+    {showPasswordPrompt && <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-2xl border p-5 w-full max-w-md"><h2 className="text-xl font-bold mb-4">Super Admin Password</h2><input type="password" className="border rounded-xl p-3 w-full font-bold" value={superAdminPassword} onChange={(e) => setSuperAdminPassword(e.target.value)} autoFocus />{isSuperAdmin && <button type="button" onClick={() => { setShowPasswordPrompt(false); setSuperAdminPassword(""); setShowResetPasswordPrompt(true); }} className="mt-4 text-sm font-bold text-blue-700 underline">Forgot password / Reset</button>}<div className="mt-5 flex justify-end gap-3"><button type="button" onClick={cancelUnlockPricing} className="bg-slate-200 text-slate-800 font-bold px-5 py-3 rounded-xl">Cancel</button><button type="button" onClick={unlockPricing} disabled={unlocking} className="bg-blue-700 text-white font-bold px-5 py-3 rounded-xl disabled:bg-slate-400">{unlocking ? "Checking..." : "Confirm"}</button></div></div></div>}
+    {showResetPasswordPrompt && <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-2xl border p-5 w-full max-w-md"><h2 className="text-xl font-bold mb-2">Reset Pricing Password</h2><p className="text-sm text-slate-600 mb-4">Super Admin only. Set a new password to unlock Pricing.</p><div className="space-y-3"><input type="password" className="border rounded-xl p-3 w-full font-bold" placeholder="New password" value={newPricingPassword} onChange={(e) => setNewPricingPassword(e.target.value)} autoFocus /><input type="password" className="border rounded-xl p-3 w-full font-bold" placeholder="Confirm new password" value={confirmPricingPassword} onChange={(e) => setConfirmPricingPassword(e.target.value)} /></div><div className="mt-5 flex justify-end gap-3"><button type="button" onClick={cancelResetPricingPassword} className="bg-slate-200 text-slate-800 font-bold px-5 py-3 rounded-xl">Cancel</button><button type="button" onClick={resetPricingPassword} disabled={resettingPassword} className="bg-red-700 text-white font-bold px-5 py-3 rounded-xl disabled:bg-slate-400">{resettingPassword ? "Resetting..." : "Reset Password"}</button></div></div></div>}
+  </div>;
 }
 
 function PriceInput({ label, help, value, onChange, disabled }) {
-  return (
-    <div className="border rounded-xl p-4">
-      <label className="font-bold text-sm block mb-2">{label}</label>
-
-      <div className="flex items-center gap-2">
-        <input
-          type="number"
-          step="0.01"
-          className="border rounded-xl p-3 w-full font-bold disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
-          value={value}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-        />
-        <span className="font-bold">%</span>
-      </div>
-
-      <p className="text-xs text-slate-500 mt-2">{help}</p>
-    </div>
-  );
+  return <div className="border rounded-xl p-4"><label className="font-bold text-sm block mb-2">{label}</label><div className="flex items-center gap-2"><input type="number" step="0.01" className="border rounded-xl p-3 w-full font-bold disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} /><span className="font-bold">%</span></div><p className="text-xs text-slate-500 mt-2">{help}</p></div>;
 }
