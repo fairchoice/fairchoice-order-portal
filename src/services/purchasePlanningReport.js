@@ -75,6 +75,7 @@ export function getPurchasePlanningPeriods(now = new Date()) {
     now: end,
     last7Start: new Date(endMs - 7 * DAY_MS),
     previous7Start: new Date(endMs - 14 * DAY_MS),
+    last14Start: new Date(endMs - 14 * DAY_MS),
     last30Start: new Date(endMs - 30 * DAY_MS),
   };
 }
@@ -84,13 +85,14 @@ export function classifyPurchasePlanningDate(value, now = new Date()) {
   const periods = getPurchasePlanningPeriods(now);
   const nowMs = periods.now.getTime();
   if (!Number.isFinite(timestamp) || timestamp > nowMs) {
-    return { last7: false, previous7: false, last30: false };
+    return { last7: false, previous7: false, last14: false, last30: false };
   }
   return {
     last7: timestamp >= periods.last7Start.getTime(),
     previous7:
       timestamp >= periods.previous7Start.getTime() &&
       timestamp < periods.last7Start.getTime(),
+    last14: timestamp >= periods.last14Start.getTime(),
     last30: timestamp >= periods.last30Start.getTime(),
   };
 }
@@ -181,6 +183,7 @@ const getOrCreateMetric = (map, key, seed = {}) => {
     map.set(key, {
       soldLast7: 0,
       soldPrevious7: 0,
+      soldLast14: 0,
       soldLast30: 0,
       preOrderBoughtQty: 0,
       preOrderIncomingQty: 0,
@@ -211,6 +214,7 @@ export function aggregateDeliveredProductSales(orders = [], now = new Date()) {
       });
       if (periods.last7) metric.soldLast7 += contribution.quantity;
       if (periods.previous7) metric.soldPrevious7 += contribution.quantity;
+      if (periods.last14) metric.soldLast14 += contribution.quantity;
       metric.soldLast30 += contribution.quantity;
     }
   }
@@ -364,14 +368,33 @@ export function calculatePurchaseTrend(soldLast7 = 0, soldPrevious7 = 0) {
 
 export function calculatePurchaseSuggestion({
   soldLast7 = 0,
+  soldPrevious7 = 0,
+  soldLast14,
   soldLast30 = 0,
   currentStock = 0,
   preOrderBoughtQty = 0,
   preOrderIncomingQty,
+  preOrderOutstandingQty = 0,
   preOrderBoughtAlreadyInStock = false,
+  purchaseCycleDays = 7,
+  leadDays = 3,
+  safetyDays = 2,
+  fastLineThreshold14 = 14,
+  fastLineBufferQty = 2,
 } = {}) {
-  const weeklyAverage = numeric(soldLast30) / (30 / 7);
-  const targetStock = Math.max(numeric(soldLast7), weeklyAverage);
+  // The planning signal is the most recent 14 days only.
+  // If soldLast14 is not supplied, rebuild it from the two real 7-day buckets.
+  const recent14 = soldLast14 === undefined
+    ? Math.max(0, numeric(soldLast7) + numeric(soldPrevious7))
+    : Math.max(0, numeric(soldLast14));
+  const dailyDemand = recent14 / 14;
+  const weeklyAverage = dailyDemand * 7;
+  const targetDays = Math.max(1, numeric(purchaseCycleDays) + numeric(leadDays) + numeric(safetyDays));
+  const outstandingDemand = Math.max(0, numeric(preOrderOutstandingQty));
+  const fastLine = recent14 >= Math.max(1, numeric(fastLineThreshold14));
+  const fastLineBuffer = fastLine ? Math.max(0, numeric(fastLineBufferQty)) : 0;
+  const targetStock = Math.ceil(dailyDemand * targetDays + outstandingDemand + fastLineBuffer);
+
   // Pre-Order Supply Buy/PartialBuy changes the allocated order line to In Stock,
   // but does not increment product_location_stock. Active bought units are therefore
   // incoming once. If that workflow changes later, the flag prevents double subtraction.
@@ -381,10 +404,21 @@ export function calculatePurchaseSuggestion({
   const incomingQty = preOrderBoughtAlreadyInStock
     ? 0
     : Math.max(0, numeric(reliableIncomingQty));
-  const suggestedOrderQty = Math.ceil(
-    Math.max(0, targetStock - Math.max(0, numeric(currentStock)) - incomingQty),
-  );
-  return { weeklyAverage, targetStock, incomingQty, suggestedOrderQty };
+  const availableQty = Math.max(0, numeric(currentStock)) + incomingQty;
+  const suggestedOrderQty = Math.ceil(Math.max(0, targetStock - availableQty));
+
+  return {
+    recent14,
+    dailyDemand,
+    weeklyAverage,
+    targetDays,
+    fastLine,
+    fastLineBuffer,
+    targetStock,
+    incomingQty,
+    availableQty,
+    suggestedOrderQty,
+  };
 }
 
 const hasLegacyGlobalStock = (product = {}) =>
@@ -420,6 +454,7 @@ const mergeMetric = (target, source) => {
   if (!source) return target;
   target.soldLast7 += numeric(source.soldLast7);
   target.soldPrevious7 += numeric(source.soldPrevious7);
+  target.soldLast14 += numeric(source.soldLast14);
   target.soldLast30 += numeric(source.soldLast30);
   target.preOrderBoughtQty += numeric(source.preOrderBoughtQty);
   target.preOrderIncomingQty += numeric(source.preOrderIncomingQty);
@@ -480,6 +515,7 @@ export function buildPurchasePlanningRows({
       const metric = {
         soldLast7: 0,
         soldPrevious7: 0,
+        soldLast14: 0,
         soldLast30: 0,
         preOrderBoughtQty: 0,
         preOrderIncomingQty: 0,
@@ -504,10 +540,13 @@ export function buildPurchasePlanningRows({
       const currentStock = stock ? numeric(stock.qty) : 0;
       const suggestion = calculatePurchaseSuggestion({
         soldLast7: metric.soldLast7,
+        soldPrevious7: metric.soldPrevious7,
+        soldLast14: metric.soldLast14,
         soldLast30: metric.soldLast30,
         currentStock,
         preOrderBoughtQty: metric.preOrderBoughtQty,
         preOrderIncomingQty: metric.preOrderIncomingQty,
+        preOrderOutstandingQty: metric.preOrderOutstandingQty,
         preOrderBoughtAlreadyInStock: false,
       });
       const trend = calculatePurchaseTrend(metric.soldLast7, metric.soldPrevious7);
@@ -532,8 +571,13 @@ export function buildPurchasePlanningRows({
         inventoryCompatibility: Boolean(stock?.legacyFallback),
         soldLast7: roundedQuantity(metric.soldLast7),
         soldPrevious7: roundedQuantity(metric.soldPrevious7),
+        soldLast14: roundedQuantity(metric.soldLast14),
         soldLast30: roundedQuantity(metric.soldLast30),
+        dailyDemand14: suggestion.dailyDemand,
         weeklyAverage: suggestion.weeklyAverage,
+        targetDays: suggestion.targetDays,
+        fastLine: suggestion.fastLine,
+        fastLineBuffer: suggestion.fastLineBuffer,
         preOrderBoughtQty: roundedQuantity(metric.preOrderBoughtQty),
         preOrderOutstandingQty: roundedQuantity(metric.preOrderOutstandingQty),
         targetStock: suggestion.targetStock,
@@ -559,15 +603,18 @@ export function buildPurchasePlanningRows({
     const seed = sales.get(key) || purchases.get(key) || outstanding.get(key);
     if (!seed) continue;
     const metric = mergeMetric(
-      mergeMetric(mergeMetric({ soldLast7: 0, soldPrevious7: 0, soldLast30: 0, preOrderBoughtQty: 0, preOrderIncomingQty: 0, preOrderOutstandingQty: 0, preOrderPurchases: [] }, sales.get(key)), purchases.get(key)),
+      mergeMetric(mergeMetric({ soldLast7: 0, soldPrevious7: 0, soldLast14: 0, soldLast30: 0, preOrderBoughtQty: 0, preOrderIncomingQty: 0, preOrderOutstandingQty: 0, preOrderPurchases: [] }, sales.get(key)), purchases.get(key)),
       outstanding.get(key),
     );
     const suggestion = calculatePurchaseSuggestion({
       soldLast7: metric.soldLast7,
+      soldPrevious7: metric.soldPrevious7,
+      soldLast14: metric.soldLast14,
       soldLast30: metric.soldLast30,
       currentStock: 0,
       preOrderBoughtQty: metric.preOrderBoughtQty,
       preOrderIncomingQty: metric.preOrderIncomingQty,
+      preOrderOutstandingQty: metric.preOrderOutstandingQty,
     });
     const trend = calculatePurchaseTrend(metric.soldLast7, metric.soldPrevious7);
     rows.push({
@@ -591,8 +638,13 @@ export function buildPurchasePlanningRows({
       inventoryCompatibility: false,
       soldLast7: roundedQuantity(metric.soldLast7),
       soldPrevious7: roundedQuantity(metric.soldPrevious7),
+      soldLast14: roundedQuantity(metric.soldLast14),
       soldLast30: roundedQuantity(metric.soldLast30),
+      dailyDemand14: suggestion.dailyDemand,
       weeklyAverage: suggestion.weeklyAverage,
+      targetDays: suggestion.targetDays,
+      fastLine: suggestion.fastLine,
+      fastLineBuffer: suggestion.fastLineBuffer,
       preOrderBoughtQty: roundedQuantity(metric.preOrderBoughtQty),
       preOrderOutstandingQty: roundedQuantity(metric.preOrderOutstandingQty),
       targetStock: suggestion.targetStock,
@@ -944,7 +996,7 @@ export function buildPurchasePlanningCsv(rows = []) {
   const headers = [
     "Product Code", "Product Name", "Main Category", "Sub Category", "Brand", "Series",
     "Supplier", "Country", "Current Stock", "Sold Last 7 Days", "Sold Previous 7 Days",
-    "Sold Last 30 Days", "Weekly Average", "Trend", "Pre-Order Bought",
+    "Sold Last 14 Days", "Sold Last 30 Days", "Weekly Average", "Trend", "Pre-Order Bought",
     "Pre-Order Outstanding", "Suggested Order Qty",
   ];
   const headerLine = headers.map(csvTextCell).join(",");
@@ -960,6 +1012,7 @@ export function buildPurchasePlanningCsv(rows = []) {
     csvNumericCell(row.currentStock),
     csvNumericCell(row.salesAvailable === false ? null : row.soldLast7),
     csvNumericCell(row.salesAvailable === false ? null : row.soldPrevious7),
+    csvNumericCell(row.salesAvailable === false ? null : row.soldLast14),
     csvNumericCell(row.salesAvailable === false ? null : row.soldLast30),
     csvNumericCell(row.salesAvailable === false ? null : row.weeklyAverage.toFixed(1)),
     csvTextCell(row.salesAvailable === false
