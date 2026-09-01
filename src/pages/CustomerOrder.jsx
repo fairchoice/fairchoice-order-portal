@@ -96,7 +96,7 @@ import HomepageTargetMessages from "../components/HomepageTargetMessages";
 import Cart from "../components/Cart.jsx";
 import ReturnRequestModal from "../components/ReturnRequestModal";
 
-import { getProducts } from "../services/products";
+import { getProducts, isActiveProduct } from "../services/products";
 import { getHomepageItems } from "../services/homepageItems";
 import {
   getActiveHomepageMessages,
@@ -1467,7 +1467,7 @@ const findHomepagePriceProduct = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
 
   return products.find((product) => {
-    if (!product.active) return false;
+    if (!isActiveProduct(product)) return false;
     if (orderCountry === "England" && !product.availableInEngland) return false;
     if (orderCountry === "Wales" && !product.availableInWales) return false;
 
@@ -1524,7 +1524,7 @@ const getHomepageCardProducts = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
   if (categoryType === "custom_link") return [];
   return products.filter((product) => {
-    if (!product.active) return false;
+    if (!isActiveProduct(product)) return false;
     if (orderCountry === "England" && !product.availableInEngland) return false;
     if (orderCountry === "Wales" && !product.availableInWales) return false;
     if (categoryType === "sub_category") return product.subCategory === item.targetValue;
@@ -1738,7 +1738,7 @@ const openHomepageItem = (item) => {
   if (categoryType === "sub_category") {
     const targetSubCategory = item.targetValue || "All Sub Categories";
     const parentCategory =
-      products.find((product) => product.subCategory === targetSubCategory)?.category ||
+      products.find((product) => isActiveProduct(product) && product.subCategory === targetSubCategory)?.category ||
       "All Products";
     setSelectedCategory(parentCategory);
     setSelectedSubCategory(targetSubCategory);
@@ -1768,7 +1768,7 @@ const openHomepageItem = (item) => {
       return;
     }
     if (destination.type === "sub_category") {
-      const parentCategory = products.find((product) => product.subCategory === destination.value)?.category || "All Products";
+      const parentCategory = products.find((product) => isActiveProduct(product) && product.subCategory === destination.value)?.category || "All Products";
       setSelectedCategory(parentCategory);
       setSelectedSubCategory(destination.value || "All Sub Categories");
       return;
@@ -1778,7 +1778,7 @@ const openHomepageItem = (item) => {
       return;
     }
     if (destination.type === "product") {
-      const product = products.find((candidate) => String(candidate.id) === String(destination.value));
+      const product = products.find((candidate) => isActiveProduct(candidate) && String(candidate.id) === String(destination.value));
       if (product) openProductDetails(product);
       return;
     }
@@ -2602,7 +2602,7 @@ const openBackOffice = async () => {
     selectedCategory !== "All Products"
       ? selectedCategory
       : selectedSubCategory !== "All Sub Categories"
-        ? products.find((product) => product.subCategory === selectedSubCategory)?.category ||
+        ? products.find((product) => isActiveProduct(product) && product.subCategory === selectedSubCategory)?.category ||
           "All Products"
         : "All Products";
 
@@ -2612,8 +2612,9 @@ const openBackOffice = async () => {
     products
       .filter(
         (p) =>
-          effectiveSelectedCategory === "All Products" ||
-          p.category === effectiveSelectedCategory
+          isActiveProduct(p) &&
+          (effectiveSelectedCategory === "All Products" ||
+          p.category === effectiveSelectedCategory)
       )
       .map((p) => String(p.subCategory || "").trim())
       .filter(Boolean)
@@ -2626,6 +2627,7 @@ const brands = [
     products
       .filter(
         (p) =>
+          isActiveProduct(p) &&
           (effectiveSelectedCategory === "All Products" ||
             p.category === effectiveSelectedCategory) &&
           (selectedSubCategory === "All Sub Categories" ||
@@ -2642,6 +2644,7 @@ const seriesList = [
     products
       .filter(
         (p) =>
+          isActiveProduct(p) &&
           (effectiveSelectedCategory === "All Products" ||
             p.category === effectiveSelectedCategory) &&
           (selectedSubCategory === "All Sub Categories" ||
@@ -2672,7 +2675,7 @@ const filteredProducts = useMemo(() => {
       const productSeries = String(product.series || "").trim();
 
       return (
-        product.active &&
+        isActiveProduct(product) &&
         (!homepagePromotionTarget ||
           productMatchesHomepagePromotion(product, homepagePromotionTarget)) &&
         (effectiveSelectedCategory === "All Products" ||
@@ -2720,7 +2723,7 @@ const homepageSearchProducts = useMemo(() => {
 
   return sortOrderProductsByAvailability(
     products.filter((product) => {
-      if (!product.active) return false;
+      if (!isActiveProduct(product)) return false;
       if (orderCountry === "England" && !product.availableInEngland) return false;
       if (orderCountry === "Wales" && !product.availableInWales) return false;
 
@@ -3296,12 +3299,24 @@ const getCustomerInvoiceStatus = (row = {}) => {
       customer,
       selectedBranchId: selectedSalesBranch?.id || "",
     });
+    const { data: canonicalInvoices, error: canonicalInvoicesError } = await supabase
+      .from("customer_invoices")
+      .select("*")
+      .eq("customer_account_id", customer.id)
+      .neq("status", "CANCELLED")
+      .order("invoice_date", { ascending: true });
+    if (canonicalInvoicesError) throw canonicalInvoicesError;
+
     const allocationPreview = buildPaymentPreview({
-      invoices: snapshot.invoices,
+      invoices: canonicalInvoices?.length ? canonicalInvoices : snapshot.invoices,
       allocations: snapshot.allocations,
       amount: paymentAmount,
       branchId: selectedSalesBranch?.id || "",
     });
+
+    if (allocationPreview.unallocatedAmount > 0.009) {
+      throw new Error("Payment is higher than the eligible outstanding invoice balance.");
+    }
 
     await postCanonicalCustomerPayment({
       customerAccountId: customer.id,
@@ -5613,7 +5628,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         Sales Rep Cash Collection
       </h2>
 
-      {salesRouteMode ? (
+      {salesRouteMode && selectedCustomerAccount ? (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
       ) : <>
         <input value={salesPaymentCustomerSearch} onChange={(e) => setSalesPaymentCustomerSearch(e.target.value)} placeholder="Search customer" className="w-full border rounded-xl p-3" />
@@ -5788,7 +5803,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             order={salesReturnOrder}
             source="SALES_REP_PORTAL"
             currentUser={activeUser}
-            catalogProducts={products.filter((product) => product.active)}
+            catalogProducts={products.filter(isActiveProduct)}
             pricingSettings={pricingSettings}
             country={orderCountry}
             allowCatalogProducts
@@ -5995,7 +6010,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           order={returnOrder}
           source={isSalesRep ? "SALES_REP_PORTAL" : "CUSTOMER_PAYMENT_HISTORY"}
           currentUser={activeUser}
-          catalogProducts={products.filter((product) => product.active)}
+          catalogProducts={products.filter(isActiveProduct)}
           pricingSettings={pricingSettings}
           country={orderCountry}
           allowCatalogProducts={isSalesRep && page === "salesReturn"}

@@ -144,6 +144,15 @@ const getExVatPrice = (product = {}, vatRate = getVatRate(product.vatType ?? pro
 
 const getGrossPrice = (netPrice, vatRate) => roundMoney(Number(netPrice || 0) * (1 + Number(vatRate || 0) / 100));
 
+// FairChoice margin rule: margin is always calculated from the Ex. VAT selling price.
+export const calculateExVatMargin = (sellingExVat, costValue) => {
+  const selling = Number(sellingExVat || 0);
+  const cost = Number(costValue || 0);
+  return selling > 0
+    ? Number((((selling - cost) / selling) * 100).toFixed(2))
+    : 0;
+};
+
 const getProductOnlySpecialPrice = (product = {}) =>
   validPositiveMoney(
     product.specialPrice ??
@@ -365,7 +374,14 @@ export const getProductPricePreview = (
         pricingSettings
     );
 
-     const cost = Number(product.cost_price || 0);
+    const cost = Number(product.cost_price || 0);
+    const exVat = getProductPriceForMode(
+        product,
+        "ex vat",
+        country,
+        pricingSettings
+    );
+    const exVatMargin = calculateExVatMargin(exVat, cost);
 
     const calcMargin = (selling) =>
         selling > 0
@@ -378,8 +394,11 @@ export const getProductPricePreview = (
         server,
         manager,
         admin,
+        exVat,
+        exVatMargin,
 
-        vatMargin: calcMargin(vat),
+        // Legacy mode margins are retained for compatibility. New margin UI must use exVatMargin.
+        vatMargin: calculateExVatMargin(vat, cost),
         serverMargin: calcMargin(server),
         managerMargin: calcMargin(manager),
         adminMargin: calcMargin(admin),

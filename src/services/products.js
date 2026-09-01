@@ -50,6 +50,15 @@ const isMissingProductSpecialColumnError = (error) =>
     .toLowerCase()
     .includes("product_special_price");
 
+export function isActiveProduct(product = {}) {
+  if (product?.active === false) return false;
+  return String(product?.status || "Active").trim().toLowerCase() !== "inactive";
+}
+
+export function getActiveProducts(products = []) {
+  return (products || []).filter(isActiveProduct);
+}
+
 async function loadAllProductRows(columns) {
   const rows = [];
 

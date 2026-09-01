@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getProducts } from "../../services/products";
+import { getProducts, isActiveProduct } from "../../services/products";
 import {
   ensureDefaultPromotionTypes,
   getPromotionRules,
@@ -447,7 +447,7 @@ export default function ProductPromotions() {
         getPromotionRules(),
       ]);
 
-      setProducts(productRows || []);
+      setProducts((productRows || []).filter(isActiveProduct));
       setPromotionTypes(typeRows || []);
       setRules(ruleRows || []);
     } catch (loadError) {
