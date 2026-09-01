@@ -536,12 +536,14 @@ const openCashCollection = async (order) => {
 
   setSavingPreviousBalance(true);
   try {
+    const paymentDate = new Date().toISOString();
+
     await postPreviousBalanceCollection({
       customerAccountId: selectedCreditCustomer.id,
       customerBranchId: selectedCreditBranch?.id || null,
       amount: paymentAmount,
       paymentMethod: previousBalanceForm.paymentType,
-      paymentDate: new Date().toISOString(),
+      paymentDate,
       payerName: previousBalanceForm.whoPaid,
       collectorName:
         loggedInUser.staff_name || loggedInUser.name || loggedInUser.username || "",
@@ -551,6 +553,7 @@ const openCashCollection = async (order) => {
         previousBalanceForm.notes ||
         `Driver previous balance collection - ${previousBalanceForm.paymentType}`,
       paymentIntentId: previousBalanceForm.paymentIntentId,
+      metadata: { payment_applies_to: "PREVIOUS_BALANCE" },
     });
   } catch (error) {
     alert("Could not save previous balance payment: " + error.message);
