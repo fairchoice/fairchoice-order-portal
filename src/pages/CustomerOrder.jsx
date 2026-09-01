@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabase.js";
 import {
   buildLegacyStaffProfile,
@@ -3634,7 +3634,7 @@ const newOrder = {
         staffName: activeUser?.staff_name || activeUser?.name || activeUser?.username || "",
         outcome: "ORDER_PLACED",
         orderNumber,
-        reason: salesRouteExceptionMode ? `Exception order — ${routeExceptionReason}` : "",
+        reason: salesRouteExceptionMode ? `Exception order â€” ${routeExceptionReason}` : "",
         note: salesRouteExceptionMode ? routeExceptionNote : "",
         routeAssignmentId: activeRouteAssignmentId,
       });
@@ -3666,7 +3666,7 @@ const newOrder = {
     setSubmissionFeedback("success");
 
     alert(
-  `âœ… Order Submitted Successfully
+  `Ã¢Å“â€¦ Order Submitted Successfully
 
 Order Number: ${formatDisplayOrderId(orderNumber)}
 
@@ -4553,7 +4553,7 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "profitPortal" && (
       <ProfitAnalysisReport currentUser={activeUser} />
     )}
-    {page === "totalCreditOutstanding" && <AllCreditOutstanding customers={customers} />}
+    {page === "totalCreditOutstanding" && <AllCreditOutstanding customers={customerAccounts} />}
     {page === "productLineAnalysis" && (
       <ProductLineAnalysisReport currentUser={activeUser} />
     )}
@@ -4743,7 +4743,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             >
               <div className="flex items-start justify-between gap-3 border-b px-4 py-4">
                 <div>
-                  <h2 id="sales-route-modal-title" className="text-xl font-black text-slate-900 sm:text-2xl">Today’s Route</h2>
+                  <h2 id="sales-route-modal-title" className="text-xl font-black text-slate-900 sm:text-2xl">Todayâ€™s Route</h2>
                   <p className="mt-1 text-sm text-slate-500">Tap a customer to start their order. Completed visits remain marked.</p>
                 </div>
                 <button type="button" onClick={() => setShowSalesRouteModal(false)} className="min-h-11 rounded-xl border border-slate-300 px-4 text-sm font-bold text-slate-700">Close</button>
@@ -4772,7 +4772,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
 
               <div className="overflow-y-auto p-3 sm:p-4">
                 {salesRouteLoading ? (
-                  <div className="p-8 text-center text-slate-500">Loading route…</div>
+                  <div className="p-8 text-center text-slate-500">Loading routeâ€¦</div>
                 ) : salesRouteRows.length ? (
                   <>
                     <div className="grid gap-2">
@@ -4786,10 +4786,10 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                             onClick={() => openSalesRouteCustomer(routeRow)}
                             className={`grid min-h-[72px] grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl border p-3 text-left sm:grid-cols-[44px_minmax(0,1fr)_auto] ${completed ? "bg-slate-100 opacity-70" : "bg-white hover:border-blue-600 hover:bg-blue-50"}`}
                           >
-                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-950 text-base font-black text-white">{routeRow.visit_sequence || "•"}</span>
+                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-950 text-base font-black text-white">{routeRow.visit_sequence || "â€¢"}</span>
                             <span className="min-w-0">
                               <strong className="block truncate text-base text-slate-900">{routeRow.customer.account_name}</strong>
-                              <span className="mt-0.5 block truncate text-sm text-slate-500">{routeRow.branch?.branch_name || "Main account"} · {routeRow.branch?.postcode || routeRow.customer.postcode || routeRow.customer.town_city || "Location not set"}</span>
+                              <span className="mt-0.5 block truncate text-sm text-slate-500">{routeRow.branch?.branch_name || "Main account"} Â· {routeRow.branch?.postcode || routeRow.customer.postcode || routeRow.customer.town_city || "Location not set"}</span>
                             </span>
                             <span className={`col-start-2 w-fit rounded-full px-2.5 py-1 text-xs font-bold sm:col-start-auto ${completed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{completed ? (routeRow.status === "ORDER_PLACED" ? "Order placed" : "No order") : "Tap to order"}</span>
                           </button>
@@ -4797,7 +4797,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                       })}
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3 text-xs">
-                      <span className="mr-auto text-slate-500">Showing {filteredSalesRouteRows.length ? (currentSalesRoutePage - 1) * 30 + 1 : 0}–{Math.min(currentSalesRoutePage * 30, filteredSalesRouteRows.length)} of {filteredSalesRouteRows.length}</span>
+                      <span className="mr-auto text-slate-500">Showing {filteredSalesRouteRows.length ? (currentSalesRoutePage - 1) * 30 + 1 : 0}â€“{Math.min(currentSalesRoutePage * 30, filteredSalesRouteRows.length)} of {filteredSalesRouteRows.length}</span>
                       <button className="min-h-10 rounded-lg border px-3 disabled:opacity-40" disabled={currentSalesRoutePage <= 1} onClick={() => setSalesRoutePage((pageNumber) => Math.max(1, pageNumber - 1))}>Previous</button>
                       <span className="font-bold">{currentSalesRoutePage} / {salesRoutePageCount}</span>
                       <button className="min-h-10 rounded-lg border px-3 disabled:opacity-40" disabled={currentSalesRoutePage >= salesRoutePageCount} onClick={() => setSalesRoutePage((pageNumber) => Math.min(salesRoutePageCount, pageNumber + 1))}>Next</button>
@@ -4805,7 +4805,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                   </>
                 ) : (
                   <div className="rounded-2xl bg-amber-50 p-6 text-center text-amber-900">
-                    <strong className="text-base">No customers assigned to today’s route.</strong>
+                    <strong className="text-base">No customers assigned to todayâ€™s route.</strong>
                     <div className="mt-1 text-sm">Admin can add customers in Sales Route Setup.</div>
                   </div>
                 )}
@@ -4817,8 +4817,8 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         {showRouteExceptionForm && salesRouteMode && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
-              <h3 className="text-xl font-bold">Exception Order — Outside Today’s Route</h3>
-              <p className="mt-1 text-sm text-slate-500">Use this only when an order must be taken from a customer who is not on today’s assigned route. The reason is recorded.</p>
+              <h3 className="text-xl font-bold">Exception Order â€” Outside Todayâ€™s Route</h3>
+              <p className="mt-1 text-sm text-slate-500">Use this only when an order must be taken from a customer who is not on todayâ€™s assigned route. The reason is recorded.</p>
               <label className="mt-4 block text-sm font-bold">Reason<select className="mt-1 w-full rounded-xl border p-3" value={routeExceptionReason} onChange={(e) => setRouteExceptionReason(e.target.value)}><option value="">Select reason</option>{EXCEPTION_ORDER_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}</select></label>
               <label className="mt-3 block text-sm font-bold">Note<textarea className="mt-1 w-full rounded-xl border p-3" rows="3" value={routeExceptionNote} onChange={(e) => setRouteExceptionNote(e.target.value)} placeholder="Optional note; required for Other" /></label>
               <div className="mt-4 flex justify-end gap-2"><button onClick={() => setShowRouteExceptionForm(false)} className="rounded-xl border px-4 py-2 font-bold">Cancel</button><button onClick={confirmSalesRouteException} className="rounded-xl bg-red-600 px-4 py-2 font-bold text-white">Continue to Normal Order</button></div>
@@ -4829,8 +4829,8 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         {showNoOrderForm && salesRouteMode && selectedCustomerAccount && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
-              <h3 className="text-xl font-bold">Confirm Visit — No Order</h3>
-              <p className="mt-1 text-sm text-slate-500">{selectedCustomerAccount.account_name}{selectedBranch?.branch_name ? ` · ${selectedBranch.branch_name}` : ""}</p>
+              <h3 className="text-xl font-bold">Confirm Visit â€” No Order</h3>
+              <p className="mt-1 text-sm text-slate-500">{selectedCustomerAccount.account_name}{selectedBranch?.branch_name ? ` Â· ${selectedBranch.branch_name}` : ""}</p>
               <label className="mt-4 block text-sm font-bold">Reason<select className="mt-1 w-full rounded-xl border p-3" value={noOrderReason} onChange={(e)=>setNoOrderReason(e.target.value)}><option value="">Select reason</option>{NO_ORDER_REASONS.map(reason=><option key={reason} value={reason}>{reason}</option>)}</select></label>
               <label className="mt-3 block text-sm font-bold">Note<textarea className="mt-1 w-full rounded-xl border p-3" rows="3" value={noOrderNote} onChange={(e)=>setNoOrderNote(e.target.value)} placeholder="Optional note; required for Other" /></label>
               <div className="mt-4 flex justify-end gap-2"><button onClick={()=>setShowNoOrderForm(false)} className="rounded-xl border px-4 py-2 font-bold">Cancel</button><button onClick={confirmSalesRouteNoOrder} className="rounded-xl bg-amber-500 px-4 py-2 font-bold text-slate-950">Confirm No Order</button></div>
@@ -4941,7 +4941,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
 
   {salesRouteMode && salesRouteExceptionMode && (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm">
-      <div><strong>Exception Order</strong><div className="text-xs text-red-800">{routeExceptionReason}{routeExceptionNote ? ` · ${routeExceptionNote}` : ""}</div></div>
+      <div><strong>Exception Order</strong><div className="text-xs text-red-800">{routeExceptionReason}{routeExceptionNote ? ` Â· ${routeExceptionNote}` : ""}</div></div>
       <button onClick={() => { resetSalesRouteCustomer(); setShowSalesRouteModal(true); }} className="rounded-xl border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700">Cancel & Return to Route</button>
     </div>
   )}
@@ -5942,7 +5942,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           onClick={goToCustomerHome}
           className="min-h-10 rounded-xl border-2 border-blue-950 bg-blue-950 px-2.5 py-2 text-xs font-bold text-white hover:bg-blue-800 sm:px-4 sm:text-sm"
         >
-          <span aria-hidden="true">⌂</span> Home
+          <span aria-hidden="true">âŒ‚</span> Home
         </button>
         <button
           type="button"
@@ -5967,7 +5967,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
       onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
       className="min-h-12 rounded-full bg-orange-500 px-4 py-3 text-sm font-bold text-white shadow-lg hover:bg-orange-600 sm:px-5"
     >
-      <span aria-hidden="true">↑</span> Top
+      <span aria-hidden="true">â†‘</span> Top
     </button>
   </div>
 )}
@@ -6024,3 +6024,4 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   );
 }
+

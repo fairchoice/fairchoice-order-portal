@@ -260,7 +260,6 @@ export default function Customers() {
         customer.allow_vat ? "Ex.VAT" : "",
         customer.allow_server ? "Inc.VAT" : "",
       ].filter(Boolean).join(", "),
-      "Opening Balance": Number(customer.opening_balance || 0),
       Active: customer.active !== false,
     }));
 
@@ -304,7 +303,6 @@ export default function Customers() {
           "Credit Limit": 0,
           "Default Price Mode": "Ex.VAT",
           "Allowed Price Modes": "Ex.VAT, Inc.VAT",
-          "Opening Balance": 0,
           Active: true,
         },
       ]),
@@ -335,7 +333,6 @@ export default function Customers() {
     const errors = [];
     const country = normalize(row.Country || row.country);
     const creditLimit = toNumber(row["Credit Limit"] ?? row.credit_limit);
-    const openingBalance = toNumber(row["Opening Balance"] ?? row.opening_balance);
     const active = toBool(row.Active ?? row.active ?? true);
     const defaultPriceMode = normalizePriceMode(
       row["Default Price Mode"] || row.default_price_mode
@@ -352,9 +349,6 @@ export default function Customers() {
     }
     if (creditLimit === null) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Credit Limit", message: "Credit Limit must be numeric" });
-    }
-    if (openingBalance === null) {
-      errors.push({ rowNumber, sheet: "Customer Accounts", field: "Opening Balance", message: "Opening Balance must be numeric" });
     }
     if (active === null) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Active", message: "Active must be TRUE or FALSE" });
@@ -385,7 +379,6 @@ export default function Customers() {
         country,
         credit_limit: creditLimit ?? 0,
         default_price_mode: defaultPriceMode,
-        opening_balance: openingBalance ?? 0,
         active: active ?? true,
         ...parseAllowedModes(row["Allowed Price Modes"] || row.allowed_price_modes),
       },
@@ -568,35 +561,6 @@ export default function Customers() {
     setImportingCustomers(false);
   };
 
-  const saveImportedOpeningBalance = async (customerName, openingBalance) => {
-    if (!customerName) return;
-
-    const { data: existingBalance, error: lookupError } = await supabase
-      .from("customer_opening_balances")
-      .select("id")
-      .eq("customer_name", customerName)
-      .maybeSingle();
-
-    if (lookupError) throw lookupError;
-
-    if (existingBalance?.id) {
-      const { error } = await supabase
-        .from("customer_opening_balances")
-        .update({ opening_balance: Number(openingBalance || 0) })
-        .eq("id", existingBalance.id);
-
-      if (error) throw error;
-      return;
-    }
-
-    const { error } = await supabase.from("customer_opening_balances").insert({
-      customer_name: customerName,
-      opening_balance: Number(openingBalance || 0),
-    });
-
-    if (error) throw error;
-  };
-
   const confirmCustomerImport = async () => {
     if (!customerImportPreview || customerImportPreview.errors.length) return;
 
@@ -621,15 +585,14 @@ export default function Customers() {
       const createdCustomerByName = new Map();
 
       for (const account of customerImportPreview.accountUpdates) {
-        const { id, opening_balance, ...payload } = account;
+        const { id, ...payload } = account;
         const { error } = await supabase.from("customer_accounts").update(payload).eq("id", id);
         if (error) throw error;
-        await saveImportedOpeningBalance(account.account_name, opening_balance);
         await syncCustomerAddressToOrders({ customerAccountId: id });
       }
 
       for (const account of customerImportPreview.accountCreates) {
-        const { id, opening_balance, ...payload } = account;
+        const { id, ...payload } = account;
         const { data, error } = await supabase
           .from("customer_accounts")
           .insert(payload)
@@ -637,7 +600,6 @@ export default function Customers() {
           .single();
         if (error) throw error;
         createdCustomerByName.set(normalizeKey(data.account_name), data);
-        await saveImportedOpeningBalance(data.account_name, opening_balance);
       }
 
       for (const branch of customerImportPreview.branchUpdates) {
