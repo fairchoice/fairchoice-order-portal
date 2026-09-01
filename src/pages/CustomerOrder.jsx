@@ -3259,23 +3259,13 @@ const getCustomerInvoiceStatus = (row = {}) => {
     return;
   }
 
-  if (!paymentAmount) {
+  if (!(paymentAmount > 0)) {
     alert("Please enter amount.");
     return;
   }
 
   if (!salesPaymentForm.whoPaid.trim()) {
     alert("Please enter who paid.");
-    return;
-  }
-
-  if (
-    selectedBranchOutstanding > 0 &&
-    paymentAmount > selectedBranchOutstanding &&
-    !window.confirm(
-      "Payment is higher than selected branch outstanding. Continue?"
-    )
-  ) {
     return;
   }
 
@@ -3290,33 +3280,26 @@ const getCustomerInvoiceStatus = (row = {}) => {
   setSavingSalesPayment(true);
 
   try {
-    const paymentDate = salesPaymentForm.collectionDate
-      ? `${salesPaymentForm.collectionDate}T12:00:00`
-      : new Date().toISOString();
-    const snapshot = await loadCentralPaymentSnapshot({
-      customerAccountId: customer.id,
-      customerName: customer.account_name,
-      customer,
-      selectedBranchId: selectedSalesBranch?.id || "",
-    });
-    const { data: canonicalInvoices, error: canonicalInvoicesError } = await supabase
-      .from("customer_invoices")
-      .select("*")
-      .eq("customer_account_id", customer.id)
-      .neq("status", "CANCELLED")
-      .order("invoice_date", { ascending: true });
-    if (canonicalInvoicesError) throw canonicalInvoicesError;
+    const now = new Date();
+    const localToday = new Date(
+      now.getTime() - now.getTimezoneOffset() * 60000
+    )
+      .toISOString()
+      .split("T")[0];
 
-    const allocationPreview = buildPaymentPreview({
-      invoices: canonicalInvoices?.length ? canonicalInvoices : snapshot.invoices,
-      allocations: snapshot.allocations,
-      amount: paymentAmount,
-      branchId: selectedSalesBranch?.id || "",
-    });
+    const selectedCollectionDate = String(
+      salesPaymentForm.collectionDate || ""
+    ).trim();
 
-    if (allocationPreview.unallocatedAmount > 0.009) {
-      throw new Error("Payment is higher than the eligible outstanding invoice balance.");
-    }
+    const paymentDate =
+      !selectedCollectionDate || selectedCollectionDate === localToday
+        ? now.toISOString()
+        : `${selectedCollectionDate}T12:00:00`;
+
+    const unallocatedOutstanding = Math.max(
+      0,
+      selectedBranchOutstanding - paymentAmount
+    );
 
     await postCanonicalCustomerPayment({
       customerAccountId: customer.id,
@@ -3332,33 +3315,49 @@ const getCustomerInvoiceStatus = (row = {}) => {
         activeUser.name ||
         activeUser.username ||
         "",
-      collectorStaffId:
-        activeUser.staff_id || activeUser.id || null,
+      collectorStaffId: activeUser.staff_id || activeUser.id || null,
       collectorRole:
         activeUser.role || activeUser.access_level || "Sales Rep",
       paymentIntentId: salesPaymentForm.paymentIntentId,
       notes: [
-        selectedSalesBranch ? `Branch: ${selectedSalesBranch.branch_name}` : "",
+        selectedSalesBranch
+          ? `Branch: ${selectedSalesBranch.branch_name}`
+          : "",
         salesPaymentForm.collectionDate
           ? `Collection date: ${salesPaymentForm.collectionDate}`
+          : "",
+        unallocatedOutstanding > 0
+          ? `Partial collection - unallocated outstanding remaining: ${formatCurrency(
+              unallocatedOutstanding
+            )}`
           : "",
         salesPaymentForm.notes || "",
       ]
         .filter(Boolean)
-        .join("\n"),
+        .join("`n"),
       metadata: {
         payment_applies_to: "SALES_REP_COLLECTION",
+        allocation_mode: "CANONICAL_FIFO",
+        collection_status:
+          unallocatedOutstanding > 0
+            ? "PARTIAL_COLLECTION"
+            : "COLLECTION",
+        unallocated_outstanding_amount: unallocatedOutstanding,
       },
-      allocations: allocationPreview.allocations,
+      allocations: [],
     });
 
     const { outstandingState } = await loadSalesRepOutstanding({
       customer,
       selectedBranchId: selectedSalesBranch?.id || "",
     });
+
     setSalesOutstandingSnapshot(outstandingState);
 
-    if (String(selectedCustomerAccount?.id || "") === String(customer.id || "")) {
+    if (
+      String(selectedCustomerAccount?.id || "") ===
+      String(customer.id || "")
+    ) {
       await loadCustomerCreditSnapshot(selectedCustomerAccount);
     }
 
@@ -3370,9 +3369,7 @@ const getCustomerInvoiceStatus = (row = {}) => {
       amount: "",
       paymentType: "Cash",
       whoPaid: "",
-      collectionDate: new Date()
-        .toISOString()
-        .split("T")[0],
+      collectionDate: new Date().toISOString().split("T")[0],
       notes: "",
       paymentIntentId: createPaymentIntentId(),
     });
@@ -3382,7 +3379,6 @@ const getCustomerInvoiceStatus = (row = {}) => {
     setSavingSalesPayment(false);
   }
 };
-
 
 const submitOrder = async () => {
   if (isSubmittingOrder || orderSubmissionLockRef.current) return;

@@ -58,8 +58,8 @@ const getRowValue = (row, keys) => {
 };
 const normalizePriceMode = (value) => {
   const mode = normalize(value);
-  if (mode.toLowerCase() === "ex. vat" || mode.toLowerCase() === "ex vat") return "VAT";
-  if (mode.toLowerCase() === "inc.vat" || mode.toLowerCase() === "inc vat") return "Server";
+  if (["ex.vat", "ex. vat", "ex vat", "vat"].includes(mode.toLowerCase())) return "VAT";
+  if (["inc.vat", "inc vat", "server"].includes(mode.toLowerCase())) return "Server";
   return mode || "VAT";
 };
 
@@ -70,7 +70,7 @@ const parseAllowedModes = (value) => {
     .filter(Boolean);
 
   return {
-    allow_vat: modes.length ? modes.includes("vat") || modes.includes("ex vat") || modes.includes("ex. vat") : true,
+    allow_vat: modes.length ? modes.includes("vat") || modes.includes("ex.vat") || modes.includes("ex vat") || modes.includes("ex. vat") : true,
     allow_server: modes.includes("server") || modes.includes("inc.vat") || modes.includes("inc vat"),
     allow_manager: false,
     allow_super: false,
