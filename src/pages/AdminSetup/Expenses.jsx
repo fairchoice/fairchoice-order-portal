@@ -50,6 +50,34 @@ function hasPermission(user, permission) {
   return permissions.all_access === true || permissions[permission] === true;
 }
 
+function isAdminExpenseEntryBlocked(user = {}) {
+  const username = String(user.username || "").trim().toLowerCase();
+  const role = String(
+    user.role ||
+      user.role_name ||
+      user.user_role ||
+      user.staff_role ||
+      user.access_level ||
+      user.profile?.role ||
+      "",
+  )
+    .trim()
+    .toLowerCase();
+
+  return (
+    username === "admin" ||
+    user.is_admin === true ||
+    user.isAdmin === true ||
+    user.is_super_admin === true ||
+    user.isSuperAdmin === true ||
+    role === "admin" ||
+    role === "administrator" ||
+    role === "super admin" ||
+    role === "super_admin" ||
+    role === "superadmin"
+  );
+}
+
 export default function Expenses() {
   const [user] = useState(currentUser);
   const [expenseTypes, setExpenseTypes] = useState([]);
@@ -61,6 +89,7 @@ export default function Expenses() {
   const [status, setStatus] = useState("All");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const adminEntryBlocked = isAdminExpenseEntryBlocked(user);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -119,6 +148,10 @@ export default function Expenses() {
   async function saveExpense(event, submit) {
     event.preventDefault();
     if (busy) return;
+    if (adminEntryBlocked) {
+      window.alert("Admin users cannot enter or submit expenses. Use an Accounts/authorised expense user.");
+      return;
+    }
     const action = submit ? "submit this expense for approval" : "save this expense";
     if (!window.confirm(`Are you sure you want to ${action}?`)) return;
 
@@ -188,6 +221,11 @@ export default function Expenses() {
             Record business expenses, submit them for approval, and post approved
             money-out entries to the Global Ledger.
           </p>
+          {adminEntryBlocked && (
+            <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+              Admin users can review expenses but cannot enter, save, or submit new expenses.
+            </div>
+          )}
         </header>
 
         {error && (
@@ -229,10 +267,10 @@ export default function Expenses() {
             <Input label="Receipt URL" type="url" required={false} value={form.receiptUrl} onChange={(value) => setForm({ ...form, receiptUrl: value })} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <button disabled={busy} onClick={(event) => saveExpense(event, false)} className="rounded-lg border border-blue-700 bg-white px-5 py-2 font-bold text-blue-700 disabled:opacity-50">
+            <button disabled={busy || adminEntryBlocked} onClick={(event) => saveExpense(event, false)} className="rounded-lg border border-blue-700 bg-white px-5 py-2 font-bold text-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
               {editingId ? "Update draft" : "Save draft"}
             </button>
-            <button disabled={busy} onClick={(event) => saveExpense(event, true)} className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white disabled:opacity-50">
+            <button disabled={busy || adminEntryBlocked} onClick={(event) => saveExpense(event, true)} className="rounded-lg bg-blue-700 px-5 py-2 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
               {editingId ? "Update and submit" : "Save and submit"}
             </button>
           </div>

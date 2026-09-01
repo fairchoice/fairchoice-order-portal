@@ -141,7 +141,14 @@ const collectorNameFor = (row) =>
   row.metadata?.sales_rep_name ||
   "";
 const collectorTypeFor = (row) => {
-  const role = normalize(row.collection_type || row.collector_role || row.collected_by_role);
+  const role = normalize(
+    row.collector_type ||
+      row.collection_type ||
+      row.collector_role ||
+      row.collected_by_role ||
+      row.metadata?.collector_role ||
+      row.metadata?.collection_type,
+  );
   if (role.includes("driver")) return "Driver";
   if (role.includes("sales")) return "Sales Rep";
   return "Office";
@@ -153,6 +160,48 @@ const dateInRange = (value, startDate, endDate) => {
   if (endDate && key > endDate) return false;
   return true;
 };
+const localDateKey = (value) => {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+const getWeekRange = (baseDate = new Date(), offsetWeeks = 0) => {
+  const base = new Date(baseDate);
+  base.setHours(12, 0, 0, 0);
+  base.setDate(base.getDate() + offsetWeeks * 7);
+  const day = base.getDay();
+  const monday = new Date(base);
+  monday.setDate(base.getDate() + (day === 0 ? -6 : 1 - day));
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  return { start: localDateKey(monday), end: localDateKey(sunday) };
+};
+const countryFor = (row = {}) =>
+  String(
+    row.resolved_country ||
+      row.country ||
+      row.customer_country ||
+      row.branch_country ||
+      row.delivery_country ||
+      row.metadata?.country ||
+      row.metadata?.customer_country ||
+      row.metadata?.branch_country ||
+      "",
+  ).trim();
+const transactionDateFor = (row = {}) =>
+  getWeeklyPaymentDate(row) ||
+  row.payout_date ||
+  row.handover_date ||
+  row.delivered_at ||
+  row.approved_at ||
+  row.created_at ||
+  row.updated_at ||
+  null;
 const getLoggedInUser = () => {
   try {
     return JSON.parse(
@@ -179,17 +228,27 @@ const isRestrictedCreditRecord = (row = {}) => {
 };
 export default function WeeklyAccount({ currentUser }) {
   const canViewTotalCollection = isOwnerUser(currentUser);
+  const defaultWeek = useMemo(() => getWeekRange(new Date()), []);
+  const previousWeek = useMemo(() => getWeekRange(new Date(), -1), []);
   const [activeTab, setActiveTab] = useState("total");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [startDate] = useState(defaultWeek.start);
+  const [endDate] = useState(defaultWeek.end);
+  const [countryFilter, setCountryFilter] = useState("All");
+  const [totalCollectionType, setTotalCollectionType] = useState("All");
+  const [reportEntryFilter, setReportEntryFilter] = useState("All");
+  const [reportCollectorFilter, setReportCollectorFilter] = useState("");
+  const [reportStartDate, setReportStartDate] = useState(defaultWeek.start);
+  const [reportEndDate, setReportEndDate] = useState(defaultWeek.end);
   const [searchByTab, setSearchByTab] = useState({});
   const [payments, setPayments] = useState([]);
   const [unpaidInvoices, setUnpaidInvoices] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [collectorIdentities, setCollectorIdentities] = useState([]);
+  const [currentStaffRows, setCurrentStaffRows] = useState([]);
   const [handoverHistory, setHandoverHistory] = useState([]);
   const [approvedExpenseTotals, setApprovedExpenseTotals] = useState([]);
   const [approvedExpenseDetails, setApprovedExpenseDetails] = useState([]);
+  const [allApprovedExpenseDetails, setAllApprovedExpenseDetails] = useState([]);
   const [approvedExpenseDetailsLoading, setApprovedExpenseDetailsLoading] = useState(false);
   const [approvedExpenseDetailsError, setApprovedExpenseDetailsError] = useState("");
   const [approvedExpensesExpanded, setApprovedExpensesExpanded] = useState(false);
@@ -235,6 +294,7 @@ export default function WeeklyAccount({ currentUser }) {
         getHandoverHistory(),
         loadWeeklyApprovedCashExpenseTotals(currentUser || getLoggedInUser()),
         loadWeeklyAccountCollectors(currentUser || getLoggedInUser()),
+        supabase.from("staff_users").select("id,staff_name,username"),
       ]);
 
       const valueAt = (index, fallback) =>
@@ -246,6 +306,32 @@ export default function WeeklyAccount({ currentUser }) {
       const history = valueAt(4, []);
       const expenseTotals = valueAt(5, []);
       const identities = valueAt(6, []);
+      const staffResult = valueAt(7, { data: [], error: null });
+
+      const [accountCountryResult, branchCountryResult] = await Promise.all([
+        supabase.from("customer_accounts").select("id,country"),
+        supabase.from("customer_branches").select("id,country"),
+      ]);
+      const accountCountryById = new Map(
+        (accountCountryResult.data || []).map((row) => [String(row.id), row.country || ""]),
+      );
+      const branchCountryById = new Map(
+        (branchCountryResult.data || []).map((row) => [String(row.id), row.country || ""]),
+      );
+      const withResolvedCountry = (row = {}) => {
+        const accountId = String(row.customer_account_id || row.customerAccountId || "");
+        const branchId = String(
+          row.customer_branch_id || row.customerBranchId || row.branch_id || "",
+        );
+        return {
+          ...row,
+          resolved_country:
+            branchCountryById.get(branchId) ||
+            accountCountryById.get(accountId) ||
+            countryFor(row) ||
+            "",
+        };
+      };
 
       if (results[0].status === "rejected") throw results[0].reason;
       if (driverResult.error) console.warn("Could not load drivers:", driverResult.error);
@@ -253,6 +339,7 @@ export default function WeeklyAccount({ currentUser }) {
       if (results[4].status === "rejected") console.warn("Could not load handovers:", results[4].reason);
       if (results[5].status === "rejected") throw results[5].reason;
       if (results[6].status === "rejected") throw results[6].reason;
+      if (staffResult.error) console.warn("Could not load current staff names:", staffResult.error);
 
       const deliveredThisWeek = (queueOrders || []).filter((order) => {
         const delivered = new Date(order.deliveredAt || order.delivered_at || order.createdAt || order.created_at || 0);
@@ -310,16 +397,43 @@ export default function WeeklyAccount({ currentUser }) {
         });
       });
 
-      setPayments(
-        (paymentsData || []).filter(
-          (row) => canViewTotalCollection || !isRestrictedCreditRecord(row),
+      const visiblePayments = (paymentsData || [])
+        .filter((row) => canViewTotalCollection || !isRestrictedCreditRecord(row))
+        .map(withResolvedCountry);
+      const uniqueCollectorStaffIds = [
+        ...new Set(
+          (identities || [])
+            .map((identity) => String(identity.staff_id || "").trim())
+            .filter(Boolean),
         ),
-      );
+      ];
+      let allExpenseDetails = [];
+      if (uniqueCollectorStaffIds.length) {
+        const expenseGroups = await Promise.allSettled(
+          uniqueCollectorStaffIds.map(async (staffId) => {
+            const rows = await loadWeeklyApprovedCashExpenseDetails(
+              currentUser || getLoggedInUser(),
+              { collectorStaffId: staffId },
+            );
+            return rows.map((row) => ({
+              ...row,
+              collector_staff_id: row.collector_staff_id || staffId,
+            }));
+          }),
+        );
+        allExpenseDetails = expenseGroups.flatMap((result) =>
+          result.status === "fulfilled" ? result.value : [],
+        );
+      }
+
+      setPayments(visiblePayments);
       setDrivers(driverResult.data || []);
-      setUnpaidInvoices([...unpaidByInvoice.values()]);
+      setUnpaidInvoices([...unpaidByInvoice.values()].map(withResolvedCountry));
       setHandoverHistory(history || []);
       setApprovedExpenseTotals(expenseTotals || []);
+      setAllApprovedExpenseDetails(allExpenseDetails);
       setCollectorIdentities(identities || []);
+      setCurrentStaffRows(staffResult.data || []);
     } catch (err) {
       console.error("Weekly Account load error:", err);
       setError(err.message || "Could not load Weekly Account.");
@@ -338,14 +452,31 @@ export default function WeeklyAccount({ currentUser }) {
         const key = getWeeklyPaymentDateKey(row);
         if (startDate && key < startDate) return false;
         if (endDate && key > endDate) return false;
+        if (countryFilter !== "All") {
+          const rowCountry = normalize(countryFor(row));
+          if (rowCountry !== normalize(countryFilter)) return false;
+        }
         return true;
       }),
-    [payments, startDate, endDate],
+    [payments, startDate, endDate, countryFilter],
   );
 
+  const allCollectionPayments = useMemo(
+    () => payments.filter(isGenuineIncomingPayment),
+    [payments],
+  );
   const collectionPayments = useMemo(
     () => filteredPayments.filter(isGenuineIncomingPayment),
     [filteredPayments],
+  );
+  const totalCollectionRows = useMemo(
+    () =>
+      collectionPayments.filter(
+        (row) =>
+          totalCollectionType === "All" ||
+          collectorTypeFor(row) === totalCollectionType,
+      ),
+    [collectionPayments, totalCollectionType],
   );
 
   const driverPayments = useMemo(
@@ -357,26 +488,34 @@ export default function WeeklyAccount({ currentUser }) {
     [collectionPayments],
   );
 
-  const collectorOptions = useMemo(
-    () =>
-      buildCollectorOptions(collectorIdentities, [
-        ...drivers.map((driver) => ({
-          ...driver,
-          collector_type: "Driver",
-          collector_name: driver.name || driver.full_name || driver.driverName,
-        })),
-        ...payments,
-        ...approvedExpenseTotals,
-        ...handoverHistory,
-      ]),
-    [
-      collectorIdentities,
-      drivers,
-      payments,
-      approvedExpenseTotals,
-      handoverHistory,
-    ],
-  );
+  const collectorOptions = useMemo(() => {
+    const currentStaffById = new Map(
+      (currentStaffRows || []).map((row) => [String(row.id || ""), row]),
+    );
+
+    return buildCollectorOptions(collectorIdentities, [
+      ...drivers.map((driver) => ({
+        ...driver,
+        collector_type: "Driver",
+        collector_name: driver.name || driver.full_name || driver.driverName,
+      })),
+      ...payments,
+      ...approvedExpenseTotals,
+      ...handoverHistory,
+    ]).map((option) => {
+      if (!option.staffId) return option;
+      const currentStaff = currentStaffById.get(String(option.staffId));
+      const currentName = String(currentStaff?.staff_name || option.staffName || option.nameSnapshot || option.username || "").trim();
+      const historicalName = String(option.username || option.nameSnapshot || "").trim();
+      const showHistorical = historicalName && normalize(historicalName) !== normalize(currentName);
+      return {
+        ...option,
+        staffName: currentName || option.staffName,
+        nameSnapshot: currentName || option.nameSnapshot,
+        label: showHistorical ? `${currentName} — old: ${historicalName}` : currentName || option.label,
+      };
+    });
+  }, [collectorIdentities, currentStaffRows, drivers, payments, approvedExpenseTotals, handoverHistory]);
   const resolveCollectorOptionForRow = (row) => {
     const type = collectorTypeFor(row);
     const sameTypeOptions = collectorOptions.filter((option) => option.type === type);
@@ -401,6 +540,18 @@ export default function WeeklyAccount({ currentUser }) {
           .includes(rowName),
       ) || null
     );
+  };
+
+  const displayCollectorNameFor = (row) => {
+    const option = resolveCollectorOptionForRow(row);
+    if (!option) return collectorNameFor(row) || "";
+    const currentName = option.staffName || option.nameSnapshot || option.username || option.label;
+    const historicalName = collectorNameFor(row);
+    if (historicalName && normalize(historicalName) !== normalize(currentName)) {
+      const alreadyShown = normalize(option.label).includes(normalize(historicalName));
+      return alreadyShown ? option.label : `${currentName} — old: ${historicalName}`;
+    }
+    return option.label || currentName || historicalName || "";
   };
 
   const handoverCollectorMatchesRow = (option, row) => {
@@ -497,8 +648,13 @@ export default function WeeklyAccount({ currentUser }) {
           currentUser || getLoggedInUser(),
           {
             collectorStaffId,
-            periodStart: startDate || null,
-            periodEnd: endDate || null,
+            periodStart: (() => {
+              const latest = handoverHistory
+                .filter((row) => handoverCollectorMatchesRow(selectedCollector, row))
+                .sort((a, b) => new Date(b.period_end || b.created_at || b.handover_date || 0) - new Date(a.period_end || a.created_at || a.handover_date || 0))[0];
+              return latest?.period_end || latest?.created_at || latest?.handover_date || null;
+            })(),
+            periodEnd: new Date().toISOString(),
           },
         );
         if (!cancelled) setApprovedExpenseDetails(rows);
@@ -518,7 +674,7 @@ export default function WeeklyAccount({ currentUser }) {
     return () => {
       cancelled = true;
     };
-  }, [collectorStaffId, currentUser, endDate, startDate]);
+  }, [collectorStaffId, currentUser, handoverHistory, selectedCollector]);
 
   const totalsByCollector = (rows) => {
     const totals = new Map();
@@ -527,7 +683,7 @@ export default function WeeklyAccount({ currentUser }) {
       const matchedOption = collectorOptions.find((option) =>
         collectorOptionMatchesRow(option, row),
       );
-      const fallbackName = collectorNameFor(row) || "Unassigned";
+      const fallbackName = displayCollectorNameFor(row) || "Unassigned";
       const label = matchedOption?.label || fallbackName;
       totals.set(label, (totals.get(label) || 0) + paymentAmount(row));
     });
@@ -538,41 +694,43 @@ export default function WeeklyAccount({ currentUser }) {
   };
 
   const cashHoldingRows = useMemo(() => {
-    return collectorOptions.map((option) => {
-      const matchingCash = collectionPayments.filter(
-        (row) =>
-          isCashPayment(row) &&
-          collectorOptionMatchesRow(option, row),
-      );
-      const collected = matchingCash.reduce((sum, row) => sum + paymentAmount(row), 0);
-      const expenseTotal = approvedExpenseTotalForCollector(
-        approvedExpenseTotals,
-        option,
-      );
-      const handedOver = handoverHistory
-        .filter((row) => collectorOptionMatchesRow(option, row))
-        .reduce((sum, row) => sum + Number(row.cash_received || 0), 0);
-      const lastHandover = handoverHistory
-        .filter((row) => collectorOptionMatchesRow(option, row))
-        .sort((a, b) => new Date(b.created_at || b.handover_date) - new Date(a.created_at || a.handover_date))[0];
-      const lastCollection = matchingCash
-        .slice()
-        .sort((a, b) => new Date(getWeeklyPaymentDate(b) || 0) - new Date(getWeeklyPaymentDate(a) || 0))[0];
-      const holding = collected - expenseTotal - handedOver;
-      const anchor = lastCollection ? new Date(getWeeklyPaymentDate(lastCollection)) : null;
-      return {
-        key: option.value,
-        collectorType: option.type,
-        collectorName: option.label,
-        collected,
-        expenses: expenseTotal,
-        handedOver,
-        holding,
-        lastHandoverDate: lastHandover?.created_at || lastHandover?.handover_date,
-        daysHolding: anchor ? Math.max(0, Math.floor((Date.now() - anchor.getTime()) / 86400000)) : 0,
-      };
-    }).sort((a, b) => b.holding - a.holding);
-  }, [collectorOptions, collectionPayments, approvedExpenseTotals, handoverHistory]);
+    return collectorOptions
+      .map((option) => {
+        const collectorHandovers = handoverHistory
+          .filter((row) => handoverCollectorMatchesRow(option, row))
+          .sort((a, b) => new Date(b.period_end || b.created_at || b.handover_date || 0) - new Date(a.period_end || a.created_at || a.handover_date || 0));
+        const lastHandover = collectorHandovers[0] || null;
+        const lastHandoverValue = lastHandover?.period_end || lastHandover?.created_at || lastHandover?.handover_date || null;
+        const lastHandoverTime = lastHandoverValue ? new Date(lastHandoverValue).getTime() : 0;
+
+        const matchingCash = allCollectionPayments.filter((row) => {
+          if (!isCashPayment(row) || !handoverCollectorMatchesRow(option, row)) return false;
+          const paymentTime = new Date(getWeeklyPaymentDate(row) || 0).getTime();
+          return Number.isFinite(paymentTime) && paymentTime > lastHandoverTime;
+        });
+        const collected = matchingCash.reduce((sum, row) => sum + paymentAmount(row), 0);
+
+        const expenseRows = allApprovedExpenseDetails.filter((row) => {
+          if (!option.staffId || String(row.collector_staff_id || "") !== String(option.staffId)) return false;
+          const expenseTime = new Date(row.payout_date || row.approved_at || row.created_at || 0).getTime();
+          return Number.isFinite(expenseTime) && expenseTime > lastHandoverTime;
+        });
+        const expenseTotal = expenseRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        const rawHolding = collected - expenseTotal;
+        const holding = Math.abs(rawHolding) < 0.01 ? 0 : rawHolding;
+        const lastCollection = matchingCash.slice().sort((a, b) => new Date(getWeeklyPaymentDate(b) || 0) - new Date(getWeeklyPaymentDate(a) || 0))[0];
+        const anchor = lastCollection ? new Date(getWeeklyPaymentDate(lastCollection)) : null;
+
+        return {
+          key: option.value, collectorType: option.type, collectorName: option.label,
+          collected, expenses: expenseTotal, handedOver: 0, holding,
+          lastHandoverDate: lastHandoverValue,
+          daysHolding: anchor ? Math.max(0, Math.floor((Date.now() - anchor.getTime()) / 86400000)) : 0,
+        };
+      })
+      .filter((row) => row.holding > 0.009)
+      .sort((a, b) => b.holding - a.holding);
+  }, [collectorOptions, allCollectionPayments, allApprovedExpenseDetails, handoverHistory]);
 
   const lastCollectorHandover = useMemo(
     () =>
@@ -590,38 +748,45 @@ export default function WeeklyAccount({ currentUser }) {
     return new Date(0);
   }, [lastCollectorHandover]);
   const handoverPeriodEnd = new Date();
-  const selectedCashCollected = collectionPayments
+  const selectedHoldingRow = cashHoldingRows.find(
+    (row) => row.key === selectedCollector?.value,
+  );
+  const selectedCurrentWeekCash = allCollectionPayments
     .filter(
       (row) =>
         isCashPayment(row) &&
-        handoverCollectorMatchesRow(selectedCollector, row),
+        handoverCollectorMatchesRow(selectedCollector, row) &&
+        dateInRange(getWeeklyPaymentDate(row), defaultWeek.start, defaultWeek.end),
     )
     .reduce((sum, row) => sum + paymentAmount(row), 0);
+  const selectedPreviousWeekCash = allCollectionPayments
+    .filter(
+      (row) =>
+        isCashPayment(row) &&
+        handoverCollectorMatchesRow(selectedCollector, row) &&
+        dateInRange(getWeeklyPaymentDate(row), previousWeek.start, previousWeek.end),
+    )
+    .reduce((sum, row) => sum + paymentAmount(row), 0);
+  const selectedCashCollected = Number(selectedHoldingRow?.collected || 0);
   const approvedExpenseDetailTotal = sumApprovedExpenseDetails(
     approvedExpenseDetails,
   );
   const selectedApprovedExpenses = approvedExpenseDetailTotal;
-  const selectedCashHandedOver = handoverHistory
-    .filter(
-      (row) =>
-        handoverCollectorMatchesRow(selectedCollector, row) &&
-        dateInRange(row.handover_date || row.created_at, startDate, endDate),
-    )
-    .reduce((sum, row) => sum + Number(row.cash_received || 0), 0);
+  // The previous handover is the reset point. This handover period starts from zero.
+  const selectedCashHandedOver = 0;
   const approvedExpenseTotalMismatch =
     Math.abs(
       Number(selectedApprovedExpenses || 0) -
         Number(approvedExpenseDetailTotal || 0),
     ) > 0.009;
-  const {
-    amountDue: selectedAmountDue,
-    difference: handoverDifference,
-  } = calculateWeeklyHandoverAmounts({
+  calculateWeeklyHandoverAmounts({
     cashCollected: selectedCashCollected,
     approvedExpenses: selectedApprovedExpenses,
     cashHandedOver: selectedCashHandedOver,
     cashReceived,
   });
+  const selectedAmountDue = Math.max(0, Number(selectedHoldingRow?.holding || 0));
+  const handoverDifference = Number(cashReceived || 0) - selectedAmountDue;
 
   async function handleSaveHandover() {
     if (!selectedCollector) return alert(`Please select ${collectorType}.`);
@@ -632,7 +797,7 @@ export default function WeeklyAccount({ currentUser }) {
       return alert("Please explain the handover difference.");
     }
     const confirmed = window.confirm(
-      `Save handover for ${collectorName}?\n\nCash collected: ${money(selectedCashCollected)}\nApproved expenses: ${money(selectedApprovedExpenses)}\nAlready handed over: ${money(selectedCashHandedOver)}\nBalance due: ${money(selectedAmountDue)}\nCash received: ${money(cashReceived)}\nDifference: ${money(handoverDifference)}`,
+      `Save handover for ${collectorName}?\n\nCash collected: ${money(selectedCashCollected)}\nApproved expenses: ${money(selectedApprovedExpenses)}\nHanded over in current period: ${money(selectedCashHandedOver)}\nBalance due: ${money(selectedAmountDue)}\nCash received: ${money(cashReceived)}\nDifference: ${money(handoverDifference)}`,
     );
     if (!confirmed) return;
 
@@ -666,22 +831,28 @@ export default function WeeklyAccount({ currentUser }) {
       "total",
       canViewTotalCollection ? "Total Collection" : "Payment Reconciliation",
     ],
+    ["unpaid", "Customers Didn’t Pay"],
     ["driver", "Driver Collection"],
     ["salesrep", "Sales Rep Collection"],
     ["holding", "Cash Holding"],
     ["handover", "Driver / Sales Rep Handover"],
-    ["unpaid", "Customers Didn’t Pay"],
+    ["report", "Collection Analysis"],
   ];
 
   const filteredHandovers = handoverHistory.filter((row) =>
     dateInRange(row.handover_date || row.created_at, startDate, endDate),
   );
-  const filteredUnpaid = unpaidInvoices.filter((row) =>
-    dateInRange(row.delivered_at || row.created_at, startDate, endDate),
-  );
+  const filteredUnpaid = unpaidInvoices.filter((row) => {
+    if (!dateInRange(row.delivered_at || row.created_at, startDate, endDate)) return false;
+    if (countryFilter !== "All") {
+      const rowCountry = normalize(countryFor(row));
+      if (rowCountry !== normalize(countryFilter)) return false;
+    }
+    return true;
+  });
   const activeSearch = searchByTab[activeTab] || "";
   const searchedPayments = filterWeeklyAccountRows(
-    collectionPayments,
+    totalCollectionRows,
     searchByTab.total,
     PAYMENT_SEARCH_FIELDS,
   );
@@ -700,8 +871,11 @@ export default function WeeklyAccount({ currentUser }) {
     searchByTab.holding,
     CASH_HOLDING_SEARCH_FIELDS,
   );
+  const selectedCollectorHandovers = selectedCollector
+    ? filteredHandovers.filter((row) => handoverCollectorMatchesRow(selectedCollector, row))
+    : [];
   const searchedHandovers = filterWeeklyAccountRows(
-    filteredHandovers,
+    selectedCollectorHandovers,
     searchByTab.handover,
     HANDOVER_SEARCH_FIELDS,
   );
@@ -709,6 +883,147 @@ export default function WeeklyAccount({ currentUser }) {
     filteredUnpaid,
     searchByTab.unpaid,
     UNPAID_SEARCH_FIELDS,
+  );
+
+  const reportTransactions = useMemo(() => {
+    const collectionRows = payments
+      .filter(isGenuineIncomingPayment)
+      .map((row) => ({
+        key: `collection:${row.canonical_payment_key || row.id || Math.random()}`,
+        entryType: "Collection",
+        date: transactionDateFor(row),
+        collector: displayCollectorNameFor(row) || "Office / Unassigned",
+        collectorType: collectorTypeFor(row),
+        customer: row.customer_name || "-",
+        reference: row.payment_reference || row.invoice_no || row.order_number || row.reference_no || "-",
+        amount: paymentAmount(row),
+        difference: 0,
+        detail: `${row.payment_type || row.payment_method || "Payment"} · paid by ${row.who_paid || row.paid_by || "not recorded"}`,
+        country: countryFor(row),
+      }));
+    const unpaidRows = unpaidInvoices.map((row) => {
+      const invoiceTotal = invoiceTotalValue(row);
+      const collected = Number(row.payment_amount || row.paid_amount || 0);
+      return {
+        key: `unpaid:${weeklyInvoiceKey(row)}`,
+        entryType: "Unpaid",
+        date: row.delivered_at || row.created_at,
+        collector: displayCollectorNameFor(row) || row.credit_selected_by || "Unassigned",
+        collectorType: collectorTypeFor(row),
+        customer: row.customer_name || "-",
+        reference: row.invoice_no || row.order_number || row.reference_no || "-",
+        amount: Math.max(0, invoiceTotal - collected),
+        difference: Math.max(0, invoiceTotal - collected),
+        detail: "Customer outstanding / not collected",
+        country: countryFor(row),
+      };
+    });
+    const handoverRows = handoverHistory.map((row) => {
+      const option = collectorOptions.find((item) => collectorOptionMatchesRow(item, row));
+      return {
+        key: `handover:${row.id}`,
+        entryType: "Handover",
+        date: row.handover_date || row.created_at,
+        collector: option?.label || row.collector_name || "Unassigned",
+        collectorType: row.collector_type || option?.type || "",
+        customer: "-",
+        reference: row.id || "-",
+        amount: Number(row.cash_received || 0),
+        difference: Number(row.difference || 0),
+        detail: row.reason || "Cash handover",
+        country: "",
+      };
+    });
+    const expenseRows = allApprovedExpenseDetails.map((row) => {
+      const staffId = String(row.collector_staff_id || "");
+      const option = collectorOptions.find((item) => item.staffId === staffId);
+      return {
+        key: `expense:${row.weekly_effect_id || row.business_payout_id || row.payout_reference || Math.random()}`,
+        entryType: "Expense",
+        date: row.payout_date || row.approved_at,
+        collector: option?.label || row.collector_name || "Unassigned",
+        collectorType: option?.type || row.collector_type || "",
+        customer: row.supplier_name || "-",
+        reference: row.payout_reference || "-",
+        amount: Number(row.amount || 0),
+        difference: 0,
+        detail: row.expense_type_name || row.description || "Approved cash expense",
+        country: "",
+      };
+    });
+    return [...collectionRows, ...unpaidRows, ...handoverRows, ...expenseRows]
+      .filter((row) => {
+        if (reportEntryFilter !== "All" && row.entryType !== reportEntryFilter) return false;
+        if (reportCollectorFilter && normalize(row.collector) !== normalize(reportCollectorFilter)) return false;
+        if (!dateInRange(row.date, reportStartDate, reportEndDate)) return false;
+        return true;
+      })
+      .sort((left, right) => new Date(right.date || 0) - new Date(left.date || 0));
+  }, [
+    payments,
+    unpaidInvoices,
+    handoverHistory,
+    allApprovedExpenseDetails,
+    collectorOptions,
+    reportEntryFilter,
+    reportCollectorFilter,
+    reportStartDate,
+    reportEndDate,
+  ]);
+
+  const collectorAnalysisRows = useMemo(
+    () =>
+      collectorOptions.map((option) => {
+        const currentWeekCollected = allCollectionPayments
+          .filter(
+            (row) =>
+              collectorOptionMatchesRow(option, row) &&
+              dateInRange(getWeeklyPaymentDate(row), defaultWeek.start, defaultWeek.end),
+          )
+          .reduce((sum, row) => sum + paymentAmount(row), 0);
+        const lastWeekCollected = allCollectionPayments
+          .filter(
+            (row) =>
+              collectorOptionMatchesRow(option, row) &&
+              dateInRange(getWeeklyPaymentDate(row), previousWeek.start, previousWeek.end),
+          )
+          .reduce((sum, row) => sum + paymentAmount(row), 0);
+        const expenses = allApprovedExpenseDetails
+          .filter((row) => String(row.collector_staff_id || "") === String(option.staffId || ""))
+          .filter((row) => dateInRange(row.payout_date || row.approved_at, reportStartDate, reportEndDate))
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        const holding = Number(cashHoldingRows.find((row) => row.key === option.value)?.holding || 0);
+        const handedOver = handoverHistory
+          .filter((row) => collectorOptionMatchesRow(option, row))
+          .filter((row) => dateInRange(row.handover_date || row.created_at, reportStartDate, reportEndDate))
+          .reduce((sum, row) => sum + Number(row.cash_received || 0), 0);
+        const differences = handoverHistory
+          .filter((row) => collectorOptionMatchesRow(option, row))
+          .filter((row) => dateInRange(row.handover_date || row.created_at, reportStartDate, reportEndDate))
+          .reduce((sum, row) => sum + Number(row.difference || 0), 0);
+        return {
+          key: option.value,
+          collector: option.label,
+          collectorType: option.type,
+          currentWeekCollected,
+          lastWeekCollected,
+          expenses,
+          handedOver,
+          holding,
+          difference: differences,
+        };
+      }),
+    [
+      collectorOptions,
+      allCollectionPayments,
+      allApprovedExpenseDetails,
+      cashHoldingRows,
+      handoverHistory,
+      defaultWeek,
+      previousWeek,
+      reportStartDate,
+      reportEndDate,
+    ],
   );
 
   if (loading) return <div className="p-4">Loading Weekly Account...</div>;
@@ -725,10 +1040,17 @@ export default function WeeklyAccount({ currentUser }) {
 
       {error && <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-red-700">{error}</div>}
 
-      <div className="flex flex-wrap items-end gap-3">
-        <Field label="Start Date"><input type="date" className="border rounded-lg px-3 py-2" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
-        <Field label="End Date"><input type="date" className="border rounded-lg px-3 py-2" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></Field>
-        <button type="button" onClick={() => { setStartDate(""); setEndDate(""); }} className="rounded-lg bg-slate-600 px-4 py-2 font-bold text-white">Clear</button>
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-slate-50 p-3">
+        <Field label="Week Commencing (Monday)"><input type="date" className="border rounded-lg bg-slate-100 px-3 py-2 font-bold" value={startDate} readOnly /></Field>
+        <Field label="Week Ending (Sunday)"><input type="date" className="border rounded-lg bg-slate-100 px-3 py-2 font-bold" value={endDate} readOnly /></Field>
+        <Field label="Country">
+          <select className="rounded-lg border bg-white px-3 py-2 font-bold" value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
+            <option value="All">All</option>
+            <option value="Wales">Wales</option>
+            <option value="England">England</option>
+          </select>
+        </Field>
+        <div className="pb-2 text-xs font-semibold text-slate-500">Weekly Collection is fixed Monday to Sunday. Use Collection Analysis for custom dates.</div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
@@ -737,6 +1059,7 @@ export default function WeeklyAccount({ currentUser }) {
         ))}
       </div>
 
+      {activeTab !== "report" && (
       <div className="flex flex-wrap items-end gap-2">
         <Field label={`Search ${tabs.find(([key]) => key === activeTab)?.[1] || "Weekly Account"}`}>
           <input
@@ -764,20 +1087,35 @@ export default function WeeklyAccount({ currentUser }) {
           </button>
         )}
       </div>
+      )}
 
       {activeTab === "total" && (
-        <CollectionSection
-          rows={searchedPayments}
-          showSummary={canViewTotalCollection}
-          money={money}
-          formatDate={formatDate}
-        />
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-white p-3">
+            <Field label="Collection Type">
+              <select className="min-w-52 rounded-lg border bg-white px-3 py-2 font-bold" value={totalCollectionType} onChange={(e) => setTotalCollectionType(e.target.value)}>
+                <option value="All">All Collection</option>
+                <option value="Driver">Driver Collection</option>
+                <option value="Sales Rep">Sales Rep Collection</option>
+                <option value="Office">Office Collection</option>
+              </select>
+            </Field>
+          </div>
+          <CollectionSection
+            rows={searchedPayments}
+            showSummary={canViewTotalCollection}
+            selectedType={totalCollectionType}
+            money={money}
+            formatDate={formatDate}
+            getCollectorName={displayCollectorNameFor}
+          />
+        </div>
       )}
-      {activeTab === "driver" && <CollectorCollectionSection rows={searchedDriverPayments} title="Driver Collection" showSummary={canViewTotalCollection} money={money} formatDate={formatDate} totals={totalsByCollector(searchedDriverPayments)} />}
-      {activeTab === "salesrep" && <CollectorCollectionSection rows={searchedSalesRepPayments} title="Sales Rep Collection" showSummary={canViewTotalCollection} money={money} formatDate={formatDate} totals={totalsByCollector(searchedSalesRepPayments)} />}
+      {activeTab === "driver" && <CollectorCollectionSection rows={searchedDriverPayments} title="Driver Collection" showSummary={canViewTotalCollection} money={money} formatDate={formatDate} totals={totalsByCollector(searchedDriverPayments)} getCollectorName={displayCollectorNameFor} />}
+      {activeTab === "salesrep" && <CollectorCollectionSection rows={searchedSalesRepPayments} title="Sales Rep Collection" showSummary={canViewTotalCollection} money={money} formatDate={formatDate} totals={totalsByCollector(searchedSalesRepPayments)} getCollectorName={displayCollectorNameFor} />}
 
       {activeTab === "holding" && (
-        <PaginatedTable rows={searchedCashHoldingRows} empty="No staff cash holding found." renderHeader={() => <tr className="bg-blue-700 text-white"><Th>Type</Th><Th>Collector</Th><Th right>Cash Collected</Th><Th right>Approved Expenses</Th><Th right>Handed Over</Th><Th right>Amount Due</Th><Th>Last Handover</Th><Th right>Days Holding</Th></tr>} renderRow={(row) => <tr key={row.key} className="border-b"><Td>{row.collectorType}</Td><Td bold>{row.collectorName}</Td><Td right>{money(row.collected)}</Td><Td right>{money(row.expenses)}</Td><Td right>{money(row.handedOver)}</Td><Td right bold className={row.holding > 0 ? "text-red-600" : "text-green-600"}>{money(row.holding)}</Td><Td>{formatDate(row.lastHandoverDate)}</Td><Td right>{row.daysHolding}</Td></tr>} />
+        <PaginatedTable rows={searchedCashHoldingRows} empty="No staff cash holding found." renderHeader={() => <tr className="bg-blue-700 text-white"><Th>Type</Th><Th>Collector</Th><Th right>Cash Collected</Th><Th right>Approved Expenses</Th><Th right>Handed Over In Current Holding</Th><Th right>Amount Due</Th><Th>Last Handover</Th><Th right>Days Holding</Th></tr>} renderRow={(row) => <tr key={row.key} className="border-b"><Td>{row.collectorType}</Td><Td bold>{row.collectorName}</Td><Td right>{money(row.collected)}</Td><Td right>{money(row.expenses)}</Td><Td right>{money(row.handedOver)}</Td><Td right bold className={row.holding > 0 ? "text-red-600" : "text-green-600"}>{money(row.holding)}</Td><Td>{formatDate(row.lastHandoverDate)}</Td><Td right>{row.daysHolding}</Td></tr>} />
       )}
 
       {activeTab === "handover" && (
@@ -788,7 +1126,9 @@ export default function WeeklyAccount({ currentUser }) {
               <Field label="Collector Type"><select className="w-full rounded-lg border p-2.5" value={collectorType} onChange={(e) => { setCollectorType(e.target.value); setCollectorSelection(""); setApprovedExpensesExpanded(false); }}><option>Driver</option><option>Sales Rep</option></select></Field>
               <Field label="Collector Name"><select className="w-full rounded-lg border p-2.5" value={collectorSelection} onChange={(e) => { setCollectorSelection(e.target.value); setApprovedExpensesExpanded(false); }}><option value="">Select</option>{optionsByType[collectorType].map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
               <Field label="Handover Date"><input type="date" className="w-full rounded-lg border p-2.5" value={handoverDate} onChange={(e) => setHandoverDate(e.target.value)} /></Field>
-              <Field label="Cash Collected"><ReadOnlyValue value={money(selectedCashCollected)} /></Field>
+              <Field label="This Week Cash Collection"><ReadOnlyValue value={money(selectedCurrentWeekCash)} /></Field>
+              <Field label="Last Week Cash Collection"><ReadOnlyValue value={money(selectedPreviousWeekCash)} /></Field>
+              <Field label="Cash Collected Since Last Handover"><ReadOnlyValue value={money(selectedCashCollected)} /></Field>
               <ApprovedExpensesToggle
                 expanded={approvedExpensesExpanded}
                 loading={approvedExpenseDetailsLoading}
@@ -796,8 +1136,8 @@ export default function WeeklyAccount({ currentUser }) {
                 money={money}
                 onToggle={() => setApprovedExpensesExpanded((value) => !value)}
               />
-              <Field label="Handed Over"><ReadOnlyValue value={money(selectedCashHandedOver)} /></Field>
-              <Field label="Balance Due"><ReadOnlyValue value={money(selectedAmountDue)} /></Field>
+              <Field label="Handed Over In Current Period"><ReadOnlyValue value={money(selectedCashHandedOver)} /></Field>
+              <Field label="Total To Handover"><ReadOnlyValue value={money(selectedAmountDue)} /></Field>
               <Field label="Cash Received"><input min="0" step="0.01" type="number" className="w-full rounded-lg border p-2.5" value={cashReceived} onChange={(e) => setCashReceived(e.target.value)} /></Field>
               <Field label="Difference"><ReadOnlyValue value={money(handoverDifference)} /></Field>
             </div>
@@ -816,16 +1156,35 @@ export default function WeeklyAccount({ currentUser }) {
             <Field label="Reason (required when different)"><textarea className="w-full rounded-lg border p-2.5" value={handoverReason} onChange={(e) => setHandoverReason(e.target.value)} /></Field>
             <button type="button" onClick={handleSaveHandover} disabled={savingHandover || approvedExpenseDetailsLoading || Boolean(approvedExpenseDetailsError)} className="rounded-lg bg-green-600 px-5 py-2.5 font-bold text-white disabled:opacity-50">{savingHandover ? "Saving..." : "Save Handover"}</button>
           </div>
-          <HandoverTable rows={searchedHandovers} money={money} formatDateTime={formatDateTime} />
+          <HandoverTable rows={searchedHandovers} money={money} formatDateTime={formatDateTime} getCollectorName={displayCollectorNameFor} />
         </div>
       )}
 
-      {activeTab === "unpaid" && <OutstandingTable rows={searchedUnpaid} money={money} formatDate={formatDate} />}
+      {activeTab === "unpaid" && <OutstandingTable rows={searchedUnpaid} money={money} formatDate={formatDate} getCollectorName={displayCollectorNameFor} />}
+
+      {activeTab === "report" && (
+        <WeeklyCollectionAnalysis
+          entryFilter={reportEntryFilter}
+          setEntryFilter={setReportEntryFilter}
+          collectorFilter={reportCollectorFilter}
+          setCollectorFilter={setReportCollectorFilter}
+          startDate={reportStartDate}
+          setStartDate={setReportStartDate}
+          endDate={reportEndDate}
+          setEndDate={setReportEndDate}
+          collectorOptions={collectorOptions}
+          transactions={reportTransactions}
+          collectorRows={collectorAnalysisRows}
+          payments={payments}
+          money={money}
+          formatDate={formatDate}
+        />
+      )}
     </div>
   );
 }
 
-function CollectionSection({ rows, showSummary, money, formatDate }) {
+function CollectionSection({ rows, showSummary, selectedType = "All", money, formatDate, getCollectorName }) {
   const total = rows.reduce((sum, row) => sum + paymentAmount(row), 0);
   const paymentCount = new Set(rows.map((row) => row.canonical_payment_key || row.id)).size;
   const totalsByType = ["Driver", "Sales Rep", "Office"].map((type) => [
@@ -844,68 +1203,157 @@ function CollectionSection({ rows, showSummary, money, formatDate }) {
             <SummaryCard title="Payments" value={paymentCount} />
             <SummaryCard title="Total Collection" value={money(total)} />
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {totalsByType.map(([type, amount]) => (
-              <MiniSummaryCard key={type} title={`${type} Collection`} value={money(amount)} />
-            ))}
-          </div>
-        </div>
-      )}
-      <PaymentTable rows={rows} money={money} formatDate={formatDate} />
-    </>
-  );
-}
-
-function CollectorCollectionSection({ rows, totals, title, showSummary, money, formatDate }) {
-  const [showCollectorTotals, setShowCollectorTotals] = useState(true);
-
-  return (
-    <>
-      {showSummary && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-end">
-            <button
-              type="button"
-              onClick={() => setShowCollectorTotals((value) => !value)}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
-            >
-              {showCollectorTotals ? "Hide collector totals" : "View collector totals"}
-            </button>
-          </div>
-          {showCollectorTotals && (
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              {totals.map(([name, total]) => (
-                <CompactCollectorCard key={name} title={name} value={money(total)} />
+          {selectedType === "All" && (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {totalsByType.map(([type, amount]) => (
+                <MiniSummaryCard key={type} title={`${type} Collection`} value={money(amount)} />
               ))}
-              {totals.length === 0 && <CompactCollectorCard title={title} value={money(0)} />}
             </div>
           )}
         </div>
       )}
-      <PaymentTable rows={rows} money={money} formatDate={formatDate} />
+      <PaymentTable rows={rows} money={money} formatDate={formatDate} getCollectorName={getCollectorName} />
     </>
   );
 }
 
-function PaymentTable({ rows, money, formatDate }) {
+function CollectorCollectionSection({ rows, totals, title, showSummary, money, formatDate, getCollectorName }) {
+  const [selectedCollectorName, setSelectedCollectorName] = useState("");
+  const collectorNames = [...new Set(rows.map((row) => getCollectorName?.(row) || collectorNameFor(row)).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+  const visibleRows = selectedCollectorName
+    ? rows.filter((row) => normalize(getCollectorName?.(row) || collectorNameFor(row)) === normalize(selectedCollectorName))
+    : rows;
+  const visibleTotal = visibleRows.reduce((sum, row) => sum + paymentAmount(row), 0);
+
+  return (
+    <>
+      {showSummary && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-white p-3">
+            <Field label="Collector">
+              <select
+                value={selectedCollectorName}
+                onChange={(event) => setSelectedCollectorName(event.target.value)}
+                className="min-w-64 rounded-lg border bg-white px-3 py-2 font-bold"
+              >
+                <option value="">All {title.replace(" Collection", "")} Collectors</option>
+                {collectorNames.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </Field>
+            <MiniSummaryCard title={selectedCollectorName || title} value={money(visibleTotal)} />
+          </div>
+          {!selectedCollectorName && totals.length > 0 && (
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+              {totals.map(([name, total]) => (
+                <CompactCollectorCard key={name} title={name} value={money(total)} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <PaymentTable rows={visibleRows} money={money} formatDate={formatDate} getCollectorName={getCollectorName} />
+    </>
+  );
+}
+
+function PaymentTable({ rows, money, formatDate, getCollectorName = collectorNameFor }) {
   const invoiceTotal = (row) => Number(row.invoice_total || row.order_total || row.total_amount || row.invoice_amount || 0);
   const balance = (row) =>
     Number.isFinite(Number(row.running_balance))
       ? Number(row.running_balance)
       : Math.max(0, invoiceTotal(row) - paymentAmount(row));
-  return <PaginatedTable rows={rows} empty="No payment records found." renderHeader={() => <tr className="bg-gray-100 text-left"><Th>Customer</Th><Th>Order No</Th><Th right>Invoice Total</Th><Th right>Paid Amount</Th><Th right>Balance</Th><Th>Payment Date</Th><Th>Payment Type</Th><Th>Who Paid</Th><Th>Collected By</Th><Th>Collection Type</Th><Th>Source</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-t"><Td>{row.customer_name || "-"}</Td><Td>{formatDisplayOrderId(row.invoice_no || row.order_number)}</Td><Td right>{money(invoiceTotal(row))}</Td><Td right>{money(paymentAmount(row))}</Td><Td right>{money(balance(row))}</Td><Td>{formatDate(getWeeklyPaymentDate(row))}</Td><Td>{row.payment_type || row.payment_method || "-"}</Td><Td>{row.who_paid || row.paid_by || "-"}</Td><Td bold>{collectorNameFor(row) || "-"}</Td><Td>{collectorTypeFor(row)}</Td><Td><SourceBadge legacy={row.is_legacy} /></Td></tr>} />;
+  return <PaginatedTable rows={rows} empty="No payment records found." renderHeader={() => <tr className="bg-gray-100 text-left"><Th>Customer</Th><Th>Order No</Th><Th right>Invoice Total</Th><Th right>Paid Amount</Th><Th right>Balance</Th><Th>Payment Date</Th><Th>Payment Type</Th><Th>Who Paid</Th><Th>Collected By</Th><Th>Collection Type</Th><Th>Source</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-t"><Td>{row.customer_name || "-"}</Td><Td>{formatDisplayOrderId(row.invoice_no || row.order_number)}</Td><Td right>{money(invoiceTotal(row))}</Td><Td right>{money(paymentAmount(row))}</Td><Td right>{money(balance(row))}</Td><Td>{formatDate(getWeeklyPaymentDate(row))}</Td><Td>{row.payment_type || row.payment_method || "-"}</Td><Td>{row.who_paid || row.paid_by || "-"}</Td><Td bold>{getCollectorName(row) || "-"}</Td><Td>{collectorTypeFor(row)}</Td><Td><SourceBadge legacy={row.is_legacy} /></Td></tr>} />;
 }
 
-function HandoverTable({ rows, money, formatDateTime }) {
-  return <PaginatedTable rows={rows} empty="No handover history found." renderHeader={() => <tr className="bg-blue-700 text-white"><Th>Date</Th><Th>Type</Th><Th>Collector</Th><Th right>Amount Due</Th><Th right>Cash Received</Th><Th right>Difference</Th><Th>Reason</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-b"><Td>{formatDateTime(row.created_at || row.handover_date)}</Td><Td>{row.collector_type}</Td><Td bold>{row.collector_name}</Td><Td right>{money(row.system_collection)}</Td><Td right>{money(row.cash_received)}</Td><Td right bold className={Number(row.difference) < 0 ? "text-red-600" : Number(row.difference) > 0 ? "text-green-600" : ""}>{money(row.difference)}</Td><Td>{row.reason || "-"}</Td></tr>} />;
+function WeeklyCollectionAnalysis({
+  entryFilter,
+  setEntryFilter,
+  collectorFilter,
+  setCollectorFilter,
+  startDate,
+  setStartDate,
+  endDate,
+  setEndDate,
+  collectorOptions,
+  transactions,
+  collectorRows,
+  payments,
+  money,
+  formatDate,
+}) {
+  const genuinePayments = payments.filter(isGenuineIncomingPayment);
+  const totalCollected = genuinePayments
+    .filter((row) => dateInRange(getWeeklyPaymentDate(row), startDate, endDate))
+    .reduce((sum, row) => sum + paymentAmount(row), 0);
+  const paidCustomers = new Set(
+    genuinePayments
+      .filter((row) => dateInRange(getWeeklyPaymentDate(row), startDate, endDate))
+      .map((row) => row.customer_name)
+      .filter(Boolean),
+  ).size;
+
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-white p-3">
+        <Field label="Entry">
+          <select className="rounded-lg border px-3 py-2" value={entryFilter} onChange={(e) => setEntryFilter(e.target.value)}>
+            <option value="All">All Transactions</option>
+            <option value="Collection">Collection</option>
+            <option value="Expense">Expense</option>
+            <option value="Handover">Handover</option>
+          </select>
+        </Field>
+        <Field label="Collector">
+          <select className="min-w-64 rounded-lg border px-3 py-2" value={collectorFilter} onChange={(e) => setCollectorFilter(e.target.value)}>
+            <option value="">All Collectors</option>
+            {collectorOptions.map((option) => <option key={option.value} value={option.label}>{option.label}</option>)}
+          </select>
+        </Field>
+        <Field label="From"><input type="date" className="rounded-lg border px-3 py-2" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
+        <Field label="To"><input type="date" className="rounded-lg border px-3 py-2" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></Field>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <SummaryCard title="Total Collection" value={money(totalCollected)} />
+        <SummaryCard title="Paid Customers" value={paidCustomers} />
+        <SummaryCard title="Collector Count" value={collectorRows.length} />
+      </div>
+
+      <PaginatedTable
+        rows={collectorFilter ? collectorRows.filter((row) => normalize(row.collector) === normalize(collectorFilter)) : collectorRows}
+        empty="No collector analysis found."
+        renderHeader={() => <tr className="bg-blue-700 text-white"><Th>Collector</Th><Th>Type</Th><Th right>This Week</Th><Th right>Last Week</Th><Th right>Approved Expenses</Th><Th right>Handed Over</Th><Th right>To Handover</Th><Th right>Difference</Th></tr>}
+        renderRow={(row) => <tr key={row.key} className="border-b"><Td bold>{row.collector}</Td><Td>{row.collectorType}</Td><Td right>{money(row.currentWeekCollected)}</Td><Td right>{money(row.lastWeekCollected)}</Td><Td right>{money(row.expenses)}</Td><Td right>{money(row.handedOver)}</Td><Td right bold className={row.holding > 0.009 ? "text-red-600" : "text-green-700"}>{money(row.holding)}</Td><Td right bold className={Math.abs(row.difference) > 0.009 ? "text-red-600" : "text-green-700"}>{money(row.difference)}</Td></tr>}
+      />
+
+      <TransactionAnalysisTable rows={transactions.filter((row) => row.entryType !== "Unpaid")} money={money} formatDate={formatDate} />
+    </div>
+  );
 }
 
-function OutstandingTable({ rows, money, formatDate }) {
+function TransactionAnalysisTable({ rows, money, formatDate }) {
+  return (
+    <PaginatedTable
+      rows={rows}
+      empty="No transactions for this filter."
+      renderHeader={() => <tr className="bg-slate-800 text-white"><Th>Date</Th><Th>Entry</Th><Th>Collector</Th><Th>Type</Th><Th>Customer / Supplier</Th><Th>Reference</Th><Th right>Amount</Th><Th right>Difference</Th><Th>Transaction Detail</Th></tr>}
+      renderRow={(row) => <tr key={row.key} className="border-b"><Td>{formatDate(row.date)}</Td><Td><StatusBadge value={row.entryType} /></Td><Td bold>{row.collector}</Td><Td>{row.collectorType || "-"}</Td><Td>{row.customer}</Td><Td>{row.reference}</Td><Td right>{money(row.amount)}</Td><Td right className={Math.abs(Number(row.difference || 0)) > 0.009 ? "text-red-600" : ""}>{money(row.difference)}</Td><Td>{row.detail}</Td></tr>}
+    />
+  );
+}
+
+function HandoverTable({ rows, money, formatDateTime, getCollectorName = (row) => row.collector_name }) {
+  return <PaginatedTable rows={rows} empty="No handover history found." renderHeader={() => <tr className="bg-blue-700 text-white"><Th>Date</Th><Th>Type</Th><Th>Collector</Th><Th right>Amount Due</Th><Th right>Cash Received</Th><Th right>Difference</Th><Th>Reason</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-b"><Td>{formatDateTime(row.created_at || row.handover_date)}</Td><Td>{row.collector_type}</Td><Td bold>{getCollectorName(row)}</Td><Td right>{money(row.system_collection)}</Td><Td right>{money(row.cash_received)}</Td><Td right bold className={Number(row.difference) < 0 ? "text-red-600" : Number(row.difference) > 0 ? "text-green-600" : ""}>{money(row.difference)}</Td><Td>{row.reason || "-"}</Td></tr>} />;
+}
+
+function OutstandingTable({ rows, money, formatDate, getCollectorName = collectorNameFor }) {
   const invoiceTotal = (row) => Number(row.invoice_total || row.order_total || row.total_amount || row.invoice_amount || row.amount || 0);
   const collected = (row) => Number(row.payment_amount || row.paid_amount || 0);
   const outstanding = (row) => Math.max(0, invoiceTotal(row) - collected(row));
   const outstandingValue = rows.reduce((sum, row) => sum + outstanding(row), 0);
-  return <><div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Unpaid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Outstanding Invoices" value={rows.length} /><SummaryCard title="Outstanding Value" value={money(outstandingValue)} /></div><PaginatedTable rows={rows} empty="No delivered credit invoices are outstanding." renderHeader={() => <tr className="bg-gray-100"><Th>Customer</Th><Th>Order No</Th><Th>Delivery Date</Th><Th right>Invoice Total</Th><Th right>Collected</Th><Th right>Outstanding</Th><Th>Driver / Sales Rep</Th><Th>Credit Selected</Th><Th>Status</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-t"><Td>{row.customer_name || "-"}</Td><Td>{formatDisplayOrderId(row.invoice_no || row.order_number)}</Td><Td>{formatDate(row.delivered_at || row.created_at)}</Td><Td right>{money(invoiceTotal(row))}</Td><Td right>{money(collected(row))}</Td><Td right bold className="text-red-600">{money(outstanding(row))}</Td><Td>{row.driver_name || row.name || row.sales_rep_name || row.collected_by || row.credit_selected_by || "-"}</Td><Td>{row.credit_selected ? `Yes${row.credit_selected_at ? ` · ${formatDate(row.credit_selected_at)}` : ""}` : "—"}</Td><Td><StatusBadge value={row.invoice_status || "OUTSTANDING"} /></Td></tr>} /></>;
+  return <><div className="grid grid-cols-1 gap-3 md:grid-cols-3"><SummaryCard title="Unpaid Customers" value={new Set(rows.map((row) => row.customer_name)).size} /><SummaryCard title="Outstanding Invoices" value={rows.length} /><SummaryCard title="Outstanding Value" value={money(outstandingValue)} /></div><PaginatedTable rows={rows} empty="No delivered credit invoices are outstanding." renderHeader={() => <tr className="bg-gray-100"><Th>Customer</Th><Th>Order No</Th><Th>Delivery Date</Th><Th right>Invoice Total</Th><Th right>Collected</Th><Th right>Outstanding</Th><Th>Driver / Sales Rep</Th><Th>Credit Selected</Th><Th>Status</Th></tr>} renderRow={(row) => <tr key={row.id} className="border-t"><Td>{row.customer_name || "-"}</Td><Td>{formatDisplayOrderId(row.invoice_no || row.order_number)}</Td><Td>{formatDate(row.delivered_at || row.created_at)}</Td><Td right>{money(invoiceTotal(row))}</Td><Td right>{money(collected(row))}</Td><Td right bold className="text-red-600">{money(outstanding(row))}</Td><Td>{getCollectorName(row) || row.credit_selected_by || "-"}</Td><Td>{row.credit_selected ? `Yes${row.credit_selected_at ? ` · ${formatDate(row.credit_selected_at)}` : ""}` : "—"}</Td><Td><StatusBadge value={row.invoice_status || "OUTSTANDING"} /></Td></tr>} /></>;
 }
 
 function PaginatedTable({ rows, renderHeader, renderRow, empty }) {
