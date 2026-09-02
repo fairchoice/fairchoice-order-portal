@@ -26,7 +26,7 @@ const PROMOTION_TARGET_SEPARATOR = "::";
 const parsePromotionTarget = (rawValue) => {
   const value = String(rawValue || "").trim();
   const [type, ...rest] = value.split(PROMOTION_TARGET_SEPARATOR);
-  if (["main_category", "sub_category", "brand", "product"].includes(type) && rest.length) {
+  if (["main_category", "sub_category", "brand", "series", "product"].includes(type) && rest.length) {
     return { type, value: rest.join(PROMOTION_TARGET_SEPARATOR) };
   }
   if (["promotion", "new", "reduced", "recommended", "top_seller"].includes(value)) {
@@ -42,6 +42,7 @@ const optionsForType = (targetOptions, targetType) => {
   if (targetType === "main_category") return targetOptions.mainCategories || [];
   if (targetType === "sub_category") return targetOptions.subCategories || [];
   if (targetType === "brand") return targetOptions.brands || [];
+  if (targetType === "series") return targetOptions.series || [];
   return [];
 };
 
@@ -257,6 +258,7 @@ export default function HomePageContentItemEditor({
                 <option value="main_category">Main category</option>
                 <option value="sub_category">Sub category</option>
                 <option value="brand">Brand</option>
+                <option value="series">Series</option>
                 <option value="custom_link">Custom link</option>
                 {isLegacyPromotion && (
                   <option value="promotion">Legacy promotion</option>
@@ -287,6 +289,7 @@ export default function HomePageContentItemEditor({
                   <option value="main_category">Main category</option>
                   <option value="sub_category">Sub category</option>
                   <option value="brand">Brand</option>
+                  <option value="series">Series</option>
                   <option value="product">Product</option>
                   <option value="promotion_flag">Product group</option>
                 </select>

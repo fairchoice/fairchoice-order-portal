@@ -14,6 +14,7 @@ const emptyOptions = {
   mainCategories: [],
   subCategories: [],
   brands: [],
+  series: [],
   products: [],
 };
 

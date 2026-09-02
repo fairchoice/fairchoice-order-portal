@@ -83,12 +83,12 @@ export async function getHomepageTargetOptions() {
     supabase
       .from("product_options")
       .select("option_type, option_name")
-      .in("option_type", ["main_category", "sub_category", "brand"])
+      .in("option_type", ["main_category", "sub_category", "brand", "series"])
       .eq("active", true),
     supabase
       .from("products")
       .select(
-        "id, product_code, product_name, main_category, sub_category, brand, status"
+        "id, product_code, product_name, main_category, sub_category, brand, series, status"
       ),
   ]);
 
@@ -113,6 +113,7 @@ export async function getHomepageTargetOptions() {
     mainCategories: valuesFor("main_category", "main_category"),
     subCategories: valuesFor("sub_category", "sub_category"),
     brands: valuesFor("brand", "brand"),
+    series: valuesFor("series", "series"),
     products: activeProductRows
       .filter((row) => row.id)
       .map((row) => ({

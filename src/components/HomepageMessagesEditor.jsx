@@ -36,6 +36,7 @@ const targetChoices = (options, targetType) => {
   if (targetType === "main_category") return options.mainCategories || [];
   if (targetType === "sub_category") return options.subCategories || [];
   if (targetType === "brand") return options.brands || [];
+  if (targetType === "series") return options.series || [];
   return [];
 };
 
@@ -161,6 +162,7 @@ function HomepageMessageRow({ initialMessage, options, onSaved, onDeleted }) {
             <option value="main_category">Main category</option>
             <option value="sub_category">Sub category</option>
             <option value="brand">Brand</option>
+            <option value="series">Series</option>
             <option value="product">Product</option>
           </select>
         </label>

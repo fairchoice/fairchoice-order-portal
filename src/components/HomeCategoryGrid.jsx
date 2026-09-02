@@ -7,6 +7,7 @@ const targetLabels = {
   main_category: "Category",
   sub_category: "Sub category",
   brand: "Brand",
+  series: "Series",
   custom_link: "Link",
   promotion: "Promotion",
 };
@@ -195,11 +196,12 @@ export default function HomeCategoryGrid({
     byLifetimeSales(left, right);
 
   const soldProducts = withSales.filter((product) => Number(product?.salesMetric?.units90 || 0) > 0);
-  const displayTopSellers = [...soldProducts].sort(byLifetimeSales).slice(0, 10);
-  const displayHotSellers = withSales
+  const allTopSellers = [...soldProducts].sort(byLifetimeSales);
+  const displayTopSellers = allTopSellers.slice(0, 10);
+  const allHotSellers = withSales
     .filter((product) => Number(product?.salesMetric?.units7 || 0) > 0 || Number(product?.salesMetric?.units30 || 0) > 0)
-    .sort(byRecentVelocity)
-    .slice(0, 10);
+    .sort(byRecentVelocity);
+  const displayHotSellers = allHotSellers.slice(0, 10);
   const popularProducts = [...soldProducts].sort(byRecentVelocity).slice(0, 15);
 
   const isVapeProduct = (product = {}) => {
@@ -440,11 +442,11 @@ export default function HomeCategoryGrid({
               </div>
               <div ref={categoryRef} className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
                 {displayBrowseItems.map((item, index) => (
-                  <button key={item.id} type="button" onClick={() => onBrowse(item)} className="w-[31%] min-w-[112px] max-w-[180px] shrink-0 snap-start overflow-hidden rounded-xl bg-white text-left sm:w-[180px]">
-                    <div className="aspect-square w-full overflow-hidden rounded-xl bg-slate-50 p-1.5">
+                  <button key={item.id} type="button" onClick={() => onBrowse(item)} className="w-[42%] min-w-[150px] max-w-[230px] shrink-0 snap-start overflow-hidden rounded-xl bg-white text-left sm:w-[220px] sm:min-w-[220px] sm:max-w-[220px]">
+                    <div className="aspect-square w-full overflow-hidden rounded-xl bg-slate-50 p-1">
                       <img src={item.image || PRODUCT_PLACEHOLDER_IMAGE} alt={item.title || item.description} loading={index < 4 ? "eager" : "lazy"} className="h-full w-full object-contain" onError={(event) => { event.currentTarget.src = PRODUCT_PLACEHOLDER_IMAGE; }} />
                     </div>
-                    <div className="mt-1 line-clamp-2 px-1 text-sm font-extrabold leading-4 text-slate-900">{item.title || item.description}</div>
+                    <div className="mt-1.5 line-clamp-2 px-1 text-[15px] font-black uppercase leading-[1.05rem] tracking-[0.01em] text-slate-900 sm:text-base sm:leading-5">{item.title || item.description}</div>
                   </button>
                 ))}
               </div>
@@ -458,7 +460,10 @@ export default function HomeCategoryGrid({
 
             {displayTopSellers.length > 0 && (
               <section className="relative mt-4 rounded-2xl bg-orange-50 p-3 sm:p-4">
-                <div className="mb-2 flex items-center justify-between"><h2 className="text-xl font-black text-slate-900">Top Sellers</h2><span className="text-xs font-bold text-slate-600">Swipe or use arrows</span></div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <button type="button" onClick={() => onBrowse?.({ id: "top-sellers", categoryType: "product_set", title: "Top Sellers", productIds: allTopSellers.map((product) => product.id) })} className="text-left text-xl font-black text-slate-900 hover:text-orange-700">Top Sellers <span className="text-sm">View all ›</span></button>
+                  <span className="text-xs font-bold text-slate-600">Swipe or use arrows</span>
+                </div>
                 <div ref={topSellerRef} className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none]">{displayTopSellers.map((product) => <SwipeProductCard key={product.id} product={product} onClick={onProductClick} />)}</div>
                 {displayTopSellers.length > 2 && (<>
                   <button type="button" aria-label="Previous top sellers" onClick={() => scrollRow(topSellerRef, -1)} className="absolute left-1 top-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-white/95 text-2xl font-black shadow">‹</button>
@@ -469,7 +474,10 @@ export default function HomeCategoryGrid({
 
             {displayHotSellers.length > 0 && (
               <section className="relative mt-4 rounded-2xl bg-rose-50 p-3 sm:p-4">
-                <div className="mb-2 flex items-center justify-between"><h2 className="text-xl font-black text-slate-900">Hot Sellers</h2><span className="text-xs font-bold text-slate-600">Swipe or use arrows</span></div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <button type="button" onClick={() => onBrowse?.({ id: "hot-sellers", categoryType: "product_set", title: "Hot Sellers", productIds: allHotSellers.map((product) => product.id) })} className="text-left text-xl font-black text-slate-900 hover:text-rose-700">Hot Sellers <span className="text-sm">View all ›</span></button>
+                  <span className="text-xs font-bold text-slate-600">Swipe or use arrows</span>
+                </div>
                 <div ref={hotSellerRef} className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none]">{displayHotSellers.map((product) => <SwipeProductCard key={product.id} product={product} onClick={onProductClick} />)}</div>
                 {displayHotSellers.length > 2 && (<>
                   <button type="button" aria-label="Previous hot sellers" onClick={() => scrollRow(hotSellerRef, -1)} className="absolute left-1 top-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-white/95 text-2xl font-black shadow">‹</button>

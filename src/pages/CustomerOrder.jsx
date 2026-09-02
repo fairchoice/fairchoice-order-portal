@@ -848,6 +848,7 @@ const confirmSalesRouteException = () => {
   const [homepageSelectionType, setHomepageSelectionType] = useState("");
   const [homepageBrowseTitle, setHomepageBrowseTitle] = useState("");
   const [homepagePromotionTarget, setHomepagePromotionTarget] = useState("");
+  const [homepageProductSetIds, setHomepageProductSetIds] = useState([]);
   const [promotionRules, setPromotionRules] = useState([]);
   const [productDisplayMessages, setProductDisplayMessages] = useState([]);
   const [customerDetailsExpanded, setCustomerDetailsExpanded] = useState(false);
@@ -1438,7 +1439,7 @@ const HOMEPAGE_PROMOTION_TARGET_SEPARATOR = "::";
 const parseHomepagePromotionDestination = (rawValue) => {
   const value = String(rawValue || "").trim();
   const [type, ...rest] = value.split(HOMEPAGE_PROMOTION_TARGET_SEPARATOR);
-  if (["main_category", "sub_category", "brand", "product"].includes(type) && rest.length) {
+  if (["main_category", "sub_category", "brand", "series", "product"].includes(type) && rest.length) {
     return { type, value: rest.join(HOMEPAGE_PROMOTION_TARGET_SEPARATOR) };
   }
   return { type: "promotion_flag", value };
@@ -1452,6 +1453,7 @@ const productMatchesHomepagePromotion = (product, targetValue) => {
   if (destination.type === "main_category") return String(product.category || "") === destination.value;
   if (destination.type === "sub_category") return String(product.subCategory || "") === destination.value;
   if (destination.type === "brand") return String(product.brand || "") === destination.value;
+  if (destination.type === "series") return String(product.series || "") === destination.value;
   if (destination.type === "product") return String(product.id || "") === String(destination.value);
 
   const target = normalizeHomepagePromotionTarget(destination.value);
@@ -1477,6 +1479,10 @@ const findHomepagePriceProduct = (item) => {
 
     if (categoryType === "brand") {
       return product.brand === item.targetValue;
+    }
+
+    if (categoryType === "series") {
+      return product.series === item.targetValue;
     }
 
     if (categoryType === "promotion") {
@@ -1529,6 +1535,7 @@ const getHomepageCardProducts = (item) => {
     if (orderCountry === "Wales" && !product.availableInWales) return false;
     if (categoryType === "sub_category") return product.subCategory === item.targetValue;
     if (categoryType === "brand") return product.brand === item.targetValue;
+    if (categoryType === "series") return product.series === item.targetValue;
     if (categoryType === "promotion") return productMatchesHomepagePromotion(product, item.targetValue);
     return product.category === item.targetValue;
   });
@@ -1546,10 +1553,23 @@ const homepageCategoryCards = homepageItems.map((item) => {
   };
 });
 
+const messageContextProduct = products.find((product) => {
+  if (!isActiveProduct(product)) return false;
+  if (selectedSubCategory !== "All Sub Categories" && product.subCategory === selectedSubCategory) return true;
+  if (selectedSeries !== "All Series" && product.series === selectedSeries) return true;
+  if (selectedBrand !== "All Brands" && product.brand === selectedBrand) return true;
+  return false;
+});
+const messageSelectedCategory =
+  selectedCategory !== "All Products"
+    ? selectedCategory
+    : messageContextProduct?.category || selectedCategory;
+
 const matchingHomepageMessages = getMatchingHomepageMessages(homepageMessages, {
-  selectedCategory,
+  selectedCategory: messageSelectedCategory,
   selectedSubCategory,
   selectedBrand,
+  selectedSeries,
 });
 const selectedProductNotices = getMatchingHomepageMessages(homepageMessages, {
   selectedProductId: selectedImage?.id,
@@ -1582,6 +1602,7 @@ const restoreCustomerHome = useCallback(() => {
   setHomepageSelectionType("");
   setHomepageBrowseTitle("");
   setHomepagePromotionTarget("");
+  setHomepageProductSetIds([]);
   setPage("order");
   setSelectedCategory("All Products");
   setSelectedSubCategory("All Sub Categories");
@@ -1731,9 +1752,17 @@ const openHomepageItem = (item) => {
     item.title || item.description || item.targetValue || "Products"
   );
   setHomepagePromotionTarget("");
+  setHomepageProductSetIds([]);
   setSearch("");
   setSelectedBrand("All Brands");
   setSelectedSeries("All Series");
+
+  if (categoryType === "product_set") {
+    setSelectedCategory("All Products");
+    setSelectedSubCategory("All Sub Categories");
+    setHomepageProductSetIds((item.productIds || []).map(String));
+    return;
+  }
 
   if (categoryType === "sub_category") {
     const targetSubCategory = item.targetValue || "All Sub Categories";
@@ -1751,6 +1780,14 @@ const openHomepageItem = (item) => {
     setSelectedBrand("All Brands");
     setSelectedSeries("All Series");
     setSearch(item.targetValue || "");
+    return;
+  }
+
+  if (categoryType === "series") {
+    setSelectedCategory("All Products");
+    setSelectedSubCategory("All Sub Categories");
+    setSelectedBrand("All Brands");
+    setSelectedSeries(item.targetValue || "All Series");
     return;
   }
 
@@ -1775,6 +1812,10 @@ const openHomepageItem = (item) => {
     }
     if (destination.type === "brand") {
       setSelectedBrand(destination.value || "All Brands");
+      return;
+    }
+    if (destination.type === "series") {
+      setSelectedSeries(destination.value || "All Series");
       return;
     }
     if (destination.type === "product") {
@@ -2705,6 +2746,7 @@ const filteredProducts = useMemo(() => {
   selectedBrand,
   selectedSeries,
   homepagePromotionTarget,
+  homepageProductSetIds,
 ]);
 
 const totalProductPages = Math.max(
