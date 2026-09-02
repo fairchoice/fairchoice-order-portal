@@ -153,6 +153,14 @@ export async function postCanonicalCustomerPayment(input = {}) {
 
   const securedInput = {
     ...input,
+    // Central Payment must follow the same server-authoritative FIFO rule as
+    // Sales Rep cash collection. Do not send a browser-built allocation list:
+    // the canonical RPC rebuilds allocations from live invoice balances and
+    // preserves any excess payment as unallocated instead of rejecting it.
+    allocations:
+      input.paymentSource === FC_PAYMENT_SOURCES.CENTRAL_PAYMENT
+        ? []
+        : input.allocations,
     ownerUsername: input.fcUsername || storedSession.username || null,
     ownerPassword: input.fcSessionToken || storedSession.token || null,
     metadata: {
