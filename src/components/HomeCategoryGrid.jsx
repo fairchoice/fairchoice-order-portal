@@ -464,7 +464,7 @@ export default function HomeCategoryGrid({
                   <button type="button" onClick={() => onBrowse?.({ id: "top-sellers", categoryType: "product_set", title: "Top Sellers", productIds: allTopSellers.map((product) => product.id) })} className="text-left text-xl font-black text-slate-900 hover:text-orange-700">Top Sellers <span className="text-sm">View all ›</span></button>
                   <span className="text-xs font-bold text-slate-600">Swipe or use arrows</span>
                 </div>
-                <div ref={topSellerRef} className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none]">{displayTopSellers.map((product) => <SwipeProductCard key={product.id} product={product} onClick={onProductClick} />)}</div>
+                <div ref={topSellerRef} className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none]">{displayTopSellers.map((product) => <SwipeProductCard key={product.id} product={product} onClick={() => onBrowse?.({ id: "top-sellers", categoryType: "product_set", title: "Top Sellers", productIds: allTopSellers.map((entry) => entry.id) })} />)}</div>
                 {displayTopSellers.length > 2 && (<>
                   <button type="button" aria-label="Previous top sellers" onClick={() => scrollRow(topSellerRef, -1)} className="absolute left-1 top-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-white/95 text-2xl font-black shadow">‹</button>
                   <button type="button" aria-label="Next top sellers" onClick={() => scrollRow(topSellerRef, 1)} className="absolute right-1 top-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-white/95 text-2xl font-black shadow">›</button>
@@ -478,7 +478,7 @@ export default function HomeCategoryGrid({
                   <button type="button" onClick={() => onBrowse?.({ id: "hot-sellers", categoryType: "product_set", title: "Hot Sellers", productIds: allHotSellers.map((product) => product.id) })} className="text-left text-xl font-black text-slate-900 hover:text-rose-700">Hot Sellers <span className="text-sm">View all ›</span></button>
                   <span className="text-xs font-bold text-slate-600">Swipe or use arrows</span>
                 </div>
-                <div ref={hotSellerRef} className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none]">{displayHotSellers.map((product) => <SwipeProductCard key={product.id} product={product} onClick={onProductClick} />)}</div>
+                <div ref={hotSellerRef} className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none]">{displayHotSellers.map((product) => <SwipeProductCard key={product.id} product={product} onClick={() => onBrowse?.({ id: "hot-sellers", categoryType: "product_set", title: "Hot Sellers", productIds: allHotSellers.map((entry) => entry.id) })} />)}</div>
                 {displayHotSellers.length > 2 && (<>
                   <button type="button" aria-label="Previous hot sellers" onClick={() => scrollRow(hotSellerRef, -1)} className="absolute left-1 top-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-white/95 text-2xl font-black shadow">‹</button>
                   <button type="button" aria-label="Next hot sellers" onClick={() => scrollRow(hotSellerRef, 1)} className="absolute right-1 top-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-white/95 text-2xl font-black shadow">›</button>

@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabase.js";
 import {
   buildLegacyStaffProfile,
@@ -2717,6 +2717,8 @@ const filteredProducts = useMemo(() => {
 
       return (
         isActiveProduct(product) &&
+        (!homepageProductSetIds.length ||
+          homepageProductSetIds.includes(String(product.id))) &&
         (!homepagePromotionTarget ||
           productMatchesHomepagePromotion(product, homepagePromotionTarget)) &&
         (effectiveSelectedCategory === "All Products" ||
