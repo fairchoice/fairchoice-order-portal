@@ -1251,6 +1251,13 @@ const getLinePrice = (item = {}) =>
 const getLineVatRate = (item = {}) =>
   Number(item.vatRate ?? item.vat_rate ?? item.vatPercent ?? item.vat_percent ?? 0);
 
+const isFreePromotionInvoiceLine = (item = {}) => {
+  const quantity = getLineQuantity(item);
+  const unitPrice = getLinePrice(item);
+  const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
+  return quantity > 0 && unitPrice > 0 && Math.abs(netTotal) < 0.005;
+};
+
 const getInvoiceProductCode = (item = {}) => getProductCodeFromInvoiceItem(item);
 
 const getPrintableCompanyAddress = (address = "") =>
@@ -1302,11 +1309,16 @@ function buildLegacyStandardInvoiceHtml(
       const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
       const vatRate = getLineVatRate(item);
       const productCode = getInvoiceProductCode(item);
+      const isFreePromotion = isFreePromotionInvoiceLine(item);
 
       return `
         <tr>
           <td>${escapeHtml(productCode)}</td>
-          <td>${escapeHtml(item.name || item.productName || item.product_name || "")}</td>
+          <td>${escapeHtml(item.name || item.productName || item.product_name || "")}${
+            isFreePromotion
+              ? ' <strong style="display:inline-block;margin-left:5px;color:#15803d;font-size:10px;">FREE / PROMOTION</strong>'
+              : ""
+          }</td>
           <td class="right">${escapeHtml(quantity)}</td>
           ${
             showPrices
@@ -1692,6 +1704,7 @@ export function buildStandardInvoiceHtml(
       const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
       const vatRate = getLineVatRate(item);
       const productCode = getInvoiceProductCode(item);
+      const isFreePromotion = isFreePromotionInvoiceLine(item);
 
       return `
         <tr>
@@ -1700,7 +1713,11 @@ export function buildStandardInvoiceHtml(
               ? ""
               : `<td class="code">${escapeHtml(productCode)}</td>`
           }
-          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}</td>
+          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}${
+            isFreePromotion
+              ? ' <span style="display:inline-block;margin-left:5px;padding:1px 5px;border:1px solid #16a34a;border-radius:8px;color:#15803d;font-size:9px;font-weight:900;white-space:nowrap;">FREE / PROMOTION</span>'
+              : ""
+          }</td>
           <td class="right">${escapeHtml(quantity)}</td>
           ${
             showPrices
@@ -2242,12 +2259,62 @@ const openInvoiceHtml = (html, popupMessage = "Popup blocked. Please allow popup
   return win;
 };
 
-export function previewInvoice(order = {}, options = {}) {
-  return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: false }));
+const mergeFreshInvoiceOrder = (originalOrder = {}, freshOrder = null) => {
+  if (!freshOrder) return originalOrder;
+
+  return {
+    ...originalOrder,
+    ...freshOrder,
+    // Keep transient document/payment display state supplied by the caller,
+    // while the live DB order/items remain the financial source of truth.
+    _documentPaymentStatus:
+      originalOrder._documentPaymentStatus ?? freshOrder._documentPaymentStatus,
+    documentPaymentStatus:
+      originalOrder.documentPaymentStatus ?? freshOrder.documentPaymentStatus,
+    invoicePaymentStatus:
+      originalOrder.invoicePaymentStatus ?? freshOrder.invoicePaymentStatus,
+  };
+};
+
+const openFreshInvoiceHtml = async (
+  order = {},
+  options = {},
+  { autoPrint = false, popupMessage = "Popup blocked. Please allow popups for invoices." } = {}
+) => {
+  // Open the window synchronously so browsers do not block it while the live
+  // order is refreshed from Supabase.
+  const win = window.open("", "_blank", "width=900,height=700");
+  if (!win) {
+    alert(popupMessage);
+    return null;
+  }
+
+  try {
+    const freshOrder = await fetchInvoiceOrderFromDb(order).catch((error) => {
+      console.warn("Invoice live-order refresh failed; using supplied order snapshot.", error);
+      return null;
+    });
+    const documentOrder = mergeFreshInvoiceOrder(order, freshOrder);
+    const html = buildStandardInvoiceHtml(documentOrder, { ...options, autoPrint });
+    win.document.write(html);
+    win.document.close();
+    return win;
+  } catch (error) {
+    try {
+      win.close();
+    } catch (_) {
+      // Ignore popup cleanup failures.
+    }
+    throw error;
+  }
+};
+
+export async function previewInvoice(order = {}, options = {}) {
+  return openFreshInvoiceHtml(order, options, { autoPrint: false });
 }
 
-export function printInvoice(order = {}, options = {}) {
-  return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: true }));
+export async function printInvoice(order = {}, options = {}) {
+  return openFreshInvoiceHtml(order, options, { autoPrint: true });
 }
 
 export function printOrderForm(order = {}, options = {}) {
@@ -2260,11 +2327,11 @@ export function printDeliveryNote(order = {}, options = {}) {
   );
 }
 
-export function downloadInvoice(order = {}, options = {}) {
-  return openInvoiceHtml(
-    buildStandardInvoiceHtml(order, { ...options, autoPrint: true }),
-    "Popup blocked. Please allow popups to download or save the invoice PDF."
-  );
+export async function downloadInvoice(order = {}, options = {}) {
+  return openFreshInvoiceHtml(order, options, {
+    autoPrint: true,
+    popupMessage: "Popup blocked. Please allow popups to download or save the invoice PDF.",
+  });
 }
 
 export async function createInvoice({ order, confirmedBy, currentUser } = {}) {

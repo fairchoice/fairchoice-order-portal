@@ -7,6 +7,7 @@ import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import { isOperationalCustomer } from "../../utils/customerStatus";
 import {
   createOrUpdateInvoiceForDeliveredOrder,
+  fetchInvoiceOrderFromDb,
   loadCustomerOutstandingSnapshot,
   printThermalReceipt,
   withResolvedInvoicePaymentStatus,
@@ -98,8 +99,24 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   return isLegacyTestAmount(value) && hasLegacyName ? "" : value || "";
 };
 
-  const getDriverTotals = (order) =>
-    calculateDocumentTotals(order.items || [], order);
+  const getDriverTotals = (order = {}) => {
+    const calculated = calculateDocumentTotals(order.items || order.order_items || [], order);
+    const savedGrandTotal = [
+      order.grand_total,
+      order.grandTotal,
+      order.order_total,
+      order.orderTotal,
+      order.total_amount,
+      order.totalAmount,
+      order.total,
+    ]
+      .map((value) => (value === null || value === undefined || value === "" ? null : Number(value)))
+      .find((value) => Number.isFinite(value));
+
+    return savedGrandTotal === undefined
+      ? calculated
+      : { ...calculated, grandTotal: savedGrandTotal, grand_total: savedGrandTotal, totalAmount: savedGrandTotal };
+  };
 
   const getDriverItems = (order) => sortPrintItems(getDriverTotals(order).invoiceItems);
 
@@ -114,7 +131,8 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   });
 
   const printResolvedThermalReceipt = async (order) => {
-    const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+    const freshOrder = await fetchInvoiceOrderFromDb(order).catch(() => null);
+    const resolvedOrder = await withResolvedInvoicePaymentStatus(freshOrder || order);
     printThermalReceipt(resolvedOrder);
   };
  

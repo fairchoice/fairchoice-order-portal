@@ -572,7 +572,12 @@ const orderItems = calculatedOrderItems.map((item) => ({
     throw itemsError;
   }
 
-  for (const item of cart) {
+  // Promotion discount/free lines are synthetic calculation rows. Physical
+  // inventory is already represented by the paid product quantities, so never
+  // write stock movements for the synthetic rows.
+  const stockItems = (cart || []).filter((item) => !item?.isPromotionFree);
+
+  for (const item of stockItems) {
     const stockAfter = Math.max(0, item.stock - item.qty);
 
     await supabase

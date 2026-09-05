@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getProducts, isActiveProduct } from "../../services/products";
 import {
   ensureDefaultPromotionTypes,
   getPromotionRules,
   getPromotionTypes,
   PROMOTION_LABELS,
+  PROMOTION_FLAVOUR_MODES,
+  PROMOTION_PRICE_MODES,
   PROMOTION_RULE_KINDS,
   savePromotionRule,
   savePromotionType,
@@ -14,14 +16,18 @@ import {
 
 const emptyBulkRule = {
   id: "",
-  promotion_name: "",
   promotion_type_id: "",
   active: true,
+  price_mode: PROMOTION_PRICE_MODES.EX_VAT,
   trigger_brand: "",
   trigger_series: "",
+  trigger_flavour_mode: PROMOTION_FLAVOUR_MODES.ALL,
+  trigger_flavours: [],
   buy_qty: 10,
   free_brand: "",
   free_series: "",
+  free_flavour_mode: PROMOTION_FLAVOUR_MODES.ALL,
+  free_flavours: [],
   free_qty: 1,
   start_date: "",
   end_date: "",
@@ -30,9 +36,9 @@ const emptyBulkRule = {
 
 const emptyPromotionRule = {
   id: "",
-  promotion_name: "",
   promotion_type_id: "",
   active: true,
+  price_mode: PROMOTION_PRICE_MODES.EX_VAT,
   selectedProductIds: [],
   offer_price: "",
   label_type: "promotion",
@@ -42,9 +48,9 @@ const emptyPromotionRule = {
 
 const emptyReducedRule = {
   id: "",
-  promotion_name: "",
   promotion_type_id: "",
   active: true,
+  price_mode: PROMOTION_PRICE_MODES.EX_VAT,
   selectedProductIds: [],
   offer_price: "",
   label_type: "reduced",
@@ -76,12 +82,164 @@ function Card({ title, children }) {
 
 function Field({ label, children }) {
   return (
-    <label className="block">
-      <span className="block text-sm font-bold text-slate-700 mb-2">
+    <div className="block">
+      <div className="block text-sm font-bold text-slate-700 mb-2">
         {label}
-      </span>
+      </div>
       {children}
-    </label>
+    </div>
+  );
+}
+
+
+const flavourList = (values) =>
+  [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
+
+const rulePriceModeLabel = (value) => {
+  if (value === PROMOTION_PRICE_MODES.INC_VAT) return "Inc.VAT";
+  if (value === PROMOTION_PRICE_MODES.BOTH) return "Both";
+  return "Ex.VAT";
+};
+
+function PriceModeSelect({ value, onChange }) {
+  return (
+    <select value={value || PROMOTION_PRICE_MODES.EX_VAT} onChange={(event) => onChange(event.target.value)} className="border border-slate-300 rounded-xl px-4 py-3 w-full bg-white text-slate-900">
+      <option value={PROMOTION_PRICE_MODES.EX_VAT}>Ex.VAT</option>
+      <option value={PROMOTION_PRICE_MODES.INC_VAT}>Inc.VAT</option>
+      <option value={PROMOTION_PRICE_MODES.BOTH}>Both</option>
+    </select>
+  );
+}
+
+function FlavourRuleSelector({ mode, flavours, options, onModeChange, onFlavoursChange }) {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState(() => flavourList(flavours));
+  const selectedRef = useRef(flavourList(flavours));
+
+  useEffect(() => {
+    const incoming = flavourList(flavours);
+    selectedRef.current = incoming;
+    setSelected(incoming);
+  }, [flavours]);
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const visibleOptions = flavourList(options).filter((flavour) =>
+    !normalizedSearch || flavour.toLowerCase().includes(normalizedSearch)
+  );
+
+  const commitSelected = (nextValues) => {
+    const next = flavourList(nextValues);
+    selectedRef.current = next;
+    setSelected(next);
+    onFlavoursChange(next);
+  };
+
+  const addFlavour = (flavour) => {
+    const current = selectedRef.current;
+    if (current.includes(flavour)) return;
+    commitSelected([...current, flavour]);
+  };
+
+  const removeFlavour = (flavour) =>
+    commitSelected(selectedRef.current.filter((item) => item !== flavour));
+
+  const addVisible = () =>
+    commitSelected([...selectedRef.current, ...visibleOptions]);
+
+  return (
+    <div className="space-y-3 w-full">
+      <select
+        value={mode || PROMOTION_FLAVOUR_MODES.ALL}
+        onChange={(event) => {
+          const nextMode = event.target.value;
+          onModeChange(nextMode);
+          setSearch("");
+          if (nextMode === PROMOTION_FLAVOUR_MODES.ALL) commitSelected([]);
+        }}
+        className="border border-slate-300 rounded-xl px-3 py-2.5 w-full bg-white text-slate-900"
+      >
+        <option value={PROMOTION_FLAVOUR_MODES.ALL}>All flavours</option>
+        <option value={PROMOTION_FLAVOUR_MODES.INCLUDE}>Only selected flavours</option>
+        <option value={PROMOTION_FLAVOUR_MODES.EXCLUDE}>All except selected flavours</option>
+      </select>
+
+      {mode !== PROMOTION_FLAVOUR_MODES.ALL && (
+        <div className="rounded-xl border border-slate-300 bg-white p-4 space-y-3">
+          <div className="flex flex-col md:flex-row gap-2">
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search flavours..."
+              className="border border-slate-300 rounded-xl px-4 py-3 flex-1 min-w-0 text-slate-900 text-base"
+            />
+            <button
+              type="button"
+              onClick={addVisible}
+              disabled={!visibleOptions.length}
+              className="bg-blue-600 text-white rounded-xl px-5 py-3 font-bold whitespace-nowrap disabled:opacity-40"
+            >
+              Add shown
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-bold text-slate-700">{selected.length} selected</span>
+            {!!selected.length && (
+              <button type="button" onClick={() => commitSelected([])} className="text-red-600 font-bold">
+                Clear selected
+              </button>
+            )}
+          </div>
+
+          {!!selected.length && (
+            <div className="flex flex-wrap gap-2 rounded-xl bg-slate-50 border border-slate-200 p-3">
+              {selected.map((flavour) => (
+                <button
+                  type="button"
+                  key={flavour}
+                  onClick={() => removeFlavour(flavour)}
+                  className="inline-flex items-center gap-2 rounded-full bg-blue-50 border border-blue-200 px-3 py-2 text-sm font-bold text-blue-800 hover:bg-blue-100"
+                  title={`Remove ${flavour}`}
+                >
+                  <span className="whitespace-normal text-left">{flavour}</span>
+                  <span aria-hidden="true">x</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="max-h-[460px] overflow-y-auto rounded-xl border border-slate-200 divide-y bg-white">
+            {visibleOptions.map((flavour) => {
+              const isSelected = selected.includes(flavour);
+              return (
+                <label
+                  key={flavour}
+                  className={`flex items-center gap-4 px-4 py-4 cursor-pointer select-none ${isSelected ? "bg-blue-50" : "hover:bg-slate-50"}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => isSelected ? removeFlavour(flavour) : addFlavour(flavour)}
+                    className="h-5 w-5 shrink-0 cursor-pointer"
+                  />
+                  <span className="flex-1 min-w-0 text-base font-medium text-slate-900 whitespace-normal break-words">
+                    {flavour}
+                  </span>
+                  <span className={`rounded-lg px-3 py-1.5 text-sm font-bold whitespace-nowrap ${isSelected ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"}`}>
+                    {isSelected ? "Selected" : "Select"}
+                  </span>
+                </label>
+              );
+            })}
+            {!visibleOptions.length && (
+              <div className="p-6 text-center text-sm text-slate-500">
+                No matching flavours found.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -160,6 +318,8 @@ function expiryAlert(endDate) {
 function typeNameById(promotionTypes, id) {
   return promotionTypes.find((type) => String(type.id) === String(id))?.type_name || "";
 }
+
+const productNameById = (products, id) => products.find((product) => String(product.id) === String(id))?.name || "Product";
 
 function formatDateRange(rule) {
   const start = rule.start_date || "-";
@@ -423,6 +583,9 @@ export default function ProductPromotions() {
     [products, bulkRule.free_brand]
   );
 
+  const buyFlavours = useMemo(() => flavourList(products.filter((product) => (!bulkRule.trigger_brand || product.brand === bulkRule.trigger_brand) && (!bulkRule.trigger_series || product.series === bulkRule.trigger_series)).map((product) => product.flavour || product.flavor)), [products, bulkRule.trigger_brand, bulkRule.trigger_series]);
+  const freeFlavours = useMemo(() => flavourList(products.filter((product) => (!bulkRule.free_brand || product.brand === bulkRule.free_brand) && (!bulkRule.free_series || product.series === bulkRule.free_series)).map((product) => product.flavour || product.flavor)), [products, bulkRule.free_brand, bulkRule.free_series]);
+
   const bulkRules = rules.filter(
     (rule) => rule.rule_kind === PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE
   );
@@ -484,7 +647,11 @@ export default function ProductPromotions() {
         .filter(
           (product) =>
             product.brand === bulkRule.trigger_brand &&
-            product.series === bulkRule.trigger_series
+            product.series === bulkRule.trigger_series &&
+            (bulkRule.trigger_flavour_mode === PROMOTION_FLAVOUR_MODES.ALL ||
+              (bulkRule.trigger_flavour_mode === PROMOTION_FLAVOUR_MODES.INCLUDE
+                ? flavourList(bulkRule.trigger_flavours).includes(String(product.flavour || product.flavor || "").trim())
+                : !flavourList(bulkRule.trigger_flavours).includes(String(product.flavour || product.flavor || "").trim())))
         )
         .map((product) => product.id)
         .filter(Boolean);
@@ -509,17 +676,21 @@ export default function ProductPromotions() {
   await savePromotionRule(
   {
     id: bulkRule.id || undefined,
-    promotion_name: bulkRule.promotion_name,
     promotion_type_id: getBulkTypeId(),
     active: bulkRule.active,
+    price_mode: bulkRule.price_mode,
     rule_kind: PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE,
 
     trigger_brand: bulkRule.trigger_brand,
     trigger_series: bulkRule.trigger_series,
+    trigger_flavour_mode: bulkRule.trigger_flavour_mode,
+    trigger_flavours: bulkRule.trigger_flavours,
     buy_qty: bulkRule.buy_qty,
 
     free_brand: bulkRule.free_brand,
     free_series: bulkRule.free_series,
+    free_flavour_mode: bulkRule.free_flavour_mode,
+    free_flavours: bulkRule.free_flavours,
     free_qty: bulkRule.free_qty,
 
     label_type: bulkRule.label_type,
@@ -554,9 +725,9 @@ export default function ProductPromotions() {
                 promotionRule.selectedProductIds.length === 1
                   ? promotionRule.id || undefined
                   : undefined,
-              promotion_name: promotionRule.promotion_name,
               promotion_type_id: getPromotionTypeId(),
               active: promotionRule.active,
+              price_mode: promotionRule.price_mode,
               rule_kind: PROMOTION_RULE_KINDS.PROMOTION_PRICE,
               trigger_product_id: productId,
               offer_price: promotionRule.offer_price,
@@ -595,9 +766,9 @@ export default function ProductPromotions() {
                 reducedRule.selectedProductIds.length === 1
                   ? reducedRule.id || undefined
                   : undefined,
-              promotion_name: reducedRule.promotion_name,
               promotion_type_id: getReducedTypeId(),
               active: reducedRule.active,
+              price_mode: reducedRule.price_mode,
               rule_kind: PROMOTION_RULE_KINDS.REDUCED_PRICE,
               trigger_product_id: productId,
               offer_price: reducedRule.offer_price,
@@ -655,14 +826,18 @@ export default function ProductPromotions() {
     setBulkRule({
       ...emptyBulkRule,
       id: rule.id,
-      promotion_name: rule.promotion_name || "",
       promotion_type_id: rule.promotion_type_id || "",
       active: rule.active !== false,
+      price_mode: rule.price_mode || PROMOTION_PRICE_MODES.EX_VAT,
       trigger_brand: rule.trigger_brand || "",
       trigger_series: rule.trigger_series || "",
+      trigger_flavour_mode: rule.trigger_flavour_mode || PROMOTION_FLAVOUR_MODES.ALL,
+      trigger_flavours: flavourList(rule.trigger_flavours),
       free_brand: rule.free_brand || "",
       buy_qty: rule.buy_qty || 10,
       free_series: rule.free_series || "",
+      free_flavour_mode: rule.free_flavour_mode || PROMOTION_FLAVOUR_MODES.ALL,
+      free_flavours: flavourList(rule.free_flavours),
       free_qty: rule.free_qty || 1,
       start_date: rule.start_date || "",
       end_date: rule.end_date || "",
@@ -682,9 +857,9 @@ export default function ProductPromotions() {
         ? emptyReducedRule
         : emptyPromotionRule),
       id: rule.id,
-      promotion_name: rule.promotion_name || "",
       promotion_type_id: rule.promotion_type_id || "",
       active: rule.active !== false,
+      price_mode: rule.price_mode || PROMOTION_PRICE_MODES.EX_VAT,
       selectedProductIds: (rule.product_id || rule.trigger_product_id)
         ? [rule.product_id || rule.trigger_product_id]
         : [],
@@ -753,16 +928,7 @@ export default function ProductPromotions() {
       {!loading && activeTab === "Bulk Buy - Get Free" && (
         <div className="space-y-4">
           <Card title="Promotion Details">
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-              <Field label="Promotion Name">
-                <input
-                  value={bulkRule.promotion_name}
-                  onChange={(event) =>
-                    setBulkRule({ ...bulkRule, promotion_name: event.target.value })
-                  }
-                  className="border border-slate-300 rounded-xl px-4 py-3 w-full text-slate-900"
-                />
-              </Field>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
               <Field label="Promotion Type">
                 <PromotionTypeSelect
                   value={getBulkTypeId()}
@@ -771,6 +937,9 @@ export default function ProductPromotions() {
                   }
                   promotionTypes={activePromotionTypes}
                 />
+              </Field>
+              <Field label="Price Mode">
+                <PriceModeSelect value={bulkRule.price_mode} onChange={(price_mode) => setBulkRule({ ...bulkRule, price_mode })} />
               </Field>
               <Field label="Start Date">
                 <input
@@ -803,7 +972,7 @@ export default function ProductPromotions() {
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
             <Card title="Buy Rule">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                 <Field label="Buy Brand">
                   <select
                     value={bulkRule.trigger_brand}
@@ -812,6 +981,8 @@ export default function ProductPromotions() {
                         ...bulkRule,
                         trigger_brand: event.target.value,
                         trigger_series: "",
+                        trigger_flavour_mode: PROMOTION_FLAVOUR_MODES.ALL,
+                        trigger_flavours: [],
                       })
                     }
                     className="border border-slate-300 rounded-xl px-4 py-3 w-full bg-white text-slate-900"
@@ -828,7 +999,7 @@ export default function ProductPromotions() {
                   <select
                     value={bulkRule.trigger_series}
                     onChange={(event) =>
-                      setBulkRule({ ...bulkRule, trigger_series: event.target.value })
+                      setBulkRule({ ...bulkRule, trigger_series: event.target.value, trigger_flavour_mode: PROMOTION_FLAVOUR_MODES.ALL, trigger_flavours: [] })
                     }
                     className="border border-slate-300 rounded-xl px-4 py-3 w-full bg-white text-slate-900"
                   >
@@ -840,6 +1011,7 @@ export default function ProductPromotions() {
                     ))}
                   </select>
                 </Field>
+                <div className="md:col-span-2 xl:col-span-4"><Field label="Buy Flavours"><FlavourRuleSelector key={`buy-${bulkRule.id || "new"}-${bulkRule.trigger_series}-${bulkRule.trigger_flavour_mode}`} mode={bulkRule.trigger_flavour_mode} flavours={bulkRule.trigger_flavours} options={buyFlavours} onModeChange={(trigger_flavour_mode) => setBulkRule((current) => ({ ...current, trigger_flavour_mode }))} onFlavoursChange={(trigger_flavours) => setBulkRule((current) => ({ ...current, trigger_flavours }))} /></Field></div>
                 <Field label="Buy Quantity">
                   <input
                     type="number"
@@ -855,7 +1027,7 @@ export default function ProductPromotions() {
             </Card>
 
             <Card title="Free Rule">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                 <Field label="Free Brand">
                   <select
                     value={bulkRule.free_brand}
@@ -864,6 +1036,8 @@ export default function ProductPromotions() {
                         ...bulkRule,
                         free_brand: event.target.value,
                         free_series: "",
+                        free_flavour_mode: PROMOTION_FLAVOUR_MODES.ALL,
+                        free_flavours: [],
                       })
                     }
                     className="border border-slate-300 rounded-xl px-4 py-3 w-full bg-white text-slate-900"
@@ -880,7 +1054,7 @@ export default function ProductPromotions() {
                   <select
                     value={bulkRule.free_series}
                     onChange={(event) =>
-                      setBulkRule({ ...bulkRule, free_series: event.target.value })
+                      setBulkRule({ ...bulkRule, free_series: event.target.value, free_flavour_mode: PROMOTION_FLAVOUR_MODES.ALL, free_flavours: [] })
                     }
                     className="border border-slate-300 rounded-xl px-4 py-3 w-full bg-white text-slate-900"
                   >
@@ -892,6 +1066,7 @@ export default function ProductPromotions() {
                     ))}
                   </select>
                 </Field>
+                <div className="md:col-span-2 xl:col-span-4"><Field label="Free Flavours"><FlavourRuleSelector key={`free-${bulkRule.id || "new"}-${bulkRule.free_series}-${bulkRule.free_flavour_mode}`} mode={bulkRule.free_flavour_mode} flavours={bulkRule.free_flavours} options={freeFlavours} onModeChange={(free_flavour_mode) => setBulkRule((current) => ({ ...current, free_flavour_mode }))} onFlavoursChange={(free_flavours) => setBulkRule((current) => ({ ...current, free_flavours }))} /></Field></div>
                 <Field label="Free Quantity">
                   <input
                     type="number"
@@ -945,8 +1120,8 @@ export default function ProductPromotions() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-700 text-white">
                   <tr>
-                    <th className="p-3 text-left">Promotion Name</th>
-                    <th className="p-3 text-left">Promotion Type</th>
+                    <th className="p-3 text-left">Rule</th>
+                    <th className="p-3 text-left">Price Mode</th>
                     <th className="p-3 text-left">Start Date</th>
                     <th className="p-3 text-left">End Date</th>
                     <th className="p-3 text-left">Expiry Alert</th>
@@ -957,10 +1132,8 @@ export default function ProductPromotions() {
                 <tbody>
                   {bulkRules.map((rule) => (
                     <tr key={rule.id} className="bg-white border-b">
-                      <td className="p-3 font-bold">{rule.promotion_name}</td>
-                      <td className="p-3">
-                        {typeNameById(promotionTypes, rule.promotion_type_id)}
-                      </td>
+                      <td className="p-3 font-bold">Buy {rule.buy_qty} {rule.trigger_series} / Get {rule.free_qty} {rule.free_series}</td>
+                      <td className="p-3">{rulePriceModeLabel(rule.price_mode)}</td>
                       <td className="p-3">{rule.start_date || "-"}</td>
                       <td className="p-3">{rule.end_date || "-"}</td>
                       <td className="p-3">{expiryAlert(rule.end_date)}</td>
@@ -995,19 +1168,7 @@ export default function ProductPromotions() {
       {!loading && activeTab === "Promotion Price" && (
         <div className="space-y-4">
           <Card title="Promotion Details">
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-              <Field label="Promotion Name">
-                <input
-                  value={promotionRule.promotion_name}
-                  onChange={(event) =>
-                    setPromotionRule({
-                      ...promotionRule,
-                      promotion_name: event.target.value,
-                    })
-                  }
-                  className="border border-slate-300 rounded-xl px-4 py-3 w-full text-slate-900"
-                />
-              </Field>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
               <Field label="Promotion Type">
                 <PromotionTypeSelect
                   value={getPromotionTypeId()}
@@ -1016,6 +1177,9 @@ export default function ProductPromotions() {
                   }
                   promotionTypes={activePromotionTypes}
                 />
+              </Field>
+              <Field label="Price Mode">
+                <PriceModeSelect value={promotionRule.price_mode} onChange={(price_mode) => setPromotionRule({ ...promotionRule, price_mode })} />
               </Field>
               <Field label="Start Date">
                 <input
@@ -1131,8 +1295,8 @@ export default function ProductPromotions() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-700 text-white">
                   <tr>
-                    <th className="p-3 text-left">Promotion Name</th>
-                    <th className="p-3 text-left">Promotion Type</th>
+                    <th className="p-3 text-left">Product</th>
+                    <th className="p-3 text-left">Price Mode</th>
                     <th className="p-3 text-left">Date</th>
                     <th className="p-3 text-left">Expiry Alert</th>
                     <th className="p-3 text-left">Active</th>
@@ -1142,10 +1306,8 @@ export default function ProductPromotions() {
                 <tbody>
                   {promotionRules.map((rule) => (
                     <tr key={rule.id} className="bg-white border-b">
-                      <td className="p-3 font-bold">{rule.promotion_name}</td>
-                      <td className="p-3">
-                        {typeNameById(promotionTypes, rule.promotion_type_id)}
-                      </td>
+                      <td className="p-3 font-bold">{productNameById(products, rule.trigger_product_id || rule.product_id)}</td>
+                      <td className="p-3">{rulePriceModeLabel(rule.price_mode)}</td>
                       <td className="p-3">{formatDateRange(rule)}</td>
                       <td className="p-3">{expiryAlert(rule.end_date)}</td>
                       <td className="p-3">
@@ -1181,19 +1343,7 @@ export default function ProductPromotions() {
       {!loading && activeTab === "Reduced Price" && (
         <div className="space-y-4">
           <Card title="Promotion Details">
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-              <Field label="Promotion Name">
-                <input
-                  value={reducedRule.promotion_name}
-                  onChange={(event) =>
-                    setReducedRule({
-                      ...reducedRule,
-                      promotion_name: event.target.value,
-                    })
-                  }
-                  className="border border-slate-300 rounded-xl px-4 py-3 w-full text-slate-900"
-                />
-              </Field>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
               <Field label="Promotion Type">
                 <PromotionTypeSelect
                   value={getReducedTypeId()}
@@ -1202,6 +1352,9 @@ export default function ProductPromotions() {
                   }
                   promotionTypes={activePromotionTypes}
                 />
+              </Field>
+              <Field label="Price Mode">
+                <PriceModeSelect value={reducedRule.price_mode} onChange={(price_mode) => setReducedRule({ ...reducedRule, price_mode })} />
               </Field>
               <Field label="Start Date">
                 <input
@@ -1309,8 +1462,8 @@ export default function ProductPromotions() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-700 text-white">
                   <tr>
-                    <th className="p-3 text-left">Promotion Name</th>
-                    <th className="p-3 text-left">Promotion Type</th>
+                    <th className="p-3 text-left">Product</th>
+                    <th className="p-3 text-left">Price Mode</th>
                     <th className="p-3 text-left">Date</th>
                     <th className="p-3 text-left">Expiry Alert</th>
                     <th className="p-3 text-left">Active</th>
@@ -1320,10 +1473,8 @@ export default function ProductPromotions() {
                 <tbody>
                   {reducedRules.map((rule) => (
                     <tr key={rule.id} className="bg-white border-b">
-                      <td className="p-3 font-bold">{rule.promotion_name}</td>
-                      <td className="p-3">
-                        {typeNameById(promotionTypes, rule.promotion_type_id)}
-                      </td>
+                      <td className="p-3 font-bold">{productNameById(products, rule.trigger_product_id || rule.product_id)}</td>
+                      <td className="p-3">{rulePriceModeLabel(rule.price_mode)}</td>
                       <td className="p-3">{formatDateRange(rule)}</td>
                       <td className="p-3">{expiryAlert(rule.end_date)}</td>
                       <td className="p-3">

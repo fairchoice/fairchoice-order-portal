@@ -791,19 +791,19 @@ const bulkRefreshOrderPrices = async (order) => {
     </div>
 
     {getStableOrderItems(order.orderId, order.items).map((item) => {
-      const savedLineTotal = Number(
+      const savedLineValue =
   item.net_total ??
-    item.netTotal ??
-    item.line_total ??
-    item.lineTotal ??
-    0
-);
+  item.netTotal ??
+  item.line_total ??
+  item.lineTotal;
+const hasSavedLineTotal = hasValidMoney(savedLineValue);
+const savedLineTotal = hasSavedLineTotal ? Number(savedLineValue) : 0;
 
 const fallbackLineTotal =
   Number(item.qty ?? item.quantity ?? 0) *
   getSavedOrderItemPrice(item);
 
-const lineTotal = savedLineTotal > 0 ? savedLineTotal : fallbackLineTotal;
+const lineTotal = hasSavedLineTotal ? savedLineTotal : fallbackLineTotal;
 const savedUnitPrice = getSavedOrderItemPrice(item);
 
       return (

@@ -54,10 +54,7 @@ const getDocumentItemTotals = (item = {}, { includeVat = true } = {}) => {
     };
   }
 
-  if (
-    hasMoneyValue(savedNet) &&
-    Number(savedNet) > 0
-  ) {
+  if (hasMoneyValue(savedNet)) {
     const netTotal = money2(savedNet);
     return {
       netTotal,

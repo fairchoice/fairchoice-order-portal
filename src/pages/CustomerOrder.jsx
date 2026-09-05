@@ -106,11 +106,23 @@ import {
   applyLocationStockToProducts,
   saveProductLocationStock,
 } from "../services/locationStock";
+import { getActivePromotionRules } from "../services/promotionRules";
 import {
-  applyPromotionRulesToCart,
-  getActivePromotionRules,
-  PROMOTION_RULE_KINDS,
-} from "../services/promotionRules";
+  applyCustomerOrderPromotions,
+  findActivePromotionPriceRule,
+  getActivePromotionPrice,
+  getPromotionDiscountAmount,
+  productMatchesPromotionPosterSeries,
+  resolvePromotionAudienceType,
+} from "./CustomerOrderModules/customerOrderPromotions";
+import {
+  buildCustomerOrderRequest,
+  createCustomerOrderWithSessionRetry,
+} from "./CustomerOrderModules/customerOrderSubmission";
+import {
+  addReceivedOrderItemWithPromotions,
+  updateReceivedOrderItemWithPromotions,
+} from "./CustomerOrderModules/receivedOrderItemChanges";
 import {
   calculateCartOrderItems,
   calculateCartTotals,
@@ -547,6 +559,12 @@ const loggedInUser =
   const isWarehouse = dutyRestricted ? activeDuty === "warehouse" : canAccessPage(activeUser, "page.operations.warehouse");
   const isDriver = dutyRestricted ? activeDuty === "driver" : canAccessPage(activeUser, "page.operations.driver");
   const salesRouteMode = activeDuty === "sales_rep" && !isNisstajAdmin;
+  const promotionAudienceType = resolvePromotionAudienceType({
+    activeUser,
+    normalizedRole,
+    isSalesRep,
+    salesRouteMode,
+  });
   const canCollectCash = isSalesRep && hasFcPermission(activeUser, FC_PERMISSIONS.PAYMENTS_COLLECT_CASH);
   const canManualCheckoutDiscount = canPerform(activeUser, "orders.discount.change");
   const basePermissions = activeUser?.effective_permissions || activeUser?.permissions || {};
@@ -907,7 +925,13 @@ useEffect(() => {
 }, [cart, cartStorageKey]);
 
 const applyCartPromotions = (cartLines) =>
-  applyPromotionRulesToCart(cartLines, promotionRules, { products, priceMode });
+  applyCustomerOrderPromotions({
+    cartLines,
+    promotionRules,
+    products,
+    priceMode,
+    audienceType: promotionAudienceType,
+  });
 
 const refreshPromotionRules = async () => {
   try {
@@ -935,17 +959,19 @@ const refreshProductDisplayMessages = async () => {
 
 useEffect(() => {
   setCart((oldCart) => {
-    const recalculatedCart = applyPromotionRulesToCart(
-      oldCart,
+    const recalculatedCart = applyCustomerOrderPromotions({
+      cartLines: oldCart,
       promotionRules,
-      { products, priceMode }
-    );
+      products,
+      priceMode,
+      audienceType: promotionAudienceType,
+    });
 
     return JSON.stringify(recalculatedCart) === JSON.stringify(oldCart)
       ? oldCart
       : recalculatedCart;
   });
-}, [promotionRules, products]);
+}, [promotionRules, products, priceMode, promotionAudienceType]);
 
 const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) => {
   if (!customerName && !customerId) return [];
@@ -1308,122 +1334,21 @@ useEffect(() => {
       }
     : null;
 
-const normalizePromotionType = (value) =>
-  String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
+const getActivePromotionPriceRule = (product) =>
+  findActivePromotionPriceRule({
+    product,
+    promotionRules,
+    priceMode,
+    audienceType: promotionAudienceType,
+  });
 
-const getPromotionRuleProductId = (rule) =>
-  rule?.product_id ??
-  rule?.productId ??
-  rule?.trigger_product_id ??
-  rule?.triggerProductId ??
-  rule?.selected_product_id ??
-  rule?.selectedProductId ??
-  rule?.product?.id ??
-  rule?.selected_product?.id ??
-  rule?.selectedProduct?.id ??
-  rule?.promotion_product?.product_id ??
-  rule?.promotionProduct?.productId ??
-  rule?.rule_product?.product_id ??
-  rule?.ruleProduct?.productId;
-
-const getPromotionRulePrice = (rule) =>
-  rule?.promotion_price ??
-  rule?.promotionPrice ??
-  rule?.offer_price ??
-  rule?.offerPrice;
-
-const getPromotionRuleProductIds = (rule) => {
-  const directProductId = getPromotionRuleProductId(rule);
-  const ids = directProductId != null ? [directProductId] : [];
-  const relatedProducts =
-    rule?.selected_products ??
-    rule?.selectedProducts ??
-    rule?.products ??
-    rule?.rule_products ??
-    rule?.ruleProducts ??
-    rule?.promotion_products ??
-    rule?.promotionProducts ??
-    [];
-
-  if (Array.isArray(relatedProducts)) {
-    relatedProducts.forEach((item) => {
-      const productId =
-        item?.product_id ??
-        item?.productId ??
-        item?.id ??
-        item?.product?.id;
-      if (productId != null) ids.push(productId);
-    });
-  }
-
-  return ids;
-};
-
-const isPromotionPriceRule = (rule) => {
-  const type = normalizePromotionType(
-    rule?.promotion_type ??
-      rule?.promotionType ??
-      rule?.promotion_type_name ??
-      rule?.promotionTypeName
-  );
-
-  return (
-    type === "promotion_price" ||
-    type === "promotionprice" ||
-    rule?.rule_kind === PROMOTION_RULE_KINDS.PROMOTION_PRICE
-  );
-};
-
-const getActivePromotionPriceRule = (product) => {
-  if (!isVatPriceMode(priceMode)) return null;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  return promotionRules.find((rule) => {
-    const startDate = rule?.start_date ? new Date(rule.start_date) : null;
-    const endDate = rule?.end_date ? new Date(rule.end_date) : null;
-
-    if (startDate) startDate.setHours(0, 0, 0, 0);
-    if (endDate) endDate.setHours(23, 59, 59, 999);
-
-    const startsOk = !startDate || startDate <= today;
-    const endsOk = !endDate || endDate >= today;
-    const productIds = getPromotionRuleProductIds(rule);
-    const promotionPrice = getPromotionRulePrice(rule);
-
-  const activeOk =
-  rule?.active === true ||
-  String(rule?.active).toLowerCase() === "true";
-
-const productMatch = productIds.some(
-  (productId) => String(productId) === String(product?.id)
-);
-
-return (
-  activeOk &&
-  startsOk &&
-  endsOk &&
-  isPromotionPriceRule(rule) &&
-  productMatch &&
-  promotionPrice != null &&
-  promotionPrice !== ""
-);
-
-
-  }) || null;
-};
-
-const getPromotionPrice = (product) => {
-  const rule = getActivePromotionPriceRule(product);
-  if (!rule) return null;
-
-  const promotionPrice = Number(getPromotionRulePrice(rule));
-  return Number.isFinite(promotionPrice) ? promotionPrice : null;
-};
+const getPromotionPrice = (product) =>
+  getActivePromotionPrice({
+    product,
+    promotionRules,
+    priceMode,
+    audienceType: promotionAudienceType,
+  });
 
 const getPriceDetails = (product) =>
   getProductPriceDetailsForMode(product, priceMode, orderCountry, pricingSettings);
@@ -2729,6 +2654,14 @@ const filteredProducts = useMemo(() => {
           productBrand === selectedBrand) &&
         (selectedSeries === "All Series" ||
           productSeries === selectedSeries) &&
+        (homepageSelectionType !== "promotion" ||
+          selectedSeries === "All Series" ||
+          productMatchesPromotionPosterSeries({
+            product,
+            promotionRules,
+            series: selectedSeries,
+            priceMode,
+          })) &&
         (keyword === "" ||
           String(product.name || "").toLowerCase().includes(keyword) ||
           String(product.productCode || "").toLowerCase().includes(keyword) ||
@@ -2749,6 +2682,9 @@ const filteredProducts = useMemo(() => {
   selectedSeries,
   homepagePromotionTarget,
   homepageProductSetIds,
+  homepageSelectionType,
+  promotionRules,
+  priceMode,
 ]);
 
 const totalProductPages = Math.max(
@@ -3031,10 +2967,7 @@ const getHomepageSubtitle = (item) => {
     );
   };
 
-  const promotionDiscountAmount = cart.reduce(
-    (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
-    0
-  );
+  const promotionDiscountAmount = getPromotionDiscountAmount(cart);
   const effectiveOrderDiscountPercent = canManualCheckoutDiscount
     ? Number(orderDiscountPercent || 0)
     : 0;
@@ -3568,27 +3501,20 @@ const submitOrder = async () => {
       JSON.stringify({ orderNumber: submissionOrderNumber, fingerprint: submissionFingerprint })
     );
 
-    const orderRequest = {
+    const orderRequest = buildCustomerOrderRequest({
       orderNumber: submissionOrderNumber,
-      companyName: selectedCustomerAccount.account_name,
+      customer: selectedCustomerAccount,
+      branch: selectedBranch,
       priceMode,
-      cart: paidCartForOrder,
-      total: finalTotal,
-      discount_percent: effectiveOrderDiscountPercent,
-      discount_amount: canManualCheckoutDiscount ? Number(discountAmount || 0) : 0,
-      discount_applied_by: canManualCheckoutDiscount ? userProfile?.id || "" : "",
-      discount_applied_by_name: canManualCheckoutDiscount
-        ? userProfile?.full_name || userProfile?.name || ""
-        : "",
-      customer_account_id: selectedCustomerAccount.id,
-      customer_branch_id: selectedBranch?.id || null,
-      delivery_branch_name: selectedBranch?.branch_name || "",
-      delivery_address: selectedBranch?.delivery_address || "",
-      delivery_postcode: selectedBranch?.postcode || "",
-      customer_country: orderCountry,
-      credit_limit: creditLimit,
-      notes: "Payment status: UNPAID. No Payment Now selected.",
-    };
+      cart,
+      finalTotal,
+      effectiveOrderDiscountPercent,
+      discountAmount,
+      canManualCheckoutDiscount,
+      userProfile,
+      orderCountry,
+      creditLimit,
+    });
 
     let createdOrder;
     const submittingCentralCartId = CENTRAL_CART_ENABLED && !salesRouteMode
@@ -3605,15 +3531,21 @@ const submitOrder = async () => {
     }
 
     try {
-      try {
-        createdOrder = await createCustomerOrder(orderRequest);
-      } catch (error) {
-        if (!isOrderAuthError(error)) throw error;
-
-        const refreshed = await supabase.auth.refreshSession();
-        if (refreshed.error || !refreshed.data.session) throw error;
-        createdOrder = await createCustomerOrder(orderRequest);
-      }
+      createdOrder = await createCustomerOrderWithSessionRetry({
+        orderRequest,
+        createOrder: createCustomerOrder,
+        isAuthError: isOrderAuthError,
+        refreshSession: () => supabase.auth.refreshSession(),
+        promotionRunContext: {
+          cart,
+          customer: selectedCustomerAccount,
+          branch: selectedBranch,
+          actor: activeUser,
+          audienceType: promotionAudienceType,
+          country: orderCountry,
+          profile: activeUser,
+        },
+      });
     } catch (error) {
       if (submittingCentralCartId) {
         await cancelCentralCartSubmission({
@@ -3790,133 +3722,16 @@ const getCalculatedOrderItemForSave = (item, order = {}) =>
   })[0] || item;
 
 const updateOrderItem = async (orderId, itemId, updates) => {
-  setOrders((oldOrders) =>
-    oldOrders.map((order) => {
-      if (order.orderId !== orderId) return order;
-
-      const updatedItems = order.items.map((item) => {
-        const itemKey = item.dbId || item.id || item.productId || item.product_id;
-
-        if (String(itemKey) !== String(itemId)) return item;
-
-        return {
-          ...item,
-          ...updates,
-        };
-      });
-
-      return recalculateOrder(order, updatedItems);
-    })
-  );
-
-const order = orders.find((o) => o.orderId === orderId);
-
-const item = order?.items?.find((i) => {
-  const itemKey = i.dbId || i.id || i.productId || i.product_id;
-  return String(itemKey) === String(itemId);
-});
-
-const dbUpdates = {};
-const itemForCalculation = {
-  ...(item || {}),
-  ...updates,
-  qty: updates.qty ?? updates.pickedQty ?? updates.picked_qty ?? item?.qty,
-  pickedQty: updates.pickedQty ?? updates.picked_qty ?? updates.qty ?? item?.pickedQty,
-};
-const calculatedItem = getCalculatedOrderItemForSave(itemForCalculation, order);
-
-if (updates.qty !== undefined) {
-  const qty = Number(updates.qty || 0);
-
-  dbUpdates.qty = qty;
-  dbUpdates.picked_qty = qty;
-}
-
-if (updates.pickedQty !== undefined) {
-  dbUpdates.picked_qty = Number(updates.pickedQty || 0);
-}
-
-if (updates.sourceStatus !== undefined) {
-  dbUpdates.source_status = updates.sourceStatus;
-}
-
-if (updates.includeInPicking !== undefined) {
-  dbUpdates.include_in_picking = updates.includeInPicking;
-}
-
-if (
-  updates.price !== undefined ||
-  updates.selectedPrice !== undefined ||
-  updates.unit_price !== undefined ||
-  updates.unitPrice !== undefined
-) {
-  const nextPrice = roundMoney(
-    updates.price ??
-      updates.selectedPrice ??
-      updates.unit_price ??
-      updates.unitPrice ??
-      item?.price ??
-      0
-  );
-
-  dbUpdates.price = nextPrice.toFixed(2);
-}
-
-dbUpdates.line_total = calculatedItem.line_total.toFixed(2);
-dbUpdates.net_total = calculatedItem.net_total.toFixed(2);
-dbUpdates.gross_total = calculatedItem.gross_total.toFixed(2);
-dbUpdates.vat_amount = calculatedItem.vat_total.toFixed(2);
-
-const { error } = await supabase
-  .from("order_items")
-  .update(dbUpdates)
-  .eq("id", item?.dbId || itemId);
-
-if (error) {
-  console.error("Order item update error:", error);
-  alert("Could not update order item: " + error.message);
-  return false;
-}
-
-const updatedOrderItems = (order?.items || []).map((currentItem) => {
-  const currentKey = currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
-  if (String(currentKey) !== String(itemId)) return currentItem;
-
-  const mergedItem = { ...currentItem, ...updates };
-  const mergedPrice = roundMoney(
-    mergedItem.price ?? mergedItem.selectedPrice ?? mergedItem.unit_price ?? mergedItem.unitPrice ?? 0
-  );
-  const calculatedMergedItem = getCalculatedOrderItemForSave(
-    {
-      ...mergedItem,
-      price: mergedPrice,
-      selectedPrice: mergedPrice,
-      unit_price: mergedPrice,
-      unitPrice: mergedPrice,
-    },
-    order
-  );
-
-  return {
-    ...mergedItem,
-    price: mergedPrice,
-    selectedPrice: mergedPrice,
-    unit_price: mergedPrice,
-    unitPrice: mergedPrice,
-    lineTotal: calculatedMergedItem.line_total,
-    line_total: calculatedMergedItem.line_total,
-    netTotal: calculatedMergedItem.net_total,
-    net_total: calculatedMergedItem.net_total,
-    grossTotal: calculatedMergedItem.gross_total,
-    gross_total: calculatedMergedItem.gross_total,
-    vatTotal: calculatedMergedItem.vat_total,
-    vat_total: calculatedMergedItem.vat_total,
-  };
-});
-
-await saveOrderTotalsToDatabase(orderId, updatedOrderItems, order);
-await fetchOrders();
-return true;
+  const order = orders.find((entry) => entry.orderId === orderId);
+  try {
+    const result = await updateReceivedOrderItemWithPromotions({ order, itemId, updates });
+    await fetchOrders();
+    return result;
+  } catch (error) {
+    console.error("Update received-order item error:", error);
+    alert("Could not update order item: " + (error?.message || "Promotion recalculation failed."));
+    return false;
+  }
 };
 
 const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restoreQty) => {
@@ -3961,115 +3776,17 @@ const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restor
   return true;
 };
 const addOrderItem = async (orderId, newItem) => {
-  const order = orders.find((o) => o.orderId === orderId);
+  const order = orders.find((entry) => entry.orderId === orderId);
 
-  if (!order?.dbId) {
-    alert("Order database ID not found.");
-    return;
+  try {
+    const result = await addReceivedOrderItemWithPromotions({ order, newItem });
+    await fetchOrders();
+    return result;
+  } catch (error) {
+    console.error("Add received-order item error:", error);
+    alert("Could not add order item: " + (error?.message || "Promotion recalculation failed."));
+    return null;
   }
-
-  const qty = Number(newItem.qty || 1);
-  const price = roundMoney(newItem.price || newItem.selectedPrice || 0);
-  const calculatedItem = getCalculatedOrderItemForSave(
-    {
-      ...newItem,
-      qty,
-      pickedQty: qty,
-      price,
-      selectedPrice: price,
-      unit_price: price,
-      unitPrice: price,
-    },
-    order
-  );
-  const productCode = getOrderItemProductCode(calculatedItem);
-
-  let { data, error } = await supabase
-    .from("order_items")
-    .insert({
-      order_id: order.dbId,
-      product_id: newItem.productId,
-      product_code: productCode,
-      product_name: newItem.name,
-      brand: newItem.brand || "",
-      series: newItem.series || "",
-      flavour: newItem.flavour || "",
-      carton_size: newItem.cartonSize || "",
-      qty,
-      picked_qty: qty,
-      price: calculatedItem.price.toFixed(2),
-      line_total: calculatedItem.line_total.toFixed(2),
-      net_total: calculatedItem.net_total.toFixed(2),
-      gross_total: calculatedItem.gross_total.toFixed(2),
-     vat_amount: calculatedItem.vat_total.toFixed(2),
-      source_status: "In Stock",
-      include_in_picking: true,
-    })
-    .select("id")
-    .single();
-
-  if (
-    error &&
-    String(error.message || error.details || "").toLowerCase().includes("product_code")
-  ) {
-    const retry = await supabase
-      .from("order_items")
-      .insert({
-        order_id: order.dbId,
-        product_id: newItem.productId,
-        product_name: newItem.name,
-        brand: newItem.brand || "",
-        series: newItem.series || "",
-        flavour: newItem.flavour || "",
-        carton_size: newItem.cartonSize || "",
-        qty,
-        picked_qty: qty,
-        price: calculatedItem.price.toFixed(2),
-        line_total: calculatedItem.line_total.toFixed(2),
-        net_total: calculatedItem.net_total.toFixed(2),
-        gross_total: calculatedItem.gross_total.toFixed(2),
-        vat_amount: calculatedItem.vat_total.toFixed(2),
-        source_status: "In Stock",
-        include_in_picking: true,
-      })
-      .select("id")
-      .single();
-
-    data = retry.data;
-    error = retry.error;
-  }
-
-  if (error) {
-    console.error("Add item error:", error);
-    alert(error.message);
-    return;
-  }
-
-  await saveOrderTotalsToDatabase(
-    orderId,
-    [
-      ...(order.items || []),
-      {
-        ...newItem,
-        qty,
-        pickedQty: qty,
-        price,
-        selectedPrice: price,
-        lineTotal: calculatedItem.line_total,
-        line_total: calculatedItem.line_total,
-        netTotal: calculatedItem.net_total,
-        net_total: calculatedItem.net_total,
-        grossTotal: calculatedItem.gross_total,
-        gross_total: calculatedItem.gross_total,
-        vatTotal: calculatedItem.vat_total,
-        vat_total: calculatedItem.vat_total,
-        },
-    ],
-    order
-  );
-
-  await fetchOrders();
-  return data;
 };
 
 const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) => {
@@ -4928,7 +4645,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 <div className="flex min-w-max items-center gap-5 font-semibold">
                   <span><strong>Credit Limit:</strong> {formatCurrency(selectedCustomerAccount?.credit_limit)}</span>
                   <span><strong>Credit Balance:</strong> {formatCurrency(getCreditBalance(selectedCustomerAccount, customerLedger, customerOpeningBalance))}</span>
-                  <span><strong>Customer:</strong> {selectedCustomerAccount.account_name}</span>
+                  <span className="inline-flex items-center gap-1.5"><strong>Customer:</strong> {selectedCustomerAccount.account_name}{!isCustomer && (<button type="button" title="Change customer" aria-label="Change customer" onClick={() => { if (salesRouteMode && !salesRouteExceptionMode) { resetSalesRouteCustomer(); setShowSalesRouteModal(true); } else { setCustomerDetailsExpanded(true); setTimeout(() => document.getElementById("order-customer-details")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0); } }} className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900">✎</button>)}</span>
                   <span><strong>Branch:</strong> {selectedBranch?.branch_name || "Main account"}</span>
                   <span><strong>Address:</strong> {getCustomerAddress(selectedCustomerAccount, selectedBranch)}</span>
                 </div>
