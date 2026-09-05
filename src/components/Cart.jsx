@@ -23,6 +23,9 @@ export default function Cart({
   paymentChoice,
   onPaymentChoiceChange,
   paymentChoiceValid = false,
+  requireImmediatePayment = false,
+  bankProofFile = null,
+  onBankProofChange,
   readOnly = false,
   reviewMode = false,
   hideSubmit = false,
@@ -173,6 +176,9 @@ export default function Cart({
           <PaymentChoiceSelector
             choice={paymentChoice}
             onChoiceChange={onPaymentChoiceChange}
+            requireImmediatePayment={requireImmediatePayment}
+            bankProofFile={bankProofFile}
+            onBankProofChange={onBankProofChange}
           />
         )}
 

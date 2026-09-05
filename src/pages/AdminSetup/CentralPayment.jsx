@@ -32,6 +32,27 @@ const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
 const ledgerTypes = ["PAYMENT", "DISCOUNT", "INVOICE", "CREDIT", "REFUND", "ADJUSTMENT", "EXPENSE"];
 const BRANCH_SELECT = "__select__";
 
+const getPaymentMetadata = (payment = {}) => {
+  if (payment?.metadata && typeof payment.metadata === "object") return payment.metadata;
+  if (typeof payment?.metadata === "string") {
+    try {
+      const parsed = JSON.parse(payment.metadata);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+
+const getBankProof = (payment = {}) => {
+  const metadata = getPaymentMetadata(payment);
+  return {
+    dataUrl: String(metadata.bank_proof_data_url || metadata.payment_proof_data_url || ""),
+    name: String(metadata.bank_proof_name || "Bank payment proof"),
+  };
+};
+
 const matchesCustomer = (customer, search) =>
   [
     customer.account_name,
@@ -771,22 +792,34 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
             <p className="text-sm text-slate-600">Pending transfers do not affect the customer balance. Approve or reject each transfer here.</p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-sm">
-              <thead><tr className="border-b bg-amber-50 text-left"><th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Paid By</th><th className="p-3 text-right">Amount</th><th className="p-3">Status</th><th className="p-3 text-right">Action</th></tr></thead>
+            <table className="w-full min-w-[980px] text-sm">
+              <thead><tr className="border-b bg-amber-50 text-left"><th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Paid By</th><th className="p-3 text-right">Amount</th><th className="p-3">Proof</th><th className="p-3">Status</th><th className="p-3 text-right">Action</th></tr></thead>
               <tbody>
-                {pendingBankTransfers.map((payment) => (
+                {pendingBankTransfers.map((payment) => {
+                  const proof = getBankProof(payment);
+                  return (
                   <tr key={payment.id} className="border-b">
                     <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
                     <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td>
                     <td className="p-3">{payment.paid_by || "-"}</td>
                     <td className="p-3 text-right font-extrabold">{formatCurrency(payment.amount || 0)}</td>
+                    <td className="p-3">
+                      {proof.dataUrl ? (
+                        <a href={proof.dataUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-800">
+                          <img src={proof.dataUrl} alt="Bank proof" className="h-10 w-10 rounded object-cover" />
+                          View proof
+                        </a>
+                      ) : (
+                        <span className="text-xs font-bold text-red-700">No proof</span>
+                      )}
+                    </td>
                     <td className="p-3"><span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-extrabold text-amber-800">UNAPPROVED</span></td>
                     <td className="p-3 text-right">
-                      <button type="button" onClick={() => confirmBank(payment)} className="rounded-lg bg-green-700 px-3 py-2 text-xs font-bold text-white">Approve</button>
+                      <button type="button" onClick={() => confirmBank(payment)} disabled={!proof.dataUrl} title={!proof.dataUrl ? "Bank proof is required before approval" : "Approve bank transfer"} className="rounded-lg bg-green-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300">Approve</button>
                       <button type="button" onClick={() => rejectBank(payment)} className="ml-2 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white">Reject</button>
                     </td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           </div>

@@ -536,6 +536,19 @@ export default function ProductPromotions() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [bulkRule, setBulkRule] = useState(emptyBulkRule);
+  const bulkRuleRef = useRef(emptyBulkRule);
+  const updateBulkRule = (updater) => {
+    setBulkRule((current) => {
+      const next = typeof updater === "function" ? updater(current) : updater;
+      bulkRuleRef.current = next;
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    bulkRuleRef.current = bulkRule;
+  }, [bulkRule]);
+
   const [promotionRule, setPromotionRule] = useState(emptyPromotionRule);
   const [reducedRule, setReducedRule] = useState(emptyReducedRule);
   const [typeForm, setTypeForm] = useState(emptyTypeForm);
@@ -628,8 +641,8 @@ export default function ProductPromotions() {
   const findTypeId = (typeName) =>
     promotionTypes.find((type) => type.type_name === typeName)?.id || "";
 
-  const getBulkTypeId = () =>
-    bulkRule.promotion_type_id || findTypeId("Buy More Get Free Product");
+  const getBulkTypeId = (rule = bulkRuleRef.current) =>
+    rule.promotion_type_id || findTypeId("Buy More Get Free Product");
 
   const getPromotionTypeId = () =>
     promotionRule.promotion_type_id || findTypeId("Promotion Price");
@@ -673,34 +686,35 @@ export default function ProductPromotions() {
     setSuccess("");
 
     try {
-  await savePromotionRule(
-  {
-    id: bulkRule.id || undefined,
-    promotion_type_id: getBulkTypeId(),
-    active: bulkRule.active,
-    price_mode: bulkRule.price_mode,
-    rule_kind: PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE,
+      const currentBulkRule = bulkRuleRef.current;
+      await savePromotionRule(
+        {
+          id: currentBulkRule.id || undefined,
+          promotion_type_id: getBulkTypeId(currentBulkRule),
+          active: currentBulkRule.active,
+          price_mode: currentBulkRule.price_mode,
+          rule_kind: PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE,
 
-    trigger_brand: bulkRule.trigger_brand,
-    trigger_series: bulkRule.trigger_series,
-    trigger_flavour_mode: bulkRule.trigger_flavour_mode,
-    trigger_flavours: bulkRule.trigger_flavours,
-    buy_qty: bulkRule.buy_qty,
+          trigger_brand: currentBulkRule.trigger_brand,
+          trigger_series: currentBulkRule.trigger_series,
+          trigger_flavour_mode: currentBulkRule.trigger_flavour_mode,
+          trigger_flavours: flavourList(currentBulkRule.trigger_flavours),
+          buy_qty: currentBulkRule.buy_qty,
 
-    free_brand: bulkRule.free_brand,
-    free_series: bulkRule.free_series,
-    free_flavour_mode: bulkRule.free_flavour_mode,
-    free_flavours: bulkRule.free_flavours,
-    free_qty: bulkRule.free_qty,
+          free_brand: currentBulkRule.free_brand,
+          free_series: currentBulkRule.free_series,
+          free_flavour_mode: currentBulkRule.free_flavour_mode,
+          free_flavours: flavourList(currentBulkRule.free_flavours),
+          free_qty: currentBulkRule.free_qty,
 
-    label_type: bulkRule.label_type,
-    start_date: bulkRule.start_date,
-    end_date: bulkRule.end_date,
-  },
-  []
-);
+          label_type: currentBulkRule.label_type,
+          start_date: currentBulkRule.start_date,
+          end_date: currentBulkRule.end_date,
+        },
+        []
+      );
 
-      setBulkRule(emptyBulkRule);
+      updateBulkRule(emptyBulkRule);
       setSuccess("Bulk buy promotion saved.");
       await loadData();
     } catch (saveError) {
@@ -1011,7 +1025,7 @@ export default function ProductPromotions() {
                     ))}
                   </select>
                 </Field>
-                <div className="md:col-span-2 xl:col-span-4"><Field label="Buy Flavours"><FlavourRuleSelector key={`buy-${bulkRule.id || "new"}-${bulkRule.trigger_series}-${bulkRule.trigger_flavour_mode}`} mode={bulkRule.trigger_flavour_mode} flavours={bulkRule.trigger_flavours} options={buyFlavours} onModeChange={(trigger_flavour_mode) => setBulkRule((current) => ({ ...current, trigger_flavour_mode }))} onFlavoursChange={(trigger_flavours) => setBulkRule((current) => ({ ...current, trigger_flavours }))} /></Field></div>
+                <div className="md:col-span-2 xl:col-span-4"><Field label="Buy Flavours"><FlavourRuleSelector key={`buy-${bulkRule.id || "new"}-${bulkRule.trigger_series}-${bulkRule.trigger_flavour_mode}`} mode={bulkRule.trigger_flavour_mode} flavours={bulkRule.trigger_flavours} options={buyFlavours} onModeChange={(trigger_flavour_mode) => updateBulkRule((current) => ({ ...current, trigger_flavour_mode }))} onFlavoursChange={(trigger_flavours) => updateBulkRule((current) => ({ ...current, trigger_flavours }))} /></Field></div>
                 <Field label="Buy Quantity">
                   <input
                     type="number"
@@ -1066,7 +1080,7 @@ export default function ProductPromotions() {
                     ))}
                   </select>
                 </Field>
-                <div className="md:col-span-2 xl:col-span-4"><Field label="Free Flavours"><FlavourRuleSelector key={`free-${bulkRule.id || "new"}-${bulkRule.free_series}-${bulkRule.free_flavour_mode}`} mode={bulkRule.free_flavour_mode} flavours={bulkRule.free_flavours} options={freeFlavours} onModeChange={(free_flavour_mode) => setBulkRule((current) => ({ ...current, free_flavour_mode }))} onFlavoursChange={(free_flavours) => setBulkRule((current) => ({ ...current, free_flavours }))} /></Field></div>
+                <div className="md:col-span-2 xl:col-span-4"><Field label="Free Flavours"><FlavourRuleSelector key={`free-${bulkRule.id || "new"}-${bulkRule.free_series}-${bulkRule.free_flavour_mode}`} mode={bulkRule.free_flavour_mode} flavours={bulkRule.free_flavours} options={freeFlavours} onModeChange={(free_flavour_mode) => updateBulkRule((current) => ({ ...current, free_flavour_mode }))} onFlavoursChange={(free_flavours) => updateBulkRule((current) => ({ ...current, free_flavours }))} /></Field></div>
                 <Field label="Free Quantity">
                   <input
                     type="number"
@@ -1112,7 +1126,7 @@ export default function ProductPromotions() {
           <ActionButtons
             saving={saving}
             onSave={saveBulkRule}
-            onClear={() => setBulkRule(emptyBulkRule)}
+            onClear={() => updateBulkRule(emptyBulkRule)}
           />
 
           <Card title="Bulk Buy Promotions">

@@ -207,6 +207,21 @@ async function refreshSupabaseSessionIfNeeded() {
   return refreshed.data.session;
 }
 
+const readCheckoutBankProofDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    if (!file) return resolve("");
+    if (!String(file.type || "").startsWith("image/")) {
+      return reject(new Error("Bank payment proof must be an image / screenshot."));
+    }
+    if (Number(file.size || 0) > 2.5 * 1024 * 1024) {
+      return reject(new Error("Bank payment screenshot is too large. Please use an image under 2.5 MB."));
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the bank payment screenshot."));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
+
 function normalizeProduct(raw) {
   return {
     id: raw.id,
@@ -813,7 +828,9 @@ const openSalesRouteCustomer = useCallback((routeRow) => {
   setRouteExceptionReason("");
   setRouteExceptionNote("");
   setCustomerDetailsExpanded(false);
-  setOrderPaymentChoice("no_payment");
+  setOrderPaymentChoice("cash_now");
+  setOrderBankProofFile(null);
+  setOrderPaymentIntentId(createPaymentIntentId());
   setShowSalesRouteModal(false);
   const modes = getAllowedPriceModesForCustomer(customer, pricingSettings);
   const defaultMode = String(customer.default_price_mode || "vat").toLowerCase();
@@ -873,7 +890,12 @@ const confirmSalesRouteException = () => {
   const [isCartEditing, setIsCartEditing] = useState(false);
   const [cartNotice, setCartNotice] = useState("");
   const [submissionFeedback, setSubmissionFeedback] = useState("");
-  const [orderPaymentChoice, setOrderPaymentChoice] = useState("no_payment");
+  const salesCheckoutPaymentRequired = isSalesRep && !isCustomer;
+  const [orderPaymentChoice, setOrderPaymentChoice] = useState(() =>
+    salesCheckoutPaymentRequired ? "cash_now" : "no_payment"
+  );
+  const [orderBankProofFile, setOrderBankProofFile] = useState(null);
+  const [orderPaymentIntentId, setOrderPaymentIntentId] = useState(() => createPaymentIntentId());
   const lastCartProductIdRef = useRef("");
   const browseScrollPositionRef = useRef(0);
   const productHighlightTimerRef = useRef(null);
@@ -2979,7 +3001,10 @@ const getHomepageSubtitle = (item) => {
   });
   const discountAmount = cartTotals.discountAmount;
   const finalTotal = cartTotals.totalAmount;
-  const orderPaymentChoiceValid = orderPaymentChoice === "no_payment";
+  const orderPaymentChoiceValid = salesCheckoutPaymentRequired
+    ? orderPaymentChoice === "cash_now" ||
+      (orderPaymentChoice === "bank_transfer_now" && Boolean(orderBankProofFile))
+    : orderPaymentChoice === "no_payment";
 
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
@@ -3379,7 +3404,11 @@ const submitOrder = async () => {
   }
 
   if (!orderPaymentChoiceValid) {
-    alert("Please continue with No Payment Now. Card payment is not available in this checkout.");
+    alert(
+      salesCheckoutPaymentRequired
+        ? "Customer payment is required. Select Cash Paid, or Bank Transfer Paid and attach the payment screenshot."
+        : "Please continue with No Payment Now. Card payment is not available in this checkout."
+    );
     return;
   }
 
@@ -3411,6 +3440,16 @@ const submitOrder = async () => {
     }
 
     if (!window.confirm(`${message}\n\nApprove below-cost special pricing?`)) {
+      return;
+    }
+  }
+
+  let checkoutBankProofDataUrl = "";
+  if (salesCheckoutPaymentRequired && orderPaymentChoice === "bank_transfer_now") {
+    try {
+      checkoutBankProofDataUrl = await readCheckoutBankProofDataUrl(orderBankProofFile);
+    } catch (proofError) {
+      alert(proofError?.message || "Could not read the bank payment screenshot.");
       return;
     }
   }
@@ -3458,7 +3497,7 @@ const submitOrder = async () => {
     return;
   }
 
-  if (creditLimit > 0 && projectedBalance > creditLimit) {
+  if (!salesCheckoutPaymentRequired && creditLimit > 0 && projectedBalance > creditLimit) {
     setSubmissionFeedback("");
     alert(
       `Credit limit exceeded.\n\n` +
@@ -3561,6 +3600,49 @@ const submitOrder = async () => {
 
     const { orderNumber } = createdOrder;
 
+    if (salesCheckoutPaymentRequired) {
+      const checkoutPaymentMethod =
+        orderPaymentChoice === "bank_transfer_now" ? "Bank Transfer" : "Cash";
+      try {
+        await postCanonicalCustomerPayment({
+          customerAccountId: selectedCustomerAccount.id,
+          customerBranchId: selectedBranch?.id || null,
+          amount: orderTotal,
+          paymentDate: new Date().toISOString(),
+          paymentMethod: checkoutPaymentMethod,
+          paymentSource: CANONICAL_PAYMENT_SOURCES.ORDER_PAYMENT,
+          paymentReference: orderNumber,
+          paidBy: selectedCustomerAccount.account_name || selectedCustomerAccount.company_name || "Customer",
+          paymentIntentId: orderPaymentIntentId,
+          notes: `Paid sales checkout for ${orderNumber}`,
+          metadata: {
+            payment_applies_to: "ORDER_CHECKOUT",
+            order_number: orderNumber,
+            bank_proof_data_url: checkoutBankProofDataUrl || null,
+            bank_proof_name: orderBankProofFile?.name || null,
+            bank_proof_mime_type: orderBankProofFile?.type || null,
+          },
+          allocations: [],
+        });
+      } catch (paymentError) {
+        await updateOrderStatus(orderNumber, "Cancelled").catch((cancelError) =>
+          console.error("Paid checkout rollback failed:", cancelError)
+        );
+        if (submittingCentralCartId) {
+          await cancelCentralCartSubmission({
+            profile: activeUser,
+            cartId: submittingCentralCartId,
+            orderNumber,
+          }).catch((cancelError) =>
+            console.error("Central cart payment rollback error:", cancelError)
+          );
+        }
+        localStorage.removeItem(orderSubmissionStorageKey);
+        setOrderPaymentIntentId(createPaymentIntentId());
+        throw new Error(`Payment was not accepted, so the order was cancelled: ${paymentError?.message || "Unknown payment error"}`);
+      }
+    }
+
     if (submittingCentralCartId) {
       await finalizeCentralCartSubmission({
         profile: activeUser,
@@ -3591,7 +3673,9 @@ const newOrder = {
     canManualCheckoutDiscount ? userProfile?.full_name || userProfile?.name || "" : "",
    createdAt: new Date().toLocaleString(),
    status: "Received",
-   paymentStatus: "UNPAID",
+   paymentStatus: salesCheckoutPaymentRequired
+     ? orderPaymentChoice === "bank_transfer_now" ? "PENDING_VERIFICATION" : "PAID"
+     : "UNPAID",
    paymentChoice: orderPaymentChoice,
    items: paidCartForOrder,
     };
@@ -3617,7 +3701,9 @@ const newOrder = {
 
     setCart([]);
     setIsCartEditing(false);
-    setOrderPaymentChoice("no_payment");
+    setOrderPaymentChoice(salesCheckoutPaymentRequired ? "cash_now" : "no_payment");
+    setOrderBankProofFile(null);
+    setOrderPaymentIntentId(createPaymentIntentId());
     setOrderDiscountPercent(0);
 
     if (!isCustomer) {
@@ -3663,7 +3749,11 @@ Please quote your Order Number if you need assistance.`
       message: error?.message || String(error),
       online: navigator.onLine,
     });
-    alert("We could not submit the order.\nPlease check your connection and try again.");
+    alert(
+      String(error?.message || "").startsWith("Payment was not accepted")
+        ? error.message
+        : "We could not submit the order.\nPlease check your connection and try again."
+    );
   } finally {
     orderSubmissionLockRef.current = false;
     setIsSubmittingOrder(false);
@@ -4471,6 +4561,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             <button onClick={resetSalesRouteCustomer} className="payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">Route</button>
           )}
           <button onClick={() => setPage("order")} className={`order-tab-btn btn-secondary bg-white text-blue-800 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}>Order</button>
+          <button type="button" onClick={() => { window.location.hash = "promotion-run"; }} className="payment-history-tab-btn border border-emerald-200 bg-emerald-500 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">Promotion Run</button>
           {salesRouteMode && <button onClick={() => setPage("expenses")} className={`payment-history-tab-btn bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "expenses" ? "active" : ""}`}>Expenses</button>}
           {canCollectCash && (
             <button onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesPaymentForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesCashCollection"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}>Collection</button>
@@ -4622,6 +4713,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                       ? [
                           { label: "Route", hidden: !salesRouteMode, onClick: () => setShowSalesRouteModal(true) },
                           { label: "Order", onClick: () => setPage("order") },
+                          { label: "Promotion Run", onClick: () => { window.location.hash = "promotion-run"; } },
                           { label: "Expenses", hidden: !salesRouteMode, onClick: () => setPage("expenses") },
                           { label: "Cash Collection", hidden: !canCollectCash, onClick: () => { if (salesRouteMode && selectedCustomerAccount) { setSalesPaymentForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); } setPage("salesCashCollection"); } },
                           { label: "Return", onClick: () => { if (salesRouteMode && selectedCustomerAccount) { setSalesReturnForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); } setPage("salesReturn"); } },
@@ -4756,7 +4848,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         setSelectedCustomerAccount(customer || null);
         setSelectedBranchId("");
         setSelectedBranch(null);
-        setOrderPaymentChoice("no_payment");
+        setOrderPaymentChoice(salesCheckoutPaymentRequired ? "cash_now" : "no_payment");
+        setOrderBankProofFile(null);
+        setOrderPaymentIntentId(createPaymentIntentId());
         setCustomerDetailsExpanded(
           !customer || getCustomerBranches(customer).length > 0
         );
@@ -4952,6 +5046,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                       ? [
                           { label: "Route", hidden: !salesRouteMode, onClick: () => setShowSalesRouteModal(true) },
                           { label: "Order", onClick: () => setPage("order") },
+                          { label: "Promotion Run", onClick: () => { window.location.hash = "promotion-run"; } },
                           { label: "Expenses", hidden: !salesRouteMode, onClick: () => setPage("expenses") },
                           {
                             label: "Cash Collection",
@@ -5162,8 +5257,12 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 paymentChoice={orderPaymentChoice}
                 onPaymentChoiceChange={(choice) => {
                   setOrderPaymentChoice(choice);
+                  if (choice !== "bank_transfer_now") setOrderBankProofFile(null);
                 }}
                 paymentChoiceValid={orderPaymentChoiceValid}
+                requireImmediatePayment={salesCheckoutPaymentRequired}
+                bankProofFile={orderBankProofFile}
+                onBankProofChange={setOrderBankProofFile}
                 reviewMode
                 hideSubmit
               />
@@ -5672,7 +5771,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 localStorage.removeItem(orderSubmissionStorageKey);
                 setCart([]);
                 setIsCartEditing(false);
-                setOrderPaymentChoice("no_payment");
+                setOrderPaymentChoice(salesCheckoutPaymentRequired ? "cash_now" : "no_payment");
+                setOrderBankProofFile(null);
+                setOrderPaymentIntentId(createPaymentIntentId());
               }}
               className="mt-0.5 text-[11px] text-red-600 underline"
             >

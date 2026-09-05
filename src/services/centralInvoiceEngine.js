@@ -1316,7 +1316,7 @@ function buildLegacyStandardInvoiceHtml(
           <td>${escapeHtml(productCode)}</td>
           <td>${escapeHtml(item.name || item.productName || item.product_name || "")}${
             isFreePromotion
-              ? ' <strong style="display:inline-block;margin-left:5px;color:#15803d;font-size:10px;">FREE / PROMOTION</strong>'
+              ? ' <strong style="display:inline-block;margin-left:5px;color:#15803d;font-size:10px;">PROMOTION FREE</strong>'
               : ""
           }</td>
           <td class="right">${escapeHtml(quantity)}</td>
@@ -1715,7 +1715,7 @@ export function buildStandardInvoiceHtml(
           }
           <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}${
             isFreePromotion
-              ? ' <span style="display:inline-block;margin-left:5px;padding:1px 5px;border:1px solid #16a34a;border-radius:8px;color:#15803d;font-size:9px;font-weight:900;white-space:nowrap;">FREE / PROMOTION</span>'
+              ? ' <span style="display:inline-block;margin-left:5px;padding:1px 5px;border:1px solid #16a34a;border-radius:8px;color:#15803d;font-size:9px;font-weight:900;white-space:nowrap;">PROMOTION FREE</span>'
               : ""
           }</td>
           <td class="right">${escapeHtml(quantity)}</td>
