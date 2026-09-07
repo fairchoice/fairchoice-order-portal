@@ -3,6 +3,7 @@ import {
   buildLocationStockMap,
   getProductLocationStock,
 } from "./locationStock";
+import { buildProductPriceCodeMap, getProductPriceCodeRows } from "./priceCodes";
 
 const PRODUCT_SELECT_COLUMNS = [
   "id",
@@ -83,7 +84,7 @@ async function loadAllProductRows(columns) {
   return { data: rows, error: null };
 }
 
-function normalizeProduct(p, locationStocksByProduct = {}) {
+function normalizeProduct(p, locationStocksByProduct = {}, priceCodePricesByProduct = {}) {
   const productSpecialPrice = Number(
     p.product_special_price ?? p.productSpecialPrice ?? p.cash_price ?? 0
   );
@@ -125,6 +126,8 @@ function normalizeProduct(p, locationStocksByProduct = {}) {
     topSeller: Boolean(p.top_seller),
     active: String(p.status || "Active").trim().toLowerCase() !== "inactive",
     locationStocks: locationStocksByProduct[p.id] || {},
+    priceCodePrices: priceCodePricesByProduct[p.id] || {},
+    price_code_prices: priceCodePricesByProduct[p.id] || {},
   };
 }
 
@@ -140,6 +143,7 @@ export async function getProducts() {
   if (error) throw error;
 
   let locationStocksByProduct = {};
+  let priceCodePricesByProduct = {};
 
   try {
     const productIds = (data || []).map((product) => product.id).filter(Boolean);
@@ -149,8 +153,17 @@ export async function getProducts() {
     console.error("Location stock loading error:", locationStockError);
   }
 
+  try {
+    const productIds = (data || []).map((product) => product.id).filter(Boolean);
+    const codePriceRows = await getProductPriceCodeRows(productIds);
+    priceCodePricesByProduct = buildProductPriceCodeMap(codePriceRows);
+  } catch (priceCodeError) {
+    // Keep product loading backwards-compatible until the migration is applied.
+    console.warn("Product price code loading unavailable:", priceCodeError?.message || priceCodeError);
+  }
+
   return (data || []).map((product) =>
-    normalizeProduct(product, locationStocksByProduct)
+    normalizeProduct(product, locationStocksByProduct, priceCodePricesByProduct)
   );
 }
 

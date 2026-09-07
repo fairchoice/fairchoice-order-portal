@@ -22,45 +22,85 @@ export const roundToFairQuarter = (price) => {
   return pounds + 1;
 };
 
-export const normalizePriceMode = (priceMode) =>
-  String(priceMode || "")
-    .trim()
-    .toLowerCase()
+export const normalizePriceMode = (priceMode) => {
+  const raw = String(priceMode || "").trim().toLowerCase();
+  // Customer price-code modes contain UUIDs; do not normalize their hyphens.
+  if (raw.startsWith("code:")) return raw;
+  return raw
     .replace(/[._-]+/g, " ")
     .replace(/\s+/g, " ");
+};
 
-export const getPriceModeLabel = (priceMode) => {
+const getPriceCodeModeParts = (priceMode) => {
   const mode = normalizePriceMode(priceMode);
-
-  if (mode === "vat" || mode === "ex vat" || mode === "exvat") return "Ex.VAT";
-  if (mode === "server") return "Inc.VAT";
-  if (mode === "super" || mode === "admin" || mode === "admin offer") {
-    return "Admin Offer";
+  if (!mode.startsWith("code:")) {
+    return { priceCodeId: "", basePriceMode: "ex vat" };
   }
-  if (mode === "manager" || mode === "manager offer") return "Manager Offer";
+  const payload = mode.slice(5);
+  const separatorIndex = payload.indexOf("|");
+  if (separatorIndex < 0) {
+    return { priceCodeId: payload, basePriceMode: "inc vat" };
+  }
+  const base = payload.slice(separatorIndex + 1);
+  return {
+    priceCodeId: payload.slice(0, separatorIndex),
+    basePriceMode: ["inc vat", "inc.vat", "incvat", "server"].includes(base) ? "inc vat" : "ex vat",
+  };
+};
+
+export const getPriceModeLabel = (priceMode, pricingSettings = {}) => {
+  const mode = normalizePriceMode(priceMode);
+  if (mode.startsWith("code:")) {
+    const { priceCodeId } = getPriceCodeModeParts(mode);
+    const priceCode = (pricingSettings.price_codes || pricingSettings.priceCodes || []).find(
+      (item) => String(item.id) === String(priceCodeId)
+    );
+    return priceCode?.code || "Customer Price Code";
+  }
+
+  if (["royalty", "server", "inc vat"].includes(mode)) return "Inc.VAT";
+  if (["owner offer", "manager", "manager offer"].includes(mode)) return "Inc.VAT";
+  if (["admin", "admin offer", "long customer", "long customers", "super", "vat"].includes(mode)) return "Ex.VAT";
+  if (["ex vat", "exvat"].includes(mode)) return "Ex.VAT";
 
   return priceMode || "Ex.VAT";
 };
 
 export const isServerManagerPriceMode = (priceMode) => {
   const mode = normalizePriceMode(priceMode);
-  return mode === "server" || mode === "manager";
+  return mode.startsWith("code:") || ["royalty", "server", "inc vat", "owner offer", "manager", "manager offer"].includes(mode);
 };
 
 export const isSpecialOfferPriceMode = (priceMode) => {
   const mode = normalizePriceMode(priceMode);
-  return (
-    mode === "server" ||
-    mode === "manager" ||
-    mode === "super" ||
-    mode === "admin" ||
-    mode === "admin offer"
-  );
+  if (mode.startsWith("code:")) return true;
+  return [
+    "royalty", "server", "inc vat",
+    "owner offer", "manager", "manager offer",
+    "admin", "admin offer",
+    "long customer", "long customers", "super"
+  ].includes(mode);
 };
 
+// Legacy helper: VAT/normal mode is still an Ex.VAT unit price with VAT added at totals.
 export const isVatPriceMode = (priceMode) => {
   const mode = normalizePriceMode(priceMode);
   return mode === "vat";
+};
+
+export const shouldAddVatForPriceMode = (priceMode) => {
+  const mode = normalizePriceMode(priceMode);
+  if (mode.startsWith("code:")) {
+    return getPriceCodeModeParts(mode).basePriceMode === "ex vat";
+  }
+  return (
+    mode === "vat" ||
+    mode === "admin" ||
+    mode === "admin offer" ||
+    mode === "long customer" ||
+    mode === "long customers" ||
+    mode === "super"
+  );
 };
 
 export const getVatRate = (vatType) => {
@@ -77,9 +117,24 @@ export const getVatRate = (vatType) => {
 export const getPricingDiscountPercent = (priceMode, pricingSettings = {}) => {
   const mode = normalizePriceMode(priceMode);
 
-  if (mode === "server") return Number(pricingSettings.server_discount_percent || 0);
-  if (mode === "manager") return Number(pricingSettings.manager_discount_percent || 0);
-  if (mode === "super" || mode === "admin" || mode === "admin offer") {
+  if (mode.startsWith("code:")) {
+    const { priceCodeId } = getPriceCodeModeParts(mode);
+    const priceCode = (pricingSettings.price_codes || pricingSettings.priceCodes || []).find(
+      (item) => String(item.id) === String(priceCodeId) && item.active !== false
+    );
+    return Number(priceCode?.discount_percent ?? priceCode?.discountPercent ?? 0);
+  }
+
+  if (["royalty", "server", "inc vat"].includes(mode)) {
+    return Number(pricingSettings.server_discount_percent || 0);
+  }
+  if (["owner offer", "manager", "manager offer"].includes(mode)) {
+    return Number(pricingSettings.manager_discount_percent || 0);
+  }
+  if (["admin", "admin offer"].includes(mode)) {
+    return Number(pricingSettings.admin_offer_discount_percent || 0);
+  }
+  if (["long customer", "long customers", "super", "vat"].includes(mode)) {
     return Number(pricingSettings.super_discount_percent || 0);
   }
 
@@ -95,24 +150,31 @@ const validPositiveMoney = (value) => {
 const getPricingPercent = (priceMode, pricingSettings = {}) => {
   const mode = normalizePriceMode(priceMode);
 
-  if (mode === "server") {
+  if (mode.startsWith("code:")) {
+    const { priceCodeId } = getPriceCodeModeParts(mode);
+    const priceCode = (pricingSettings.price_codes || pricingSettings.priceCodes || []).find(
+      (item) => String(item.id) === String(priceCodeId) && item.active !== false
+    );
+    return Number(priceCode?.discount_percent ?? priceCode?.discountPercent ?? 0);
+  }
+
+  if (["royalty", "server", "inc vat"].includes(mode)) {
     return Number(pricingSettings.server_pricing_percent ?? pricingSettings.server_discount_percent ?? 0);
   }
 
-  if (mode === "manager") {
+  if (["owner offer", "manager", "manager offer"].includes(mode)) {
     return Number(pricingSettings.manager_pricing_percent ?? pricingSettings.manager_discount_percent ?? 0);
   }
 
-  if (mode === "admin" || mode === "admin offer") {
+  if (["admin", "admin offer"].includes(mode)) {
     return Number(
       pricingSettings.admin_pricing_percent ??
         pricingSettings.admin_offer_discount_percent ??
-        pricingSettings.super_discount_percent ??
         0
     );
   }
 
-  if (mode === "super") {
+  if (["long customer", "long customers", "super", "vat"].includes(mode)) {
     return Number(pricingSettings.super_pricing_percent ?? pricingSettings.super_discount_percent ?? 0);
   }
 
@@ -153,32 +215,28 @@ export const calculateExVatMargin = (sellingExVat, costValue) => {
     : 0;
 };
 
-const getProductOnlySpecialPrice = (product = {}) =>
-  validPositiveMoney(
-    product.specialPrice ??
-      product.special_price ??
-      product.productSpecialPrice ??
-      product.product_special_price ??
-      product.cashPrice ??
-      product.cash_price
-  );
-
-export const getProductSpecialPrice = (product = {}, country = "") => {
-  const modeCountry = String(country || "").trim().toLowerCase();
-  const specialPrice =
-    modeCountry === "wales"
-      ? validPositiveMoney(product.walesSpecialPrice ?? product.wales_special_price)
-      : modeCountry === "england"
-        ? validPositiveMoney(product.englandSpecialPrice ?? product.england_special_price)
-        : 0;
-
-  return specialPrice;
-};
-
 const applyPricingDiscount = (basePrice, percent) => {
   const discountPercent = Number(percent || 0);
   if (!discountPercent) return roundMoney(basePrice);
   return roundMoney(Number(basePrice || 0) * (1 - discountPercent / 100));
+};
+
+// Customer code prices follow the customer base mode.
+// Ex.VAT code calculations keep the two-decimal FairChoice truncation rule.
+const applyCustomerCodeDiscount = (basePrice, percent) => {
+  const discountPercent = Number(percent || 0);
+  if (!discountPercent) return truncateMoney(basePrice);
+  return truncateMoney(Number(basePrice || 0) * (1 - discountPercent / 100));
+};
+
+// All calculated Inc.VAT prices use FairChoice quarter rounding.
+// Examples: GBP 10.18 -> GBP 10.25, GBP 10.38 -> GBP 10.50.
+const applyIncVatQuarterDiscount = (basePrice, percent) => {
+  const discountPercent = Number(percent || 0);
+  const calculated = discountPercent
+    ? Number(basePrice || 0) * (1 - discountPercent / 100)
+    : Number(basePrice || 0);
+  return roundToFairQuarter(calculated);
 };
 
 const getVatMultiplier = (vatRate) => {
@@ -225,57 +283,85 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
     "";
   const exVatPrice = getExVatPrice(product, vatRate);
   const vatSellPrice = getVatSellPrice(product);
-  const productSpecialPrice = getProductOnlySpecialPrice(product);
-  const countrySpecialPrice = getProductSpecialPrice(product, resolvedCountry);
   const pricingPercent = getPricingPercent(mode, pricingSettings);
-  const discountedNetPrice = applyPricingDiscount(exVatPrice, pricingPercent);
-  const serverManagerBasePrice = roundMoney(vatSellPrice * getVatMultiplier(vatRate));
-  const serverManagerPrice = applyServerManagerPricing(serverManagerBasePrice, pricingPercent);
+  const incVatBasePrice = getGrossPrice(exVatPrice, vatRate);
+  const royaltyMode = ["royalty", "server", "inc vat"].includes(mode);
+  const ownerOfferMode = ["owner offer", "manager", "manager offer"].includes(mode);
+  const adminMode = ["admin", "admin offer"].includes(mode);
+  const longCustomerMode = ["long customer", "long customers", "super"].includes(mode);
+  const { priceCodeId, basePriceMode: codeBasePriceMode } = getPriceCodeModeParts(mode);
+  const codeMode = Boolean(priceCodeId);
+  const productPriceCodeMap = product.priceCodePrices || product.price_code_prices || {};
+  const productCodeOverride = priceCodeId
+    ? validPositiveMoney(productPriceCodeMap[priceCodeId])
+    : 0;
 
   let unitPrice = exVatPrice;
-  let grossPrice = exVatPrice;
-  let vatAmount = 0;
+  let grossPrice = getGrossPrice(exVatPrice, vatRate);
+  let vatAmount = roundMoney(grossPrice - exVatPrice);
   let appliedRule = "ex_vat_price";
   let appliedSpecialPriceType = "";
 
-  if (mode === "vat" || mode === "normal" || mode === "sales invoice") {
-    unitPrice = vatSellPrice;
+  if (codeMode) {
+    if (productCodeOverride > 0) {
+      if (codeBasePriceMode === "inc vat") {
+        unitPrice = productCodeOverride;
+        grossPrice = productCodeOverride;
+        vatAmount = 0;
+        appliedRule = "product_price_code_override_inc_vat";
+      } else {
+        unitPrice = productCodeOverride;
+        grossPrice = getGrossPrice(unitPrice, vatRate);
+        vatAmount = roundMoney(grossPrice - unitPrice);
+        appliedRule = "product_price_code_override_ex_vat";
+      }
+      appliedSpecialPriceType = "price_code";
+    } else if (codeBasePriceMode === "inc vat") {
+      unitPrice = applyIncVatQuarterDiscount(incVatBasePrice, pricingPercent);
+      grossPrice = unitPrice;
+      vatAmount = 0;
+      appliedRule = "customer_price_code_percent_inc_vat";
+    } else {
+      unitPrice = applyCustomerCodeDiscount(exVatPrice, pricingPercent);
+      grossPrice = getGrossPrice(unitPrice, vatRate);
+      vatAmount = roundMoney(grossPrice - unitPrice);
+      appliedRule = "customer_price_code_percent_ex_vat";
+    }
+  } else if (mode === "vat" || mode === "normal" || mode === "sales invoice") {
+    // Normal Ex.VAT pricing: never apply legacy Super/Long Customer discount.
+    unitPrice = exVatPrice;
     grossPrice = getGrossPrice(unitPrice, vatRate);
     vatAmount = roundMoney(grossPrice - unitPrice);
-    appliedRule = "vat_sell_price";
+    appliedRule = "normal_ex_vat_price";
   } else if (mode === "ex vat" || mode === "exvat") {
     unitPrice = exVatPrice;
     grossPrice = unitPrice;
+    vatAmount = 0;
     appliedRule = "ex_vat_price";
-  } else if (mode === "server") {
-    if (countrySpecialPrice > 0) {
-      unitPrice = countrySpecialPrice;
-      appliedRule = "country_special_price";
-      appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
-    } else {
-      unitPrice = serverManagerPrice;
-      appliedRule = "server_pricing_percent";
-    }
+  } else if (royaltyMode) {
+    // Royalty percentage is calculated from the VAT-inclusive selling price.
+    unitPrice = applyIncVatQuarterDiscount(incVatBasePrice, pricingPercent);
     grossPrice = unitPrice;
-  } else if (mode === "manager") {
-    if (productSpecialPrice > 0) {
-      unitPrice = productSpecialPrice;
-      appliedRule = "product_special_price";
-      appliedSpecialPriceType = "product";
-    } else if (countrySpecialPrice > 0) {
-      unitPrice = countrySpecialPrice;
-      appliedRule = "country_special_price";
-      appliedSpecialPriceType = String(resolvedCountry || "country").toLowerCase();
-    } else {
-      unitPrice = serverManagerPrice;
-      appliedRule = "manager_pricing_percent";
-    }
+    vatAmount = 0;
+    appliedRule = "royalty_pricing_percent_inc_vat_quarter";
+  } else if (ownerOfferMode) {
+    // Owner Offer percentage is calculated from the VAT-inclusive selling price.
+    unitPrice = applyIncVatQuarterDiscount(incVatBasePrice, pricingPercent);
     grossPrice = unitPrice;
-  } else if (mode === "admin" || mode === "admin offer" || mode === "super") {
-    unitPrice = truncateMoney(Number(vatSellPrice || 0) * (1 - pricingPercent / 100));
-    grossPrice = unitPrice;
-    vatAmount = roundMoney(unitPrice * (vatRate / 100));
-    appliedRule = "admin_pricing_percent_vat_sell";
+    vatAmount = 0;
+    appliedRule = "owner_offer_pricing_percent_inc_vat_quarter";
+  } else if (adminMode) {
+    // Admin percentage is calculated from Ex.VAT, then VAT is added by totals.
+    unitPrice = applyPricingDiscount(exVatPrice, pricingPercent);
+    grossPrice = getGrossPrice(unitPrice, vatRate);
+    vatAmount = roundMoney(grossPrice - unitPrice);
+    appliedRule = "admin_pricing_percent_ex_vat";
+  } else if (longCustomerMode) {
+    // Long Customer percentage is calculated from Ex.VAT, then VAT is added by totals.
+    unitPrice = applyPricingDiscount(exVatPrice, pricingPercent);
+    grossPrice = getGrossPrice(unitPrice, vatRate);
+    vatAmount = roundMoney(grossPrice - unitPrice);
+    appliedRule = "long_customer_pricing_percent_ex_vat";
   }
 
   unitPrice = roundMoney(unitPrice);
@@ -292,16 +378,12 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
     grossPrice,
     normalPrice: vatSellPrice,
     vatSellPrice,
-    specialPrice: appliedSpecialPriceType
-      ? appliedSpecialPriceType === "product"
-        ? productSpecialPrice
-        : countrySpecialPrice
-      : 0,
+    specialPrice: appliedSpecialPriceType === "price_code" ? productCodeOverride : 0,
     usesSpecialPrice: Boolean(appliedSpecialPriceType),
     appliedRule,
     appliedSpecialPriceType,
     specialPriceSource: appliedSpecialPriceType
-      ? `${appliedSpecialPriceType} special price`
+      ? `${appliedSpecialPriceType} price`
       : "",
   };
 };

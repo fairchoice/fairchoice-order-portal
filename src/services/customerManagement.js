@@ -6,8 +6,7 @@ import { getFcSessionState, readStoredFcProfile } from "./fcSession";
 const normaliseStatus = getStoredCustomerStatus;
 const normalisePriceMode = (mode) => {
   const normalizedMode = String(mode || "VAT").trim().toLowerCase();
-  if (["server", "inc.vat", "inc vat"].includes(normalizedMode)) return "Server";
-  if (["super", "admin", "admin offer"].includes(normalizedMode)) return "Admin Offer";
+  if (["server", "inc.vat", "inc vat", "royalty", "owner offer", "manager", "manager offer"].includes(normalizedMode)) return "Server";
   return "VAT";
 };
 
@@ -133,13 +132,15 @@ export async function saveCustomerAccount(account) {
 
     payment_terms: account.payment_terms || "",
     credit_limit: Number(account.credit_limit || 0),
-    default_price_mode: defaultPriceMode === "Admin Offer" ? "VAT" : defaultPriceMode,
+    default_price_mode: defaultPriceMode,
+    customer_price_code_id: account.customer_price_code_id || null,
 
     status: normaliseStatus(account.status),
     active: account.active ?? true,
 
-    allow_vat: account.allow_vat ?? true,
-    allow_server: account.allow_server ?? false,
+    // Legacy flags remain compatible with the two normal base modes.
+    allow_vat: defaultPriceMode === "VAT",
+    allow_server: defaultPriceMode === "Server",
     allow_manager: false,
     allow_super: false,
   };

@@ -97,6 +97,13 @@ import Cart from "../components/Cart.jsx";
 import ReturnRequestModal from "../components/ReturnRequestModal";
 
 import { getProducts, isActiveProduct } from "../services/products";
+import {
+  buildProductPriceCodeMap,
+  getCustomerPriceCodes,
+  getProductPriceCodeRows,
+  makePriceCodeMode,
+  syncProductPriceCodePrices,
+} from "../services/priceCodes";
 import { getHomepageItems } from "../services/homepageItems";
 import {
   getActiveHomepageMessages,
@@ -140,6 +147,7 @@ import {
   getPriceModeLabel,
   getVatRate,
   isVatPriceMode,
+  normalizePriceMode,
 } from "../utils/pricing";
 import {
   calculateCustomerCredit,
@@ -149,6 +157,7 @@ import {
 
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
+import BulkCustomerCodePrices from "./AdminSetup/BulkCustomerCodePrices";
 import ProductPromotions from "./AdminSetup/ProductPromotions";
 import AdminOrders from "./AdminOrders";
 import OrderPicking from "./OrderPicking";
@@ -234,16 +243,6 @@ function normalizeProduct(raw) {
     flavour: raw.flavour || "",
     cashPrice: Number(raw.cash_price || 0),
     vatPrice: Number(raw.vat_price || 0),
-    productSpecialPrice: Number(
-      raw.product_special_price ?? raw.productSpecialPrice ?? raw.cash_price ?? 0
-    ),
-    product_special_price: Number(
-      raw.product_special_price ?? raw.productSpecialPrice ?? raw.cash_price ?? 0
-    ),
-    walesSpecialPrice: Number(raw.wales_special_price || 0),
-    wales_special_price: Number(raw.wales_special_price || 0),
-    englandSpecialPrice: Number(raw.england_special_price || 0),
-    england_special_price: Number(raw.england_special_price || 0),
     cartonSize: raw.carton_size || "",
     image: getDisplayProductImage(raw),
     stock: Number(raw.stock || 0),
@@ -264,6 +263,8 @@ function normalizeProduct(raw) {
     supplierName: raw.supplier_name || "",
     salesAccount: raw.sales_account || "",
     purchaseAccount: raw.purchase_account || "",
+    priceCodePrices: raw.priceCodePrices || raw.price_code_prices || {},
+    price_code_prices: raw.price_code_prices || raw.priceCodePrices || {},
   };
 }
 
@@ -477,21 +478,30 @@ const customerMatchesSearch = (customer, searchTerm) => {
     .some((value) => String(value).toLowerCase().includes(search));
 };
 
+const getCustomerPriceModeValue = (customer, pricingSettings = {}) => {
+  const mode = normalizePriceMode(customer?.default_price_mode || "vat");
+  const basePriceMode =
+    ["server", "inc vat", "inc.vat", "royalty", "owner offer", "manager", "manager offer"].includes(mode)
+      ? "inc vat"
+      : "ex vat";
+
+  if (customer?.customer_price_code_id) {
+    const activeCode = (pricingSettings.price_codes || []).find(
+      (priceCode) =>
+        String(priceCode.id) === String(customer.customer_price_code_id) &&
+        priceCode.active !== false
+    );
+    if (activeCode) return makePriceCodeMode(activeCode.id, basePriceMode);
+  }
+
+  return basePriceMode === "inc vat" ? "inc vat" : "vat";
+};
+
 const getAllowedPriceModesForCustomer = (customer, pricingSettings = {}) => {
   if (!customer) return ["vat"];
-
-  const modes = [];
-  if (customer.allow_vat !== false) modes.push("vat");
-  if (customer.allow_server === true) modes.push("server");
-  if (customer.allow_manager === true && pricingSettings?.show_manager_offer) {
-    modes.push("manager");
-  }
-  if (customer.allow_super === true && pricingSettings?.show_super_offer) {
-    modes.push("super");
-  }
-
-  return modes.length ? modes : ["vat"];
+  return [getCustomerPriceModeValue(customer, pricingSettings)];
 };
+
 
 const customerMatchesCountry = (customer, country) => {
   const selectedCountry = normalizeCountry(country);
@@ -760,12 +770,9 @@ useEffect(() => {
   const [manualCountry, setManualCountry] = useState("Wales");
 
   const [pricingSettings, setPricingSettings] = useState({
-    server_discount_percent: 2,
-    manager_discount_percent: 2.5,
-    admin_offer_discount_percent: 3.5,
-    super_discount_percent: 3.5,
-    show_manager_offer: true,
-    show_super_offer: true,
+    vat_percent: 20,
+    server_discount_percent: 0,
+    price_codes: [],
   });
 
 const refreshSalesRoute = useCallback(async () => {
@@ -833,7 +840,7 @@ const openSalesRouteCustomer = useCallback((routeRow) => {
   setOrderPaymentIntentId(createPaymentIntentId());
   setShowSalesRouteModal(false);
   const modes = getAllowedPriceModesForCustomer(customer, pricingSettings);
-  const defaultMode = String(customer.default_price_mode || "vat").toLowerCase();
+  const defaultMode = getCustomerPriceModeValue(customer, pricingSettings);
   setPriceMode(modes.includes(defaultMode) ? defaultMode : modes[0] || "vat");
   setPage("order");
 }, [pricingSettings]);
@@ -1237,10 +1244,7 @@ useEffect(() => {
     brand: "",
     series: "",
     flavour: "",
-    cashPrice: "",
     vatPrice: "",
-    walesSpecialPrice: "",
-    englandSpecialPrice: "",
     cartonSize: "",
     image: "",
     stock: "",
@@ -1253,6 +1257,7 @@ useEffect(() => {
     supplierName: "",
     salesAccount: "",
     purchaseAccount: "",
+    priceCodePrices: {},
     locationStocks: {},
     isNew: false,
     isPromotion: false,
@@ -1330,13 +1335,16 @@ useEffect(() => {
     [selectedCustomerAccount, orderCountry, isSalesRep]
   );
 
-  const allowedPriceModes = useMemo(
-    () =>
-      isAdmin || isSalesRep
-        ? ["vat", "server", "manager", "super"]
-        : getAllowedPriceModesForCustomer(selectedCustomerAccount, pricingSettings),
-    [isAdmin, isSalesRep, pricingSettings, selectedCustomerAccount]
-  );
+  const allowedPriceModes = useMemo(() => {
+    if (isAdmin || isSalesRep) {
+      return [
+        "vat",
+        "inc vat",
+        ...(pricingSettings.price_codes || []).map((priceCode) => makePriceCodeMode(priceCode.id)),
+      ];
+    }
+    return getAllowedPriceModesForCustomer(selectedCustomerAccount, pricingSettings);
+  }, [isAdmin, isSalesRep, pricingSettings.price_codes, selectedCustomerAccount]);
   const showPriceModeSelector =
     isAdmin || isSalesRep || allowedPriceModes.length > 1;
   const salesReturnOrder = selectedSalesReturnCustomer
@@ -2075,8 +2083,8 @@ useEffect(() => {
     setSelectedCustomerAccount(customer);
     setCustomerDetailsExpanded(getCustomerBranches(customer).length > 0);
     setCompanyName(customer.account_name);
-    setPriceMode(String(customer.default_price_mode || "vat").toLowerCase());
-  }, [isCustomer, userProfile?.customer_account_id, customerAccounts]);
+    setPriceMode(getCustomerPriceModeValue(customer, pricingSettings));
+  }, [isCustomer, userProfile?.customer_account_id, customerAccounts, pricingSettings.price_codes]);
 
   useEffect(() => {
     if (!selectedCustomerAccount) return;
@@ -2130,8 +2138,22 @@ useEffect(() => {
 
     try {
       const data = await getProducts();
+      const productIds = (data || []).map((product) => product.id).filter(Boolean);
+      let exactCodePricesByProduct = {};
+
+      if (productIds.length) {
+        const exactCodeRows = await getProductPriceCodeRows(productIds);
+        exactCodePricesByProduct = buildProductPriceCodeMap(exactCodeRows);
+      }
+
+      const productsWithExactCodePrices = (data || []).map((product) => ({
+        ...product,
+        priceCodePrices: exactCodePricesByProduct[product.id] || product.priceCodePrices || {},
+        price_code_prices: exactCodePricesByProduct[product.id] || product.price_code_prices || {},
+      }));
+
       const productsForCountry = applyLocationStockToProducts(
-        data || [],
+        productsWithExactCodePrices,
         orderCountry
       );
 
@@ -2285,9 +2307,19 @@ useEffect(() => {
       .eq("id", 1)
       .single();
 
-    if (!error && data) {
-      setPricingSettings(data);
+    let priceCodes = [];
+    try {
+      priceCodes = await getCustomerPriceCodes();
+    } catch (priceCodeError) {
+      console.warn("Customer price codes unavailable:", priceCodeError?.message || priceCodeError);
     }
+
+    setPricingSettings({
+      ...(error || !data ? {} : data),
+      vat_percent: Number(data?.vat_percent ?? 20),
+      server_discount_percent: Number(data?.server_discount_percent ?? 0),
+      price_codes: priceCodes || [],
+    });
   };
 
 const fetchOrders = async ({ throwOnError = false } = {}) => {
@@ -4042,10 +4074,8 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       brand: productFormForSave.brand,
       series: productFormForSave.series,
       flavour: productFormForSave.flavour,
-      cash_price: Number(productFormForSave.cashPrice || 0),
+      cash_price: 0,
       vat_price: Number(productFormForSave.vatPrice || 0),
-      wales_special_price: Number(productFormForSave.walesSpecialPrice || 0),
-      england_special_price: Number(productFormForSave.englandSpecialPrice || 0),
       cost_price: Number(productFormForSave.costPrice || 0),
       supplier_name: productFormForSave.supplierName || "",
       sales_account: productFormForSave.salesAccount || defaultAccounts.salesAccount || "",
@@ -4099,6 +4129,17 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       return;
     }
 
+    try {
+      const priceCodeEntries = Object.entries(productFormForSave.priceCodePrices || {}).map(
+        ([priceCodeId, price]) => ({ priceCodeId, price })
+      );
+      await syncProductPriceCodePrices(response.data?.id || editingId, priceCodeEntries);
+    } catch (priceCodeError) {
+      console.error("Product customer-code price save error:", priceCodeError);
+      alert(`Product was saved, but customer-code prices could not be saved.\n\n${priceCodeError.message || priceCodeError}`);
+      return;
+    }
+
     setEditingId(null);
     setProductForm({
       productCode: "",
@@ -4108,11 +4149,8 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       brand: "",
       series: "",
       flavour: "",
-      cashPrice: "",
-      vatPrice: "",
-      walesSpecialPrice: "",
-      englandSpecialPrice: "",
-      cartonSize: "",
+        vatPrice: "",
+          cartonSize: "",
       image: "",
       stock: "",
       lowStockAlert: "10",
@@ -4124,6 +4162,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       supplierName: "",
       salesAccount: "",
       purchaseAccount: "",
+      priceCodePrices: {},
       locationStocks: {},
       isNew: false,
       isPromotion: false,
@@ -4138,11 +4177,19 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     alert("Product saved.");
   };
 
-  const editProduct = (product) => {
+  const editProduct = async (product) => {
     setEditingId(product.id);
     const productLabelFormFlags = getProductLabelFormFlags(
       getProductLabelValue(product)
     );
+
+    let freshPriceCodePrices = product.priceCodePrices || product.price_code_prices || {};
+    try {
+      const rows = await getProductPriceCodeRows([product.id]);
+      freshPriceCodePrices = buildProductPriceCodeMap(rows)[product.id] || {};
+    } catch (priceCodeError) {
+      console.error("Product customer-code prices reload error:", priceCodeError);
+    }
 
     setProductForm({
       productCode: product.productCode || "",
@@ -4152,10 +4199,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       brand: product.brand || "",
       series: product.series || "",
       flavour: product.flavour || "",
-      cashPrice: product.cashPrice || "",
       vatPrice: product.vatPrice || "",
-      walesSpecialPrice: product.walesSpecialPrice || "",
-      englandSpecialPrice: product.englandSpecialPrice || "",
       cartonSize: product.cartonSize || "",
       image: product.image || "",
       stock: product.stock || "",
@@ -4168,6 +4212,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       supplierName: product.supplierName || "",
       salesAccount: product.salesAccount || "",
       purchaseAccount: product.purchaseAccount || "",
+      priceCodePrices: freshPriceCodePrices,
       locationStocks: product.locationStocks || {},
       isNew: productLabelFormFlags.isNew === true,
       isPromotion: productLabelFormFlags.isPromotion === true,
@@ -4221,7 +4266,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
           <div><b>Order:</b> ${order.orderId}</div>
           <div><b>Date:</b> ${order.createdAt}</div>
           <div><b>Company:</b> ${order.companyName || "-"}</div>
-          <div><b>Price:</b> ${getPriceModeLabel(order.priceMode)}</div>
+          <div><b>Price:</b> ${getPriceModeLabel(order.priceMode, pricingSettings)}</div>
           <div class="line"></div>
           <table>${rows}</table>
           <div class="line"></div>
@@ -4444,6 +4489,13 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "productImportExport" && (
       <ProductImportExport
         products={products}
+        fetchProducts={fetchProducts}
+      />
+    )}
+    {page === "customerCodePrices" && (
+      <BulkCustomerCodePrices
+        products={products}
+        pricingSettings={pricingSettings}
         fetchProducts={fetchProducts}
       />
     )}
@@ -4859,12 +4911,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           setCompanyName(customer.account_name);
 
           const allowedModes = isAdmin
-            ? ["vat", "server", "manager", "super"]
+            ? [
+                "vat",
+                "inc vat",
+                ...(pricingSettings.price_codes || []).map((priceCode) => makePriceCodeMode(priceCode.id)),
+              ]
             : getAllowedPriceModesForCustomer(customer, pricingSettings);
 
-          const defaultMode = String(
-            customer.default_price_mode || "vat"
-          ).toLowerCase();
+          const defaultMode = getCustomerPriceModeValue(customer, pricingSettings);
 
           setPriceMode(
             allowedModes.includes(defaultMode)
@@ -4959,21 +5013,11 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         minWidth: "150px",
       }}
     >
-      {allowedPriceModes.includes("vat") && (
-        <option value="vat">Ex.VAT</option>
-      )}
-
-      {allowedPriceModes.includes("server") && (
-        <option value="server">Inc.VAT</option>
-      )}
-
-      {allowedPriceModes.includes("manager") && (
-        <option value="manager">Manager Offer</option>
-      )}
-
-      {allowedPriceModes.includes("super") && (
-        <option value="super">Admin Offer</option>
-      )}
+      {allowedPriceModes.map((mode) => (
+        <option key={mode} value={mode}>
+          {getPriceModeLabel(mode, pricingSettings)}
+        </option>
+      ))}
     </select>
   </div>
 )}

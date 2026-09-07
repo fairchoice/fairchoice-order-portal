@@ -55,6 +55,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
           page("page.product.stock_taking", "Stock Taking", "stockTaking", ["Admin"]),
           page("page.product.import", "Product Import / Upload", "productImportExport"),
           page("page.product.pricing_rules", "Pricing Rules", "pricingRule"),
+          page("page.product.customer_code_prices", "Customer Code Prices", "customerCodePrices", ["Admin"]),
           page("page.product.price_management", "Price Management", "priceManagement"),
           page("page.product.promotion", "Promotion", "promotions"),
         ],

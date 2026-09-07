@@ -11,6 +11,11 @@ import {
 } from "../services/homepageItems";
 import { formatCurrency } from "../utils/currency";
 import { getHomepagePriceForMode, getProductPriceForMode } from "../utils/pricing";
+import {
+  deleteProductPriceCodePrice,
+  getCustomerPriceCodes,
+  upsertProductPriceCodePrice,
+} from "../services/priceCodes";
 
 
 
@@ -159,6 +164,10 @@ const handleHomepageImageUpload = async () => {
   const [productOptions, setProductOptions] = useState([]);
   const [accountCodes, setAccountCodes] = useState([]);
   const [stockLocations, setStockLocations] = useState([]);
+const [customerPriceCodes, setCustomerPriceCodes] = useState([]);
+const [selectedPriceCodeId, setSelectedPriceCodeId] = useState("");
+const [selectedPriceCodePrice, setSelectedPriceCodePrice] = useState("");
+const [codePricePage, setCodePricePage] = useState(1);
 
   const [suppliers, setSuppliers] = useState([]);
 
@@ -178,6 +187,9 @@ const handleHomepageImageUpload = async () => {
     fetchAccountCodes();
     fetchStockLocations();
     fetchHomepageItems();
+    getCustomerPriceCodes({ includeInactive: true })
+      .then((rows) => setCustomerPriceCodes(rows || []))
+      .catch((error) => console.error("Customer price code load error:", error));
       }, []);
 
   const updateField = (field, value) => {
@@ -247,10 +259,7 @@ const handleHomepageImageUpload = async () => {
       brand: "",
       series: "",
       flavour: "",
-      cashPrice: "",
       vatPrice: "",
-      walesSpecialPrice: "",
-      englandSpecialPrice: "",
       vatType: "20",
       availableInEngland: true,
       availableInWales: true,
@@ -263,6 +272,7 @@ const handleHomepageImageUpload = async () => {
       supplierName: "",
       salesAccount: "",
       purchaseAccount: "",
+      priceCodePrices: {},
       locationStocks: {},
       isNew: false,
       isPromotion: false,
@@ -882,6 +892,72 @@ const updateProductLabel = (labelValue) => {
   });
 };
 
+const productCodePriceEntries = Object.entries(productForm.priceCodePrices || {})
+  .map(([priceCodeId, price]) => ({
+    priceCodeId,
+    price: Number(price || 0),
+    priceCode: customerPriceCodes.find((item) => String(item.id) === String(priceCodeId)),
+  }))
+  .filter((entry) => entry.price > 0)
+  .sort((a, b) => String(a.priceCode?.code || a.priceCodeId).localeCompare(String(b.priceCode?.code || b.priceCodeId)));
+
+const CODE_PRICE_PAGE_SIZE = 5;
+const codePricePageCount = Math.max(1, Math.ceil(productCodePriceEntries.length / CODE_PRICE_PAGE_SIZE));
+const safeCodePricePage = Math.min(codePricePage, codePricePageCount);
+const visibleProductCodePrices = productCodePriceEntries.slice(
+  (safeCodePricePage - 1) * CODE_PRICE_PAGE_SIZE,
+  safeCodePricePage * CODE_PRICE_PAGE_SIZE
+);
+
+const saveProductCodePriceDraft = async () => {
+  const priceCodeId = String(selectedPriceCodeId || "").trim();
+  const price = Number(selectedPriceCodePrice || 0);
+  if (!priceCodeId) return alert("Select a customer price code.");
+  if (!Number.isFinite(price) || price <= 0) return alert("Enter a valid code price.");
+
+  try {
+    if (editingId) {
+      await upsertProductPriceCodePrice(editingId, priceCodeId, price);
+    }
+
+    setProductForm((old) => ({
+      ...old,
+      priceCodePrices: {
+        ...(old.priceCodePrices || {}),
+        [priceCodeId]: price,
+      },
+    }));
+    setSelectedPriceCodeId("");
+    setSelectedPriceCodePrice("");
+    setCodePricePage(1);
+  } catch (error) {
+    console.error("Customer code product price save error:", error);
+    alert(`Could not save customer code product price.\n\n${error.message || error}`);
+  }
+};
+
+const editProductCodePriceDraft = (entry) => {
+  setSelectedPriceCodeId(entry.priceCodeId);
+  setSelectedPriceCodePrice(String(entry.price));
+};
+
+const removeProductCodePriceDraft = async (priceCodeId) => {
+  try {
+    if (editingId) {
+      await deleteProductPriceCodePrice(editingId, priceCodeId);
+    }
+
+    setProductForm((old) => {
+      const nextPrices = { ...(old.priceCodePrices || {}) };
+      delete nextPrices[priceCodeId];
+      return { ...old, priceCodePrices: nextPrices };
+    });
+  } catch (error) {
+    console.error("Customer code product price remove error:", error);
+    alert(`Could not remove customer code product price.\n\n${error.message || error}`);
+  }
+};
+
   return (
     <div className="p-5 bg-slate-50 min-h-screen">
       <div className="flex items-center gap-3 mb-5">
@@ -1261,44 +1337,6 @@ const updateProductLabel = (labelValue) => {
                   />
                 </label>
 
-                <label className="block">
-                  <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
-                    Wales Special Price
-                  </span>
-                  <input
-                    className="input-box"
-                    type="number"
-                    placeholder="Wales Special Price"
-                    value={productForm.walesSpecialPrice || ""}
-                    onChange={(e) => updateField("walesSpecialPrice", e.target.value)}
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
-                    England Special Price
-                  </span>
-                  <input
-                    className="input-box"
-                    type="number"
-                    placeholder="England Special Price"
-                    value={productForm.englandSpecialPrice || ""}
-                    onChange={(e) => updateField("englandSpecialPrice", e.target.value)}
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
-                    Product Special Price
-                  </span>
-                  <input
-                    className="input-box"
-                    type="number"
-                    placeholder="Product Special Price"
-                    value={productForm.cashPrice || ""}
-                    onChange={(e) => updateField("cashPrice", e.target.value)}
-                  />
-                </label>
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold uppercase text-slate-600">
@@ -1315,6 +1353,87 @@ const updateProductLabel = (labelValue) => {
                     <option value="exempt">VAT Exempt</option>
                   </select>
                 </label>
+
+                <div className="rounded-xl border border-slate-300 p-3">
+                  <div className="mb-2 text-sm font-bold">Customer Code Product Price</div>
+                  <p className="mb-3 text-xs text-slate-500">
+                    Exact Product + Customer Code price is checked first. If no exact price exists, the system uses that customer code percentage against the customer's Ex.VAT / Inc.VAT price mode.
+                  </p>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_130px_auto]">
+                    <select
+                      className="input-box"
+                      value={selectedPriceCodeId}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        setSelectedPriceCodeId(nextId);
+                        const existing = productForm.priceCodePrices?.[nextId];
+                        setSelectedPriceCodePrice(existing ? String(existing) : "");
+                      }}
+                    >
+                      <option value="">Select customer code</option>
+                      {customerPriceCodes.map((priceCode) => (
+                        <option key={priceCode.id} value={priceCode.id} disabled={priceCode.active === false}>
+                          {priceCode.code} - {Number(priceCode.discount_percent || 0)}%{priceCode.active === false ? " (Inactive)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      className="input-box"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Exact price"
+                      value={selectedPriceCodePrice}
+                      onChange={(e) => setSelectedPriceCodePrice(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={saveProductCodePriceDraft}
+                      className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white"
+                    >
+                      Add / Update
+                    </button>
+                  </div>
+
+                  <div className="mt-3 overflow-x-auto rounded-lg border">
+                    <table className="min-w-full text-xs">
+                      <thead className="bg-slate-100 text-left">
+                        <tr>
+                          <th className="p-2">Code</th>
+                          <th className="p-2">%</th>
+                          <th className="p-2">Exact Price</th>
+                          <th className="p-2">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleProductCodePrices.map((entry) => (
+                          <tr key={entry.priceCodeId} className="border-t">
+                            <td className="p-2 font-bold">{entry.priceCode?.code || "Unknown code"}</td>
+                            <td className="p-2">{Number(entry.priceCode?.discount_percent || 0)}%</td>
+                            <td className="p-2 font-bold">{formatCurrency(entry.price)}</td>
+                            <td className="p-2">
+                              <div className="flex gap-1">
+                                <button type="button" onClick={() => editProductCodePriceDraft(entry)} className="rounded border px-2 py-1 font-bold">Edit</button>
+                                <button type="button" onClick={() => removeProductCodePriceDraft(entry.priceCodeId)} className="rounded border px-2 py-1 font-bold">Remove</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {visibleProductCodePrices.length === 0 && (
+                          <tr><td colSpan="4" className="p-3 text-center text-slate-500">No exact customer-code prices for this product.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {codePricePageCount > 1 && (
+                    <div className="mt-2 flex items-center justify-between text-xs">
+                      <button type="button" disabled={safeCodePricePage <= 1} onClick={() => setCodePricePage((p) => Math.max(1, p - 1))} className="rounded border px-3 py-1 font-bold disabled:opacity-40">Previous</button>
+                      <span className="font-bold">Page {safeCodePricePage} of {codePricePageCount}</span>
+                      <button type="button" disabled={safeCodePricePage >= codePricePageCount} onClick={() => setCodePricePage((p) => Math.min(codePricePageCount, p + 1))} className="rounded border px-3 py-1 font-bold disabled:opacity-40">Next</button>
+                    </div>
+                  )}
+                </div>
               </div>
             </section>
 
