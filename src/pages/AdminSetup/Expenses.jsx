@@ -51,31 +51,25 @@ function hasPermission(user, permission) {
 }
 
 function isAdminExpenseEntryBlocked(user = {}) {
-  const username = String(user.username || "").trim().toLowerCase();
-  const role = String(
-    user.role ||
-      user.role_name ||
-      user.user_role ||
-      user.staff_role ||
-      user.access_level ||
-      user.profile?.role ||
-      "",
-  )
+  const saved = typeof localStorage !== "undefined" ? (() => {
+    try {
+      return JSON.parse(
+        localStorage.getItem("loggedInUser") ||
+          localStorage.getItem("fairchoice_user") ||
+          "null",
+      ) || {};
+    } catch {
+      return {};
+    }
+  })() : {};
+
+  const username = String(user.username || saved.username || "")
     .trim()
     .toLowerCase();
 
-  return (
-    username === "admin" ||
-    user.is_admin === true ||
-    user.isAdmin === true ||
-    user.is_super_admin === true ||
-    user.isSuperAdmin === true ||
-    role === "admin" ||
-    role === "administrator" ||
-    role === "super admin" ||
-    role === "super_admin" ||
-    role === "superadmin"
-  );
+  // Only the dedicated `admin` login is read-only for expense entry.
+  // Staff users with Admin/Super Admin roles are allowed to record expenses.
+  return username === "admin";
 }
 
 export default function Expenses() {

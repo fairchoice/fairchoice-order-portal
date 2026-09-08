@@ -19,41 +19,13 @@ function storedUser() {
 
 function isAdminExpenseEntryBlocked(user = {}) {
   const saved = storedUser();
-  const username = String(user.username || saved.username || "").trim().toLowerCase();
-  const role = String(
-    user.role ||
-      user.role_name ||
-      user.user_role ||
-      user.staff_role ||
-      user.access_level ||
-      saved.role ||
-      saved.role_name ||
-      saved.user_role ||
-      saved.staff_role ||
-      saved.access_level ||
-      user.profile?.role ||
-      saved.profile?.role ||
-      "",
-  )
+  const username = String(user.username || saved.username || "")
     .trim()
     .toLowerCase();
 
-  return (
-    username === "admin" ||
-    user.is_admin === true ||
-    user.isAdmin === true ||
-    user.is_super_admin === true ||
-    user.isSuperAdmin === true ||
-    saved.is_admin === true ||
-    saved.isAdmin === true ||
-    saved.is_super_admin === true ||
-    saved.isSuperAdmin === true ||
-    role === "admin" ||
-    role === "administrator" ||
-    role === "super admin" ||
-    role === "super_admin" ||
-    role === "superadmin"
-  );
+  // Only the dedicated `admin` login is read-only for expense entry.
+  // Staff users with Admin/Super Admin roles are allowed to record expenses.
+  return username === "admin";
 }
 
 function sessionArguments(user = {}) {
@@ -145,7 +117,7 @@ function payoutArguments(input, user = {}) {
 
 export async function createPayout(input, user = {}) {
   if (isAdminExpenseEntryBlocked(user)) {
-    throw new Error("Admin users cannot enter or submit expenses.");
+    throw new Error("The shared admin login cannot enter or submit expenses.");
   }
   return callExpenseRpc("fc_create_business_payout", {
     ...sessionArguments(user),
@@ -156,7 +128,7 @@ export async function createPayout(input, user = {}) {
 
 export async function updatePayout(payoutId, input, user = {}) {
   if (isAdminExpenseEntryBlocked(user)) {
-    throw new Error("Admin users cannot enter or submit expenses.");
+    throw new Error("The shared admin login cannot enter or submit expenses.");
   }
   if (!payoutId) throw new Error("Expense ID is required.");
   return callExpenseRpc("fc_update_business_payout", {
@@ -177,7 +149,7 @@ async function transitionPayout(rpcName, payoutId, user, reason) {
 
 export function submitPayout(payoutId, user = {}) {
   if (isAdminExpenseEntryBlocked(user)) {
-    throw new Error("Admin users cannot enter or submit expenses.");
+    throw new Error("The shared admin login cannot enter or submit expenses.");
   }
   return transitionPayout("fc_submit_business_payout", payoutId, user);
 }

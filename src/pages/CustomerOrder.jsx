@@ -101,6 +101,7 @@ import {
   buildProductPriceCodeMap,
   getCustomerPriceCodes,
   getProductPriceCodeRows,
+  getPriceCodeModeParts,
   makePriceCodeMode,
   syncProductPriceCodePrices,
 } from "../services/priceCodes";
@@ -500,6 +501,15 @@ const getCustomerPriceModeValue = (customer, pricingSettings = {}) => {
 const getAllowedPriceModesForCustomer = (customer, pricingSettings = {}) => {
   if (!customer) return ["vat"];
   return [getCustomerPriceModeValue(customer, pricingSettings)];
+};
+
+const getCustomerOrderPriceModeLabel = (priceMode, pricingSettings = {}) => {
+  const value = String(priceMode || "").trim();
+  if (value.toLowerCase().startsWith("code:")) {
+    const { basePriceMode } = getPriceCodeModeParts(value);
+    return basePriceMode === "inc vat" ? "Inc.VAT" : "Ex.VAT";
+  }
+  return getPriceModeLabel(priceMode, pricingSettings);
 };
 
 
@@ -1337,14 +1347,21 @@ useEffect(() => {
 
   const allowedPriceModes = useMemo(() => {
     if (isAdmin || isSalesRep) {
-      return [
-        "vat",
-        "inc vat",
-        ...(pricingSettings.price_codes || []).map((priceCode) => makePriceCodeMode(priceCode.id)),
-      ];
+      const customerMode = selectedCustomerAccount
+        ? getCustomerPriceModeValue(selectedCustomerAccount, pricingSettings)
+        : "";
+
+      if (String(customerMode).toLowerCase().startsWith("code:")) {
+        const { basePriceMode } = getPriceCodeModeParts(customerMode);
+        return basePriceMode === "inc vat"
+          ? ["vat", customerMode]
+          : [customerMode, "inc vat"];
+      }
+
+      return ["vat", "inc vat"];
     }
     return getAllowedPriceModesForCustomer(selectedCustomerAccount, pricingSettings);
-  }, [isAdmin, isSalesRep, pricingSettings.price_codes, selectedCustomerAccount]);
+  }, [isAdmin, isSalesRep, pricingSettings, selectedCustomerAccount]);
   const showPriceModeSelector =
     isAdmin || isSalesRep || allowedPriceModes.length > 1;
   const salesReturnOrder = selectedSalesReturnCustomer
@@ -4266,7 +4283,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
           <div><b>Order:</b> ${order.orderId}</div>
           <div><b>Date:</b> ${order.createdAt}</div>
           <div><b>Company:</b> ${order.companyName || "-"}</div>
-          <div><b>Price:</b> ${getPriceModeLabel(order.priceMode, pricingSettings)}</div>
+          <div><b>Price:</b> ${getCustomerOrderPriceModeLabel(order.priceMode, pricingSettings)}</div>
           <div class="line"></div>
           <table>${rows}</table>
           <div class="line"></div>
@@ -5015,7 +5032,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     >
       {allowedPriceModes.map((mode) => (
         <option key={mode} value={mode}>
-          {getPriceModeLabel(mode, pricingSettings)}
+          {getCustomerOrderPriceModeLabel(mode, pricingSettings)}
         </option>
       ))}
     </select>

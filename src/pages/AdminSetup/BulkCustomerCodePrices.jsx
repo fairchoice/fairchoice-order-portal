@@ -63,27 +63,37 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     [codes, selectedCodeId]
   );
 
+  const getMainCategory = (product) => product.main_category || product.category || "";
+  const getBrand = (product) => product.brand || "";
+  const getSeries = (product) => product.series || product.product_series || "";
+
   const categories = useMemo(
-    () => [...new Set(products.map((product) => product.category || product.main_category).filter(Boolean))].sort(),
+    () => [...new Set(products.map(getMainCategory).filter(Boolean))].sort(),
     [products]
   );
 
-  const brands = useMemo(
-    () => [...new Set(products.map((product) => product.brand).filter(Boolean))].sort(),
-    [products]
-  );
+  const brands = useMemo(() => {
+    const scopedProducts = category === "All"
+      ? products
+      : products.filter((product) => getMainCategory(product) === category);
+    return [...new Set(scopedProducts.map(getBrand).filter(Boolean))].sort();
+  }, [products, category]);
 
-  const seriesOptions = useMemo(
-    () => [...new Set(products.map((product) => product.series || product.product_series).filter(Boolean))].sort(),
-    [products]
-  );
+  const seriesOptions = useMemo(() => {
+    const scopedProducts = products.filter((product) => {
+      if (category !== "All" && getMainCategory(product) !== category) return false;
+      if (brand !== "All" && getBrand(product) !== brand) return false;
+      return true;
+    });
+    return [...new Set(scopedProducts.map(getSeries).filter(Boolean))].sort();
+  }, [products, category, brand]);
 
   const filteredProducts = useMemo(() => {
     const term = String(search || "").trim().toLowerCase();
     return products.filter((product) => {
-      const productCategory = product.category || product.main_category || "";
-      const productBrand = product.brand || "";
-      const productSeries = product.series || product.product_series || "";
+      const productCategory = getMainCategory(product);
+      const productBrand = getBrand(product);
+      const productSeries = getSeries(product);
       if (category !== "All" && productCategory !== category) return false;
       if (brand !== "All" && productBrand !== brand) return false;
       if (series !== "All" && productSeries !== series) return false;
@@ -153,9 +163,9 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     const numeric = Number(seriesExactPrice || 0);
     if (!Number.isFinite(numeric) || numeric <= 0) { setMessage("Enter a valid Series exact price greater than £0.00."); return; }
     const targets = products.filter((product) => {
-      const productSeries = product.series || product.product_series || "";
-      const productCategory = product.category || product.main_category || "";
-      const productBrand = product.brand || "";
+      const productSeries = getSeries(product);
+      const productCategory = getMainCategory(product);
+      const productBrand = getBrand(product);
       return product.id && productSeries === series && (category === "All" || productCategory === category) && (brand === "All" || productBrand === brand);
     });
     if (!targets.length) { setMessage("No products found for the selected Series."); return; }
@@ -221,14 +231,14 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Product name or code" style={inputStyle} />
           </label>
           <label style={fieldStyle}>
-            <span style={labelStyle}>Category</span>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} style={inputStyle}>
+            <span style={labelStyle}>Main Category</span>
+            <select value={category} onChange={(e) => { setCategory(e.target.value); setBrand("All"); setSeries("All"); }} style={inputStyle}>
               <option>All</option>{categories.map((item) => <option key={item}>{item}</option>)}
             </select>
           </label>
           <label style={fieldStyle}>
             <span style={labelStyle}>Brand</span>
-            <select value={brand} onChange={(e) => setBrand(e.target.value)} style={inputStyle}>
+            <select value={brand} onChange={(e) => { setBrand(e.target.value); setSeries("All"); }} style={inputStyle}>
               <option>All</option>{brands.map((item) => <option key={item}>{item}</option>)}
             </select>
           </label>

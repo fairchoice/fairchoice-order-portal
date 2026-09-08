@@ -124,11 +124,17 @@ export default function AccessControl({ initialStaffId = "" }) {
     if (!window.confirm(`Save page and important-function access for ${selected.staff_name || selected.username}?`)) return;
     setSaving(true);
     setError("");
+    const permissionKeys = new Set(selected.permission_keys || []);
+    // Customer Login page access must include the action permission used by
+    // onboarding/update RPCs, otherwise the page opens but Save is denied.
+    if (permissionKeys.has("page.login.customer_login")) {
+      permissionKeys.add("customers.create_login");
+    }
     const { error: rpcError } = await supabase.rpc("fc_save_staff_permissions_v1", {
       p_username: session.username,
       p_session_token: session.token,
       p_target_staff_id: selected.staff_id,
-      p_permission_keys: selected.permission_keys,
+      p_permission_keys: [...permissionKeys],
     });
     setSaving(false);
     if (rpcError) {
