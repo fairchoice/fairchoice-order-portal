@@ -170,6 +170,7 @@ import { getCustomerAccounts } from "../services/customerManagement";
 
 import {
   createCustomerOrder,
+  getCustomerOrderByNumber,
   updateOrderStatus,
   updateOrderFields,
 } from "../services/orders";
@@ -907,7 +908,10 @@ const confirmSalesRouteException = () => {
   const [isCartEditing, setIsCartEditing] = useState(false);
   const [cartNotice, setCartNotice] = useState("");
   const [submissionFeedback, setSubmissionFeedback] = useState("");
-  const salesCheckoutPaymentRequired = isSalesRep && !isCustomer;
+  // Checkpoint 10.3: normal orders are always Pay on Delivery.
+  // Cash collection must happen later in the Delivery/Collection workflow.
+  // The separate Promotion Run workflow keeps its existing paid-sale behaviour.
+  const salesCheckoutPaymentRequired = false;
   const [orderPaymentChoice, setOrderPaymentChoice] = useState(() =>
     salesCheckoutPaymentRequired ? "cash_now" : "no_payment"
   );
@@ -3624,6 +3628,7 @@ const submitOrder = async () => {
         createOrder: createCustomerOrder,
         isAuthError: isOrderAuthError,
         refreshSession: () => supabase.auth.refreshSession(),
+        findOrderByNumber: getCustomerOrderByNumber,
         promotionRunContext: {
           cart,
           customer: selectedCustomerAccount,
@@ -3798,10 +3803,13 @@ Please quote your Order Number if you need assistance.`
       message: error?.message || String(error),
       online: navigator.onLine,
     });
+    const submissionErrorMessage = String(error?.message || "").trim();
     alert(
-      String(error?.message || "").startsWith("Payment was not accepted")
-        ? error.message
-        : "We could not submit the order.\nPlease check your connection and try again."
+      submissionErrorMessage.startsWith("Payment was not accepted")
+        ? submissionErrorMessage
+        : `Order was not confirmed. Your basket has been kept and nothing has been cleared.\n\n` +
+          `Please press Place Order again when ready. The same order reference will be reused so a successful first attempt is not duplicated.` +
+          (submissionErrorMessage ? `\n\nDetails: ${submissionErrorMessage}` : "")
     );
   } finally {
     orderSubmissionLockRef.current = false;
@@ -3871,6 +3879,38 @@ const updateOrderItem = async (orderId, itemId, updates) => {
     alert("Could not update order item: " + (error?.message || "Promotion recalculation failed."));
     return false;
   }
+};
+
+const updatePreOrderSupplyItem = async (orderId, itemId, updates = {}) => {
+  const order = orders.find((entry) => String(entry.orderId) === String(orderId));
+  const item = order?.items?.find((entry) => String(entry.dbId || entry.id) === String(itemId));
+  if (!order || !item) return false;
+
+  const merged = { ...item, ...updates };
+  const calculated = getCalculatedOrderItemForSave(merged, order);
+  const payload = {
+    qty: Number(merged.qty ?? item.qty ?? 0),
+    picked_qty: Number(merged.pickedQty ?? merged.picked_qty ?? item.pickedQty ?? item.picked_qty ?? 0),
+    source_status: merged.sourceStatus ?? merged.source_status ?? item.sourceStatus ?? item.source_status ?? null,
+    include_in_picking: Boolean(merged.includeInPicking ?? merged.include_in_picking ?? item.includeInPicking ?? item.include_in_picking),
+    line_total: Number(calculated.line_total || 0).toFixed(2),
+    net_total: Number(calculated.net_total || 0).toFixed(2),
+    gross_total: Number(calculated.gross_total || 0).toFixed(2),
+    vat_amount: Number(calculated.vat_total || 0).toFixed(2),
+  };
+
+  const { error } = await supabase.from("order_items").update(payload).eq("id", item.dbId || itemId);
+  if (error) {
+    console.error("Pre-order supply item update error:", error);
+    return false;
+  }
+
+  const updatedItems = (order.items || []).map((entry) =>
+    String(entry.dbId || entry.id) === String(itemId) ? { ...entry, ...merged, ...calculated } : entry
+  );
+  await saveOrderTotalsToDatabase(orderId, updatedItems, order);
+  await fetchOrders();
+  return true;
 };
 
 const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restoreQty) => {
@@ -4378,7 +4418,7 @@ const backOfficeContent = comingSoonTitle ? (
         expandedOrders={expandedOrders}
         toggleOrderExpanded={toggleOrderExpanded}
         printPickingList={printPickingList}
-        updateOrderItem={updateOrderItem}
+        updateOrderItem={updatePreOrderSupplyItem}
         addOrderItem={addOrderItem}
         changeOrderStatus={changeOrderStatus}
         fetchOrders={fetchOrders}
@@ -4411,11 +4451,19 @@ const backOfficeContent = comingSoonTitle ? (
       <PreOrderSupply
         orders={orders}
         products={products}
-        updateOrderItem={updateOrderItem}
+        updateOrderItem={updatePreOrderSupplyItem}
         addOrderItem={addOrderItem}
         splitPreOrderItem={splitPreOrderItem}
         restorePreOrderSplit={restorePreOrderSplit}
         refreshOrders={fetchOrders}
+      />
+    )}
+
+    {page === "posPurchaseHistory" && (
+      <PreOrderSupply
+        orders={[]}
+        products={products}
+        historyOnly
       />
     )}
 

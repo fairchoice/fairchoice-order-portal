@@ -62,18 +62,46 @@ export const createCustomerOrderWithSessionRetry = async ({
   createOrder,
   isAuthError,
   refreshSession,
+  findOrderByNumber,
   promotionRunContext = null,
   persistPromotionRun = persistPromotionRunForOrder,
 } = {}) => {
   let createdOrder;
 
+  const recoverAlreadyCreatedOrder = async () => {
+    const orderNumber = String(orderRequest?.orderNumber || "").trim();
+    if (!orderNumber || typeof findOrderByNumber !== "function") return null;
+
+    try {
+      return await findOrderByNumber(orderNumber);
+    } catch (verificationError) {
+      // Verification is best-effort. Preserve the original submission error if
+      // the network/database is also unavailable during the verification read.
+      console.warn("[OrderSubmission] could not verify order after submit error", verificationError);
+      return null;
+    }
+  };
+
   try {
     createdOrder = await createOrder(orderRequest);
   } catch (error) {
-    if (!isAuthError(error)) throw error;
-    const refreshed = await refreshSession();
-    if (refreshed?.error || !refreshed?.data?.session) throw error;
-    createdOrder = await createOrder(orderRequest);
+    // A browser can lose the response after the server has already committed
+    // the order. Always verify the same order number before allowing a retry.
+    createdOrder = await recoverAlreadyCreatedOrder();
+
+    if (!createdOrder) {
+      if (!isAuthError(error)) throw error;
+
+      const refreshed = await refreshSession();
+      if (refreshed?.error || !refreshed?.data?.session) throw error;
+
+      // The first request may have completed while the session was being
+      // refreshed, so verify again before issuing a second write.
+      createdOrder = await recoverAlreadyCreatedOrder();
+      if (!createdOrder) {
+        createdOrder = await createOrder(orderRequest);
+      }
+    }
   }
 
   await persistPromotionRunWithoutBlockingOrder({

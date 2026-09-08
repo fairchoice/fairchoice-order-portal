@@ -601,6 +601,34 @@ const orderItems = calculatedOrderItems.map((item) => ({
   };
 }
 
+export async function getCustomerOrderByNumber(orderNumber) {
+  const normalizedOrderNumber = String(orderNumber || "").trim();
+  if (!normalizedOrderNumber) return null;
+
+  const { data: order, error: orderError } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("order_number", normalizedOrderNumber)
+    .maybeSingle();
+
+  if (orderError) throw orderError;
+  if (!order) return null;
+
+  const { count, error: itemsError } = await supabase
+    .from("order_items")
+    .select("id", { count: "exact", head: true })
+    .eq("order_id", order.id);
+
+  if (itemsError) throw itemsError;
+  if (Number(count || 0) <= 0) return null;
+
+  return {
+    orderNumber: normalizedOrderNumber,
+    order,
+    alreadyCreated: true,
+  };
+}
+
 export async function updateOrderStatus(orderNumber, status) {
   const normalizedStatus = String(status || "").trim().toLowerCase();
   const isDeliveredStatus = isConfirmedStatusForProcessingQueue(normalizedStatus);
