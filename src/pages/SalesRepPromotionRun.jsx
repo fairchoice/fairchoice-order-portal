@@ -189,7 +189,7 @@ const readBankProofDataUrl = (file) =>
     reader.readAsDataURL(file);
   });
 
-export default function SalesRepPromotionRun({ userProfile, onLogout }) {
+export default function SalesRepPromotionRun({ userProfile, onLogout, onBackToOrder }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -713,6 +713,7 @@ export default function SalesRepPromotionRun({ userProfile, onLogout }) {
               )}
             </div>
             <div className="flex gap-2">
+              <button type="button" onClick={onBackToOrder} className="rounded-xl border border-white/30 px-3 py-2 text-sm font-bold">Normal Sale</button>
               <button type="button" onClick={onLogout} className="rounded-xl border border-white/30 px-3 py-2 text-sm font-bold">Logout</button>
             </div>
           </div>
@@ -782,6 +783,7 @@ export default function SalesRepPromotionRun({ userProfile, onLogout }) {
               )}
               <div className="mt-4 flex flex-wrap gap-2">
                 <button type="button" onClick={resetForNextSale} className="rounded-xl border border-emerald-700 bg-white px-4 py-2 font-bold text-emerald-800">Next Promotion Sale</button>
+                <button type="button" onClick={onBackToOrder} className="rounded-xl border border-slate-500 bg-white px-4 py-2 font-bold text-slate-700">Normal Sale / Delivery Order</button>
               </div>
             </section>
           ) : (
@@ -793,6 +795,7 @@ export default function SalesRepPromotionRun({ userProfile, onLogout }) {
                     <h2 className="text-xl font-black">What promotion are you running?</h2>
                     <p className="text-sm text-slate-500">Only active promotions that apply to Sales are shown.</p>
                   </div>
+                  <button type="button" onClick={onBackToOrder} className="rounded-xl border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-black text-blue-900">Customer wants other products? Normal Sale →</button>
                 </div>
 
                 {!availableRules.length ? (

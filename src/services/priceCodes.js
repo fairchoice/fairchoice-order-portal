@@ -103,23 +103,27 @@ export async function getProductPriceCodeRows(productIds = []) {
   const ids = [...new Set((productIds || []).filter(Boolean))];
   if (!ids.length) return [];
 
-  const rows = [];
   const chunkSize = 50;
+  const chunks = [];
   for (let index = 0; index < ids.length; index += chunkSize) {
-    const chunk = ids.slice(index, index + chunkSize);
-    const { data, error } = await supabase
-      .from("product_price_code_prices")
-      .select("id, product_id, price_code_id, price, active")
-      .in("product_id", chunk)
-      .eq("active", true);
-
-    if (error) throw error;
-    rows.push(...(data || []));
+    chunks.push(ids.slice(index, index + chunkSize));
   }
 
-  return rows;
-}
+  const chunkRows = await Promise.all(
+    chunks.map(async (chunk) => {
+      const { data, error } = await supabase
+        .from("product_price_code_prices")
+        .select("id, product_id, price_code_id, price, active")
+        .in("product_id", chunk)
+        .eq("active", true);
 
+      if (error) throw error;
+      return data || [];
+    })
+  );
+
+  return chunkRows.flat();
+}
 export function buildProductPriceCodeMap(rows = []) {
   return (rows || []).reduce((result, row) => {
     const productId = String(row.product_id || "");
