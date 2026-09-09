@@ -1,4 +1,4 @@
-import { isVatPriceMode } from "./pricing.js";
+import { isVatPriceMode, normalizePriceMode } from "./pricing.js";
 
 const money2 = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -126,19 +126,21 @@ const buildVatGroups = (items = [], includeVat = true) => {
 };
 
 export const getCustomerDocumentType = (priceMode = "") => {
-  const mode = String(priceMode || "").trim().toLowerCase();
-
-  const isOrderForm =
-    mode === "server" ||
-    mode === "manager" ||
-    mode.includes("server") ||
-    mode.includes("manager");
+  const mode = normalizePriceMode(priceMode);
+  const isOrderForm = [
+    "royalty", "server", "inc vat",
+    "owner offer", "manager", "manager offer"
+  ].includes(mode);
 
   return isOrderForm ? "order_form" : "invoice";
 };
 
 export function calculateDocumentTotals(items = [], order = {}) {
-  const includeVat = isVatPriceMode(order.priceMode || order.price_mode);
+  const priceMode = order.priceMode || order.price_mode;
+  const mode = normalizePriceMode(priceMode);
+  const includeVat =
+    isVatPriceMode(priceMode) ||
+    ["admin", "admin offer", "long customer", "long customers", "super"].includes(mode);
   const printableItems = (items || [])
     .filter(isPrintableDocumentItem)
     .map((item) => {

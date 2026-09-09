@@ -140,7 +140,7 @@ const collectorNameFor = (row) =>
   row.metadata?.driver_name ||
   row.metadata?.sales_rep_name ||
   "";
-const collectorTypeFor = (row) => {
+const collectorTypeFor = (row = {}) => {
   const role = normalize(
     row.collector_type ||
       row.collection_type ||
@@ -151,6 +151,19 @@ const collectorTypeFor = (row) => {
   );
   if (role.includes("driver")) return "Driver";
   if (role.includes("sales")) return "Sales Rep";
+
+  // Legacy/live-order collection rows did not always persist collector_role.
+  // Recover the collector type from their source marker so those collectors
+  // still appear in Weekly Account / Cash Holding.
+  const source = normalize(
+    row.collection_source ||
+      row.source ||
+      row.transaction_source ||
+      row.metadata?.collection_source ||
+      row.metadata?.source,
+  );
+  if (source.includes("driver")) return "Driver";
+  if (source.includes("sales") || source.includes("rep")) return "Sales Rep";
   return "Office";
 };
 const dateInRange = (value, startDate, endDate) => {
@@ -499,9 +512,24 @@ export default function WeeklyAccount({ currentUser }) {
         collector_type: "Driver",
         collector_name: driver.name || driver.full_name || driver.driverName,
       })),
-      ...payments,
-      ...approvedExpenseTotals,
-      ...handoverHistory,
+      // Normalize old live-order collection rows before handing them to the
+      // identity builder. This preserves collectors that have no current login
+      // or staff mapping but do have a Driver/Sales source marker.
+      ...payments.map((row) => ({
+        ...row,
+        collector_type: collectorTypeFor(row),
+        collector_name: collectorNameFor(row),
+      })),
+      ...approvedExpenseTotals.map((row) => ({
+        ...row,
+        collector_type: collectorTypeFor(row),
+        collector_name: collectorNameFor(row),
+      })),
+      ...handoverHistory.map((row) => ({
+        ...row,
+        collector_type: collectorTypeFor(row),
+        collector_name: collectorNameFor(row),
+      })),
     ]).map((option) => {
       if (!option.staffId) return option;
       const currentStaff = currentStaffById.get(String(option.staffId));

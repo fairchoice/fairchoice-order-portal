@@ -493,7 +493,19 @@ const getCustomerPriceModeValue = (customer, pricingSettings = {}) => {
         String(priceCode.id) === String(customer.customer_price_code_id) &&
         priceCode.active !== false
     );
-    if (activeCode) return makePriceCodeMode(activeCode.id, basePriceMode);
+    if (activeCode) {
+      const overlayId = customer?.customer_price_overlay_code_id || "";
+      const activeOverlay = overlayId
+        ? (pricingSettings.price_codes || []).find(
+            (priceCode) =>
+              String(priceCode.id) === String(overlayId) &&
+              priceCode.active !== false &&
+              String(priceCode.code_type || "").toLowerCase() === "sub" &&
+              String(priceCode.parent_price_code_id || "") === String(activeCode.id)
+          )
+        : null;
+      return makePriceCodeMode(activeCode.id, basePriceMode, activeOverlay?.id || "");
+    }
   }
 
   return basePriceMode === "inc vat" ? "inc vat" : "vat";

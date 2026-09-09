@@ -1342,7 +1342,10 @@ const runInvoiceAction = async (row, action) => {
           .order("created_at", { ascending: false }),
         supabase
           .from("orders")
-          .select("*, order_items(*)")
+          // Load order headers first. order_items are hydrated in one batched query below.
+          // Joining order_items here duplicated thousands of rows and could hit the
+          // PostgREST statement timeout before the invoice screen rendered.
+          .select("*")
           .order("created_at", { ascending: false })
           .limit(500),
         canViewServerManagerInvoices ? loadProcessingQueueOrders() : Promise.resolve([]),
@@ -1483,37 +1486,12 @@ const runInvoiceAction = async (row, action) => {
           new Date(getCreatedDate(a) || 0).getTime()
       );
 
-      const invoiceRows = await Promise.all(
-        mergedRows.map(async (row) => {
-          try {
-            const order = await fetchInvoiceOrderFromDb(row);
-            if (!order) return row;
-
-            const invoiceTotal = getInvoiceTotal(order);
-            const refreshedRow = {
-              ...row,
-              _freshOrder: order,
-              order_uuid: order.id || order.dbId || order.order_id || row.order_uuid || null,
-              dbId: order.id || order.dbId || order.order_id || row.dbId || null,
-              order_id: order.id || order.dbId || order.order_id || row.order_id || null,
-              canonical_order_number:
-                order.order_number || row.canonical_order_number || row.order_number,
-              full_order_number:
-                order.order_number || row.full_order_number || row.order_number,
-              _invoiceSource: "canonical_order_refresh",
-              debit: invoiceTotal,
-              amount: invoiceTotal,
-              invoice_amount: invoiceTotal,
-              invoice_total: invoiceTotal,
-            };
-
-            return refreshedRow;
-          } catch (err) {
-            console.warn("Could not refresh invoice order for list row:", err);
-            return row;
-          }
-        })
-      );
+      // Every operational order above already carries a fully hydrated _freshOrder.
+      // Do not re-fetch every invoice one-by-one here: fetchInvoiceOrderFromDb()
+      // performs several queries per invoice and caused a large N+1 burst. Ledger-only
+      // rows can safely keep their ledger representation; exact open/print actions still
+      // fetch the canonical order on demand.
+      const invoiceRows = mergedRows;
 
       const resolvedInvoiceRows = await resolveInvoiceRowsWithAllocationData(invoiceRows);
 

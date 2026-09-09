@@ -34,17 +34,15 @@ export const normalizePriceMode = (priceMode) => {
 const getPriceCodeModeParts = (priceMode) => {
   const mode = normalizePriceMode(priceMode);
   if (!mode.startsWith("code:")) {
-    return { priceCodeId: "", basePriceMode: "ex vat" };
+    return { priceCodeId: "", basePriceMode: "ex vat", overlayPriceCodeId: "" };
   }
-  const payload = mode.slice(5);
-  const separatorIndex = payload.indexOf("|");
-  if (separatorIndex < 0) {
-    return { priceCodeId: payload, basePriceMode: "inc vat" };
-  }
-  const base = payload.slice(separatorIndex + 1);
+  const parts = mode.slice(5).split("|");
+  const base = parts[1] || "inc vat";
+  const overlayPart = parts.find((part) => String(part).startsWith("overlay:"));
   return {
-    priceCodeId: payload.slice(0, separatorIndex),
+    priceCodeId: parts[0] || "",
     basePriceMode: ["inc vat", "inc.vat", "incvat", "server"].includes(base) ? "inc vat" : "ex vat",
+    overlayPriceCodeId: overlayPart ? overlayPart.slice("overlay:".length) : "",
   };
 };
 
@@ -289,12 +287,16 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
   const ownerOfferMode = ["owner offer", "manager", "manager offer"].includes(mode);
   const adminMode = ["admin", "admin offer"].includes(mode);
   const longCustomerMode = ["long customer", "long customers", "super"].includes(mode);
-  const { priceCodeId, basePriceMode: codeBasePriceMode } = getPriceCodeModeParts(mode);
+  const { priceCodeId, basePriceMode: codeBasePriceMode, overlayPriceCodeId } = getPriceCodeModeParts(mode);
   const codeMode = Boolean(priceCodeId);
   const productPriceCodeMap = product.priceCodePrices || product.price_code_prices || {};
-  const productCodeOverride = priceCodeId
+  const overlayCodeOverride = overlayPriceCodeId
+    ? validPositiveMoney(productPriceCodeMap[overlayPriceCodeId])
+    : 0;
+  const baseProductCodeOverride = priceCodeId
     ? validPositiveMoney(productPriceCodeMap[priceCodeId])
     : 0;
+  const productCodeOverride = overlayCodeOverride || baseProductCodeOverride;
 
   let unitPrice = exVatPrice;
   let grossPrice = getGrossPrice(exVatPrice, vatRate);
@@ -315,7 +317,7 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
         vatAmount = roundMoney(grossPrice - unitPrice);
         appliedRule = "product_price_code_override_ex_vat";
       }
-      appliedSpecialPriceType = "price_code";
+      appliedSpecialPriceType = overlayCodeOverride > 0 ? "sub_price_code" : "price_code";
     } else if (codeBasePriceMode === "inc vat") {
       unitPrice = applyIncVatQuarterDiscount(incVatBasePrice, pricingPercent);
       grossPrice = unitPrice;
@@ -378,7 +380,7 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
     grossPrice,
     normalPrice: vatSellPrice,
     vatSellPrice,
-    specialPrice: appliedSpecialPriceType === "price_code" ? productCodeOverride : 0,
+    specialPrice: appliedSpecialPriceType ? productCodeOverride : 0,
     usesSpecialPrice: Boolean(appliedSpecialPriceType),
     appliedRule,
     appliedSpecialPriceType,

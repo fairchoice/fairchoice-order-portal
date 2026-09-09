@@ -15,6 +15,8 @@ const shouldAddVatForPriceMode = (priceMode) => {
     isVatPriceMode(mode) ||
     mode === "admin" ||
     mode === "admin offer" ||
+    mode === "long customer" ||
+    mode === "long customers" ||
     mode === "super"
   );
 };

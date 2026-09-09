@@ -6,18 +6,25 @@ const normalizeBasePriceMode = (basePriceMode) => {
   return "ex vat";
 };
 
-export const makePriceCodeMode = (priceCodeId, basePriceMode = "inc vat") =>
-  priceCodeId ? `code:${String(priceCodeId)}|${normalizeBasePriceMode(basePriceMode)}` : "";
+export const makePriceCodeMode = (priceCodeId, basePriceMode = "inc vat", overlayPriceCodeId = "") => {
+  if (!priceCodeId) return "";
+  const base = `code:${String(priceCodeId)}|${normalizeBasePriceMode(basePriceMode)}`;
+  return overlayPriceCodeId ? `${base}|overlay:${String(overlayPriceCodeId)}` : base;
+};
 
 export const getPriceCodeModeParts = (priceMode) => {
   const value = String(priceMode || "").trim();
-  if (!value.toLowerCase().startsWith("code:")) return { priceCodeId: "", basePriceMode: "ex vat" };
-  const payload = value.slice(5);
-  const separatorIndex = payload.indexOf("|");
-  if (separatorIndex < 0) return { priceCodeId: payload, basePriceMode: "inc vat" };
+  if (!value.toLowerCase().startsWith("code:")) {
+    return { priceCodeId: "", basePriceMode: "ex vat", overlayPriceCodeId: "" };
+  }
+  const parts = value.slice(5).split("|");
+  const priceCodeId = parts[0] || "";
+  const basePriceMode = normalizeBasePriceMode(parts[1] || "inc vat");
+  const overlayPart = parts.find((part) => String(part).toLowerCase().startsWith("overlay:"));
   return {
-    priceCodeId: payload.slice(0, separatorIndex),
-    basePriceMode: normalizeBasePriceMode(payload.slice(separatorIndex + 1)),
+    priceCodeId,
+    basePriceMode,
+    overlayPriceCodeId: overlayPart ? overlayPart.slice("overlay:".length) : "",
   };
 };
 
@@ -26,7 +33,7 @@ export const getPriceCodeIdFromMode = (priceMode) => getPriceCodeModeParts(price
 export async function getCustomerPriceCodes({ includeInactive = false } = {}) {
   let query = supabase
     .from("customer_price_codes")
-    .select("id, code, discount_percent, active, created_at, updated_at")
+    .select("*")
     .order("code", { ascending: true });
 
   if (!includeInactive) query = query.eq("active", true);
@@ -36,7 +43,7 @@ export async function getCustomerPriceCodes({ includeInactive = false } = {}) {
   return data || [];
 }
 
-export async function createCustomerPriceCode({ code, discountPercent }) {
+export async function createCustomerPriceCode({ code, discountPercent, codeType = "base", parentPriceCodeId = null, exactOnly = false }) {
   const cleanCode = String(code || "").trim();
   if (!cleanCode) throw new Error("Price code is required.");
 
@@ -44,7 +51,10 @@ export async function createCustomerPriceCode({ code, discountPercent }) {
     .from("customer_price_codes")
     .insert({
       code: cleanCode,
-      discount_percent: Number(discountPercent || 0),
+      discount_percent: codeType === "sub" ? 0 : Number(discountPercent || 0),
+      code_type: codeType === "sub" ? "sub" : "base",
+      parent_price_code_id: codeType === "sub" ? parentPriceCodeId || null : null,
+      exact_only: codeType === "sub" ? true : exactOnly === true,
       active: true,
     })
     .select()
@@ -66,6 +76,15 @@ export async function updateCustomerPriceCode(id, changes = {}) {
   }
   if (Object.prototype.hasOwnProperty.call(changes, "active")) {
     payload.active = changes.active === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "codeType")) {
+    payload.code_type = changes.codeType === "sub" ? "sub" : "base";
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "parentPriceCodeId")) {
+    payload.parent_price_code_id = changes.parentPriceCodeId || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "exactOnly")) {
+    payload.exact_only = changes.exactOnly === true;
   }
   payload.updated_at = new Date().toISOString();
 

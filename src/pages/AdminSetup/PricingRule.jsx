@@ -19,6 +19,8 @@ export default function Pricing() {
   const [showNewCode, setShowNewCode] = useState(false);
   const [newCode, setNewCode] = useState("");
   const [newCodePercent, setNewCodePercent] = useState("");
+  const [newCodeType, setNewCodeType] = useState("base");
+  const [newCodeParentId, setNewCodeParentId] = useState("");
   const [savingCode, setSavingCode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
@@ -161,11 +163,19 @@ export default function Pricing() {
     if (!pricingUnlocked) return alert("Unlock Pricing first.");
     const code = newCode.trim();
     const percent = Number(newCodePercent || 0);
+    const isSubCode = newCodeType === "sub";
     if (!code) return alert("Enter a customer price code.");
-    if (!Number.isFinite(percent) || percent < 0 || percent > 100) return alert("Enter a percentage from 0 to 100.");
+    if (!isSubCode && (!Number.isFinite(percent) || percent < 0 || percent > 100)) return alert("Enter a percentage from 0 to 100.");
+    if (isSubCode && !newCodeParentId) return alert("Select the Base Code for this Sub Code.");
     setSavingCode(true);
     try {
-      const created = await createCustomerPriceCode({ code, discountPercent: percent });
+      const created = await createCustomerPriceCode({
+        code,
+        discountPercent: isSubCode ? 0 : percent,
+        codeType: isSubCode ? "sub" : "base",
+        parentPriceCodeId: isSubCode ? newCodeParentId : null,
+        exactOnly: isSubCode,
+      });
       await logAction({
         user: loggedInUser,
         action_type: "Customer price code created",
@@ -175,6 +185,8 @@ export default function Pricing() {
       });
       setNewCode("");
       setNewCodePercent("");
+      setNewCodeType("base");
+      setNewCodeParentId("");
       setShowNewCode(false);
       await loadPriceCodes();
     } catch (error) {
@@ -280,7 +292,7 @@ export default function Pricing() {
           <div>
             <h2 className="text-xl font-bold">Customer Price Codes</h2>
             <p className="text-sm text-slate-600">
-              Code percentage is calculated from the Inc.VAT product price unless that product has an exact code price.
+              Base Codes can use percentage or exact prices. Sub Codes are exact-price-only overlays linked to a Base Code.
             </p>
           </div>
           <button
@@ -294,25 +306,49 @@ export default function Pricing() {
         </div>
 
         {showNewCode && (
-          <div className="mb-4 grid grid-cols-1 md:grid-cols-[1fr_180px_auto] gap-3 rounded-xl border bg-slate-50 p-4">
+          <div className="mb-4 grid grid-cols-1 md:grid-cols-[1fr_150px_1fr_170px_auto] gap-3 rounded-xl border bg-slate-50 p-4">
             <input
               className="border rounded-xl p-3 font-bold"
               placeholder="Customer price code"
               value={newCode}
               onChange={(e) => setNewCode(e.target.value)}
             />
-            <div className="flex items-center gap-2">
-              <input
-                className="border rounded-xl p-3 w-full font-bold"
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                placeholder="Percentage"
-                value={newCodePercent}
-                onChange={(e) => setNewCodePercent(e.target.value)}
-              />
-              <span className="font-bold">%</span>
+            <select
+              className="border rounded-xl p-3 font-bold bg-white"
+              value={newCodeType}
+              onChange={(e) => { setNewCodeType(e.target.value); setNewCodeParentId(""); }}
+            >
+              <option value="base">Base Code</option>
+              <option value="sub">Sub Code</option>
+            </select>
+            {newCodeType === "sub" ? (
+              <select
+                className="border rounded-xl p-3 font-bold bg-white"
+                value={newCodeParentId}
+                onChange={(e) => setNewCodeParentId(e.target.value)}
+              >
+                <option value="">Select Base Code</option>
+                {priceCodes.filter((code) => String(code.code_type || "base").toLowerCase() !== "sub" && code.active !== false).map((code) => (
+                  <option key={code.id} value={code.id}>{code.code}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  className="border rounded-xl p-3 w-full font-bold"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  placeholder="Percentage"
+                  value={newCodePercent}
+                  onChange={(e) => setNewCodePercent(e.target.value)}
+                />
+                <span className="font-bold">%</span>
+              </div>
+            )}
+            <div className="rounded-xl border bg-white px-3 py-2 text-xs font-bold text-slate-600 flex items-center">
+              {newCodeType === "sub" ? "Exact prices only" : "Percentage + exact overrides"}
             </div>
             <button
               type="button"
@@ -330,6 +366,8 @@ export default function Pricing() {
             <thead className="bg-slate-100 text-left">
               <tr>
                 <th className="p-3">Code</th>
+                <th className="p-3">Type</th>
+                <th className="p-3">Parent</th>
                 <th className="p-3">Percentage</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Actions</th>
@@ -339,12 +377,14 @@ export default function Pricing() {
               {visibleCodes.map((priceCode) => (
                 <tr key={priceCode.id} className="border-t">
                   <td className="p-3 font-bold">{priceCode.code}</td>
-                  <td className="p-3">{Number(priceCode.discount_percent || 0)}%</td>
+                  <td className="p-3 font-bold">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? "Sub Code" : "Base Code"}</td>
+                  <td className="p-3">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? (priceCodes.find((item) => String(item.id) === String(priceCode.parent_price_code_id))?.code || "-") : "-"}</td>
+                  <td className="p-3">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? "Exact only" : `${Number(priceCode.discount_percent || 0)}%`}</td>
                   <td className="p-3">{priceCode.active === false ? "Inactive" : "Active"}</td>
                   <td className="p-3">
                     <div className="flex flex-wrap gap-2">
                       <button type="button" disabled={!pricingUnlocked} onClick={() => renamePriceCode(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">Rename</button>
-                      <button type="button" disabled={!pricingUnlocked} onClick={() => editPriceCodePercent(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">Edit %</button>
+                      {String(priceCode.code_type || "base").toLowerCase() !== "sub" && <button type="button" disabled={!pricingUnlocked} onClick={() => editPriceCodePercent(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">Edit %</button>}
                       <button type="button" disabled={!pricingUnlocked} onClick={() => togglePriceCode(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">
                         {priceCode.active === false ? "Activate" : "Inactive"}
                       </button>
@@ -353,7 +393,7 @@ export default function Pricing() {
                 </tr>
               ))}
               {visibleCodes.length === 0 && (
-                <tr><td colSpan="4" className="p-6 text-center text-slate-500">No customer price codes yet.</td></tr>
+                <tr><td colSpan="6" className="p-6 text-center text-slate-500">No customer price codes yet.</td></tr>
               )}
             </tbody>
           </table>
