@@ -31,6 +31,10 @@ const readLocal = (key) => {
 };
 const writeLocal = (key, rows) => localStorage.setItem(key, JSON.stringify(rows || []));
 const missingRelation = (error) => ["42P01", "PGRST205", "PGRST204", "42703"].includes(error?.code) || /does not exist|schema cache/i.test(String(error?.message || ""));
+const routeVisitWriteUnavailable = (error) =>
+  missingRelation(error) ||
+  ["42501", "PGRST301"].includes(error?.code) ||
+  /row-level security|permission denied|not authorized|not authenticated/i.test(String(error?.message || ""));
 const uuid = () => globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 export const getRouteDay = (value = new Date()) => DAYS[new Date(value).getDay()];
 export const getBusinessDate = (value = new Date()) => {
@@ -120,7 +124,8 @@ export async function recordSalesRouteVisit({
   };
   const { data, error } = await supabase.from("sales_route_visits").insert(row).select("*").single();
   if (!error) return data;
-  if (!missingRelation(error)) throw error;
+  if (!routeVisitWriteUnavailable(error)) throw error;
+  console.warn("Sales route visit tracking unavailable; continuing without blocking order flow:", error?.message || error);
   const rows = readLocal(VISITS_KEY);
   rows.push(row); writeLocal(VISITS_KEY, rows); return row;
 }
