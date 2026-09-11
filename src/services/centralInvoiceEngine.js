@@ -1274,6 +1274,34 @@ const isFreePromotionInvoiceLine = (item = {}, order = {}) => {
   return quantity > 0 && unitPrice > 0 && Math.abs(netTotal) < 0.005;
 };
 
+const restoreHistoricalInvoiceAmounts = (order = {}) => {
+  if (isPromotionInvoiceDateEligible(order)) return order;
+
+  const restoreItem = (item = {}) => {
+    const quantity = getLineQuantity(item);
+    const unitPrice = getLinePrice(item);
+    const savedNet = Number(item.net_total ?? item.netTotal ?? 0);
+
+    if (quantity <= 0 || unitPrice <= 0 || Math.abs(savedNet) >= 0.005) {
+      return item;
+    }
+
+    const restoredNet = roundMoney(unitPrice * quantity);
+    return {
+      ...item,
+      net_total: restoredNet,
+      netTotal: restoredNet,
+    };
+  };
+
+  const restoredItems = (order.items || order.order_items || []).map(restoreItem);
+  return {
+    ...order,
+    items: restoredItems,
+    order_items: restoredItems,
+  };
+};
+
 const getInvoiceProductCode = (item = {}) => getProductCodeFromInvoiceItem(item);
 
 const getPrintableCompanyAddress = (address = "") =>
@@ -1286,7 +1314,7 @@ function buildLegacyStandardInvoiceHtml(
   order = {},
   { documentType = "invoice", autoPrint = false, settings: settingsOverride = {} } = {}
 ) {
-  const invoiceOrder = normalizeInvoiceOrder(order);
+  const invoiceOrder = restoreHistoricalInvoiceAmounts(normalizeInvoiceOrder(order));
   const settings = getInvoiceSettings(settingsOverride);
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
   const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
@@ -1629,7 +1657,7 @@ export function buildStandardInvoiceHtml(
   order = {},
   { documentType = "invoice", autoPrint = false, settings: settingsOverride = {} } = {}
 ) {
-  const invoiceOrder = normalizeInvoiceOrder(order);
+  const invoiceOrder = restoreHistoricalInvoiceAmounts(normalizeInvoiceOrder(order));
   const printTemplate = getPrintTemplate(invoiceOrder.priceMode || invoiceOrder.price_mode);
   const resolvedDocumentType =
     documentType === "invoice" &&
