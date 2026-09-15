@@ -1,10 +1,15 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import { supabase } from "../../supabaseClient";
 import { getProductPriceForMode, getProductPricePreview, getVatRate, isVatPriceMode, roundMoney } from "../../utils/pricing";
 import BulkToDatabase from "./PriceManagement/BulkToDatabase";
 import BulkDatabaseToOrders from "./PriceManagement/BulkDatabaseToOrders";
 import SingleDatabaseToOrder from "./PriceManagement/SingleDatabaseToOrder";
+import {
+  loadSupplierSetup,
+  loadSupplierProductPricing,
+  saveSupplierProductPricing,
+} from "../../services/suppliers";
 
 const PRICE_PAGE_SIZE = 20;
 
@@ -17,6 +22,23 @@ export default function PriceManagement({
 
   const [activeTab, setActiveTab] = useState("bulkPrice");
 
+  const currentUser = useMemo(() => {
+    try {
+      return JSON.parse(
+        localStorage.getItem("loggedInUser") ||
+          localStorage.getItem("fairchoice_user") ||
+          "null"
+      );
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const [suppliers, setSuppliers] = useState([]);
+  const [supplierId, setSupplierId] = useState("");
+  const [supplierPricingRows, setSupplierPricingRows] = useState([]);
+  const [supplierPricingLoading, setSupplierPricingLoading] = useState(false);
+
   const [brand, setBrand] = useState("");
   const [series, setSeries] = useState("");
   const [search, setSearch] = useState("");
@@ -25,11 +47,13 @@ export default function PriceManagement({
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkNewPrice, setBulkNewPrice] = useState("");
   const [bulkCostPrice, setBulkCostPrice] = useState("");
+  const [bulkCostVatMode, setBulkCostVatMode] = useState("ex");
 
   const [singleSearch, setSingleSearch] = useState("");
   const [singleProductId, setSingleProductId] = useState("");
   const [singleNewPrice, setSingleNewPrice] = useState("");
   const [singleCostPrice, setSingleCostPrice] = useState("");
+  const [singleCostVatMode, setSingleCostVatMode] = useState("ex");
   const [singleViewProduct, setSingleViewProduct] = useState(null);
 
   const [orderBrand, setOrderBrand] = useState("");
@@ -50,11 +74,30 @@ export default function PriceManagement({
   }, [safeProducts]);
 
   const seriesList = useMemo(() => {
-    return [...new Set(safeProducts.map((p) => p.series).filter(Boolean))].sort();
-  }, [safeProducts]);
+    return [
+      ...new Set(
+        safeProducts
+          .filter((p) => !brand || String(p.brand || "") === brand)
+          .map((p) => p.series)
+          .filter(Boolean)
+      ),
+    ].sort();
+  }, [safeProducts, brand]);
+
+  const orderSeriesList = useMemo(() => {
+    return [
+      ...new Set(
+        safeProducts
+          .filter((p) => !orderBrand || String(p.brand || "") === orderBrand)
+          .map((p) => p.series)
+          .filter(Boolean)
+      ),
+    ].sort();
+  }, [safeProducts, orderBrand]);
 
   function getProductId(product) {
-    return product.id || product.product_id || product.code || product.product_code;
+    if (!product) return "";
+    return product.id || product.product_id || product.code || product.product_code || "";
   }
 
   function productName(product) {
@@ -70,7 +113,109 @@ export default function PriceManagement({
   }
 
   function costPrice(product) {
+    if (supplierId) {
+      return Number(supplierCostRow(getProductId(product))?.unit_cost || 0);
+    }
     return Number(product.cost_price || 0);
+  }
+
+  function normalizeVatInput(value, vatMode) {
+    const amount = Number(value || 0);
+    return vatMode === "inc" ? roundMoney(amount / 1.2) : amount;
+  }
+
+  useEffect(() => {
+    let active = true;
+    if (!currentUser) return undefined;
+
+    loadSupplierSetup(currentUser, { includeInactive: false })
+      .then((rows) => {
+        if (!active) return;
+        setSuppliers((rows || []).filter((supplier) => supplier.active !== false));
+      })
+      .catch((error) => console.error("Supplier list loading error:", error));
+
+    return () => {
+      active = false;
+    };
+  }, [currentUser]);
+
+  const refreshSelectedSupplierPricing = async (selectedSupplierId = supplierId) => {
+    if (!selectedSupplierId || !currentUser) {
+      setSupplierPricingRows([]);
+      return [];
+    }
+
+    setSupplierPricingLoading(true);
+    try {
+      const data = await loadSupplierProductPricing(currentUser, selectedSupplierId, false);
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      setSupplierPricingRows(rows);
+      return rows;
+    } finally {
+      setSupplierPricingLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshSelectedSupplierPricing(supplierId).catch((error) =>
+      console.error("Supplier pricing loading error:", error)
+    );
+  }, [supplierId, currentUser]);
+
+  function supplierCostRow(productId) {
+    return supplierPricingRows
+      .filter(
+        (row) =>
+          String(row.product_id || row.productId || "") === String(productId || "") &&
+          row.active !== false &&
+          !row.effective_to
+      )
+      .sort((a, b) =>
+        String(b.effective_from || "").localeCompare(String(a.effective_from || ""))
+      )
+      .find((row) => String(row.pricing_basis || "").toUpperCase() === "STANDARD") || null;
+  }
+
+  async function requireAdminPassword(actionLabel) {
+    const username = String(
+      currentUser?.username ||
+        currentUser?.staff_username ||
+        currentUser?.login ||
+        ""
+    ).trim().toLowerCase();
+
+    if (!username) {
+      alert("Admin verification failed: current username is unavailable.");
+      return false;
+    }
+
+    const password = window.prompt(`Admin password required for ${actionLabel}.`);
+    if (password === null) return false;
+    if (!password) {
+      alert("Admin password is required.");
+      return false;
+    }
+
+    const { data, error } = await supabase.rpc("fc_login_v2", {
+      p_username: username,
+      p_password: password,
+    });
+
+    if (error || data?.ok === false) {
+      alert(data?.error || error?.message || "Invalid admin password.");
+      return false;
+    }
+
+    const role = String(data?.profile?.role || data?.profile?.access_level || "")
+      .trim()
+      .toLowerCase();
+    if (!["admin", "administrator", "super admin"].includes(role)) {
+      alert("An Admin or Super Admin password is required.");
+      return false;
+    }
+
+    return true;
   }
 
   const filteredProducts = useMemo(() => {
@@ -97,9 +242,11 @@ export default function PriceManagement({
     safePage * PRICE_PAGE_SIZE
   );
 
+  const bulkSavedExVatCost = normalizeVatInput(bulkCostPrice, bulkCostVatMode);
+
   const bulkPreviewProduct = {
     vat_price: Number(bulkNewPrice || 0),
-    cost_price: Number(bulkCostPrice || 0),
+    cost_price: bulkSavedExVatCost,
     vat_type: "20",
   };
 
@@ -125,8 +272,23 @@ export default function PriceManagement({
     (p) => String(getProductId(p)) === String(singleProductId)
   );
 
+  useEffect(() => {
+    if (!singleProductId || !supplierId) return;
+    const row = supplierCostRow(singleProductId);
+    setSingleCostPrice(row ? String(row.unit_cost ?? "") : "");
+  }, [singleProductId, supplierId, supplierPricingRows]);
+
   const selectedSingleCurrent = selectedSingleProduct
-    ? getProductPricePreview(selectedSingleProduct, "", pricingSettings)
+    ? getProductPricePreview(
+        {
+          ...selectedSingleProduct,
+          cost_price: supplierId
+            ? Number(supplierCostRow(getProductId(selectedSingleProduct))?.unit_cost || 0)
+            : Number(selectedSingleProduct?.cost_price || 0),
+        },
+        "",
+        pricingSettings
+      )
     : null;
 
   const singlePreviewProduct = {
@@ -137,7 +299,9 @@ export default function PriceManagement({
         : Number(selectedSingleProduct?.vat_price || 0),
     cost_price:
       singleCostPrice !== ""
-        ? Number(singleCostPrice)
+        ? normalizeVatInput(singleCostPrice, singleCostVatMode)
+        : supplierId
+        ? Number(supplierCostRow(getProductId(selectedSingleProduct))?.unit_cost || 0)
         : Number(selectedSingleProduct?.cost_price || 0),
   };
 
@@ -243,27 +407,47 @@ export default function PriceManagement({
       return;
     }
 
-    const updateData = {};
-
-    if (bulkNewPrice !== "") {
-      updateData.vat_price = Number(bulkNewPrice);
-    }
-
-    if (bulkCostPrice !== "") {
-      updateData.cost_price = Number(bulkCostPrice);
-    }
-
-    const { error } = await supabase
-      .from("products")
-      .update(updateData)
-      .in("id", selectedIds);
-
-    if (error) {
-      alert(error.message);
+    if (bulkCostPrice !== "" && !supplierId) {
+      alert("Select a supplier before saving a cost price.");
       return;
     }
 
-    alert("Bulk price updated in database.");
+    if (bulkNewPrice !== "") {
+      const { error } = await supabase
+        .from("products")
+        .update({ vat_price: Number(bulkNewPrice) })
+        .in("id", selectedIds);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    if (bulkCostPrice !== "") {
+      for (const productId of selectedIds) {
+        await saveSupplierProductPricing(
+          {
+            supplierId,
+            productId,
+            pricingBasis: "STANDARD",
+            unitCost: bulkSavedExVatCost,
+            effectiveFrom: new Date().toISOString().slice(0, 10),
+            note: "Price Management",
+          },
+          currentUser
+        );
+      }
+      await refreshSelectedSupplierPricing();
+    }
+
+    alert(
+      bulkNewPrice !== "" && bulkCostPrice !== ""
+        ? "Selling price and supplier cost updated."
+        : bulkCostPrice !== ""
+        ? "Supplier cost updated."
+        : "Selling price updated in database."
+    );
     resetBulkEdit();
     await refreshProducts();
   }
@@ -424,6 +608,8 @@ export default function PriceManagement({
       return;
     }
 
+    if (!(await requireAdminPassword("DB to Order Bulk"))) return;
+
     setBulkOrderLoading(true);
     try {
       const updated = await updateReceivedOrderRows(bulkOrderPreviewRows);
@@ -489,31 +675,64 @@ export default function PriceManagement({
       return;
     }
 
-    const oldProduct = { ...selectedSingleProduct };
+    if (singleCostPrice !== "" && !supplierId) {
+      alert("Select a supplier before saving a cost price.");
+      return;
+    }
+
+    if (!(await requireAdminPassword("Single to DB"))) return;
+
+    const oldProduct = {
+      ...selectedSingleProduct,
+      ...(supplierId
+        ? { cost_price: Number(supplierCostRow(selectedSingleProduct.id)?.unit_cost || 0) }
+        : {}),
+    };
     const updateData = {};
 
     if (singleNewPrice !== "") {
       updateData.vat_price = Number(singleNewPrice);
+      const { error } = await supabase
+        .from("products")
+        .update(updateData)
+        .eq("id", selectedSingleProduct.id);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
     }
 
     if (singleCostPrice !== "") {
-      updateData.cost_price = Number(singleCostPrice);
-    }
-
-    const { error } = await supabase
-      .from("products")
-      .update(updateData)
-      .eq("id", selectedSingleProduct.id);
-
-    if (error) {
-      alert(error.message);
-      return;
+      await saveSupplierProductPricing(
+        {
+          supplierId,
+          productId: selectedSingleProduct.id,
+          pricingBasis: "STANDARD",
+          unitCost: normalizeVatInput(singleCostPrice, singleCostVatMode),
+          effectiveFrom: new Date().toISOString().slice(0, 10),
+          note: "Price Management",
+        },
+        currentUser
+      );
+      await refreshSelectedSupplierPricing();
     }
 
     const updatedProduct = {
       ...oldProduct,
       ...updateData,
+      ...(singleCostPrice !== "" ? { cost_price: normalizeVatInput(singleCostPrice, singleCostVatMode) } : {}),
     };
+
+    alert(
+      singleNewPrice !== "" && singleCostPrice !== ""
+        ? "Selling price and supplier cost updated."
+        : singleCostPrice !== ""
+        ? "Supplier cost updated."
+        : "Product selling price updated."
+    );
+
+    await refreshProducts();
 
     if (showView) {
       setSingleViewProduct({
@@ -521,14 +740,12 @@ export default function PriceManagement({
         updatedProduct,
       });
     }
-
-    alert("Product updated.");
-    await refreshProducts();
   }
 
   function resetBulkEdit() {
     setBulkNewPrice("");
     setBulkCostPrice("");
+    setBulkCostVatMode("ex");
     setSelectedIds([]);
     setBrand("");
     setSeries("");
@@ -541,6 +758,7 @@ export default function PriceManagement({
     setSingleProductId("");
     setSingleNewPrice("");
     setSingleCostPrice("");
+    setSingleCostVatMode("ex");
     setSingleViewProduct(null);
   }
 
@@ -593,9 +811,32 @@ export default function PriceManagement({
       </div>
 
       {activeTab === "bulkPrice" && (
-  <BulkToDatabase
+        <>
+          <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3">
+            <label className="text-sm font-bold text-slate-700">
+              Supplier for cost price
+              <select
+                value={supplierId}
+                onChange={(e) => setSupplierId(e.target.value)}
+                className="ml-3 min-w-[260px] rounded-lg border border-slate-300 bg-white px-3 py-2"
+              >
+                <option value="">Select supplier</option>
+                {suppliers.map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>
+                    {supplier.supplier_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="text-xs font-semibold text-slate-600">
+              {supplierPricingLoading
+                ? "Loading supplier costs..."
+                : "Cost is stored per supplier. Selling price can be saved without a cost price."}
+            </span>
+          </div>
+          <BulkToDatabase
     brand={brand}
-    setBrand={setBrand}
+    setBrand={(value) => { setBrand(value); setSeries(""); setPage(1); }}
     series={series}
     setSeries={setSeries}
     search={search}
@@ -609,6 +850,9 @@ export default function PriceManagement({
     setBulkNewPrice={setBulkNewPrice}
     bulkCostPrice={bulkCostPrice}
     setBulkCostPrice={setBulkCostPrice}
+    bulkCostVatMode={bulkCostVatMode}
+    setBulkCostVatMode={setBulkCostVatMode}
+    bulkSavedExVatCost={bulkSavedExVatCost}
     bulkPreview={bulkPreview}
     safePage={safePage}
     totalPages={totalPages}
@@ -625,18 +869,19 @@ export default function PriceManagement({
     costPrice={costPrice}
     pricingSettings={pricingSettings}
   />
+        </>
 )}
 
       {activeTab === "bulkOrder" && (
         <BulkDatabaseToOrders
           brand={orderBrand}
-          setBrand={setOrderBrand}
+          setBrand={(value) => { setOrderBrand(value); setOrderSeries(""); setOrderPage(1); }}
           series={orderSeries}
           setSeries={setOrderSeries}
           search={orderSearch}
           setSearch={setOrderSearch}
           brands={brands}
-          seriesList={seriesList}
+          seriesList={orderSeriesList}
           filteredProducts={filteredOrderProducts}
           pagedProducts={pagedOrderProducts}
           selectedIds={orderSelectedIds}
@@ -691,6 +936,19 @@ export default function PriceManagement({
       {activeTab === "individualPrice" && (
         <div className="mt-6 border rounded-2xl p-5">
           <div className="flex flex-wrap gap-3">
+            <select
+              value={supplierId}
+              onChange={(e) => setSupplierId(e.target.value)}
+              className="border rounded-xl px-4 py-3 min-w-[280px]"
+            >
+              <option value="">Supplier for cost price</option>
+              {suppliers.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.supplier_name}
+                </option>
+              ))}
+            </select>
+
             <input
               value={singleSearch}
               onChange={(e) => setSingleSearch(e.target.value)}
@@ -700,7 +958,7 @@ export default function PriceManagement({
 
             <select
               value={singleProductId}
-              onChange={(e) => setSingleProductId(e.target.value)}
+              onChange={(e) => { setSingleProductId(e.target.value); setSingleCostPrice(""); }}
               className="border rounded-xl px-4 py-3 min-w-[320px]"
             >
               <option value="">Select product</option>
@@ -715,36 +973,30 @@ export default function PriceManagement({
           {selectedSingleProduct && (
             <div className="mt-4 font-bold text-slate-700">
               Current Price: £{vatPrice(selectedSingleProduct).toFixed(2)}
+              {" "} | Current Supplier Cost: £{Number(
+                supplierId
+                  ? supplierCostRow(getProductId(selectedSingleProduct))?.unit_cost || 0
+                  : selectedSingleProduct?.cost_price || 0
+              ).toFixed(2)}
               {" "} | Current Margin: {selectedSingleCurrent?.exVatMargin}%
             </div>
           )}
 
-          <div className="mt-4 flex flex-wrap gap-3 items-center">
-            <input
-              value={singleNewPrice}
-              onChange={(e) => setSingleNewPrice(e.target.value)}
-              placeholder="New Ex.VAT Price"
-              type="number"
-              step="0.01"
-              className="border rounded-xl px-4 py-3 min-w-[220px]"
-            />
-
-            <input
-              value={singleCostPrice}
-              onChange={(e) => setSingleCostPrice(e.target.value)}
-              placeholder="Cost Price"
-              type="number"
-              step="0.01"
-              className="border rounded-xl px-4 py-3 min-w-[220px]"
-            />
-
-            <div className="font-bold text-slate-700">
-              New Inc.VAT Price: £{Number(singlePreview.server || 0).toFixed(2)}
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+              <div className="mb-2 font-extrabold text-slate-800">Selling Price</div>
+              <input value={singleNewPrice} onChange={(e) => setSingleNewPrice(e.target.value)} placeholder="New Ex.VAT Selling Price" type="number" step="0.01" className="w-full border rounded-xl px-4 py-3" />
+              <div className="mt-2 text-sm font-bold text-slate-700">Inc.VAT Selling Price: £{Number(singlePreview.server || 0).toFixed(2)}</div>
             </div>
-
-            <div className="font-bold text-slate-700">
-              New Margin: {singlePreview.exVatMargin}%
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <div className="mb-2 font-extrabold text-slate-800">Supplier Cost Price</div>
+              <div className="flex flex-wrap gap-2">
+                <select value={singleCostVatMode} onChange={(e) => setSingleCostVatMode(e.target.value)} className="border rounded-xl px-4 py-3 min-w-[170px] bg-white"><option value="ex">Ex.VAT Cost</option><option value="inc">Inc.VAT Cost</option></select>
+                <input value={singleCostPrice} onChange={(e) => setSingleCostPrice(e.target.value)} placeholder={singleCostVatMode === "inc" ? "Inc.VAT Cost Price" : "Ex.VAT Cost Price"} type="number" step="0.01" className="flex-1 border rounded-xl px-4 py-3 min-w-[220px] bg-white" />
+              </div>
+              {singleCostVatMode === "inc" && singleCostPrice !== "" && (<div className="mt-2 text-sm font-bold text-slate-700">Saved Ex.VAT Cost: £{normalizeVatInput(singleCostPrice, singleCostVatMode).toFixed(2)}</div>)}
             </div>
+            <div className="font-bold text-slate-700 lg:col-span-2">New Margin: {singlePreview.exVatMargin}%</div>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-3">
@@ -803,7 +1055,7 @@ export default function PriceManagement({
                           {productName(singleViewProduct.updatedProduct)}
                         </td>
                         <td className="border p-3 text-right">
-                          £{costPrice(singleViewProduct.updatedProduct).toFixed(2)}
+                          £{Number(singleViewProduct.updatedProduct?.cost_price || 0).toFixed(2)}
                         </td>
                         <td className="border p-3 text-right">
                           £{vatPrice(singleViewProduct.oldProduct).toFixed(2)}

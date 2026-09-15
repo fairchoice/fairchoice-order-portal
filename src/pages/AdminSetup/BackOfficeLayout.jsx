@@ -145,12 +145,19 @@ export default function BackOfficeLayout({ page, setPage, fetchOrders, currentUs
     return "Back Office";
   }, [currentUser, isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer]);
 
-  const handleNavigate = async (item) => {
+  const handleNavigate = (item) => {
     if (item.key && !registryCanAccessPage(currentUser, item.key)) { alert("You do not have permission to access this page."); return; }
-    if (item.fetchOrdersBefore && typeof fetchOrders === "function") await fetchOrders();
     if (item.hash) window.history.replaceState(null, "", item.hash);
-    setPage(item.page); setDrawerOpen(false);
-    if (item.fetchOrdersAfter && typeof fetchOrders === "function") await fetchOrders();
+
+    // ChP-03: open the page immediately; refresh order data in the background.
+    setPage(item.page);
+    setDrawerOpen(false);
+
+    if ((item.fetchOrdersBefore || item.fetchOrdersAfter) && typeof fetchOrders === "function") {
+      Promise.resolve()
+        .then(() => fetchOrders())
+        .catch((error) => console.error("Background order refresh failed:", error));
+    }
   };
 
   const sidebar = <aside className="bo-sidebar" aria-label="Back Office navigation"><div className="bo-brand"><div className="bo-brand-mark">FC</div><div><div className="bo-brand-title">FairChoice</div><div className="bo-brand-subtitle">Order Portal</div></div></div>{onLogout && <button type="button" className="bo-logout bo-logout-top" onClick={onLogout}>Logout</button>}<nav className="bo-nav">{allowedSections.map((section) => <NavSection key={section.title} section={section} page={page} onNavigate={handleNavigate} />)}</nav><div className="bo-sidebar-footer"><div className="bo-role">{roleLabel}</div></div></aside>;

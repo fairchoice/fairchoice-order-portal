@@ -997,6 +997,13 @@ export async function editCentralPayment({ currentUser, payment, changes, reason
 
 export async function loadPaymentAuditHistory(customerAccountId) {
   if (!customerAccountId) return [];
+
+  // This audit table is intentionally protected by Supabase Auth/RLS.
+  // FairChoice staff normally use the separate FC session, so a direct
+  // PostgREST read would only create a 401 and is not required for balances.
+  const { data: authData } = await supabase.auth.getSession();
+  if (!authData?.session?.access_token) return [];
+
   const { data, error } = await safeSelect("central_payment_lifecycle_audit", (query) =>
     query
       .select("*")

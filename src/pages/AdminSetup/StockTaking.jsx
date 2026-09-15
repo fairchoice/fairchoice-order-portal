@@ -235,23 +235,6 @@ export default function StockTaking({ products = [], fetchProducts }) {
       return;
     }
 
-    if (!subCategory && !brand) {
-      setMessage("Select a Subcategory or Brand before saving.");
-      return;
-    }
-
-    if (seriesOptions.length > 0 && !series) {
-      setMessage("Select a Series and save one series at a time.");
-      return;
-    }
-
-    if (visibleProducts.length > groupLimit) {
-      setMessage(
-        `This shelf group has ${visibleProducts.length} products. Narrow the filters to ${groupLimit} or fewer before saving.`
-      );
-      return;
-    }
-
     const rows = Object.entries(confirmed)
       .filter(([productId, isConfirmed]) =>
         isConfirmed && visibleProductIds.has(String(productId))

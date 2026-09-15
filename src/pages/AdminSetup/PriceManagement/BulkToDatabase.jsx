@@ -16,6 +16,9 @@ export default function BulkToDatabase({
   setBulkNewPrice,
   bulkCostPrice,
   setBulkCostPrice,
+  bulkCostVatMode,
+  setBulkCostVatMode,
+  bulkSavedExVatCost,
   bulkPreview,
   safePage,
   totalPages,
@@ -69,30 +72,50 @@ export default function BulkToDatabase({
         />
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-3 items-center">
-        <input
-          value={bulkNewPrice}
-          onChange={(e) => setBulkNewPrice(e.target.value)}
-          placeholder="New Ex.VAT Price"
-          type="number"
-          step="0.01"
-          className="border rounded-xl px-4 py-3 min-w-[220px]"
-        />
-
-        <input
-          value={bulkCostPrice}
-          onChange={(e) => setBulkCostPrice(e.target.value)}
-          placeholder="Cost Price"
-          type="number"
-          step="0.01"
-          className="border rounded-xl px-4 py-3 min-w-[220px]"
-        />
-
-        <div className="font-bold text-slate-700">
-          New Inc.VAT Price: £{Number(bulkPreview.server || 0).toFixed(2)}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+          <div className="mb-2 font-extrabold text-slate-800">Selling Price</div>
+          <input
+            value={bulkNewPrice}
+            onChange={(e) => setBulkNewPrice(e.target.value)}
+            placeholder="New Ex.VAT Selling Price"
+            type="number"
+            step="0.01"
+            className="w-full border rounded-xl px-4 py-3 bg-white"
+          />
+          <div className="mt-2 text-sm font-bold text-slate-700">
+            Inc.VAT Selling Price: £{Number(bulkPreview.server || 0).toFixed(2)}
+          </div>
         </div>
 
-        <div className="font-bold text-slate-700">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="mb-2 font-extrabold text-slate-800">Supplier Cost Price</div>
+          <div className="flex flex-wrap gap-2">
+            <select
+              value={bulkCostVatMode}
+              onChange={(e) => setBulkCostVatMode(e.target.value)}
+              className="border rounded-xl px-4 py-3 min-w-[170px] bg-white"
+            >
+              <option value="ex">Ex.VAT Cost</option>
+              <option value="inc">Inc.VAT Cost</option>
+            </select>
+            <input
+              value={bulkCostPrice}
+              onChange={(e) => setBulkCostPrice(e.target.value)}
+              placeholder={bulkCostVatMode === "inc" ? "Inc.VAT Cost Price" : "Ex.VAT Cost Price"}
+              type="number"
+              step="0.01"
+              className="flex-1 border rounded-xl px-4 py-3 min-w-[220px] bg-white"
+            />
+          </div>
+          {bulkCostVatMode === "inc" && bulkCostPrice !== "" && (
+            <div className="mt-2 text-sm font-bold text-slate-700">
+              Saved Ex.VAT Cost: £{Number(bulkSavedExVatCost || 0).toFixed(2)}
+            </div>
+          )}
+        </div>
+
+        <div className="font-bold text-slate-700 lg:col-span-2">
           New Margin: {bulkPreview.exVatMargin}%
         </div>
       </div>
