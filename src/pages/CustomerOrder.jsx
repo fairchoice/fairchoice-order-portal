@@ -1165,24 +1165,61 @@ const loadCustomerCreditSnapshot = async (
       selectedBranchId: branchId || "",
     });
 
-    const historyRows = (selectedSnapshot.transactionHistory || []).map((row) => ({
-      ...row,
-      created_at: row.date,
-      payment_date: row.date,
-      entry_type: row.type,
-      transaction_type: row.type,
-      reference_no: row.reference,
-      debit: row.amount > 0 ? row.amount : 0,
-      credit: row.amount < 0 ? Math.abs(row.amount) : 0,
-      running_balance: row.runningBalance,
-      branch_id: row.branchId,
-      customer_branch_id: row.branchId,
-      branch_name: row.branchName,
-      payment_type: row.paymentMethod,
-      paid_by: row.paidBy,
-      invoice_status: row.status,
-      payment_status: row.status,
-    }));
+    const hiddenCustomerPortalPaymentStatuses = new Set([
+      "VOID",
+      "VOIDED",
+      "REVERSED",
+      "ARCHIVED",
+      "INACTIVE",
+      "CANCELLED",
+      "CANCELED",
+      "DELETED",
+    ]);
+    const isHiddenVoidedCustomerPayment = (row = {}) => {
+      const type = String(row.type || row.transaction_type || row.entry_type || "")
+        .trim()
+        .toUpperCase();
+      if (type !== "PAYMENT") return false;
+
+      const source = row.source_record || {};
+      const status = String(
+        row.status ||
+          row.payment_status ||
+          source.status ||
+          source.payment_status ||
+          ""
+      )
+        .trim()
+        .toUpperCase();
+
+      return (
+        row.voided === true ||
+        Boolean(row.voided_at || row.reversed_at) ||
+        Boolean(source.voided_at || source.reversed_at) ||
+        hiddenCustomerPortalPaymentStatuses.has(status)
+      );
+    };
+
+    const historyRows = (selectedSnapshot.transactionHistory || [])
+      .filter((row) => !isHiddenVoidedCustomerPayment(row))
+      .map((row) => ({
+        ...row,
+        created_at: row.date,
+        payment_date: row.date,
+        entry_type: row.type,
+        transaction_type: row.type,
+        reference_no: row.reference,
+        debit: row.amount > 0 ? row.amount : 0,
+        credit: row.amount < 0 ? Math.abs(row.amount) : 0,
+        running_balance: row.runningBalance,
+        branch_id: row.branchId,
+        customer_branch_id: row.branchId,
+        branch_name: row.branchName,
+        payment_type: row.paymentMethod,
+        paid_by: row.paidBy,
+        invoice_status: row.status,
+        payment_status: row.status,
+      }));
 
     setCustomerLedger(historyRows);
     setCustomerOpeningBalance(

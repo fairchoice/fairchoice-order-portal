@@ -79,14 +79,17 @@ export default function Expenses() {
   const [payouts, setPayouts] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
+  const [viewingExpense, setViewingExpense] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const adminEntryBlocked = isAdminExpenseEntryBlocked(user);
 
   const refresh = useCallback(async () => {
     setError("");
+    setLoading(true);
     try {
       const [types, supplierRows, payoutRows] = await Promise.all([
         loadExpenseTypes(user),
@@ -102,6 +105,8 @@ export default function Expenses() {
       }));
     } catch (refreshError) {
       setError(refreshError.message || "Could not load expenses.");
+    } finally {
+      setLoading(false);
     }
   }, [user]);
 
@@ -168,6 +173,7 @@ export default function Expenses() {
   }
 
   function editExpense(row) {
+    setViewingExpense(null);
     setEditingId(row.id);
     setForm({
       payoutDate: row.payout_date,
@@ -227,6 +233,13 @@ export default function Expenses() {
             {error}
           </div>
         )}
+        {loading && (
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+            Loading data...
+          </div>
+        )}
+
 
         <form className="rounded-xl border bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-3">
@@ -301,6 +314,7 @@ export default function Expenses() {
                     <Cell>{row.recorded_by_staff_name}</Cell>
                     <Cell>
                       <div className="flex min-w-48 flex-wrap gap-2">
+                        <button disabled={busy} className="text-slate-700 underline" onClick={() => setViewingExpense(row)}>View details</button>
                         {["DRAFT", "REJECTED"].includes(row.status) && (
                           <button disabled={busy} className="text-blue-700 underline" onClick={() => editExpense(row)}>Edit</button>
                         )}
@@ -327,7 +341,55 @@ export default function Expenses() {
             </table>
           </div>
         </div>
+
+        {viewingExpense && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setViewingExpense(null)}>
+            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-extrabold text-slate-950">Expense details</h3>
+                  <p className="text-sm text-slate-500">{viewingExpense.payout_reference}</p>
+                </div>
+                <button type="button" className="font-bold text-slate-600" onClick={() => setViewingExpense(null)}>Close</button>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <Detail label="Date" value={viewingExpense.payout_date} />
+                <Detail label="Status" value={viewingExpense.status} />
+                <Detail label="Expense type" value={viewingExpense.expense_type_name} />
+                <Detail label="Supplier" value={viewingExpense.supplier_name || "Not applicable"} />
+                <Detail label="Amount" value={formatCurrency(viewingExpense.amount)} />
+                <Detail label="Payment method" value={viewingExpense.payment_method} />
+                <Detail label="Paid from" value={viewingExpense.paid_by_staff_id ? "Staff collected cash" : "Business funds"} />
+                <Detail label="Recorded by" value={viewingExpense.recorded_by_staff_name} />
+                <Detail label="Description" value={viewingExpense.description || "—"} wide />
+                <Detail label="Receipt reference" value={viewingExpense.receipt_reference || "—"} />
+                <Detail label="Created" value={viewingExpense.created_at ? new Date(viewingExpense.created_at).toLocaleString() : "—"} />
+                {viewingExpense.rejection_reason && <Detail label="Rejection reason" value={viewingExpense.rejection_reason} wide />}
+                {viewingExpense.void_reason && <Detail label="Void reason" value={viewingExpense.void_reason} wide />}
+                {viewingExpense.receipt_url && (
+                  <div className="sm:col-span-2">
+                    <a className="font-semibold text-blue-700 underline" href={viewingExpense.receipt_url} target="_blank" rel="noreferrer">Open receipt</a>
+                  </div>
+                )}
+              </div>
+              {["DRAFT", "REJECTED"].includes(viewingExpense.status) && (
+                <div className="mt-5 border-t pt-4">
+                  <button type="button" className="rounded-lg bg-blue-700 px-4 py-2 font-bold text-white" onClick={() => editExpense(viewingExpense)}>Edit this expense</button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+function Detail({ label, value, wide = false }) {
+  return (
+    <div className={wide ? "sm:col-span-2" : ""}>
+      <div className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-1 whitespace-pre-wrap text-sm text-slate-900">{value || "—"}</div>
     </div>
   );
 }
