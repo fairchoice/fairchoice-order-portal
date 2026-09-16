@@ -31,13 +31,12 @@ export function warehouseSupplyStage(value) {
       "preorder",
       "need supplier",
       "supply needed",
-      // Legacy values written by the old workflow are still unresolved demand.
-      "next supplier",
-      "next supply",
-      "supplier pending",
     ].includes(status)
   ) {
     return "Pre-order";
+  }
+  if (["next supplier", "next supply", "supplier pending"].includes(status)) {
+    return "Next Supplier";
   }
   if (["cannot supply", "removed"].includes(status)) return "Cannot Supply";
   return null;
@@ -63,20 +62,28 @@ export function preOrderSupplyItemChanges(
     return {
       sourceStatus: "In Stock",
       includeInPicking: true,
-      pickedQty: Number(quantity || 0),
+      // Stock is available to the picker, but must not be marked picked
+      // until a warehouse user explicitly confirms the Pick action.
+      pickedQty: 0,
     };
   }
   if (actionType === "PartialBuy") {
     return {
-      sourceStatus: "Need Supplier",
+      sourceStatus: "Next Supplier",
       includeInPicking: false,
       pickedQty: 0,
       qty: Number(remainingQuantity || 0),
     };
   }
-  if (actionType === "NextSup") return null;
+  if (actionType === "NextSup") {
+    return {
+      sourceStatus: "Next Supplier",
+      includeInPicking: false,
+      pickedQty: 0,
+    };
+  }
   if (actionType === "Available") {
-    return { sourceStatus: "In Stock", includeInPicking: true, pickedQty: Number(quantity || 0) };
+    return { sourceStatus: "In Stock", includeInPicking: true, pickedQty: 0 };
   }
   if (actionType === "Recall Available") {
     return { sourceStatus: "Cannot Supply", includeInPicking: false, pickedQty: 0 };

@@ -1251,57 +1251,6 @@ const getLinePrice = (item = {}) =>
 const getLineVatRate = (item = {}) =>
   Number(item.vatRate ?? item.vat_rate ?? item.vatPercent ?? item.vat_percent ?? 0);
 
-const PROMOTION_INVOICE_START_DATE = "2026-09-04";
-
-const isPromotionInvoiceDateEligible = (order = {}) => {
-  const rawDate =
-    order.created_at ||
-    order.createdAt ||
-    order.order_date ||
-    order.orderDate ||
-    order.invoice_date ||
-    order.invoiceDate ||
-    "";
-  const dateKey = String(rawDate).slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(dateKey) && dateKey >= PROMOTION_INVOICE_START_DATE;
-};
-
-const isFreePromotionInvoiceLine = (item = {}, order = {}) => {
-  if (!isPromotionInvoiceDateEligible(order)) return false;
-  const quantity = getLineQuantity(item);
-  const unitPrice = getLinePrice(item);
-  const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
-  return quantity > 0 && unitPrice > 0 && Math.abs(netTotal) < 0.005;
-};
-
-const restoreHistoricalInvoiceAmounts = (order = {}) => {
-  if (isPromotionInvoiceDateEligible(order)) return order;
-
-  const restoreItem = (item = {}) => {
-    const quantity = getLineQuantity(item);
-    const unitPrice = getLinePrice(item);
-    const savedNet = Number(item.net_total ?? item.netTotal ?? 0);
-
-    if (quantity <= 0 || unitPrice <= 0 || Math.abs(savedNet) >= 0.005) {
-      return item;
-    }
-
-    const restoredNet = roundMoney(unitPrice * quantity);
-    return {
-      ...item,
-      net_total: restoredNet,
-      netTotal: restoredNet,
-    };
-  };
-
-  const restoredItems = (order.items || order.order_items || []).map(restoreItem);
-  return {
-    ...order,
-    items: restoredItems,
-    order_items: restoredItems,
-  };
-};
-
 const getInvoiceProductCode = (item = {}) => getProductCodeFromInvoiceItem(item);
 
 const getPrintableCompanyAddress = (address = "") =>
@@ -1314,13 +1263,12 @@ function buildLegacyStandardInvoiceHtml(
   order = {},
   { documentType = "invoice", autoPrint = false, settings: settingsOverride = {} } = {}
 ) {
-  const invoiceOrder = restoreHistoricalInvoiceAmounts(normalizeInvoiceOrder(order));
+  const invoiceOrder = normalizeInvoiceOrder(order);
   const settings = getInvoiceSettings(settingsOverride);
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
   const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
   const isDeliveryNote = documentType === "deliveryNote";
   const isOrderForm = documentType === "orderForm";
-  const isReturnInvoice = documentType === "returnInvoice";
   const isServerManagerDocument = isServerManagerPriceMode(
     invoiceOrder.priceMode || invoiceOrder.price_mode
   );
@@ -1354,16 +1302,11 @@ function buildLegacyStandardInvoiceHtml(
       const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
       const vatRate = getLineVatRate(item);
       const productCode = getInvoiceProductCode(item);
-      const isFreePromotion = isFreePromotionInvoiceLine(item, invoiceOrder);
 
       return `
         <tr>
           <td>${escapeHtml(productCode)}</td>
-          <td>${escapeHtml(item.name || item.productName || item.product_name || "")}${
-            isFreePromotion
-              ? ' <strong style="display:inline-block;margin-left:5px;color:#15803d;font-size:10px;">PROMOTION FREE</strong>'
-              : ""
-          }</td>
+          <td>${escapeHtml(item.name || item.productName || item.product_name || "")}</td>
           <td class="right">${escapeHtml(quantity)}</td>
           ${
             showPrices
@@ -1399,8 +1342,8 @@ function buildLegacyStandardInvoiceHtml(
             min-height: 277mm;
             display: flex;
             flex-direction: column;
-            position: relative;
-            isolation: isolate;
+              position: relative;
+  isolation: isolate;
           }
           .content {
             flex: 1 0 auto;
@@ -1657,7 +1600,7 @@ export function buildStandardInvoiceHtml(
   order = {},
   { documentType = "invoice", autoPrint = false, settings: settingsOverride = {} } = {}
 ) {
-  const invoiceOrder = restoreHistoricalInvoiceAmounts(normalizeInvoiceOrder(order));
+  const invoiceOrder = normalizeInvoiceOrder(order);
   const printTemplate = getPrintTemplate(invoiceOrder.priceMode || invoiceOrder.price_mode);
   const resolvedDocumentType =
     documentType === "invoice" &&
@@ -1749,7 +1692,6 @@ export function buildStandardInvoiceHtml(
       const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
       const vatRate = getLineVatRate(item);
       const productCode = getInvoiceProductCode(item);
-      const isFreePromotion = isFreePromotionInvoiceLine(item, invoiceOrder);
 
       return `
         <tr>
@@ -1758,11 +1700,7 @@ export function buildStandardInvoiceHtml(
               ? ""
               : `<td class="code">${escapeHtml(productCode)}</td>`
           }
-          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}${
-            isFreePromotion
-              ? ' <span style="display:inline-block;margin-left:5px;padding:1px 5px;border:1px solid #16a34a;border-radius:8px;color:#15803d;font-size:9px;font-weight:900;white-space:nowrap;">PROMOTION FREE</span>'
-              : ""
-          }</td>
+          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}</td>
           <td class="right">${escapeHtml(quantity)}</td>
           ${
             showPrices
@@ -1831,18 +1769,20 @@ export function buildStandardInvoiceHtml(
             pointer-events: none;
             background: transparent;
           }
-          .watermark.paid {
-            color: rgba(22, 163, 74, 0.14);
-            border-color: rgba(22, 163, 74, 0.18);
-          }
-          .watermark.part-paid {
-            color: rgba(124, 58, 237, 0.14);
-            border-color: rgba(124, 58, 237, 0.18);
-          }
-          .watermark.in-progress {
-            color: rgba(217, 119, 6, 0.16);
-            border-color: rgba(217, 119, 6, 0.20);
-          }
+        .watermark.paid {
+  color: rgba(22, 163, 74, 0.14);
+  border-color: rgba(22, 163, 74, 0.18);
+}
+
+.watermark.part-paid {
+  color: rgba(124, 58, 237, 0.14);
+  border-color: rgba(124, 58, 237, 0.18);
+}
+
+.watermark.in-progress {
+  color: rgba(217, 119, 6, 0.16);
+  border-color: rgba(217, 119, 6, 0.20);
+}
           .content,
           .footer {
             position: relative;
@@ -1867,7 +1807,9 @@ export function buildStandardInvoiceHtml(
             color: #334155;
             font-size: 10.5px;
           }
-          .brand-panel { text-align: right; }
+          .brand-panel {
+            text-align: right;
+          }
           .logo {
             max-width: 155px;
             max-height: 74px;
@@ -1910,9 +1852,19 @@ export function buildStandardInvoiceHtml(
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
-          .panel-body { padding: 8px; background: #fff; }
-          .customer-name { font-size: 13px; font-weight: 900; margin-bottom: 5px; }
-          .address-block { color: #334155; margin-top: 4px; }
+          .panel-body {
+            padding: 8px;
+            background: #fff;
+          }
+          .customer-name {
+            font-size: 13px;
+            font-weight: 900;
+            margin-bottom: 5px;
+          }
+          .address-block {
+            color: #334155;
+            margin-top: 4px;
+          }
           .muted-label {
             color: #64748b;
             font-size: 9.5px;
@@ -1927,8 +1879,15 @@ export function buildStandardInvoiceHtml(
             border-bottom: 1px solid #e2e8f0;
           }
           .detail-row:last-child { border-bottom: 0; }
-          .detail-label { color: #475569; font-weight: 800; }
-          .detail-value { color: #0f172a; font-weight: 700; overflow-wrap: anywhere; }
+          .detail-label {
+            color: #475569;
+            font-weight: 800;
+          }
+          .detail-value {
+            color: #0f172a;
+            font-weight: 700;
+            overflow-wrap: anywhere;
+          }
           table {
             width: 100%;
             border-collapse: collapse;
@@ -1969,7 +1928,10 @@ export function buildStandardInvoiceHtml(
             overflow: hidden;
             text-overflow: ellipsis;
           }
-          .description { font-weight: 700; font-size: 11.8px; }
+          .description {
+            font-weight: 700;
+            font-size: 11.8px;
+          }
           .summary-area {
             display: grid;
             grid-template-columns: minmax(0, 1fr) 78mm;
@@ -1990,16 +1952,29 @@ export function buildStandardInvoiceHtml(
             padding: 8px;
             background: #fff;
           }
-          .count-value { font-size: 18px; font-weight: 900; color: #0f172a; }
+          .count-value {
+            font-size: 18px;
+            font-weight: 900;
+            color: #0f172a;
+          }
           .vat-summary {
             margin-top: 10px;
             border: 1px solid #fed7aa;
             border-radius: 6px;
             overflow: hidden;
           }
-          .vat-summary table { margin: 0; font-size: 10px; }
-          .vat-summary th { background: #fed7aa !important; color: #111827 !important; }
-          .vat-summary td { background: #fff !important; padding: 5px 6px; }
+          .vat-summary table {
+            margin: 0;
+            font-size: 10px;
+          }
+          .vat-summary th {
+            background: #fed7aa !important;
+            color: #111827 !important;
+          }
+          .vat-summary td {
+            background: #fff !important;
+            padding: 5px 6px;
+          }
           .totals-box {
             border: 1px solid #bfdbfe;
             border-radius: 6px;
@@ -2013,8 +1988,14 @@ export function buildStandardInvoiceHtml(
             border-bottom: 1px solid #dbeafe;
           }
           .total-row:last-child { border-bottom: 0; }
-          .total-label { font-weight: 900; color: #334155; }
-          .total-value { text-align: right; font-weight: 900; }
+          .total-label {
+            font-weight: 900;
+            color: #334155;
+          }
+          .total-value {
+            text-align: right;
+            font-weight: 900;
+          }
           .grand-total {
             background: #dbeafe !important;
             color: #111827 !important;
@@ -2054,7 +2035,9 @@ export function buildStandardInvoiceHtml(
             break-inside: avoid;
             page-break-inside: avoid;
           }
-          .page-number::after { content: "Page " counter(page); }
+          .page-number::after {
+            content: "Page " counter(page);
+          }
           @media print {
             * {
               -webkit-print-color-adjust: exact !important;
@@ -2066,7 +2049,10 @@ export function buildStandardInvoiceHtml(
               max-width: 210mm;
               overflow: visible;
             }
-            .page { width: 190mm; max-width: 190mm; }
+            .page {
+              width: 190mm;
+              max-width: 190mm;
+            }
           }
         </style>
       </head>
@@ -2211,12 +2197,16 @@ export function buildStandardInvoiceHtml(
               }
             </section>
 
-            <section class="deliver-bottom">
-              <div class="muted-label">Deliver To</div>
-              <div class="customer-name">${escapeHtml(customerName)}</div>
-              ${branchName ? `<div>${escapeHtml(branchName)}</div>` : ""}
-              <div>${escapeHtml(deliveryAddress)}</div>
-            </section>
+            ${
+              `
+                  <section class="deliver-bottom">
+                    <div class="muted-label">Deliver To</div>
+                    <div class="customer-name">${escapeHtml(customerName)}</div>
+                    ${branchName ? `<div>${escapeHtml(branchName)}</div>` : ""}
+                    <div>${escapeHtml(deliveryAddress)}</div>
+                  </section>
+                `
+            }
 
             ${(settings.defaultNotes || invoiceOrder.notes) ? `<section class="notes">${escapeHtml(invoiceOrder.notes || settings.defaultNotes)}</section>` : ""}
           </main>
@@ -2252,58 +2242,12 @@ const openInvoiceHtml = (html, popupMessage = "Popup blocked. Please allow popup
   return win;
 };
 
-const mergeFreshInvoiceOrder = (originalOrder = {}, freshOrder = null) => {
-  if (!freshOrder) return originalOrder;
-
-  return {
-    ...originalOrder,
-    ...freshOrder,
-    _documentPaymentStatus:
-      originalOrder._documentPaymentStatus ?? freshOrder._documentPaymentStatus,
-    documentPaymentStatus:
-      originalOrder.documentPaymentStatus ?? freshOrder.documentPaymentStatus,
-    invoicePaymentStatus:
-      originalOrder.invoicePaymentStatus ?? freshOrder.invoicePaymentStatus,
-  };
-};
-
-const openFreshInvoiceHtml = async (
-  order = {},
-  options = {},
-  { autoPrint = false, popupMessage = "Popup blocked. Please allow popups for invoices." } = {}
-) => {
-  const win = window.open("", "_blank", "width=900,height=700");
-  if (!win) {
-    alert(popupMessage);
-    return null;
-  }
-
-  try {
-    const freshOrder = await fetchInvoiceOrderFromDb(order).catch((error) => {
-      console.warn("Invoice live-order refresh failed; using supplied order snapshot.", error);
-      return null;
-    });
-    const documentOrder = mergeFreshInvoiceOrder(order, freshOrder);
-    const html = buildStandardInvoiceHtml(documentOrder, { ...options, autoPrint });
-    win.document.write(html);
-    win.document.close();
-    return win;
-  } catch (error) {
-    try {
-      win.close();
-    } catch (_) {
-      // Ignore popup cleanup failures.
-    }
-    throw error;
-  }
-};
-
-export async function previewInvoice(order = {}, options = {}) {
-  return openFreshInvoiceHtml(order, options, { autoPrint: false });
+export function previewInvoice(order = {}, options = {}) {
+  return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: false }));
 }
 
-export async function printInvoice(order = {}, options = {}) {
-  return openFreshInvoiceHtml(order, options, { autoPrint: true });
+export function printInvoice(order = {}, options = {}) {
+  return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: true }));
 }
 
 export function printOrderForm(order = {}, options = {}) {
@@ -2316,11 +2260,11 @@ export function printDeliveryNote(order = {}, options = {}) {
   );
 }
 
-export async function downloadInvoice(order = {}, options = {}) {
-  return openFreshInvoiceHtml(order, options, {
-    autoPrint: true,
-    popupMessage: "Popup blocked. Please allow popups to download or save the invoice PDF.",
-  });
+export function downloadInvoice(order = {}, options = {}) {
+  return openInvoiceHtml(
+    buildStandardInvoiceHtml(order, { ...options, autoPrint: true }),
+    "Popup blocked. Please allow popups to download or save the invoice PDF."
+  );
 }
 
 export async function createInvoice({ order, confirmedBy, currentUser } = {}) {
@@ -2763,6 +2707,9 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
   if (error) throw error;
 
+  // customer_invoices is protected by RLS. Do not insert into it directly
+  // from the browser. Use the existing SECURITY DEFINER sync RPC so the
+  // canonical invoice is created/updated from the authoritative order row.
   let canonicalOrderUuid = [
     order.id,
     order.dbId,
@@ -2979,11 +2926,12 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
     totalAmount: Number(row.grand_total || snapshot.total_amount || 0),
     total_amount: Number(row.grand_total || snapshot.total_amount || 0),
     finalTotal: Number(
-      row.grand_total ||
-      snapshot.grand_total ||
-      snapshot.order_total ||
-      0
-    ),
+  row.grand_total ||
+  snapshot.grand_total ||
+  snapshot.order_total ||
+  0
+),
+
     subtotal: Number(row.subtotal || snapshot.subtotal || 0),
     net_total: Number(row.net_total || snapshot.net_total || snapshot.subtotal || 0),
     vatTotal: Number(row.vat_total || snapshot.vat_total || snapshot.total_vat || 0),
@@ -3023,11 +2971,36 @@ export async function loadProcessingQueueOrders({
   customerName,
 } = {}) {
   const runQuery = async (buildQuery) => {
+    // processing_queue contains large JSON snapshots. Selecting every column and
+    // sorting the active queue by confirmed_at was causing PostgREST statement
+    // timeouts during ordinary order refreshes. Only load the fields this mapper
+    // actually consumes and use the indexed queue_status + queued_at path.
     let query = supabase
       .from("processing_queue")
-      .select("*")
+      .select([
+        "id",
+        "order_id",
+        "order_number",
+        "customer_account_id",
+        "customer_branch_id",
+        "branch_id",
+        "customer_name",
+        "branch_name",
+        "price_mode",
+        "queue_status",
+        "confirmed_at",
+        "queued_at",
+        "created_at",
+        "grand_total",
+        "subtotal",
+        "net_total",
+        "vat_total",
+        "total_quantity",
+        "total_lines",
+        "line_items",
+        "transaction_snapshot",
+      ].join(","))
       .in("queue_status", activeProcessingQueueStatuses)
-      .order("confirmed_at", { ascending: true, nullsFirst: false })
       .order("queued_at", { ascending: true });
 
     query = buildQuery ? buildQuery(query) : query;
@@ -3093,10 +3066,10 @@ const mapOrderForLedgerFallback = (order = {}) => ({
     "",
   priceMode: order.price_mode || "vat",
   finalTotal: Number(
-    order.grand_total ||
-    order.order_total ||
-    0
-  ),
+  order.grand_total ||
+  order.order_total ||
+  0
+),
   orderTotal: Number(order.order_total || order.total || 0),
   createdAt: order.created_at,
   deliveredAt: order.delivered_at || order.updated_at || order.created_at,

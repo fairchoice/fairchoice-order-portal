@@ -428,7 +428,8 @@ const mapDeliveredOrderForCustomerLedger = (order = {}) => ({
     vat_total: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
     sourceStatus: item.source_status || item.status || "In Stock",
     source_status: item.source_status || item.status || "In Stock",
-    pickedQty: Number(item.picked_qty || item.qty || item.quantity || 0),
+    // Picking must always be a warehouse-user action; do not infer picked quantity from ordered qty.
+    pickedQty: Number(item.picked_qty ?? 0),
     includeInPicking: item.include_in_picking !== false,
     include_in_picking: item.include_in_picking !== false,
   })),
@@ -1943,10 +1944,8 @@ const buildCartFromCentralItems = (items = []) => {
               ? "Need Supplier"
               : "In Stock",
           includeInPicking: true,
-          pickedQty: Math.min(
-            Number(product.stock || 0),
-            Number(serverItem.quantity || 0)
-          ),
+          // In-stock means available to pick, not already picked.
+          pickedQty: 0,
         },
         Number(serverItem.quantity || 0)
       );
@@ -2487,7 +2486,8 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
         vatTotal: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
         stock: Number(item.stock_before || 0),
         sourceStatus: item.source_status || "In Stock",
-        pickedQty: Number(item.picked_qty || item.qty || 0),
+        // Preserve a real saved pick only. A zero/null picked_qty must not fall back to ordered qty.
+        pickedQty: Number(item.picked_qty ?? 0),
         includeInPicking: item.include_in_picking !== false,
         pickingAction: item.picking_action || null,
         picking_action: item.picking_action || null,
@@ -2948,7 +2948,7 @@ const getHomepageSubtitle = (item) => {
                 ...product,
                 sourceStatus:
                   product.stock < newQty ? "Need Supplier" : "In Stock",
-                pickedQty: Math.min(product.stock, newQty),
+                pickedQty: 0,
               },
               newQty
             )
@@ -2966,7 +2966,7 @@ const getHomepageSubtitle = (item) => {
         sourceStatus:
           product.stock < quantity ? "Need Supplier" : "In Stock",
         includeInPicking: true,
-        pickedQty: Math.min(product.stock, quantity),
+        pickedQty: 0,
         },
         quantity
       ),
@@ -2995,7 +2995,7 @@ const getHomepageSubtitle = (item) => {
                     ...item,
                     sourceStatus:
                       item.stock < item.qty + 1 ? "Need Supplier" : "In Stock",
-                    pickedQty: Math.min(item.stock, item.qty + 1),
+                    pickedQty: 0,
                   },
                   item.qty + 1
                 )
@@ -3025,7 +3025,7 @@ const getHomepageSubtitle = (item) => {
                 : recalculateCartItemForPriceMode(
                     {
                       ...item,
-                      pickedQty: Math.min(item.stock, item.qty - 1),
+                      pickedQty: 0,
                     },
                     item.qty - 1
                   )
@@ -3058,7 +3058,7 @@ const getHomepageSubtitle = (item) => {
                     ...item,
                     sourceStatus:
                       item.stock < quantity ? "Need Supplier" : "In Stock",
-                    pickedQty: Math.min(item.stock, quantity),
+                    pickedQty: 0,
                   },
                   quantity
                 )
@@ -3958,7 +3958,8 @@ const updatePreOrderSupplyItem = async (orderId, itemId, updates = {}) => {
     String(entry.dbId || entry.id) === String(itemId) ? { ...entry, ...merged, ...calculated } : entry
   );
   await saveOrderTotalsToDatabase(orderId, updatedItems, order);
-  await fetchOrders();
+  // Pre-order batch sync refreshes orders once after the batch.
+  // Avoid a full orders + processing_queue reload for every individual item.
   return true;
 };
 
@@ -4000,7 +4001,7 @@ const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restor
     if (error) return false;
   }
   await saveOrderTotalsToDatabase(orderId, finalItems, order);
-  await fetchOrders();
+  // The parent Pre-order sync performs the single post-batch refresh.
   return true;
 };
 const addOrderItem = async (orderId, newItem) => {
@@ -4035,7 +4036,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     {
       ...item,
       qty: allocatedQty,
-      pickedQty: allocatedQty,
+      pickedQty: 0,
       price,
       selectedPrice: price,
       unit_price: price,
@@ -4092,7 +4093,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       flavour: item.flavour || "",
       carton_size: item.cartonSize || item.carton_size || "",
       qty: allocatedQty,
-      picked_qty: allocatedQty,
+      picked_qty: 0,
       price: availableItem.price.toFixed(2),
       line_total: availableItem.line_total.toFixed(2),
       net_total: availableItem.net_total.toFixed(2),
@@ -4137,7 +4138,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     dbId: data?.id,
     id: data?.id,
     qty: allocatedQty,
-    pickedQty: allocatedQty,
+    pickedQty: 0,
     sourceStatus: "In Stock",
     includeInPicking: true,
     lineTotal: availableItem.line_total,
@@ -4151,7 +4152,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
   });
 
   await saveOrderTotalsToDatabase(orderId, updatedItems, order);
-  await fetchOrders();
+  // Do not reload all orders/processing_queue for each split in a 30-item batch.
   return data;
 };
 

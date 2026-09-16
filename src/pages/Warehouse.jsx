@@ -22,6 +22,36 @@ import {
   withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
 
+const PREORDER_SUPPLIER_HIGHLIGHT_KEY = "fc_preorder_supplier_highlights_v1";
+
+const SUPPLIER_LIGHT_COLORS = [
+  { backgroundColor: "#eff6ff", borderColor: "#93c5fd", color: "#1e40af" },
+  { backgroundColor: "#f0fdf4", borderColor: "#86efac", color: "#166534" },
+  { backgroundColor: "#fff7ed", borderColor: "#fdba74", color: "#9a3412" },
+  { backgroundColor: "#faf5ff", borderColor: "#d8b4fe", color: "#6b21a8" },
+  { backgroundColor: "#fdf2f8", borderColor: "#f9a8d4", color: "#9d174d" },
+  { backgroundColor: "#ecfeff", borderColor: "#67e8f9", color: "#155e75" },
+  { backgroundColor: "#fefce8", borderColor: "#fde047", color: "#854d0e" },
+  { backgroundColor: "#f1f5f9", borderColor: "#94a3b8", color: "#334155" },
+];
+
+const supplierColorFor = (supplierId, supplierName) => {
+  const seed = String(supplierId || supplierName || "Supplier");
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(index)) | 0;
+  }
+  return SUPPLIER_LIGHT_COLORS[Math.abs(hash) % SUPPLIER_LIGHT_COLORS.length];
+};
+
+const readSupplierHighlights = () => {
+  try {
+    return JSON.parse(localStorage.getItem(PREORDER_SUPPLIER_HIGHLIGHT_KEY) || "{}");
+  } catch {
+    return {};
+  }
+};
+
 /*
   Warehouse Page
   --------------------------------------------------
@@ -51,6 +81,23 @@ export default function Warehouse({
   const [countryFilter, setCountryFilter] = useState("All");
   const [stableItemOrders, setStableItemOrders] = useState({});
   const [preOrderPanelOrderId, setPreOrderPanelOrderId] = useState(null);
+  const [supplierHighlights, setSupplierHighlights] = useState(() => readSupplierHighlights());
+
+  // Visual supplier highlights are read from the compact cache written by POS sync.
+  // This deliberately performs no database request, so Warehouse navigation stays fast.
+  useEffect(() => {
+    setSupplierHighlights(readSupplierHighlights());
+  }, [orders]);
+
+  useEffect(() => {
+    const refreshSupplierHighlights = () => setSupplierHighlights(readSupplierHighlights());
+    window.addEventListener("focus", refreshSupplierHighlights);
+    window.addEventListener("storage", refreshSupplierHighlights);
+    return () => {
+      window.removeEventListener("focus", refreshSupplierHighlights);
+      window.removeEventListener("storage", refreshSupplierHighlights);
+    };
+  }, []);
 
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
@@ -901,11 +948,30 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     );
   };
 
+  const getUnresolvedSupplyItems = (order = {}) => {
+    const blockingStatuses = new Set([
+      "need supplier",
+      "pre-order",
+      "pre order",
+      "supply needed",
+      "next supplier",
+    ]);
+    return (order.items || []).filter((item) =>
+      blockingStatuses.has(String(getWarehouseStatus(item) || "").trim().toLowerCase())
+    );
+  };
+
   /*
     Assign driver to order.
   */
  const assignDriver = async (order, driverName) => {
   const orderId = getOrderId(order);
+  const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
+
+  if (driverName && unresolvedSupplyItems.length > 0) {
+    alert(`Resolve ${unresolvedSupplyItems.length} Pre-Order / Next Supplier item(s) before assigning a driver.`);
+    return;
+  }
 
   setAssignedDrivers((prev) => ({
     ...prev,
@@ -997,6 +1063,12 @@ const confirmForDriver = async (order) => {
   }
 
   const orderId = order.orderId || order.order_number;
+  const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
+
+  if (unresolvedSupplyItems.length > 0) {
+    alert(`Resolve ${unresolvedSupplyItems.length} Pre-Order / Next Supplier item(s) before sending this order to the driver.`);
+    return;
+  }
 
   const driverName =
     assignedDrivers[orderId] ||
@@ -1115,14 +1187,30 @@ const printCustomerDocumentForMode =
               const isInStock = sourceStatus === "In Stock";
               const isCannotSupply = sourceStatus === "Cannot Supply";
               const needsSupplier = !isInStock && !isCannotSupply;
+              const itemId = String(item.dbId || item.id || "");
+              const supplierHighlight = supplierHighlights[`${orderId}:${itemId}`] || null;
+              const supplierColor = supplierHighlight
+                ? supplierColorFor(supplierHighlight.supplierId, supplierHighlight.supplierName)
+                : null;
               return (
                 <div
                   key={item.id}
                   className={`grid grid-cols-1 md:grid-cols-[1fr_70px_140px] gap-2 md:gap-0 items-center border rounded-lg px-3 py-2 text-sm ${
                     item.includeInPicking === false ? "opacity-50 bg-slate-50" : ""
                   }`}
+                  style={supplierColor ? {
+                    backgroundColor: supplierColor.backgroundColor,
+                    borderColor: supplierColor.borderColor,
+                  } : undefined}
                 >
-                  <div className="font-medium truncate pr-3">{item.name}</div>
+                  <div className="min-w-0 pr-3">
+                    <div className="font-medium truncate">{item.name}</div>
+                    {supplierHighlight && (
+                      <div className="mt-0.5 truncate text-[10px] font-extrabold" style={{ color: supplierColor.color }}>
+                        Bought · {supplierHighlight.supplierName || "Supplier"}
+                      </div>
+                    )}
+                  </div>
 
                   <div className="text-center font-semibold">
                     {getLineQty(item)}
