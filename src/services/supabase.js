@@ -1,10 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Production safety pin: keep the live app on the FairChoice V3 Supabase project.
-// Vite environment values are build-time values and a stale/mismatched deployment
-// can otherwise send every browser request to the wrong endpoint.
-const SUPABASE_URL = "https://tnwvdmrrpwmfeujbyrxk.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_DC80W7bdorQWY322b3wV2g_IerFZN-y";
+// Production safety pin: keep the live app on the FairChoice order-system Supabase project.
+const SUPABASE_URL = "https://naobitwzrkovmwvzvgvf.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_dUuIBZqx-emtlO6-NXOXKw_22dONRSH";
 
 export const isSupabaseConfigured =
   SUPABASE_URL.startsWith("https://") &&
