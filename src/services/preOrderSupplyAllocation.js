@@ -59,13 +59,9 @@ export function preOrderSupplyItemChanges(
   { quantity = 0, remainingQuantity = 0, restoreQuantity = 0 } = {},
 ) {
   if (actionType === "Buy") {
-    return {
-      sourceStatus: "In Stock",
-      includeInPicking: true,
-      // Stock is available to the picker, but must not be marked picked
-      // until a warehouse user explicitly confirms the Pick action.
-      pickedQty: 0,
-    };
+    // POS Buy is status-only. Never alter ordered, picked/packed, or inclusion
+    // quantities here; those remain owned by the existing order/warehouse flow.
+    return { sourceStatus: "In Stock" };
   }
   if (actionType === "PartialBuy") {
     return {

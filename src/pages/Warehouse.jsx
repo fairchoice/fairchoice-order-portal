@@ -9,6 +9,7 @@ import { sortPrintItems } from "../utils/printItemSorting";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import WarehousePreOrderPanel from "../components/WarehousePreOrderPanel";
 import { compareWarehouseProducts } from "../utils/warehouseProductSorting";
+import { loadPreOrderSupplyHistory } from "../services/preOrderSupplyHistory";
 
 import {
   calculateDocumentTotals,
@@ -50,6 +51,38 @@ const readSupplierHighlights = () => {
   } catch {
     return {};
   }
+};
+
+const buildSharedSupplierHighlights = (events = []) => {
+  const recalledIds = new Set(
+    (events || [])
+      .filter((event) => event?.actionType === "Recall")
+      .flatMap((event) => [event?.recalledClientActionId, event?.recalledEventId])
+      .filter(Boolean)
+      .map(String)
+  );
+
+  const highlights = {};
+  [...(events || [])]
+    .filter((event) => ["Buy", "PartialBuy"].includes(event?.actionType))
+    .filter((event) =>
+      !recalledIds.has(String(event?.clientActionId || "")) &&
+      !recalledIds.has(String(event?.id || ""))
+    )
+    .sort((left, right) => new Date(left?.timestamp || 0) - new Date(right?.timestamp || 0))
+    .forEach((event) => {
+      const targetItemId = event.actionType === "PartialBuy"
+        ? (event.addedItemId || event.itemId)
+        : event.itemId;
+      if (!event.orderId || !targetItemId) return;
+      highlights[`${event.orderId}:${targetItemId}`] = {
+        supplierId: event.supplierId || null,
+        supplierName: event.supplierName || "Supplier",
+        syncedAt: event.timestamp || null,
+      };
+    });
+
+  return highlights;
 };
 
 /*
@@ -98,6 +131,37 @@ export default function Warehouse({
       window.removeEventListener("storage", refreshSupplierHighlights);
     };
   }, []);
+
+
+  // Supplier colours must survive navigation, refreshes, and different devices.
+  // Local storage is only a fast same-browser cache; the persisted POS purchase
+  // history is the shared source. This is read-only and never changes order data.
+  useEffect(() => {
+    let active = true;
+
+    const refreshSharedSupplierHighlights = async () => {
+      try {
+        const { events } = await loadPreOrderSupplyHistory(loggedInUser, {
+          pageSize: 500,
+          maxPages: 4,
+        });
+        if (!active) return;
+        setSupplierHighlights({
+          ...readSupplierHighlights(),
+          ...buildSharedSupplierHighlights(events),
+        });
+      } catch (error) {
+        console.warn("Warehouse supplier highlight history load skipped:", error?.message || error);
+      }
+    };
+
+    refreshSharedSupplierHighlights();
+    window.addEventListener("focus", refreshSharedSupplierHighlights);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshSharedSupplierHighlights);
+    };
+  }, [loggedInUser?.id, loggedInUser?.staff_id, loggedInUser?.username]);
 
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
@@ -282,6 +346,71 @@ const fetchDrivers = async () => {
   */
   const getLineQty = getOrderItemQty;
 
+  // Warehouse Packing must show the quantity that was actually packed/picked.
+  // Legacy completed warehouse rows can have picked_qty saved as 0 even though
+  // the order line quantity is valid. For display/printing only, fall back to
+  // the ordered quantity when picking is already completed. Nothing is written
+  // back to the database.
+  const getWarehousePackedQty = (item = {}, order = {}) => {
+    const pickedRaw = item.pickedQty ?? item.picked_qty;
+    const picked = Number(pickedRaw);
+    const ordered = Number(item.qty ?? item.quantity ?? 0);
+    const pickingStatus = String(
+      order.picking_status ?? order.pickingStatus ?? ""
+    ).trim().toLowerCase();
+    const warehouseStatus = String(order.status || "").trim().toLowerCase();
+    const itemStatus = String(
+      item.sourceStatus ?? item.source_status ?? item.status ?? ""
+    ).trim().toLowerCase();
+    const pickingCompleted =
+      pickingStatus === "completed" || warehouseStatus === "warehouse packing";
+    const isPreOrderLine = [
+      "need supplier",
+      "pre-order",
+      "pre order",
+      "supply needed",
+      "next supplier",
+    ].includes(itemStatus);
+
+    if (Number.isFinite(picked) && picked > 0) return picked;
+
+    // Pre-order lines are not packed yet, but Warehouse must still show the
+    // customer's ordered quantity instead of 0. Display/print only; no DB write.
+    if (isPreOrderLine && Number.isFinite(ordered) && ordered > 0) {
+      return ordered;
+    }
+
+    if (
+      pickingCompleted &&
+      item.includeInPicking !== false &&
+      item.include_in_picking !== false &&
+      Number.isFinite(ordered) &&
+      ordered > 0
+    ) {
+      return ordered;
+    }
+
+    if (pickedRaw !== null && pickedRaw !== undefined && pickedRaw !== "") {
+      return Number.isFinite(picked) ? picked : 0;
+    }
+
+    return Number.isFinite(ordered) ? ordered : 0;
+  };
+
+  const withWarehousePackedQuantities = (order = {}) => ({
+    ...order,
+    items: (order.items || []).map((item) => {
+      const packedQty = getWarehousePackedQty(item, order);
+      return {
+        ...item,
+        qty: packedQty,
+        quantity: packedQty,
+        pickedQty: packedQty,
+        picked_qty: packedQty,
+      };
+    }),
+  });
+
  const getSavedLinePrice = (item = {}) =>
   Number(item.price ?? item.unit_price ?? 0);
 
@@ -382,7 +511,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   */
 
     const printOrderFormDocument = (order) => {
-    printCentralOrderForm(order);
+    printCentralOrderForm(withWarehousePackedQuantities(order));
     return;
 
     const printableItems = getPrintableItems(order);
@@ -986,7 +1115,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 const printProtectedOrderForm = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  printCentralOrderForm(order);
+  printCentralOrderForm(withWarehousePackedQuantities(order));
   await logAction({
     user: loggedInUser,
     action_type: "Printed picking list",
@@ -1213,7 +1342,7 @@ const printCustomerDocumentForMode =
                   </div>
 
                   <div className="text-center font-semibold">
-                    {getLineQty(item)}
+                    {getWarehousePackedQty(item, order)}
                   </div>
 
                   <div
