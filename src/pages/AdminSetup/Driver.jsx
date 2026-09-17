@@ -36,11 +36,80 @@ import {
   resolveDriverDeliveryAllocations,
 } from "../../utils/driverCashCollectionForm";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
+import { loadPreOrderSupplyHistory } from "../../services/preOrderSupplyHistory";
 
 const COMPLETED_COLLECTION_STORAGE_KEY =
   "fairchoice_driver_completed_collection_orders";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const SUPPLIER_LIGHT_COLORS = [
+  { backgroundColor: "#eff6ff", borderColor: "#93c5fd", color: "#1e40af" },
+  { backgroundColor: "#f0fdf4", borderColor: "#86efac", color: "#166534" },
+  { backgroundColor: "#fff7ed", borderColor: "#fdba74", color: "#9a3412" },
+  { backgroundColor: "#faf5ff", borderColor: "#d8b4fe", color: "#6b21a8" },
+  { backgroundColor: "#fdf2f8", borderColor: "#f9a8d4", color: "#9d174d" },
+  { backgroundColor: "#ecfeff", borderColor: "#67e8f9", color: "#155e75" },
+  { backgroundColor: "#fefce8", borderColor: "#fde047", color: "#854d0e" },
+  { backgroundColor: "#f1f5f9", borderColor: "#94a3b8", color: "#334155" },
+];
+
+const supplierColorFor = (supplierId, supplierName) => {
+  const seed = String(supplierId || supplierName || "Supplier");
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(index)) | 0;
+  }
+  return SUPPLIER_LIGHT_COLORS[Math.abs(hash) % SUPPLIER_LIGHT_COLORS.length];
+};
+
+const buildSharedSupplierHighlights = (events = []) => {
+  const recalledIds = new Set(
+    (events || [])
+      .filter((event) => event?.actionType === "Recall")
+      .flatMap((event) => [event?.recalledClientActionId, event?.recalledEventId])
+      .filter(Boolean)
+      .map(String)
+  );
+  const highlights = {};
+  [...(events || [])]
+    .filter((event) => ["Buy", "PartialBuy"].includes(event?.actionType))
+    .filter((event) =>
+      !recalledIds.has(String(event?.clientActionId || "")) &&
+      !recalledIds.has(String(event?.id || ""))
+    )
+    .sort((left, right) => new Date(left?.timestamp || 0) - new Date(right?.timestamp || 0))
+    .forEach((event) => {
+      const targetItemId = event.actionType === "PartialBuy"
+        ? (event.addedItemId || event.itemId)
+        : event.itemId;
+      if (!event.orderId || !targetItemId) return;
+      highlights[`${event.orderId}:${targetItemId}`] = {
+        supplierId: event.supplierId || null,
+        supplierName: event.supplierName || "Supplier",
+      };
+    });
+  return highlights;
+};
+
+const PRINT_EXCLUDED_SUPPLY_STATUSES = new Set([
+  "cannot supply", "need supplier", "pre-order", "pre order", "supply needed", "next supplier",
+]);
+
+const getDriverItemStatus = (item = {}) =>
+  String(item.sourceStatus || item.source_status || item.status || "In Stock");
+
+const isDriverPrintExcluded = (item = {}) =>
+  PRINT_EXCLUDED_SUPPLY_STATUSES.has(getDriverItemStatus(item).trim().toLowerCase());
+
+const getDriverPrintableSourceItems = (order = {}) =>
+  (order.items || order.order_items || []).filter((item) => !isDriverPrintExcluded(item));
+
+const withDriverPrintableItems = (order = {}) => ({
+  ...order,
+  items: getDriverPrintableSourceItems(order),
+  order_items: getDriverPrintableSourceItems(order),
+});
 
 const loadCompletedCollectionOrderIds = () => {
   try {
@@ -87,6 +156,29 @@ const loggedInUser = JSON.parse(
   localStorage.getItem("loggedInUser") || "{}"
 );
 
+const [supplierHighlights, setSupplierHighlights] = useState({});
+
+useEffect(() => {
+  let active = true;
+  const loadSupplierHighlights = async () => {
+    try {
+      const { events } = await loadPreOrderSupplyHistory(loggedInUser, {
+        pageSize: 500,
+        maxPages: 4,
+      });
+      if (active) setSupplierHighlights(buildSharedSupplierHighlights(events));
+    } catch (error) {
+      console.warn("Driver supplier highlight history load skipped:", error?.message || error);
+    }
+  };
+  loadSupplierHighlights();
+  window.addEventListener("focus", loadSupplierHighlights);
+  return () => {
+    active = false;
+    window.removeEventListener("focus", loadSupplierHighlights);
+  };
+}, [loggedInUser?.id, loggedInUser?.staff_id, loggedInUser?.username]);
+
 const legacyTestTextValues = new Set(["nisstaj", "test", "test user", "test receiver"]);
 const isLegacyTestText = (value) =>
   legacyTestTextValues.has(String(value || "").trim().toLowerCase());
@@ -100,7 +192,7 @@ const cleanLegacyTestAmount = (value, order = {}) => {
 };
 
   const getDriverTotals = (order = {}) => {
-    const calculated = calculateDocumentTotals(order.items || order.order_items || [], order);
+    const calculated = calculateDocumentTotals(getDriverPrintableSourceItems(order), order);
     const savedGrandTotal = [
       order.grand_total,
       order.grandTotal,
@@ -119,6 +211,8 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   };
 
   const getDriverItems = (order) => sortPrintItems(getDriverTotals(order).invoiceItems);
+  const getDriverDisplayItems = (order) =>
+    sortPrintItems([...(order.items || order.order_items || [])]);
 
   const [showPreviousBalance, setShowPreviousBalance] = useState(false);
 
@@ -132,7 +226,8 @@ const cleanLegacyTestAmount = (value, order = {}) => {
 
   const printResolvedThermalReceipt = async (order) => {
     const freshOrder = await fetchInvoiceOrderFromDb(order).catch(() => null);
-    const resolvedOrder = await withResolvedInvoicePaymentStatus(freshOrder || order);
+    const safeOrder = withDriverPrintableItems(freshOrder || order);
+    const resolvedOrder = await withResolvedInvoicePaymentStatus(safeOrder);
     printThermalReceipt(resolvedOrder);
   };
  
@@ -1365,15 +1460,39 @@ const paymentCollected = isCredit ? "No" : "Yes";
 
             {expandedOrder === order.orderId && (
               <div className="mt-3 space-y-2">
-                {getDriverItems(order).map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex justify-between border rounded-xl p-2 text-sm"
-                  >
-                    <span>{item.name}</span>
-                    <strong>{item.pickedQty ?? item.qty}</strong>
-                  </div>
-                ))}
+                {getDriverDisplayItems(order).map((item) => {
+                  const orderId = String(order.orderId || order.order_number || "");
+                  const itemId = String(item.dbId || item.id || "");
+                  const supplierHighlight = supplierHighlights[`${orderId}:${itemId}`] || null;
+                  const supplierColor = supplierHighlight
+                    ? supplierColorFor(supplierHighlight.supplierId, supplierHighlight.supplierName)
+                    : null;
+                  const status = getDriverItemStatus(item);
+                  const normalizedStatus = status.trim().toLowerCase();
+                  const statusLabel = ["need supplier", "pre-order", "pre order", "supply needed", "next supplier"]
+                    .includes(normalizedStatus) ? "Pre-Order" : status;
+                  return (
+                    <div
+                      key={item.id}
+                      className="grid grid-cols-[1fr_auto_auto] items-center gap-3 border rounded-xl p-2 text-sm"
+                      style={supplierColor ? {
+                        backgroundColor: supplierColor.backgroundColor,
+                        borderColor: supplierColor.borderColor,
+                      } : undefined}
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate">{item.name}</div>
+                        {supplierHighlight && (
+                          <div className="text-[10px] font-extrabold" style={{ color: supplierColor.color }}>
+                            Bought · {supplierHighlight.supplierName || "Supplier"}
+                          </div>
+                        )}
+                      </div>
+                      <strong>{item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0}</strong>
+                      <span className="text-xs font-bold">{statusLabel}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
 

@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../services/supabase";
@@ -411,6 +412,32 @@ const fetchDrivers = async () => {
     }),
   });
 
+  const PRINT_EXCLUDED_SUPPLY_STATUSES = new Set([
+    "cannot supply",
+    "need supplier",
+    "pre-order",
+    "pre order",
+    "supply needed",
+    "next supplier",
+  ]);
+
+  const isPrintExcludedSupplyItem = (item = {}) =>
+    PRINT_EXCLUDED_SUPPLY_STATUSES.has(
+      String(item.sourceStatus || item.source_status || item.status || "")
+        .trim()
+        .toLowerCase()
+    );
+
+  // Customer documents must never contain unresolved supplier lines or Cannot Supply.
+  // This is a print-only copy and never writes anything back to the order/database.
+  const withWarehousePrintableItems = (order = {}) => ({
+    ...order,
+    items: (order.items || []).filter((item) => !isPrintExcludedSupplyItem(item)),
+  });
+
+  const getWarehousePrintOrder = (order = {}) =>
+    withWarehousePrintableItems(withWarehousePackedQuantities(order));
+
  const getSavedLinePrice = (item = {}) =>
   Number(item.price ?? item.unit_price ?? 0);
 
@@ -511,7 +538,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   */
 
     const printOrderFormDocument = (order) => {
-    printCentralOrderForm(withWarehousePackedQuantities(order));
+    printCentralOrderForm(getWarehousePrintOrder(order));
     return;
 
     const printableItems = getPrintableItems(order);
@@ -1115,7 +1142,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 const printProtectedOrderForm = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  printCentralOrderForm(withWarehousePackedQuantities(order));
+  printCentralOrderForm(getWarehousePrintOrder(order));
   await logAction({
     user: loggedInUser,
     action_type: "Printed picking list",
@@ -1129,7 +1156,7 @@ const printProtectedOrderForm = async (order) => {
 const printProtectedInvoice = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+  const resolvedOrder = await withResolvedInvoicePaymentStatus(getWarehousePrintOrder(order));
   printCentralInvoice(resolvedOrder);
   await logAction({
     user: loggedInUser,
@@ -1144,7 +1171,7 @@ const printProtectedInvoice = async (order) => {
 const printProtectedDeliveryNote = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print delivery notes.")) return;
 
-  const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+  const resolvedOrder = await withResolvedInvoicePaymentStatus(getWarehousePrintOrder(order));
   printCentralDeliveryNote(resolvedOrder);
   await logAction({
     user: loggedInUser,
@@ -1230,6 +1257,8 @@ const confirmForDriver = async (order) => {
 const pickingQty = cardTotals.totalQty;
 const orderValue = cardTotals.grandTotal;
     const isReadyForDriver = order.status === "Ready For Driver";
+    const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
+    const hasUnresolvedSupply = unresolvedSupplyItems.length > 0;
     const priceMode = order.price_mode || order.priceMode || "";
     const orderDate =
       order.created_at ||
@@ -1383,7 +1412,9 @@ const printCustomerDocumentForMode =
               {hasPermission(loggedInUser, "can_print") && (
                 <button
                   onClick={async () =>
-                    printThermalReceipt(await withResolvedInvoicePaymentStatus(order))
+                    printThermalReceipt(
+                      await withResolvedInvoicePaymentStatus(getWarehousePrintOrder(order))
+                    )
                   }
                   className={`bg-zinc-700 text-white ${btn}`}
                 >
@@ -1395,9 +1426,11 @@ const printCustomerDocumentForMode =
                 value={assignedDrivers[orderId] ?? getDriverName(order) ?? ""}
                 onChange={(e) => assignDriver(order, e.target.value)}
                 className="border rounded-lg px-3 py-1.5 text-xs font-semibold"
-                disabled={isReadyForDriver}
+                disabled={isReadyForDriver || hasUnresolvedSupply}
               >
-                <option value="">Assign Driver</option>
+                <option value="">
+                  {hasUnresolvedSupply ? "Resolve Pre-Order First" : "Assign Driver"}
+                </option>
                 {drivers.map((driver) => (
                   <option key={driver.id} value={driver.username}>
                     {driver.username}

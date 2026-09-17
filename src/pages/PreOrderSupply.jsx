@@ -1045,9 +1045,57 @@ export default function PreOrderSupply({
       }
 
       persistedAction = { ...persistedAction, syncStatus: "synced" };
-      const [savedEvent] = await Promise.all([
-        recordPreOrderSupplyEvent(persistedAction, loggedInUser),
-        logAction({
+
+      // Save the permanent supplier event before we consider a Buy successfully synced.
+      // If the status update succeeded but the event save fails, immediately restore only
+      // the previous status. Quantities / picked / packed / inclusion flags are never changed.
+      let savedEvent;
+      try {
+        savedEvent = await recordPreOrderSupplyEvent(persistedAction, loggedInUser);
+      } catch (historyError) {
+        try {
+          if (action.actionType === "Buy") {
+            // Full Buy only changed the supply status, so restore status only.
+            await updateOrderItem(action.orderId, action.itemId, {
+              sourceStatus: action.previousStatus || "Need Supplier",
+            });
+          } else if (action.actionType === "PartialBuy") {
+            // Partial Buy creates a temporary split before the supplier event is saved.
+            // If permanent history fails, undo that split so the order is exactly as it
+            // was before Sync. This is failure rollback only; successful Buy never changes
+            // any extra quantity/picked/packed fields beyond the existing split workflow.
+            const addedItemId = persistedAction.addedItemId || null;
+            if (addedItemId && typeof restorePreOrderSplit === "function") {
+              const restored = await restorePreOrderSplit(
+                action.orderId,
+                action.itemId,
+                addedItemId,
+                Number(action.previousQty || action.quantity || 0),
+              );
+              if (restored === false) throw new Error("Partial Buy split rollback did not complete.");
+            } else {
+              await updateOrderItem(action.orderId, action.itemId, {
+                sourceStatus: action.previousStatus || "Need Supplier",
+                qty: Number(action.previousQty || action.quantity || 0),
+              });
+              if (addedItemId) {
+                await updateOrderItem(action.orderId, addedItemId, {
+                  sourceStatus: action.previousStatus || "Need Supplier",
+                  qty: 0,
+                });
+              }
+            }
+          }
+        } catch (restoreError) {
+          console.error("Pre-order supplier state rollback failed after history error:", restoreError);
+        }
+        throw historyError;
+      }
+
+      // Audit logging is secondary to the permanent supplier event. A transient audit-log
+      // failure must not create an In Stock item with missing supplier ownership/history.
+      try {
+        await logAction({
           user: loggedInUser,
           action_type: `Pre-order Supply ${action.actionType}`,
           page_module: "Pre-order Supply",
@@ -1067,8 +1115,11 @@ export default function PreOrderSupply({
             status: action.newStatus,
             batchId: action.batchId,
           },
-        }),
-      ]);
+        });
+      } catch (auditError) {
+        console.warn("Pre-order Supply audit log skipped:", auditError?.message || auditError);
+      }
+
       setHistoryEvents((current) => [savedEvent, ...current]);
       cacheSupplierHighlight(persistedAction);
       persistedByClientActionId.set(action.clientActionId, persistedAction);
