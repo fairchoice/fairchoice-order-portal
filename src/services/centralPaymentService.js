@@ -1287,3 +1287,72 @@ export async function applyBranchSeparation({
   }
   return data;
 }
+
+export async function attachOwnerBankTransferProof({ payment, currentUser, proofDataUrl, proofName } = {}) {
+  if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
+    throw new Error("Only nisstaj_admin can attach bank transfer proof.");
+  }
+
+  if (!payment?.id) throw new Error("Pending bank transfer is required.");
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
+  const proof = String(proofDataUrl || "");
+
+  if (!proof.startsWith("data:image/")) {
+    throw new Error("Bank payment proof must be an image / screenshot.");
+  }
+
+  if (proof.length > 3600000) {
+    throw new Error("Bank payment screenshot is too large. Please use an image under 2.5 MB.");
+  }
+
+  const { data: currentPayment, error: loadError } = await supabase
+    .from("customer_payments")
+    .select("id, payment_method, verification_status, metadata")
+    .eq("id", payment.id)
+    .maybeSingle();
+
+  if (loadError) throw loadError;
+  if (!currentPayment) throw new Error("Pending bank transfer could not be found.");
+
+  if (currentPayment.payment_method !== "Bank Transfer") {
+    throw new Error("Proof can only be attached to a bank transfer.");
+  }
+
+  if (currentPayment.verification_status !== "PENDING_VERIFICATION") {
+    throw new Error("This bank transfer is no longer awaiting approval.");
+  }
+
+  let metadata = currentPayment.metadata;
+
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    metadata = {};
+  }
+
+  const now = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("customer_payments")
+    .update({
+      metadata: {
+        ...metadata,
+        bank_proof_data_url: proof,
+        bank_proof_name: String(proofName || "Bank payment proof").slice(0, 255),
+        bank_proof_added_at: now,
+        bank_proof_added_by: getActor(currentUser),
+      },
+      updated_at: now,
+    })
+    .eq("id", payment.id)
+    .eq("payment_method", "Bank Transfer")
+    .eq("verification_status", "PENDING_VERIFICATION")
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return data;
+}

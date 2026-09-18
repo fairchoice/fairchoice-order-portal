@@ -3,6 +3,7 @@ import { formatCurrency } from "../../utils/currency";
 import {
   buildPaymentPreview,
   confirmOwnerBankTransfer,
+  attachOwnerBankTransferProof,
   rejectOwnerBankTransfer,
   createCentralPayment,
   listCentralPaymentRecords,
@@ -52,6 +53,21 @@ const getBankProof = (payment = {}) => {
     name: String(metadata.bank_proof_name || "Bank payment proof"),
   };
 };
+
+const readBankProofDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    if (!file) return reject(new Error("Choose a bank payment screenshot first."));
+    if (!String(file.type || "").startsWith("image/")) {
+      return reject(new Error("Bank payment proof must be an image / screenshot."));
+    }
+    if (Number(file.size || 0) > 2.5 * 1024 * 1024) {
+      return reject(new Error("Bank payment screenshot is too large. Please use an image under 2.5 MB."));
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the bank payment screenshot."));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
 
 const matchesCustomer = (customer, search) =>
   [
@@ -406,6 +422,7 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [ownerPassword, setOwnerPassword] = useState("");
+  const [proofSavingId, setProofSavingId] = useState("");
   const [sessionInvalid, setSessionInvalid] = useState(false);
   const [form, setForm] = useState({
     transactionType: "PAYMENT",
@@ -668,6 +685,30 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
     }
   };
 
+  const addBankProof = async (payment, file) => {
+    if (!payment?.id || !file || proofSavingId) return;
+
+    setError("");
+    setSuccess("");
+    setProofSavingId(String(payment.id));
+    try {
+      const proofDataUrl = await readBankProofDataUrl(file);
+      await attachOwnerBankTransferProof({
+        payment,
+        currentUser,
+        proofDataUrl,
+        proofName: file.name,
+      });
+      setSuccess("Bank proof saved. Review the proof, then approve the transfer.");
+      await refreshSnapshot();
+    } catch (proofError) {
+      if (await handleInvalidSessionError(proofError)) return;
+      setError(proofError.message || "Could not save bank payment proof.");
+    } finally {
+      setProofSavingId("");
+    }
+  };
+
   const confirmBank = async (payment) => {
     const note = window.prompt("Enter the compulsory bank verification note or bank statement reference.");
     if (!String(note || "").trim()) {
@@ -810,7 +851,20 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
                           View proof
                         </a>
                       ) : (
-                        <span className="text-xs font-bold text-red-700">No proof</span>
+                        <label className={`inline-flex cursor-pointer items-center rounded-lg border px-3 py-2 text-xs font-bold ${proofSavingId === String(payment.id) ? "cursor-wait bg-slate-100 text-slate-500" : "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"}`}>
+                          {proofSavingId === String(payment.id) ? "Saving proof..." : "Add Proof"}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            disabled={Boolean(proofSavingId)}
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] || null;
+                              event.target.value = "";
+                              if (file) void addBankProof(payment, file);
+                            }}
+                          />
+                        </label>
                       )}
                     </td>
                     <td className="p-3"><span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-extrabold text-amber-800">UNAPPROVED</span></td>
