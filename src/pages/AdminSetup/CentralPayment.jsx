@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
 import {
   buildPaymentPreview,
   confirmOwnerBankTransfer,
-  attachOwnerBankTransferProof,
   rejectOwnerBankTransfer,
   createCentralPayment,
   listCentralPaymentRecords,
@@ -32,42 +31,6 @@ import {
 const paymentMethods = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
 const ledgerTypes = ["PAYMENT", "DISCOUNT", "INVOICE", "CREDIT", "REFUND", "ADJUSTMENT", "EXPENSE"];
 const BRANCH_SELECT = "__select__";
-
-const getPaymentMetadata = (payment = {}) => {
-  if (payment?.metadata && typeof payment.metadata === "object") return payment.metadata;
-  if (typeof payment?.metadata === "string") {
-    try {
-      const parsed = JSON.parse(payment.metadata);
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-};
-
-const getBankProof = (payment = {}) => {
-  const metadata = getPaymentMetadata(payment);
-  return {
-    dataUrl: String(metadata.bank_proof_data_url || metadata.payment_proof_data_url || ""),
-    name: String(metadata.bank_proof_name || "Bank payment proof"),
-  };
-};
-
-const readBankProofDataUrl = (file) =>
-  new Promise((resolve, reject) => {
-    if (!file) return reject(new Error("Choose a bank payment screenshot first."));
-    if (!String(file.type || "").startsWith("image/")) {
-      return reject(new Error("Bank payment proof must be an image / screenshot."));
-    }
-    if (Number(file.size || 0) > 2.5 * 1024 * 1024) {
-      return reject(new Error("Bank payment screenshot is too large. Please use an image under 2.5 MB."));
-    }
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Could not read the bank payment screenshot."));
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.readAsDataURL(file);
-  });
 
 const matchesCustomer = (customer, search) =>
   [
@@ -422,7 +385,6 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [ownerPassword, setOwnerPassword] = useState("");
-  const [proofSavingId, setProofSavingId] = useState("");
   const [sessionInvalid, setSessionInvalid] = useState(false);
   const [form, setForm] = useState({
     transactionType: "PAYMENT",
@@ -685,30 +647,6 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
     }
   };
 
-  const addBankProof = async (payment, file) => {
-    if (!payment?.id || !file || proofSavingId) return;
-
-    setError("");
-    setSuccess("");
-    setProofSavingId(String(payment.id));
-    try {
-      const proofDataUrl = await readBankProofDataUrl(file);
-      await attachOwnerBankTransferProof({
-        payment,
-        currentUser,
-        proofDataUrl,
-        proofName: file.name,
-      });
-      setSuccess("Bank proof saved. Review the proof, then approve the transfer.");
-      await refreshSnapshot();
-    } catch (proofError) {
-      if (await handleInvalidSessionError(proofError)) return;
-      setError(proofError.message || "Could not save bank payment proof.");
-    } finally {
-      setProofSavingId("");
-    }
-  };
-
   const confirmBank = async (payment) => {
     const note = window.prompt("Enter the compulsory bank verification note or bank statement reference.");
     if (!String(note || "").trim()) {
@@ -763,7 +701,7 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
     return (
       <div className="p-4">
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 font-bold text-amber-900">
-          Your Fair Choice session is missing or expired. Returning to sign in…
+          Your Fair Choice session is missing or expired. Returning to sign inâ€¦
         </div>
       </div>
     );
@@ -834,46 +772,20 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] text-sm">
-              <thead><tr className="border-b bg-amber-50 text-left"><th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Paid By</th><th className="p-3 text-right">Amount</th><th className="p-3">Proof</th><th className="p-3">Status</th><th className="p-3 text-right">Action</th></tr></thead>
+              <thead><tr className="border-b bg-amber-50 text-left"><th className="p-3">Date</th><th className="p-3">Reference</th><th className="p-3">Paid By</th><th className="p-3 text-right">Amount</th><th className="p-3">Status</th><th className="p-3 text-right">Action</th></tr></thead>
               <tbody>
-                {pendingBankTransfers.map((payment) => {
-                  const proof = getBankProof(payment);
-                  return (
-                  <tr key={payment.id} className="border-b">
+                {pendingBankTransfers.map((payment) => (<tr key={payment.id} className="border-b">
                     <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
                     <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td>
                     <td className="p-3">{payment.paid_by || "-"}</td>
                     <td className="p-3 text-right font-extrabold">{formatCurrency(payment.amount || 0)}</td>
-                    <td className="p-3">
-                      {proof.dataUrl ? (
-                        <a href={proof.dataUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-800">
-                          <img src={proof.dataUrl} alt="Bank proof" className="h-10 w-10 rounded object-cover" />
-                          View proof
-                        </a>
-                      ) : (
-                        <label className={`inline-flex cursor-pointer items-center rounded-lg border px-3 py-2 text-xs font-bold ${proofSavingId === String(payment.id) ? "cursor-wait bg-slate-100 text-slate-500" : "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"}`}>
-                          {proofSavingId === String(payment.id) ? "Saving proof..." : "Add Proof"}
-                          <input
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            disabled={Boolean(proofSavingId)}
-                            onChange={(event) => {
-                              const file = event.target.files?.[0] || null;
-                              event.target.value = "";
-                              if (file) void addBankProof(payment, file);
-                            }}
-                          />
-                        </label>
-                      )}
-                    </td>
-                    <td className="p-3"><span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-extrabold text-amber-800">UNAPPROVED</span></td>
+<td className="p-3"><span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-extrabold text-amber-800">UNAPPROVED</span></td>
                     <td className="p-3 text-right">
-                      <button type="button" onClick={() => confirmBank(payment)} disabled={!proof.dataUrl} title={!proof.dataUrl ? "Bank proof is required before approval" : "Approve bank transfer"} className="rounded-lg bg-green-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300">Approve</button>
+                      <button type="button" onClick={() => confirmBank(payment)} title="Approve bank transfer" className="rounded-lg bg-green-700 px-3 py-2 text-xs font-bold text-white">Approve</button>
                       <button type="button" onClick={() => rejectBank(payment)} className="ml-2 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white">Reject</button>
                     </td>
                   </tr>
-                );})}
+                ))}
               </tbody>
             </table>
           </div>
@@ -918,3 +830,4 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
     </div>
   );
 }
+
