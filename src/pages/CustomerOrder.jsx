@@ -178,7 +178,6 @@ import {
   clearPendingPreOrderActionsForOrder,
   isActivePreOrderSupplyOrder,
 } from "../services/preOrderSupplyAllocation";
-import { reversePreOrderSupplyForReceivedOrder } from "../services/preOrderSupplyHistory";
 import {
   applyInvoicePaymentAllocations,
   createOrUpdateInvoiceForDeliveredOrder,
@@ -2627,24 +2626,17 @@ const openBackOffice = async () => {
   const changeOrderStatus = async (
     orderNumber,
     status,
-    { preserveSupplyState = false } = {}
+    _options = {}
   ) => {
     try {
       const existingOrder = orders.find(
         (order) => String(order.orderId) === String(orderNumber)
       );
-      if (
-        status === "Received" &&
-        existingOrder?.status !== "Received" &&
-        !preserveSupplyState
-      ) {
-        await reversePreOrderSupplyForReceivedOrder({
-          order: existingOrder,
-          user: loggedInUser,
-          updateOrderItem,
-          restorePreOrderSplit,
-        });
-      }
+
+      // Status movement is status-only. Warehouse/POS quantities and supply
+      // decisions are final and must survive backward/forward workflow moves.
+      // The only later quantity/supply changes are explicit Warehouse
+      // Pre-Order Supply actions through their dedicated item update functions.
       const updatedOrder = await updateOrderStatus(orderNumber, status);
 
       if (!isActivePreOrderSupplyOrder({ status })) {
