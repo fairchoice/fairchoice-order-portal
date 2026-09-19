@@ -1151,9 +1151,7 @@ const backToReceived = async (order) => {
     return;
   }
 
-  await changeOrderStatus(order.orderId, "Received", {
-    preserveSupplyState: true,
-  });
+  await changeOrderStatus(order.orderId, "Received");
   await logAction({
     user: loggedInUser,
     action_type: "Back to received",
