@@ -818,7 +818,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
               type="number"
               min="0"
               className="received-qty-input"
-              value={editedQty[item.dbId] ?? item.pickedQty ?? item.qty}
+              value={editedQty[item.dbId] ?? item.qty ?? item.quantity ?? item.pickingOrderedQty ?? item.picking_ordered_qty ?? item.pickedQty ?? 0}
               disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE)}
               onChange={(e) =>
                 setEditedQty((prev) => ({
@@ -836,7 +836,13 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                     editedStatus[item.dbId] || item.sourceStatus || "In Stock";
 
                   const qty = Number(
-                    editedQty[item.dbId] ?? item.pickedQty ?? item.qty
+                    editedQty[item.dbId] ??
+                      item.qty ??
+                      item.quantity ??
+                      item.pickingOrderedQty ??
+                      item.picking_ordered_qty ??
+                      item.pickedQty ??
+                      0
                   );
 
                   updatePreparedItem(order, item, {
