@@ -94,7 +94,8 @@ const buildSharedSupplierHighlights = (events = []) => {
 };
 
 const PRINT_EXCLUDED_SUPPLY_STATUSES = new Set([
-  "cannot supply", "need supplier", "pre-order", "pre order", "supply needed", "next supplier",
+  "cannot supply", "need supplier", "pre-order", "pre order",
+  "pre-order supply", "pre order supply", "supply needed", "next supplier",
 ]);
 
 const getDriverItemStatus = (item = {}) =>
