@@ -95,13 +95,21 @@ export const getInvoiceLineQuantity = (item = {}) =>
 
 export const isActiveInvoiceLine = (item = {}) => {
   if (getInvoiceLineQuantity(item) <= 0) return false;
-  if (item.includeInPicking === false || item.include_in_picking === false) return false;
 
   const status = String(item.sourceStatus || item.source_status || item.status || "")
     .trim()
     .toLowerCase();
 
-  return !inactiveInvoiceStatuses.has(status);
+  if (inactiveInvoiceStatuses.has(status)) return false;
+
+  // Pre-order supply intentionally changes status only. A line moved from
+  // Need Supplier to In Stock can still carry a stale include_in_picking=false.
+  // Explicit supplied status is authoritative for customer totals/printing.
+  if (status === "in stock" || status === "available" || status === "supplied") {
+    return true;
+  }
+
+  return item.includeInPicking !== false && item.include_in_picking !== false;
 };
 
 export const filterActiveInvoiceLines = (items = []) =>
