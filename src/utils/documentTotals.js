@@ -14,10 +14,21 @@ const isPrintableDocumentItem = (item = {}) => {
     .trim()
     .toLowerCase();
 
+  const excludedStatuses = new Set([
+    "removed",
+    "cannot supply",
+    "need supplier",
+    "pre-order",
+    "pre order",
+    "pre-order supply",
+    "pre order supply",
+    "supply needed",
+    "next supplier",
+  ]);
+
   return item.includeInPicking !== false &&
     item.include_in_picking !== false &&
-    sourceStatus !== "removed" &&
-    sourceStatus !== "cannot supply";
+    !excludedStatuses.has(sourceStatus);
 };
 
 const getSavedVatRate = (item = {}) => {
