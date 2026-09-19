@@ -75,7 +75,19 @@ const getDeliveredDate = (order = {}) =>
   order.confirmed_at ||
   order.updated_at ||
   new Date().toISOString();
-const inactiveInvoiceStatuses = new Set(["removed", "cancelled", "deleted"]);
+const inactiveInvoiceStatuses = new Set([
+  "removed",
+  "cancelled",
+  "deleted",
+  "cannot supply",
+  "need supplier",
+  "pre-order",
+  "pre order",
+  "pre-order supply",
+  "pre order supply",
+  "supply needed",
+  "next supplier",
+]);
 const activeProcessingQueueStatuses = ["queued", "pending", "processing"];
 
 export const getInvoiceLineQuantity = (item = {}) =>
