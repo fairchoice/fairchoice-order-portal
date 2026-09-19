@@ -239,18 +239,15 @@ test("pending POS state is retained only for live orders and can be cleared by o
   assert.deepEqual(JSON.parse(values.get("fairchoice_preorder_supply_pending")), [actions[0]]);
 });
 
-test("Back to Received records additive supplier reversals before changing status", () => {
+test("Back to Received preserves final Warehouse quantity and supply state", () => {
   const orderPage = fs.readFileSync(new URL("./CustomerOrder.jsx", import.meta.url), "utf8");
+  const warehousePage = fs.readFileSync(new URL("./Warehouse.jsx", import.meta.url), "utf8");
   const historyService = fs.readFileSync(new URL("../services/preOrderSupplyHistory.js", import.meta.url), "utf8");
-  assert.match(orderPage, /status === "Received"[\s\S]*reversePreOrderSupplyForReceivedOrder[\s\S]*updateOrderStatus/);
-  assert.match(historyService, /actionType: "Recall"/);
-  assert.match(historyService, /reason: "Order moved back to Received"/);
-  assert.match(historyService, /actionType: "Recall Available"/);
-  assert.match(historyService, /sourceModule: "Order Lifecycle"/);
-  assert.match(historyService, /\.sort\(\(left, right\) =>[\s\S]*new Date\(right\.timestamp/);
-  assert.match(historyService, /recalledClientActionId: event\.clientActionId/);
-  assert.match(historyService, /recalledEventId: event\.id/);
-  assert.doesNotMatch(historyService, /delete.*preorder_supply_events/is);
+
+  assert.match(orderPage, /Status movement is status-only/);
+  assert.doesNotMatch(orderPage, /reversePreOrderSupplyForReceivedOrder/);
+  assert.match(warehousePage, /changeOrderStatus\(order\.orderId, "Received"\)/);
+  assert.match(historyService, /Moving an order back to[\s\S]*Received must never reverse supplier status, ordered qty, or picked qty/);
 });
 
 test("Sync history captures authenticated actor identity without changing physical stock", () => {
