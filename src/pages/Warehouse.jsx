@@ -1211,7 +1211,10 @@ const confirmForDriver = async (order) => {
   const renderWarehouseCard = (order) => {
     const orderId = getOrderId(order);
    const cardTotals = getInvoiceTotals(order);
-const pickingQty = cardTotals.totalQty;
+const pickingQty = (order.items || []).reduce(
+  (sum, item) => sum + getWarehousePackedQty(item),
+  0
+);
 const orderValue = cardTotals.grandTotal;
     const isReadyForDriver = order.status === "Ready For Driver";
     const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
