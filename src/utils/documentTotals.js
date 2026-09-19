@@ -26,9 +26,17 @@ const isPrintableDocumentItem = (item = {}) => {
     "next supplier",
   ]);
 
+  if (excludedStatuses.has(sourceStatus)) return false;
+
+  // Warehouse Pre-Order Supply is status-only, so an item can correctly be
+  // In Stock while retaining an old include_in_picking=false flag. Supplied
+  // status is the final authority for operational quantity/value.
+  if (sourceStatus === "in stock" || sourceStatus === "available" || sourceStatus === "supplied") {
+    return true;
+  }
+
   return item.includeInPicking !== false &&
-    item.include_in_picking !== false &&
-    !excludedStatuses.has(sourceStatus);
+    item.include_in_picking !== false;
 };
 
 const getSavedVatRate = (item = {}) => {
