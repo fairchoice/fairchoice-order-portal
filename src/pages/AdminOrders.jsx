@@ -383,6 +383,14 @@ const printOrderPickingList = async (order) => {
 const updatePreparedItem = async (order, item, changes) => {
   if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_RECEIVE, "You cannot receive orders.")) return;
 
+  // A completed Warehouse pick is the final operational quantity snapshot.
+  // Moving the order back to Received is for workflow correction only; it must
+  // not allow Received Orders to overwrite Warehouse/POS quantities.
+  if (String(order?.picking_status || "").trim().toLowerCase() === "completed") {
+    alert("Warehouse quantity is final. Use Warehouse Pre-Order Supply for any later supply quantity change.");
+    return;
+  }
+
   captureStableOrderItems(order);
   await updateOrderItem(order.orderId, item.dbId, changes);
   await logAction({
@@ -819,7 +827,10 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
               min="0"
               className="received-qty-input"
               value={editedQty[item.dbId] ?? item.qty ?? item.quantity ?? item.pickingOrderedQty ?? item.picking_ordered_qty ?? item.pickedQty ?? 0}
-              disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE)}
+              disabled={
+                !hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE) ||
+                String(order?.picking_status || "").trim().toLowerCase() === "completed"
+              }
               onChange={(e) =>
                 setEditedQty((prev) => ({
                   ...prev,
@@ -829,7 +840,8 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
             />
           </div>
           <div className="received-update-cell">
-            {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE) && (
+            {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE) &&
+              String(order?.picking_status || "").trim().toLowerCase() !== "completed" && (
               <button
                 onClick={() => {
                   const status =
