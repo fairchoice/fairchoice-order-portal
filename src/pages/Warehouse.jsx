@@ -374,6 +374,8 @@ const fetchDrivers = async () => {
     "need supplier",
     "pre-order",
     "pre order",
+    "pre-order supply",
+    "pre order supply",
     "supply needed",
     "next supplier",
   ]);
@@ -1208,11 +1210,9 @@ const confirmForDriver = async (order) => {
 
   const renderWarehouseCard = (order) => {
     const orderId = getOrderId(order);
-   const cardTotals = getInvoiceTotals(order);
-const pickingQty = (order.items || []).reduce(
-  (sum, item) => sum + getWarehousePackedQty(item),
-  0
-);
+   const suppliedOrder = getWarehousePrintOrder(order);
+   const cardTotals = getInvoiceTotals(suppliedOrder);
+const pickingQty = cardTotals.totalQty;
 const orderValue = cardTotals.grandTotal;
     const isReadyForDriver = order.status === "Ready For Driver";
     const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
