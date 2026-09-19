@@ -352,65 +352,22 @@ const fetchDrivers = async () => {
   // the order line quantity is valid. For display/printing only, fall back to
   // the ordered quantity when picking is already completed. Nothing is written
   // back to the database.
-  const getWarehousePackedQty = (item = {}, order = {}) => {
-    const pickedRaw = item.pickedQty ?? item.picked_qty;
-    const picked = Number(pickedRaw);
+  const getWarehousePackedQty = (item = {}) => {
+    // Warehouse/Driver display the customer's saved ordered quantity. Supply
+    // status changes must never manufacture a zero or rewrite this quantity.
     const ordered = Number(item.qty ?? item.quantity ?? 0);
-    const pickingStatus = String(
-      order.picking_status ?? order.pickingStatus ?? ""
-    ).trim().toLowerCase();
-    const warehouseStatus = String(order.status || "").trim().toLowerCase();
-    const itemStatus = String(
-      item.sourceStatus ?? item.source_status ?? item.status ?? ""
-    ).trim().toLowerCase();
-    const pickingCompleted =
-      pickingStatus === "completed" || warehouseStatus === "warehouse packing";
-    const isPreOrderLine = [
-      "need supplier",
-      "pre-order",
-      "pre order",
-      "supply needed",
-      "next supplier",
-    ].includes(itemStatus);
-
-    if (Number.isFinite(picked) && picked > 0) return picked;
-
-    // Pre-order lines are not packed yet, but Warehouse must still show the
-    // customer's ordered quantity instead of 0. Display/print only; no DB write.
-    if (isPreOrderLine && Number.isFinite(ordered) && ordered > 0) {
-      return ordered;
-    }
-
-    if (
-      pickingCompleted &&
-      item.includeInPicking !== false &&
-      item.include_in_picking !== false &&
-      Number.isFinite(ordered) &&
-      ordered > 0
-    ) {
-      return ordered;
-    }
-
-    if (pickedRaw !== null && pickedRaw !== undefined && pickedRaw !== "") {
-      return Number.isFinite(picked) ? picked : 0;
-    }
-
     return Number.isFinite(ordered) ? ordered : 0;
   };
 
   const withWarehousePackedQuantities = (order = {}) => ({
     ...order,
-    items: (order.items || []).map((item) => {
-      const packedQty = getWarehousePackedQty(item, order);
-      return {
-        ...item,
-        qty: packedQty,
-        quantity: packedQty,
-        pickedQty: packedQty,
-        picked_qty: packedQty,
-      };
-    }),
+    items: (order.items || []).map((item) => ({
+      ...item,
+      qty: getWarehousePackedQty(item),
+      quantity: getWarehousePackedQty(item),
+    })),
   });
+
 
   const PRINT_EXCLUDED_SUPPLY_STATUSES = new Set([
     "cannot supply",

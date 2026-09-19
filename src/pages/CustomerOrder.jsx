@@ -2393,11 +2393,20 @@ useEffect(() => {
 
 const fetchOrders = async ({ throwOnError = false } = {}) => {
   try {
-    const { data, error } = await supabase
+    // Orders and the processing queue are independent reads. Start both together
+    // so Received Orders does not wait for one network request before starting
+    // the other. This changes loading time only; merge/order behaviour is unchanged.
+    const processingQueuePromise = loadProcessingQueueOrders();
+    const ordersPromise = supabase
       .from("orders")
       .select("*, order_items(*)")
       .order("created_at", { ascending: false })
       .limit(50);
+
+    const [{ data, error }, processingQueueRaw] = await Promise.all([
+      ordersPromise,
+      processingQueuePromise,
+    ]);
 
     if (error) throw error;
 
@@ -2474,6 +2483,11 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
         product_code: item.product_code || item.code || "",
         name: item.product_name,
         brand: item.brand || "",
+        category: item.main_category || item.category || "",
+        mainCategory: item.main_category || item.category || "",
+        main_category: item.main_category || item.category || "",
+        subCategory: item.sub_category || item.subcategory || "",
+        sub_category: item.sub_category || item.subcategory || "",
         series: item.series || "",
         flavour: item.flavour || "",
         cartonSize: item.carton_size || "",
@@ -2508,7 +2522,7 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       })),
     }));
 
-    const processingQueueOrders = (await loadProcessingQueueOrders()).map((order) => ({
+    const processingQueueOrders = (processingQueueRaw || []).map((order) => ({
       ...order,
       createdAt: order.createdAt
         ? new Date(order.createdAt).toLocaleString()
@@ -3934,6 +3948,28 @@ const updatePreOrderSupplyItem = async (orderId, itemId, updates = {}) => {
   const order = orders.find((entry) => String(entry.orderId) === String(orderId));
   const item = order?.items?.find((entry) => String(entry.dbId || entry.id) === String(itemId));
   if (!order || !item) return false;
+
+  const updateKeys = Object.keys(updates || {});
+  const statusOnly =
+    updateKeys.length > 0 &&
+    updateKeys.every((key) => ["sourceStatus", "source_status"].includes(key));
+
+  if (statusOnly) {
+    const sourceStatus = updates.sourceStatus ?? updates.source_status;
+    const { error } = await supabase
+      .from("order_items")
+      .update({ source_status: sourceStatus })
+      .eq("id", item.dbId || itemId);
+
+    if (error) {
+      console.error("Pre-order supply status update error:", error);
+      return false;
+    }
+
+    // Status-only means status-only: do not touch qty, picked_qty, packed state,
+    // inclusion flags, line totals, VAT, or order totals.
+    return true;
+  }
 
   const merged = { ...item, ...updates };
   const calculated = getCalculatedOrderItemForSave(merged, order);

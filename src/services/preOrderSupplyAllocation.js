@@ -58,43 +58,15 @@ export function preOrderSupplyItemChanges(
   actionType,
   { quantity = 0, remainingQuantity = 0, restoreQuantity = 0 } = {},
 ) {
-  if (actionType === "Buy") {
-    // POS Buy is status-only. Never alter ordered, picked/packed, or inclusion
-    // quantities here; those remain owned by the existing order/warehouse flow.
-    return { sourceStatus: "In Stock" };
-  }
-  if (actionType === "PartialBuy") {
-    return {
-      sourceStatus: "Next Supplier",
-      includeInPicking: false,
-      pickedQty: 0,
-      qty: Number(remainingQuantity || 0),
-    };
-  }
-  if (actionType === "NextSup") {
-    return {
-      sourceStatus: "Next Supplier",
-      includeInPicking: false,
-      pickedQty: 0,
-    };
-  }
-  if (actionType === "Available") {
-    return { sourceStatus: "In Stock", includeInPicking: true, pickedQty: 0 };
-  }
-  if (actionType === "Recall Available") {
-    return { sourceStatus: "Cannot Supply", includeInPicking: false, pickedQty: 0 };
-  }
-  if (actionType === "Remove") {
-    return { sourceStatus: "Cannot Supply", includeInPicking: false, pickedQty: 0 };
-  }
-  if (actionType === "Recall") {
-    return {
-      sourceStatus: "Need Supplier",
-      includeInPicking: false,
-      pickedQty: 0,
-      qty: Number(restoreQuantity || 0),
-    };
-  }
+  // Supply actions are status-only. Ordered qty and picking/packed quantities
+  // are owned by Received Order picking / explicit Qty Update only.
+  if (actionType === "Buy") return { sourceStatus: "In Stock" };
+  if (actionType === "PartialBuy") return { sourceStatus: "Pre-Order" };
+  if (actionType === "NextSup") return { sourceStatus: "Next Supplier" };
+  if (actionType === "Available") return { sourceStatus: "In Stock" };
+  if (actionType === "Recall Available") return { sourceStatus: "Cannot Supply" };
+  if (actionType === "Remove") return { sourceStatus: "Cannot Supply" };
+  if (actionType === "Recall") return { sourceStatus: "Need Supplier" };
   return null;
 }
 

@@ -3,6 +3,7 @@ import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { calculateDocumentTotals } from "../../utils/documentTotals";
 import { sortPrintItems } from "../../utils/printItemSorting";
+import { compareWarehouseProducts } from "../../utils/warehouseProductSorting";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import { isOperationalCustomer } from "../../utils/customerStatus";
 import {
@@ -191,28 +192,30 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   return isLegacyTestAmount(value) && hasLegacyName ? "" : value || "";
 };
 
-  const getDriverTotals = (order = {}) => {
-    const calculated = calculateDocumentTotals(getDriverPrintableSourceItems(order), order);
-    const savedGrandTotal = [
-      order.grand_total,
-      order.grandTotal,
-      order.order_total,
-      order.orderTotal,
-      order.total_amount,
-      order.totalAmount,
-      order.total,
-    ]
-      .map((value) => (value === null || value === undefined || value === "" ? null : Number(value)))
-      .find((value) => Number.isFinite(value));
+  // Driver summary must match the Warehouse order summary. Printing remains a
+  // separate filtered view that excludes unresolved Pre-Order/Cannot Supply lines.
+  const getDriverTotals = (order = {}) =>
+    calculateDocumentTotals(order.items || order.order_items || [], order);
 
-    return savedGrandTotal === undefined
-      ? calculated
-      : { ...calculated, grandTotal: savedGrandTotal, grand_total: savedGrandTotal, totalAmount: savedGrandTotal };
+  const getDriverItems = (order) =>
+    sortPrintItems(calculateDocumentTotals(getDriverPrintableSourceItems(order), order).invoiceItems);
+
+  const getDriverStatusRank = (item = {}) => {
+    const status = getDriverItemStatus(item).trim().toLowerCase();
+    if (["in stock", "available"].includes(status)) return 1;
+    if (["need supplier", "pre-order", "pre order", "supply needed", "next supplier"].includes(status)) return 2;
+    if (status === "cannot supply") return 3;
+    return 4;
   };
 
-  const getDriverItems = (order) => sortPrintItems(getDriverTotals(order).invoiceItems);
-  const getDriverDisplayItems = (order) =>
-    sortPrintItems([...(order.items || order.order_items || [])]);
+  // Same Warehouse-style order: In Stock first, unresolved supplier lines next,
+  // Cannot Supply last; products inside each section follow category/series sorting.
+  const getDriverDisplayItems = (order = {}) =>
+    [...(order.items || order.order_items || [])].sort((left, right) => {
+      const rankDifference = getDriverStatusRank(left) - getDriverStatusRank(right);
+      if (rankDifference !== 0) return rankDifference;
+      return compareWarehouseProducts(left, right);
+    });
 
   const [showPreviousBalance, setShowPreviousBalance] = useState(false);
 
@@ -750,7 +753,7 @@ const printDeliveryNoteDocument = (order) => {
             ${items
               .map(
                 (item) =>
-                  `<tr><td>${item.name || item.productName || item.product_name || ""}</td><td>${item.pickedQty ?? item.qty ?? 0}</td></tr>`
+                  `<tr><td>${item.name || item.productName || item.product_name || ""}</td><td>${item.qty ?? item.quantity ?? 0}</td></tr>`
               )
               .join("")}
           </tbody>
@@ -1380,7 +1383,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 <div className="text-base font-extrabold text-red-600">
                   Order Value: {formatCurrency(getDriverTotals(order).grandTotal)}
                 <p className="text-xs text-slate-500">
-                  {order.createdAt || order.created_at || "-"} | Total Items: {getDriverItems(order).length}
+                  {order.createdAt || order.created_at || "-"} | Total Items: {getDriverDisplayItems(order).length}
                 </p>
               </div>
               </div>
@@ -1488,7 +1491,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
                           </div>
                         )}
                       </div>
-                      <strong>{item.pickedQty ?? item.picked_qty ?? item.qty ?? item.quantity ?? 0}</strong>
+                      <strong>{item.qty ?? item.quantity ?? 0}</strong>
                       <span className="text-xs font-bold">{statusLabel}</span>
                     </div>
                   );

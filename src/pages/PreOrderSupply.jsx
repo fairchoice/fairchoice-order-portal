@@ -966,82 +966,19 @@ export default function PreOrderSupply({
         return;
       }
 
-      if (action.actionType === "PartialBuy") {
-        if (typeof splitPreOrderItem === "function") {
-          const added = await splitPreOrderItem(
-            action.orderId,
-            action.itemId,
-            action.quantity,
-            action.remainingQty,
-          );
-          if (!added) throw new Error("The partial Buy split did not complete.");
-          persistedAction = { ...action, addedItemId: added?.id || added?.dbId || null };
-        } else {
-          const updated = await updateOrderItem(action.orderId, action.itemId, action.changes);
-          if (updated === false) throw new Error("The remaining Pre-Order quantity did not update.");
-          if (typeof addOrderItem === "function") {
-            const added = await addOrderItem(action.orderId, action.itemSnapshot);
-            if (!added) throw new Error("The bought split quantity was not created.");
-            persistedAction = { ...action, addedItemId: added?.id || added?.dbId || null };
-          }
-        }
-      } else if (action.actionType === "Recall") {
-        const recalledAction = persistedByClientActionId.get(action.recalledClientActionId);
-        const recallAddedItemId = action.recallAddedItemId || recalledAction?.addedItemId || null;
-        if (recallAddedItemId && typeof restorePreOrderSplit === "function") {
-          const restored = await restorePreOrderSplit(
-            action.orderId,
-            action.itemId,
-            recallAddedItemId,
-            Number(action.previousQty || action.quantity || 0),
-          );
-          if (restored === false) throw new Error("The recalled partial Buy did not restore.");
-        } else {
-          const restored = await updateOrderItem(action.orderId, action.itemId, action.changes);
-          if (restored === false) throw new Error("The recalled Pre-Order quantity did not restore.");
-        }
-        if (recallAddedItemId && typeof restorePreOrderSplit !== "function") {
-          const cleared = await updateOrderItem(action.orderId, recallAddedItemId, {
-            sourceStatus: "Need Supplier",
-            includeInPicking: false,
-            pickedQty: 0,
-            qty: 0,
-          });
-          if (cleared === false) throw new Error("The recalled bought split did not clear.");
-        }
-      } else if (action.actionType === "Remove") {
-        // Cannot Supply is a single Warehouse transition + audit event.
-        // Do not update the item first or the RPC sees Cannot Supply -> Cannot Supply.
-        const line = warehouseLineByItemKey.get(action.itemKey) ||
-          warehouseLineByItemId.get(String(action.itemId));
-        if (!line) throw new Error("The related order item is no longer in the active workflow.");
-        try {
-          await recordWarehouseOperationalActivity({
-            order: line.order,
-            item: line.item,
-            actionType: "Cannot Supply",
-            newStatus: "Cannot Supply",
-            sourceModule: "Pre-Order Supply",
-          }, loggedInUser);
-        } catch (error) {
-          // Recovery for actions left pending by the old two-step implementation:
-          // the item may already be Cannot Supply even though the POS event did not finish.
-          if (!String(error?.message || "").includes("valid Warehouse status transition")) throw error;
-          const itemId = action.itemId || line.item?.dbId || line.item?.id;
-          const { data: currentItem, error: currentItemError } = await supabase
-            .from("order_items")
-            .select("source_status")
-            .eq("id", itemId)
-            .maybeSingle();
-          if (currentItemError || warehouseSupplyStage(currentItem?.source_status) !== "Cannot Supply") {
-            throw error;
-          }
-          // Status is already correct; continue so history/audit can complete and
-          // this stale pending action is removed.
-        }
+      if (action.actionType === "Remove") {
+        // POS Cannot Supply is status-only. Do not call the Warehouse operational
+        // transition RPC here because that RPC also owns picking fields. The
+        // permanent Pre-Order Supply event below is already included in Warehouse
+        // Activity, so persist source_status only.
+        const updated = await updateOrderItem(action.orderId, action.itemId, {
+          sourceStatus: "Cannot Supply",
+        });
+        if (updated === false) throw new Error("The Warehouse item status did not update.");
       } else {
+        // Buy / Partial Buy / Next Supplier / Recall are status-only.
         const updated = await updateOrderItem(action.orderId, action.itemId, action.changes);
-        if (updated === false) throw new Error("The Warehouse item did not update.");
+        if (updated === false) throw new Error("The Warehouse item status did not update.");
       }
 
       persistedAction = { ...persistedAction, syncStatus: "synced" };
@@ -1054,40 +991,13 @@ export default function PreOrderSupply({
         savedEvent = await recordPreOrderSupplyEvent(persistedAction, loggedInUser);
       } catch (historyError) {
         try {
-          if (action.actionType === "Buy") {
-            // Full Buy only changed the supply status, so restore status only.
+          if (["Buy", "PartialBuy", "NextSup", "Recall"].includes(action.actionType)) {
             await updateOrderItem(action.orderId, action.itemId, {
               sourceStatus: action.previousStatus || "Need Supplier",
             });
-          } else if (action.actionType === "PartialBuy") {
-            // Partial Buy creates a temporary split before the supplier event is saved.
-            // If permanent history fails, undo that split so the order is exactly as it
-            // was before Sync. This is failure rollback only; successful Buy never changes
-            // any extra quantity/picked/packed fields beyond the existing split workflow.
-            const addedItemId = persistedAction.addedItemId || null;
-            if (addedItemId && typeof restorePreOrderSplit === "function") {
-              const restored = await restorePreOrderSplit(
-                action.orderId,
-                action.itemId,
-                addedItemId,
-                Number(action.previousQty || action.quantity || 0),
-              );
-              if (restored === false) throw new Error("Partial Buy split rollback did not complete.");
-            } else {
-              await updateOrderItem(action.orderId, action.itemId, {
-                sourceStatus: action.previousStatus || "Need Supplier",
-                qty: Number(action.previousQty || action.quantity || 0),
-              });
-              if (addedItemId) {
-                await updateOrderItem(action.orderId, addedItemId, {
-                  sourceStatus: action.previousStatus || "Need Supplier",
-                  qty: 0,
-                });
-              }
-            }
           }
         } catch (restoreError) {
-          console.error("Pre-order supplier state rollback failed after history error:", restoreError);
+          console.error("Pre-order supplier status rollback failed after history error:", restoreError);
         }
         throw historyError;
       }
