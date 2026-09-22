@@ -9,6 +9,10 @@ import {
 } from "../services/locationStock";
 import { getPickingAvailability } from "../services/pickingAvailability";
 import {
+  getPickingMismatchActivity,
+  recordWarehouseOperationalActivity,
+} from "../services/warehouseActivity";
+import {
   completeOrderPicking,
   getOrderedQty,
   getRemainingPickingQty,
@@ -284,6 +288,15 @@ function OrderPickingSession({
       return;
     }
 
+    const sourceProduct = productsById.get(String(productIdOf(item)));
+    const mismatchActivity = getPickingMismatchActivity({
+      itemStatus: item.sourceStatus || item.source_status || "In Stock",
+      action,
+      inventoryLocationMissing: Boolean(sourceProduct?.inventoryLocationMissing),
+      stock,
+      quantity: requested,
+    });
+
     setBusyId(itemId);
     setError("");
     try {
@@ -316,6 +329,32 @@ function OrderPickingSession({
       setSearch("");
       if (action === "in_stock" || action === "replace") {
         setStockRefreshNonce((value) => value + 1);
+      }
+
+      if (mismatchActivity) {
+        try {
+          await recordWarehouseOperationalActivity(
+            {
+              order,
+              item,
+              ...mismatchActivity,
+              quantity: requested,
+              warehouseLocation: inventoryCountry || null,
+              sourceModule: "Received Order Picking",
+              metadata: {
+                mismatchType: mismatchActivity.mismatchType,
+                trackedStock: Number(stock || 0),
+                inventoryLocationMissing: Boolean(sourceProduct?.inventoryLocationMissing),
+              },
+            },
+            currentUser
+          );
+        } catch (activityError) {
+          console.warn(
+            "Picking mismatch activity could not be recorded:",
+            activityError?.message || activityError
+          );
+        }
       }
 
       await logAction({
@@ -544,10 +583,16 @@ function OrderPickingSession({
               "pre order",
               "next supplier",
             ].includes(currentSourceStatus);
+            // "Pick" is the physical warehouse confirmation. If tracked
+            // location stock is missing or lower than the physical quantity, do
+            // not block packing; save the pick and record a Warehouse Activity
+            // mismatch for investigation. The database never deducts below zero.
             const canPickAll =
               remaining > 0 &&
               (isPreOrderOverride ||
-                (!product?.inventoryLocationMissing && stock >= remaining));
+                product?.inventoryLocationMissing ||
+                stock >= remaining ||
+                stock < remaining);
 
             return (
               <article
