@@ -4,6 +4,7 @@ import { logAction } from "../utils/auditLog";
 import {
   applyLocationStockToProducts,
   buildLocationStockMap,
+  getCountryLocationStock,
   getProductLocationStock,
   resolveOrderInventoryCountry,
 } from "../services/locationStock";
@@ -139,7 +140,11 @@ function OrderPickingSession({
   useEffect(() => {
     let active = true;
     const refreshLocationStock = async () => {
-      const ids = [...new Set((order?.items || []).map(productIdOf).filter(Boolean))];
+      const ids = [...new Set(
+        (replacementItem ? products : (order?.items || []))
+          .map(productIdOf)
+          .filter(Boolean)
+      )];
       if (!ids.length) {
         setLiveProducts(products);
         return;
@@ -167,7 +172,7 @@ function OrderPickingSession({
     return () => {
       active = false;
     };
-  }, [order?.items, products, stockRefreshNonce]);
+  }, [order?.items, products, replacementItem, stockRefreshNonce]);
 
   const countryProducts = useMemo(
     () => applyLocationStockToProducts(liveProducts, inventoryCountry),
@@ -207,13 +212,33 @@ function OrderPickingSession({
   const replacementProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
     const originalProductId = productIdOf(replacementItem);
-    return countryProducts
+
+    return liveProducts
       .filter(isActiveProduct)
       .filter((product) => String(product.id) !== String(originalProductId))
-      .filter(
-        (product) =>
-          !product.inventoryLocationMissing && number(product.stock) > 0
-      )
+      .map((product) => {
+        const englandRow = getCountryLocationStock(product, "England");
+        const walesRow = getCountryLocationStock(product, "Wales");
+        const englandStock = number(englandRow?.qty);
+        const walesStock = number(walesRow?.qty);
+        const useWalesFallback =
+          inventoryCountry === "England" && englandStock <= 0 && walesStock > 0;
+        const replacementStockCountry = useWalesFallback ? "Wales" : inventoryCountry;
+        const replacementStock =
+          replacementStockCountry === "Wales" ? walesStock : englandStock;
+
+        return {
+          ...product,
+          stock: replacementStock,
+          englandStock,
+          walesStock,
+          replacementStockCountry,
+          replacementStockLocationId:
+            (replacementStockCountry === "Wales" ? walesRow : englandRow)?.locationId || null,
+          usedWalesFallback: useWalesFallback,
+        };
+      })
+      .filter((product) => number(product.stock) > 0)
       .filter(
         (product) =>
           !query ||
@@ -232,7 +257,7 @@ function OrderPickingSession({
           )
       )
       .slice(0, 100);
-  }, [countryProducts, replacementItem, search]);
+  }, [inventoryCountry, liveProducts, replacementItem, search]);
 
   const updateLocalItem = (itemId, updater) =>
     setItems((current) =>
@@ -737,15 +762,19 @@ function OrderPickingSession({
                     <div className="font-bold">
                       {product.name || product.productName || product.product_name}
                     </div>
-                    <div className="text-sm text-slate-500">
-                      Stock: {product.stock} ({inventoryCountry})
+                    <div className="text-right text-sm text-slate-500">
+                      <div>England: {product.englandStock} | Wales: {product.walesStock}</div>
+                      <div className="font-semibold text-slate-700">
+                        Use: {product.replacementStockCountry} ({product.stock})
+                        {product.usedWalesFallback ? " · Wales fallback" : ""}
+                      </div>
                     </div>
                   </button>
                   );
                 })}
                 {!replacementProducts.length && (
                   <div className="p-5 text-center text-slate-500">
-                    No replacement products with {inventoryCountry || "resolved"} stock.
+                    No replacement products available. England stock is used first; when England is zero, Wales stock is allowed.
                   </div>
                 )}
               </div>
