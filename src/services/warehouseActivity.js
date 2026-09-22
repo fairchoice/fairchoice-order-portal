@@ -105,18 +105,24 @@ export function getPickingMismatchActivity({
   const trackedStock = Number(stock);
   const pickedQuantity = Number(quantity);
 
-  if (normalizedAction === "in_stock" && inventoryLocationMissing) {
+  if (["in_stock", "replace"].includes(normalizedAction) && inventoryLocationMissing) {
     return {
       actionType: PICKING_MISMATCH_ACTION,
       oldStatus: oldStatus || "In Stock",
       newStatus: "In Stock",
-      reason: "Picker physically found stock but no active country inventory row was configured",
-      mismatchType: "MISSING_LOCATION_STOCK",
+      reason:
+        normalizedAction === "replace"
+          ? "Picker used a physical replacement but no active country inventory row was configured"
+          : "Picker physically found stock but no active country inventory row was configured",
+      mismatchType:
+        normalizedAction === "replace"
+          ? "REPLACEMENT_MISSING_LOCATION_STOCK"
+          : "MISSING_LOCATION_STOCK",
     };
   }
 
   if (
-    normalizedAction === "in_stock" &&
+    ["in_stock", "replace"].includes(normalizedAction) &&
     Number.isFinite(trackedStock) &&
     Number.isFinite(pickedQuantity) &&
     trackedStock < pickedQuantity
@@ -125,8 +131,14 @@ export function getPickingMismatchActivity({
       actionType: PICKING_MISMATCH_ACTION,
       oldStatus: oldStatus || "In Stock",
       newStatus: "In Stock",
-      reason: "Picker physically found more stock than the tracked country inventory quantity",
-      mismatchType: "INSUFFICIENT_TRACKED_STOCK",
+      reason:
+        normalizedAction === "replace"
+          ? "Picker used a physical replacement above the tracked country inventory quantity"
+          : "Picker physically found more stock than the tracked country inventory quantity",
+      mismatchType:
+        normalizedAction === "replace"
+          ? "REPLACEMENT_INSUFFICIENT_TRACKED_STOCK"
+          : "INSUFFICIENT_TRACKED_STOCK",
     };
   }
 
