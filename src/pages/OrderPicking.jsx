@@ -221,11 +221,10 @@ function OrderPickingSession({
         const walesRow = getCountryLocationStock(product, "Wales");
         const englandStock = number(englandRow?.qty);
         const walesStock = number(walesRow?.qty);
-        const useWalesFallback =
-          inventoryCountry === "England" && englandStock <= 0 && walesStock > 0;
-        const replacementStockCountry = useWalesFallback ? "Wales" : inventoryCountry;
+        const replacementStockCountry =
+          englandStock > 0 ? "England" : walesStock > 0 ? "Wales" : "";
         const replacementStock =
-          replacementStockCountry === "Wales" ? walesStock : englandStock;
+          replacementStockCountry === "England" ? englandStock : walesStock;
 
         return {
           ...product,
@@ -235,10 +234,10 @@ function OrderPickingSession({
           replacementStockCountry,
           replacementStockLocationId:
             (replacementStockCountry === "Wales" ? walesRow : englandRow)?.locationId || null,
-          usedWalesFallback: useWalesFallback,
+          usedWalesFallback: englandStock <= 0 && walesStock > 0,
         };
       })
-      .filter((product) => number(product.stock) > 0)
+      .filter((product) => product.englandStock > 0 || product.walesStock > 0)
       .filter(
         (product) =>
           !query ||
@@ -762,11 +761,53 @@ function OrderPickingSession({
                     <div className="font-bold">
                       {product.name || product.productName || product.product_name}
                     </div>
-                    <div className="text-right text-sm text-slate-500">
-                      <div>England: {product.englandStock} | Wales: {product.walesStock}</div>
-                      <div className="font-semibold text-slate-700">
-                        Use: {product.replacementStockCountry} ({product.stock})
-                        {product.usedWalesFallback ? " · Wales fallback" : ""}
+                    <div className="flex flex-col items-end gap-1 text-sm">
+                      <div className="text-xs font-semibold text-slate-500">
+                        England {product.englandStock} · Wales {product.walesStock}
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          disabled={product.englandStock <= 0}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (product.englandStock <= 0) return;
+                            setSelectedReplacement({
+                              ...product,
+                              stock: product.englandStock,
+                              replacementStockCountry: "England",
+                              usedWalesFallback: false,
+                            });
+                          }}
+                          className={`rounded-md border px-2 py-1 text-xs font-black ${
+                            selected && selectedReplacement?.replacementStockCountry === "England"
+                              ? "border-[#0f5b8d] bg-blue-100 text-[#0f5b8d]"
+                              : "border-slate-300 bg-white text-slate-700"
+                          } disabled:cursor-not-allowed disabled:opacity-35`}
+                        >
+                          England
+                        </button>
+                        <button
+                          type="button"
+                          disabled={product.walesStock <= 0}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (product.walesStock <= 0) return;
+                            setSelectedReplacement({
+                              ...product,
+                              stock: product.walesStock,
+                              replacementStockCountry: "Wales",
+                              usedWalesFallback: product.englandStock <= 0,
+                            });
+                          }}
+                          className={`rounded-md border px-2 py-1 text-xs font-black ${
+                            selected && selectedReplacement?.replacementStockCountry === "Wales"
+                              ? "border-[#0f5b8d] bg-blue-100 text-[#0f5b8d]"
+                              : "border-slate-300 bg-white text-slate-700"
+                          } disabled:cursor-not-allowed disabled:opacity-35`}
+                        >
+                          Wales
+                        </button>
                       </div>
                     </div>
                   </button>
@@ -774,7 +815,7 @@ function OrderPickingSession({
                 })}
                 {!replacementProducts.length && (
                   <div className="p-5 text-center text-slate-500">
-                    No replacement products available. England stock is used first; when England is zero, Wales stock is allowed.
+                    No replacement products have stock in England or Wales.
                   </div>
                 )}
               </div>
