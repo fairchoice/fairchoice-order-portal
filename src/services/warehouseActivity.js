@@ -93,9 +93,42 @@ export const normalizeWarehouseActivity = (row = {}) => ({
   metadata: row.metadata || {},
 });
 
-export function getPickingMismatchActivity({ itemStatus, action } = {}) {
+export function getPickingMismatchActivity({
+  itemStatus,
+  action,
+  inventoryLocationMissing = false,
+  stock = null,
+  quantity = null,
+} = {}) {
   const oldStatus = normalizeWarehouseStatus(itemStatus);
   const normalizedAction = String(action || "").trim().toLowerCase();
+  const trackedStock = Number(stock);
+  const pickedQuantity = Number(quantity);
+
+  if (normalizedAction === "in_stock" && inventoryLocationMissing) {
+    return {
+      actionType: PICKING_MISMATCH_ACTION,
+      oldStatus: oldStatus || "In Stock",
+      newStatus: "In Stock",
+      reason: "Picker physically found stock but no active country inventory row was configured",
+      mismatchType: "MISSING_LOCATION_STOCK",
+    };
+  }
+
+  if (
+    normalizedAction === "in_stock" &&
+    Number.isFinite(trackedStock) &&
+    Number.isFinite(pickedQuantity) &&
+    trackedStock < pickedQuantity
+  ) {
+    return {
+      actionType: PICKING_MISMATCH_ACTION,
+      oldStatus: oldStatus || "In Stock",
+      newStatus: "In Stock",
+      reason: "Picker physically found more stock than the tracked country inventory quantity",
+      mismatchType: "INSUFFICIENT_TRACKED_STOCK",
+    };
+  }
 
   if (oldStatus === "In Stock" && normalizedAction === "pre_order") {
     return {
