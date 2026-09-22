@@ -43,10 +43,14 @@ export async function savePickingDecision({ order, orderItemId, action, quantity
   const session = requireSession(user);
   const inventoryCountry = resolveOrderInventoryCountry(order);
   if (!inventoryCountry && action !== "pre_order") throw new Error("The order inventory country cannot be resolved safely.");
+  const stockCountry =
+    action === "replace"
+      ? (replacement?.replacementStockCountry || replacement?.stockCountry || inventoryCountry)
+      : inventoryCountry;
   const { data, error } = await supabase.rpc("fc_apply_picking_quantity_v1", {
     p_username: session.username, p_session_token: session.token, p_order_item_id: orderItemId,
     p_action: action, p_quantity: Number(quantity), p_client_action_id: clientActionId,
-    p_inventory_country: inventoryCountry || null,
+    p_inventory_country: stockCountry || null,
     p_replacement_product_id: replacement?.id || null,
     p_replacement_product_code: replacement?.productCode || replacement?.product_code || null,
     p_replacement_product_name: replacement?.name || replacement?.productName || replacement?.product_name || null,
