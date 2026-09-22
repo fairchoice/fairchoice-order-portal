@@ -237,7 +237,6 @@ function OrderPickingSession({
           usedWalesFallback: englandStock <= 0 && walesStock > 0,
         };
       })
-      .filter((product) => product.englandStock > 0 || product.walesStock > 0)
       .filter(
         (product) =>
           !query ||
@@ -304,7 +303,7 @@ function OrderPickingSession({
     const requested = forceFull
       ? remaining
       : action === "replace"
-        ? Math.min(selectedQuantity(item, stock), Math.max(0, stock), remaining)
+        ? Math.min(selectedQuantity(item, stock), remaining)
         : Math.min(selectedQuantity(item, stock), remaining);
 
     if (requested <= 0) {
@@ -313,10 +312,14 @@ function OrderPickingSession({
     }
 
     const sourceProduct = productsById.get(String(productIdOf(item)));
+    const activityProduct = action === "replace" && replacement ? replacement : sourceProduct;
     const mismatchActivity = getPickingMismatchActivity({
       itemStatus: item.sourceStatus || item.source_status || "In Stock",
       action,
-      inventoryLocationMissing: Boolean(sourceProduct?.inventoryLocationMissing),
+      inventoryLocationMissing:
+        action === "replace"
+          ? !replacement?.replacementStockLocationId
+          : Boolean(sourceProduct?.inventoryLocationMissing),
       stock,
       quantity: requested,
     });
@@ -368,7 +371,14 @@ function OrderPickingSession({
               metadata: {
                 mismatchType: mismatchActivity.mismatchType,
                 trackedStock: Number(stock || 0),
-                inventoryLocationMissing: Boolean(sourceProduct?.inventoryLocationMissing),
+                inventoryLocationMissing:
+                  action === "replace"
+                    ? !replacement?.replacementStockLocationId
+                    : Boolean(sourceProduct?.inventoryLocationMissing),
+                replacementProductId: replacement?.id || null,
+                replacementProductName:
+                  replacement?.name || replacement?.productName || replacement?.product_name || null,
+                replacementStockCountry: replacement?.replacementStockCountry || null,
               },
             },
             currentUser
@@ -755,7 +765,19 @@ function OrderPickingSession({
                   <button
                     type="button"
                     key={product.id}
-                    onClick={() => setSelectedReplacement(product)}
+                    onClick={() =>
+                      setSelectedReplacement({
+                        ...product,
+                        stock:
+                          product.englandStock > 0
+                            ? product.englandStock
+                            : product.walesStock,
+                        replacementStockCountry:
+                          product.englandStock > 0 ? "England" : "Wales",
+                        usedWalesFallback:
+                          product.englandStock <= 0 && product.walesStock > 0,
+                      })
+                    }
                     className={`mb-2 flex w-full items-center justify-between rounded-xl border p-4 text-left ${selected ? "border-[#0f5b8d] bg-blue-50 ring-2 ring-blue-200" : "border-slate-200 hover:bg-slate-50"}`}
                   >
                     <div className="font-bold">
@@ -768,10 +790,8 @@ function OrderPickingSession({
                       <div className="flex gap-1">
                         <button
                           type="button"
-                          disabled={product.englandStock <= 0}
                           onClick={(event) => {
                             event.stopPropagation();
-                            if (product.englandStock <= 0) return;
                             setSelectedReplacement({
                               ...product,
                               stock: product.englandStock,
@@ -789,10 +809,8 @@ function OrderPickingSession({
                         </button>
                         <button
                           type="button"
-                          disabled={product.walesStock <= 0}
                           onClick={(event) => {
                             event.stopPropagation();
-                            if (product.walesStock <= 0) return;
                             setSelectedReplacement({
                               ...product,
                               stock: product.walesStock,
@@ -815,7 +833,7 @@ function OrderPickingSession({
                 })}
                 {!replacementProducts.length && (
                   <div className="p-5 text-center text-slate-500">
-                    No replacement products have stock in England or Wales.
+                    No matching replacement products found.
                   </div>
                 )}
               </div>
