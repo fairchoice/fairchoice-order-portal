@@ -2133,7 +2133,7 @@ const runInvoiceAction = async (row, action) => {
 
                   return (
                     <tr key={row.id || getReference(row)} className="border-t border-slate-100">
-                      <td className="p-3 font-bold text-slate-900">{formatDisplayOrderId(getReference(row))}</td>
+                      <td className="p-3 font-bold text-slate-900">{getReference(row)}</td>
                       <td className="p-3">{getCustomer(row)}</td>
                       <td className="p-3">{getCreatedDate(row) ? new Date(getCreatedDate(row)).toLocaleDateString() : "-"}</td>
                       <td className="p-3 text-right font-bold">{formatCurrency(amount)}</td>
@@ -2211,7 +2211,7 @@ const runInvoiceAction = async (row, action) => {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 id="void-invoice-title" className="text-xl font-extrabold text-slate-900">Void Invoice</h3>
-                <p className="mt-1 text-sm text-slate-600">Invoice {formatDisplayOrderId(getReference(voidInvoiceRow))} · {getCustomer(voidInvoiceRow)}</p>
+                <p className="mt-1 text-sm text-slate-600">Invoice {getReference(voidInvoiceRow)} · {getCustomer(voidInvoiceRow)}</p>
               </div>
               <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50" aria-label="Close void invoice dialog">Close</button>
             </div>
