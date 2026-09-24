@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
@@ -14,7 +14,6 @@ import {
   warehouseSupplyStage,
 } from "../services/preOrderSupplyAllocation.js";
 
-
 test("supplier quantity allocation fills customer orders in stable order", () => {
   const lines = [
     { itemKey: "x", qty: 5 },
@@ -22,7 +21,6 @@ test("supplier quantity allocation fills customer orders in stable order", () =>
   ];
   assert.deepEqual(allocateSupplierQuantity(lines, 8), { x: 5, y: 3 });
 });
-
 
 test("pre-order supply exposes supplier-first queues and manual sync", () => {
   const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
@@ -36,7 +34,6 @@ test("pre-order supply exposes supplier-first queues and manual sync", () => {
   assert.doesNotMatch(source, /type="date"/);
 });
 
-
 test("Warehouse Pre-order demand is the Queue source and Received alone is excluded", () => {
   assert.equal(isWarehousePreOrderQueueLine({ status: "Warehouse Packing" }, "Pre-order"), true);
   assert.equal(isWarehousePreOrderQueueLine({ status: "Warehouse Packing" }, "Cannot Supply"), false);
@@ -46,12 +43,10 @@ test("Warehouse Pre-order demand is the Queue source and Received alone is exclu
   assert.match(source, /isWarehousePreOrderQueueLine\(entry\.order, entry\.displayStatus\)/);
 });
 
-
 test("cannot supply history stays compact without redundant unavailable label", () => {
   const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, />Not available</);
 });
-
 
 test("Warehouse Pre-Order variants are operational Pre-order Queue demand", () => {
   for (const status of [
@@ -67,12 +62,10 @@ test("Warehouse Pre-Order variants are operational Pre-order Queue demand", () =
   }
 });
 
-
 test("Warehouse Cannot Supply is operational without a Remove event", () => {
   assert.equal(warehouseSupplyStage("Cannot Supply"), "Cannot Supply");
   assert.equal(preOrderWorkflowStage("CANNOT_SUPPLY"), "Cannot Supply");
 });
-
 
 test("Buy makes exactly the bought Warehouse quantity pickable In Stock", () => {
   assert.deepEqual(preOrderSupplyItemChanges("Buy", { quantity: 4 }), {
@@ -81,7 +74,6 @@ test("Buy makes exactly the bought Warehouse quantity pickable In Stock", () => 
     pickedQty: 4,
   });
 });
-
 
 test("synced Bought remains active while its In Stock item belongs to Warehouse Packing", () => {
   const event = { itemKey: "ORD-1:item-1", itemId: "item-1", actionType: "Buy" };
@@ -94,7 +86,6 @@ test("synced Bought remains active while its In Stock item belongs to Warehouse 
   const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
   assert.match(source, /\["in stock", "available"\]\.includes\(normalizeStatus\(warehouseLine\?\.status\)\)/);
 });
-
 
 test("Recall Buy restores unresolved Warehouse demand and keeps an audit action", () => {
   assert.deepEqual(preOrderSupplyItemChanges("Recall", { restoreQuantity: 7 }), {
@@ -109,7 +100,6 @@ test("Recall Buy restores unresolved Warehouse demand and keeps an audit action"
   );
 });
 
-
 test("Next Supplier is workflow-only and leaves Warehouse status unchanged", () => {
   assert.equal(preOrderSupplyItemChanges("NextSup", { quantity: 5 }), null);
   assert.equal(
@@ -117,7 +107,6 @@ test("Next Supplier is workflow-only and leaves Warehouse status unchanged", () 
     "Next Supplier",
   );
 });
-
 
 test("supplier and availability actions remain pending until Sync All", () => {
   const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
@@ -129,7 +118,6 @@ test("supplier and availability actions remain pending until Sync All", () => {
   assert.match(source, /failedItemKeys\.has\(action\.itemKey\)/);
   assert.doesNotMatch(source, /const changeWarehouseAvailability = async/);
 });
-
 
 test("partial Buy conserves ordered quantity across In Stock and unresolved lines", () => {
   const ordered = 9;
@@ -154,7 +142,6 @@ test("partial Buy conserves ordered quantity across In Stock and unresolved line
   );
 });
 
-
 test("Buy and Remove from Next Supplier use Warehouse-safe transitions", () => {
   assert.deepEqual(preOrderSupplyItemChanges("Buy", { quantity: 3 }), {
     sourceStatus: "In Stock",
@@ -168,7 +155,6 @@ test("Buy and Remove from Next Supplier use Warehouse-safe transitions", () => {
   });
 });
 
-
 test("page records supplier-linked permanent events and skips Warehouse update for Next Supplier", () => {
   const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
   assert.match(source, /supplierId: supplier\?\.id/);
@@ -181,7 +167,6 @@ test("page records supplier-linked permanent events and skips Warehouse update f
   assert.match(source, /persistedByClientActionId/);
 });
 
-
 test("the real partial split keeps remaining and bought order_items in Warehouse-safe states", () => {
   const source = fs.readFileSync(new URL("./CustomerOrder.jsx", import.meta.url), "utf8");
   assert.match(source, /qty: remainingQty,[\s\S]*source_status: "Need Supplier",[\s\S]*include_in_picking: false/);
@@ -192,7 +177,6 @@ test("the real partial split keeps remaining and bought order_items in Warehouse
   assert.match(source, /restorePreOrderSplit=\{restorePreOrderSplit\}/);
 });
 
-
 test("Cannot Supply exposes permanent Available and Recall Available operations", () => {
   const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
   assert.match(source, /recordWarehouseOperationalActivity/);
@@ -200,7 +184,6 @@ test("Cannot Supply exposes permanent Available and Recall Available operations"
   assert.match(source, /referencedClientActionId:\s*actionType === "Recall Available" \? line\.latestAction\?\.clientActionId/s);
   assert.match(source, /recalledAvailableEventIds/);
 });
-
 
 test("all product-grouped Pre-Order tabs reuse Warehouse product sorting", () => {
   const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
@@ -210,7 +193,6 @@ test("all product-grouped Pre-Order tabs reuse Warehouse product sorting", () =>
   assert.match(source, /records: \[\.\.\.records\]\.sort\(\(left, right\) =>\s*compareWarehouseProducts/);
   assert.doesNotMatch(source, /\.sort\(\(a, b\) => a\.productName\.localeCompare\(b\.productName\)\)/);
 });
-
 
 test("orders leaving the live Warehouse workflow clear every active Pre-Order view only", () => {
   const liveOrder = { status: "Warehouse Packing" };
@@ -224,7 +206,6 @@ test("orders leaving the live Warehouse workflow clear every active Pre-Order vi
   };
   const permanentHistory = [event];
 
-
   assert.equal(isLivePreOrderDemandOrder(liveOrder), true);
   assert.equal(isLivePreOrderDemandOrder(receivedOrder), true);
   assert.equal(isActivePreOrderSupplyOrder(liveOrder), true);
@@ -234,7 +215,6 @@ test("orders leaving the live Warehouse workflow clear every active Pre-Order vi
   assert.equal(isLivePreOrderSupplyEvent(event, new Set(), new Set()), false);
   assert.deepEqual(permanentHistory, [event]);
 
-
   const source = fs.readFileSync(new URL("./PreOrderSupply.jsx", import.meta.url), "utf8");
   assert.match(source, /!isLivePreOrderSupplyEvent\(event, liveWarehouseItemKeys, liveWarehouseItemIds\)/);
   assert.match(source, /isLivePreOrderSupplyEvent\(entry, liveWarehouseItemKeys, liveWarehouseItemIds\)/);
@@ -242,7 +222,6 @@ test("orders leaving the live Warehouse workflow clear every active Pre-Order vi
   assert.match(source, /filterPendingPreOrderActionsForOrders\(current, orders\)/);
   assert.doesNotMatch(source, /setHistoryEvents\(\(current\).*filter/s);
 });
-
 
 test("pending POS state is retained only for live orders and can be cleared by order", () => {
   const actions = [{ orderId: "LIVE" }, { orderId: "DRIVER" }];
@@ -260,25 +239,16 @@ test("pending POS state is retained only for live orders and can be cleared by o
   assert.deepEqual(JSON.parse(values.get("fairchoice_preorder_supply_pending")), [actions[0]]);
 });
 
-<<<<<<< HEAD
-=======
-
->>>>>>> d3f031c (WIP wallet and warehouse development)
 test("Back to Received preserves final Warehouse quantity and supply state", () => {
   const orderPage = fs.readFileSync(new URL("./CustomerOrder.jsx", import.meta.url), "utf8");
   const warehousePage = fs.readFileSync(new URL("./Warehouse.jsx", import.meta.url), "utf8");
   const historyService = fs.readFileSync(new URL("../services/preOrderSupplyHistory.js", import.meta.url), "utf8");
 
-<<<<<<< HEAD
-=======
-
->>>>>>> d3f031c (WIP wallet and warehouse development)
   assert.match(orderPage, /Status movement is status-only/);
   assert.doesNotMatch(orderPage, /reversePreOrderSupplyForReceivedOrder/);
   assert.match(warehousePage, /changeOrderStatus\(order\.orderId, "Received"\)/);
   assert.match(historyService, /Moving an order back to[\s\S]*Received must never reverse supplier status, ordered qty, or picked qty/);
 });
-
 
 test("Sync history captures authenticated actor identity without changing physical stock", () => {
   const supplierMigration = fs.readFileSync(

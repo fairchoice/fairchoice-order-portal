@@ -2984,10 +2984,7 @@ const openBackOffice = async () => {
         (order) => String(order.orderId) === String(orderNumber)
       );
 
-<<<<<<< HEAD
-=======
 
->>>>>>> d3f031c (WIP wallet and warehouse development)
       // Status movement is status-only. Warehouse/POS quantities and supply
       // decisions are final and must survive backward/forward workflow moves.
       // The only later quantity/supply changes are explicit Warehouse

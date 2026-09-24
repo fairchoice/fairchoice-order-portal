@@ -1,4 +1,4 @@
-﻿import { supabase } from "./supabase";
+import { supabase } from "./supabase";
 import { calculateDocumentTotals } from "../utils/documentTotals";
 import {
   calculateCartOrderItems,
@@ -113,30 +113,24 @@ export const getInvoiceLineQuantity = (item = {}) =>
 
 export const isActiveInvoiceLine = (item = {}) => {
   if (getInvoiceLineQuantity(item) <= 0) return false;
-<<<<<<< HEAD
-=======
 
 
 
->>>>>>> d3f031c (WIP wallet and warehouse development)
 
   const status = String(item.sourceStatus || item.source_status || item.status || "")
     .trim()
     .toLowerCase();
 
-<<<<<<< HEAD
-  if (inactiveInvoiceStatuses.has(status)) return false;
-
-=======
-
-
-
   if (inactiveInvoiceStatuses.has(status)) return false;
 
 
 
 
->>>>>>> d3f031c (WIP wallet and warehouse development)
+  if (inactiveInvoiceStatuses.has(status)) return false;
+
+
+
+
   // Pre-order supply intentionally changes status only. A line moved from
   // Need Supplier to In Stock can still carry a stale include_in_picking=false.
   // Explicit supplied status is authoritative for customer totals/printing.
@@ -144,12 +138,9 @@ export const isActiveInvoiceLine = (item = {}) => {
     return true;
   }
 
-<<<<<<< HEAD
-=======
 
 
 
->>>>>>> d3f031c (WIP wallet and warehouse development)
   return item.includeInPicking !== false && item.include_in_picking !== false;
 };
 

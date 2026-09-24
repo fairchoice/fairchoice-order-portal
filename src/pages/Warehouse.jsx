@@ -1336,10 +1336,7 @@ const backToReceived = async (order) => {
     return;
   }
 
-<<<<<<< HEAD
-=======
 
->>>>>>> d3f031c (WIP wallet and warehouse development)
   await changeOrderStatus(order.orderId, "Received");
   await logAction({
     user: loggedInUser,
