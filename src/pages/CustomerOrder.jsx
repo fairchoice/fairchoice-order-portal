@@ -4452,7 +4452,7 @@ const getCalculatedOrderItemForSave = (item, order = {}) =>
 const updateOrderItem = async (orderId, itemId, updates) => {
   const order = orders.find((entry) => entry.orderId === orderId);
   try {
-    const result = await updateReceivedOrderItemWithPromotions({ order, itemId, updates });
+    const result = await updateReceivedOrderItemWithPromotions({ order, itemId, updates, user: loggedInUser });
     await fetchOrders();
     return result;
   } catch (error) {
