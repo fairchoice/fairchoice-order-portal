@@ -4134,9 +4134,8 @@ const submitOrder = async () => {
       userProfile,
       orderCountry,
       creditLimit,
-      walletUseRequested: Number(customerWallet.balance || 0) > 0
-        ? walletUseRequested
-        : false,
+      walletUseRequested: Boolean(walletUseRequested),
+      walletBalance: Number(customerWallet.balance || 0),
     });
 
 
@@ -4299,9 +4298,7 @@ const newOrder = {
     localStorage.removeItem(orderSubmissionStorageKey);
 
 
-    const submittedWalletReservation = walletUseRequested
-      ? Math.min(Math.max(Number(customerWallet.balance || 0), 0), Math.max(Number(orderTotal || 0), 0))
-      : 0;
+    const submittedWalletReservation = Number(orderRequest.wallet_requested_amount || 0);
 
     if (submittedWalletReservation > 0) {
       setCustomerWallet((current) => ({
