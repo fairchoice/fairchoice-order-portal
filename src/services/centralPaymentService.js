@@ -26,6 +26,7 @@ import {
 import { isTestAccount } from "../utils/testAccountFiltering";
 import { getFcSessionState } from "./fcSession";
 import { isOwnerUser } from "./ownerFinancialSecurity";
+import { canPerform } from "../security/accessControlRegistry";
 
 const deliveredStatuses = ["delivered", "confirmed", "delivery confirmed", "completed"];
 
@@ -942,7 +943,11 @@ export async function listCentralPaymentRecords({
     total_pages: Number(data?.total_pages || 1),
   };
 }
-export async function editCentralPayment({ payment, changes, reason } = {}) {
+export async function editCentralPayment({ currentUser, payment, changes, reason } = {}) {
+  if (!canPerform(currentUser, "payments.edit")) throw new Error("You do not have permission to edit payments.");
+  if (Number(changes?.amount) !== Number(payment?.amount) && !canPerform(currentUser, "payments.amount.change")) {
+    throw new Error("You do not have permission to change payment amounts.");
+  }
   if (!payment?.id) throw new Error("Payment is required.");
   if (!String(reason || "").trim()) throw new Error("Edit reason is required.");
   const { data, error } = await supabase
@@ -1117,7 +1122,8 @@ export async function voidCustomerCreditPayment({
   return data;
 }
 
-export async function removeCentralPayment({ payment, reason } = {}) {
+export async function removeCentralPayment({ currentUser, payment, reason } = {}) {
+  if (!canPerform(currentUser, "payments.reverse")) throw new Error("You do not have permission to reverse payments.");
   if (!payment?.id) throw new Error("Payment is required.");
   if (!String(reason || "").trim()) throw new Error("Archive reason is required.");
   const { data, error } = await supabase
@@ -1135,7 +1141,8 @@ export async function removeCentralPayment({ payment, reason } = {}) {
   return data;
 }
 
-export async function restoreCentralPayment({ payment, reason } = {}) {
+export async function restoreCentralPayment({ currentUser, payment, reason } = {}) {
+  if (!canPerform(currentUser, "payments.reverse")) throw new Error("You do not have permission to restore payments.");
   if (!payment?.id) throw new Error("Payment is required.");
   if (!String(reason || "").trim()) throw new Error("Restore reason is required.");
   const { data, error } = await supabase

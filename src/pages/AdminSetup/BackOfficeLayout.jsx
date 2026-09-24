@@ -1,168 +1,27 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { hasPermission } from "../../utils/permissions";
+import { useMemo, useState } from "react";
+import {
+  PAGE_ACCESS_SECTIONS,
+  canAccessPage as registryCanAccessPage,
+} from "../../security/accessControlRegistry";
 
 const defaultOpenSections = {
   Operations: true,
   "Admin Setup": true,
 };
 
-const placeholderTitles = {
-  profitPortal: "Profit Portal",
-  productLineAnalysis: "Product Line Analysis",
-  salesReports: "Sales Reports",
-  outstandingCustomers: "Outstanding Customers",
-  collectionsReport: "Collections Report",
-  driverCollections: "Driver Collections",
-  auditLog: "Audit Log",
-  importExport: "Import / Export",
-  backupTools: "Backup Tools",
-};
+const navSections = PAGE_ACCESS_SECTIONS;
 
-const navSections = [
-  {
-    title: "Order",
-    items: [
-      { label: "Sales Rep Orders", page: "order", permission: "access_sales_rep" },
-      { label: "Sales Invoices", page: "orderSalesInvoices", permission: "access_accounts" },
-    ],
-  },
-  {
-    title: "Operations",
-    items: [
-      {
-        label: "Received Orders",
-        page: "orders",
-        fetchOrdersAfter: true,
-        permission: "access_received_orders",
-      },
-      {
-        label: "Driver Portal",
-        page: "driver",
-        fetchOrdersBefore: true,
-        permission: "access_driver",
-      },
-      { label: "Returns", page: "returnsPortal", permission: "access_received_orders" },
-      {
-        label: "Warehouse",
-        page: "warehouse",
-        fetchOrdersBefore: true,
-        permission: "access_warehouse",
-      },
-      {
-        label: "Pre-order Supply",
-        page: "preOrderSupply",
-        fetchOrdersBefore: true,
-        permission: "access_warehouse",
-      },
-    ],
-  },
-  {
-    title: "Admin Setup",
-    items: [
-      { label: "Staff Setup", page: "staff", permission: "can_edit_security" },
-      { label: "Customer Setup", page: "customers", permission: "access_customer_setup" },
-      {
-        label: "Product Setup",
-        permission: "access_product_setup",
-        children: [
-          { label: "Categories", page: "categories", permission: "access_product_setup" },
-          { label: "Home Page Content", page: "homePageImages", permission: "access_product_setup" },
-          { label: "Products", page: "products", permission: "access_product_setup" },
-          { label: "Stock Taking", page: "stockTaking", permission: "access_product_setup" },
-          { label: "Product Import / Export", page: "productImportExport", permission: "access_product_setup" },
-          { label: "Pricing Rules", page: "pricingRule", permission: "can_edit_pricing" },
-          { label: "Price Management", page: "priceManagement", permission: "can_edit_pricing" },
-          { label: "Promotions", page: "promotions", permission: "access_product_setup" },
-        ],
-      },
-      { label: "Login Setup", page: "loginSetup", permission: "can_edit_security" },
-      {
-        label: "Suppliers",
-        page: "suppliers",
-        permission: "access_product_setup",
-      },
-    ],
-  },
-  {
-    title: "Accounts",
-    items: [
-      { label: "Central Payment", page: "centralPayment", permission: "access_accounts" },
-      { label: "Customer Credit", page: "credit", hash: "#credit", permission: "access_accounts" },
-      { label: "Invoices", page: "invoicesPortal", permission: "access_accounts" },
-      { label: "Weekly Account", page: "weeklyAccount", permission: "access_accounts" },
-      {
-        label: "Supplier Accounts",
-        page: "supplierAccounts",
-        permission: "page.supplier_accounts",
-      },
-      { label: "Expenses", page: "expenses" },
-      { label: "Branch Separation", page: "branchSeparation", permission: "can_edit_security" },
-    ],
-  },
-  {
-    title: "Reports",
-    items: [
-      { label: "Profit Portal", page: "profitPortal", permission: "access_reports" },
-      { label: "Product Line Analysis", page: "productLineAnalysis", permission: "access_reports" },
-      { label: "Sales Reports", page: "salesReports", permission: "access_reports" },
-      { label: "Outstanding Customers", page: "outstandingCustomers", permission: "access_reports" },
-      { label: "Collections Report", page: "collectionsReport", permission: "access_reports" },
-      { label: "Driver Collections", page: "driverCollections", permission: "access_reports" },
-    ],
-  },
-  {
-    title: "System",
-    items: [
-      { label: "Audit Log", page: "auditLog", permission: "can_edit_security" },
-      { label: "Import / Export", page: "importExport", permission: "can_edit_security" },
-      { label: "Backup Tools", page: "backupTools", permission: "can_edit_security" },
-    ],
-  },
-];
-
-const pagePermissions = {
-  order: "access_sales_rep",
-  orderSalesInvoices: "access_accounts",
-  receivedOrders: "access_received_orders",
-  orders: "access_received_orders",
-  warehouse: "access_warehouse",
-  preOrderSupply: "access_warehouse",
-  driver: "access_driver",
-  returnsPortal: "access_received_orders",
-  customerPortal: "access_customer_portal",
-  customers: "access_customer_setup",
-  categories: "access_product_setup",
-  homePageImages: "access_product_setup",
-  products: "access_product_setup",
-  suppliers: "access_product_setup",
-  stockTaking: "access_product_setup",
-  productImportExport: "access_product_setup",
-  promotions: "access_product_setup",
- pricingRule: "can_edit_pricing",
-  priceManagement: "can_edit_pricing",
-  credit: "access_accounts",
-  centralPayment: "access_accounts",
-  branchSeparation: "can_edit_security",
-  weeklyAccount: "access_accounts",
-  supplierAccounts: "page.supplier_accounts",
-  invoicesPortal: "access_accounts",
-  profitPortal: "access_reports",
-  productLineAnalysis: "access_reports",
-  salesReports: "access_reports",
-  outstandingCustomers: "access_reports",
-  collectionsReport: "access_reports",
-  driverCollections: "access_reports",
-  staff: "can_edit_security",
-  security: "can_edit_security",
-  loginSetup: "can_edit_security",
-  auditLog: "can_edit_security",
-  importExport: "can_edit_security",
-  backupTools: "can_edit_security",
-  priceManagement: "can_edit_pricing",
-};
+const internalPagePermissions = Object.freeze({
+  picking: "page.operations.received_orders",
+  receivedOrders: "page.operations.received_orders",
+  stockhistory: "page.product.stock_taking",
+  stockreceipts: "page.product.import",
+  security: "page.login.access_control",
+  loginSetup: "page.login.access_control",
+});
 
 function canSeeItem(user, item) {
-  if (item.permission && !hasPermission(user, item.permission)) return false;
+  if (item.key && !registryCanAccessPage(user, item.key)) return false;
   if (!item.children?.length) return true;
   return item.children.some((child) => canSeeItem(user, child));
 }
@@ -189,14 +48,11 @@ function filterSectionsByPermission(user) {
     .filter((section) => section.items.length > 0);
 }
 
-function canAccessPage(user, page) {
+function canAccessBackOfficePage(user, page) {
   if (user?.role === "Customer") {
     return page === "customerPortal";
   }
-
-  const permission = pagePermissions[page];
-  if (!permission) return true;
-  return hasPermission(user, permission);
+  return registryCanAccessPage(user, internalPagePermissions[page] || page);
 }
 
 function hasActivePage(items = [], page) {
@@ -215,10 +71,7 @@ function MenuItem({ item, page, depth = 0, onNavigate }) {
   const active = isItemActive(item, page);
   const hasChildren = Boolean(item.children?.length);
   const [open, setOpen] = useState(active);
-
-  useEffect(() => {
-    if (active) setOpen(true);
-  }, [active]);
+  const visible = open || active;
 
   if (hasChildren) {
     return (
@@ -227,14 +80,14 @@ function MenuItem({ item, page, depth = 0, onNavigate }) {
           type="button"
           className={`bo-tree-toggle bo-nav-parent ${active ? "is-active-parent" : ""}`}
           onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
+          aria-expanded={visible}
           style={{ paddingLeft: `${12 + depth * 14}px` }}
         >
           <span>{item.label}</span>
-          <span className="bo-chevron">{open ? "-" : "+"}</span>
+          <span className="bo-chevron">{visible ? "-" : "+"}</span>
         </button>
 
-        {open && (
+        {visible && (
           <div className="bo-nav-children">
             {item.children.map((child) => (
               <MenuItem
@@ -266,10 +119,7 @@ function MenuItem({ item, page, depth = 0, onNavigate }) {
 function NavSection({ section, page, onNavigate }) {
   const active = hasActivePage(section.items, page);
   const [open, setOpen] = useState(Boolean(defaultOpenSections[section.title]) || active);
-
-  useEffect(() => {
-    if (active) setOpen(true);
-  }, [active]);
+  const visible = open || active;
 
   return (
     <section className="bo-nav-group">
@@ -277,13 +127,13 @@ function NavSection({ section, page, onNavigate }) {
         type="button"
         className={`bo-section-toggle ${active ? "is-active-section" : ""}`}
         onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
+        aria-expanded={visible}
       >
         <span>{section.title}</span>
-        <span className="bo-chevron">{open ? "-" : "+"}</span>
+        <span className="bo-chevron">{visible ? "-" : "+"}</span>
       </button>
 
-      {open && (
+      {visible && (
         <div className="bo-section-items">
           {section.items.map((item) => (
             <MenuItem
@@ -308,14 +158,6 @@ export function ComingSoonPlaceholder({ title = "Coming Soon" }) {
   );
 }
 
-export function getComingSoonTitle(page) {
-  if (typeof page === "string" && page.startsWith("comingSoon:")) {
-    return page.replace("comingSoon:", "");
-  }
-
-  return placeholderTitles[page] || null;
-}
-
 export default function BackOfficeLayout({
   page,
   setPage,
@@ -334,7 +176,7 @@ export default function BackOfficeLayout({
     () => filterSectionsByPermission(currentUser),
     [currentUser]
   );
-  const pageAllowed = canAccessPage(currentUser, page);
+  const pageAllowed = canAccessBackOfficePage(currentUser, page);
 
   const roleLabel = useMemo(() => {
     if (isAdmin) return "Admin";
@@ -346,7 +188,7 @@ export default function BackOfficeLayout({
   }, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer]);
 
   const handleNavigate = async (item) => {
-    if (item.permission && !hasPermission(currentUser, item.permission)) {
+    if (item.key && !registryCanAccessPage(currentUser, item.key)) {
       alert("You do not have permission to access this page.");
       return;
     }

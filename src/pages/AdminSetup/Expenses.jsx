@@ -151,7 +151,7 @@ export default function Expenses() {
       description: row.description || "",
       receiptReference: row.receipt_reference || "",
       receiptUrl: row.receipt_url || "",
-      paidByType: row.paid_by_type || "BUSINESS",
+      paidByType: row.paid_by_staff_id ? "STAFF" : "BUSINESS",
       paidByStaffId: row.paid_by_staff_id || "",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -167,7 +167,11 @@ export default function Expenses() {
     try {
       await operation(reason);
       await refresh();
-      window.alert(`Expense ${label.toLowerCase()} completed.`);
+      window.alert(
+        label === "Void"
+          ? "Void confirmed."
+          : `Expense ${label.toLowerCase()} completed.`,
+      );
     } catch (transitionError) {
       window.alert(transitionError.message || `Could not ${label.toLowerCase()} the expense.`);
     } finally {
@@ -216,7 +220,10 @@ export default function Expenses() {
             <Select label="Payment method" value={form.paymentMethod} onChange={(value) => setForm({ ...form, paymentMethod: value })}>
               {PAYMENT_TYPES.map((method) => <option key={method}>{method}</option>)}
             </Select>
-            <Input label="Paid by type" value={form.paidByType} onChange={(value) => setForm({ ...form, paidByType: value })} />
+            <Select label="Paid from" value={form.paidByType} onChange={(value) => setForm({ ...form, paidByType: value, paidByStaffId: value === "STAFF" ? user.staff_id || user.staffId || "" : "" })}>
+              <option value="BUSINESS">Business funds</option>
+              <option value="STAFF">My collected cash</option>
+            </Select>
             <Input label="Description" value={form.description} onChange={(value) => setForm({ ...form, description: value })} />
             <Input label="Receipt reference" required={false} value={form.receiptReference} onChange={(value) => setForm({ ...form, receiptReference: value })} />
             <Input label="Receipt URL" type="url" required={false} value={form.receiptUrl} onChange={(value) => setForm({ ...form, receiptUrl: value })} />

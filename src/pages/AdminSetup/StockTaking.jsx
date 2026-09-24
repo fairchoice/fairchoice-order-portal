@@ -3,6 +3,7 @@ import {
   getActiveStockLocations,
   saveStockTakeCounts,
 } from "../../services/locationStock";
+import { canPerform } from "../../security/accessControlRegistry";
 
 const clean = (value) => String(value || "").trim();
 const lower = (value) => clean(value).toLowerCase();
@@ -41,6 +42,7 @@ function getSearchText(product) {
 }
 
 export default function StockTaking({ products = [], fetchProducts }) {
+  const currentUser = JSON.parse(localStorage.getItem("loggedInUser") || localStorage.getItem("fairchoice_user") || "null");
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState("");
   const [subCategory, setSubCategory] = useState("");
@@ -221,6 +223,10 @@ export default function StockTaking({ products = [], fetchProducts }) {
   };
 
   const saveAll = async () => {
+    if (!canPerform(currentUser, "stock.take_difference_approve")) {
+      setMessage("Save failed: you do not have permission to approve stock-taking differences.");
+      return;
+    }
     if (!locationId) {
       setMessage("Select a stock location first.");
       return;

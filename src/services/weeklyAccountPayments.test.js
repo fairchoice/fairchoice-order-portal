@@ -116,7 +116,7 @@ test("Weekly Account keeps tab searches isolated and excludes aggregate amounts"
     assert.doesNotMatch(
       weeklyAccountSource.slice(
         weeklyAccountSource.indexOf("const PAYMENT_SEARCH_FIELDS"),
-        weeklyAccountSource.indexOf("const EXPENSE_CATEGORIES"),
+        weeklyAccountSource.indexOf("const normalize"),
       ),
       new RegExp(restrictedField),
     );

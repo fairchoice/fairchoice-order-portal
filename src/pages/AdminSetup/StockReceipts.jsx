@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase.js";
 import { formatCurrency } from "../../utils/currency";
+import { canPerform } from "../../security/accessControlRegistry";
 
 export default function StockReceipts({ products = [], fetchProducts }) {
+  const currentUser = JSON.parse(localStorage.getItem("loggedInUser") || localStorage.getItem("fairchoice_user") || "null");
   const [suppliers, setSuppliers] = useState([]);
   const [receipts, setReceipts] = useState([]);
 
@@ -138,6 +140,11 @@ export default function StockReceipts({ products = [], fetchProducts }) {
   };
 
   const saveManualReceipt = async () => {
+    const permissionKey = purchaseType === "Stock Adjustment" ? "stock.manual_adjust" : "stock.received_quantity_change";
+    if (!canPerform(currentUser, permissionKey)) {
+      alert("You do not have permission to change received stock.");
+      return;
+    }
     if (!productId || !qtyReceived) {
       alert("Please select product and quantity.");
       return;
@@ -370,6 +377,10 @@ export default function StockReceipts({ products = [], fetchProducts }) {
 };
 
   const importExcelRows = async () => {
+    if (!canPerform(currentUser, "system.import_sensitive") || !canPerform(currentUser, "stock.received_quantity_change")) {
+      alert("You do not have permission to import received stock.");
+      return;
+    }
     if (!previewRows.length) {
       alert("Please upload Excel file first.");
       return;

@@ -89,9 +89,6 @@ export function buildCanonicalPaymentRpcParams({
   paymentSource,
   paymentReference,
   paidBy,
-  collectorName,
-  collectorStaffId = null,
-  collectorRole,
   orderId = null,
   invoiceId = null,
   paymentIntentId,
@@ -111,9 +108,6 @@ export function buildCanonicalPaymentRpcParams({
     p_payment_source: paymentSource,
     p_payment_reference: String(paymentReference || "").trim() || null,
     p_paid_by: paidBy || "",
-    p_collector_name: collectorName || "",
-    p_collector_staff_id: uuidOrNull(collectorStaffId),
-    p_collector_role: collectorRole || "",
     p_order_id: uuidOrNull(orderId),
     p_invoice_id: uuidOrNull(invoiceId),
     p_idempotency_key:
@@ -122,8 +116,8 @@ export function buildCanonicalPaymentRpcParams({
     p_notes: notes || "",
     p_metadata: metadata || {},
     p_allocations: allocations || [],
-    p_owner_username: ownerUsername || null,
-    p_owner_password: ownerPassword || null,
+    p_fc_username: ownerUsername || null,
+    p_fc_session_token: ownerPassword || null,
   };
 }
 
@@ -174,7 +168,7 @@ export async function postCanonicalCustomerPayment(input = {}) {
   }
 
   const { data, error } = await supabase.rpc(
-    "post_canonical_customer_payment_v1",
+    "post_canonical_customer_payment_v2",
     buildCanonicalPaymentRpcParams(securedInput)
   );
 

@@ -68,13 +68,25 @@ export async function loadPayouts(user = {}) {
   return data || [];
 }
 
-function payoutArguments(input) {
+function payoutArguments(input, user = {}) {
   const amount = Number(input.amount);
   if (!(amount > 0)) throw new Error("Amount must be greater than zero.");
   if (!input.payoutDate) throw new Error("Payout date is required.");
   if (!input.expenseTypeId) throw new Error("Expense type is required.");
   if (!PAYMENT_TYPES.includes(input.paymentMethod)) {
     throw new Error("Select a valid payment method.");
+  }
+  const paidByType = String(input.paidByType || "BUSINESS")
+    .trim()
+    .toUpperCase();
+  if (!["BUSINESS", "STAFF"].includes(paidByType)) {
+    throw new Error("Select who paid the expense.");
+  }
+  const paidByStaffId =
+    input.paidByStaffId ||
+    (paidByType === "STAFF" ? user.staff_id || user.staffId || null : null);
+  if (paidByType === "STAFF" && !paidByStaffId) {
+    throw new Error("Your linked staff identity is required for a staff-paid expense.");
   }
 
   return {
@@ -86,15 +98,15 @@ function payoutArguments(input) {
     p_description: String(input.description || "").trim() || null,
     p_receipt_reference: String(input.receiptReference || "").trim() || null,
     p_receipt_url: String(input.receiptUrl || "").trim() || null,
-    p_paid_by_type: String(input.paidByType || "BUSINESS").trim(),
-    p_paid_by_staff_id: input.paidByStaffId || null,
+    p_paid_by_type: paidByType,
+    p_paid_by_staff_id: paidByStaffId,
   };
 }
 
 export async function createPayout(input, user = {}) {
   return callExpenseRpc("fc_create_business_payout", {
     ...sessionArguments(user),
-    ...payoutArguments(input),
+    ...payoutArguments(input, user),
     p_submit: Boolean(input.submit),
   });
 }
@@ -104,7 +116,7 @@ export async function updatePayout(payoutId, input, user = {}) {
   return callExpenseRpc("fc_update_business_payout", {
     ...sessionArguments(user),
     p_payout_id: payoutId,
-    ...payoutArguments(input),
+    ...payoutArguments(input, user),
   });
 }
 

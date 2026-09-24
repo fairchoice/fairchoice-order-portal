@@ -1,111 +1,6 @@
-const DEFAULT_PERMISSIONS = {
-  "Super Admin": {
-    access_received_orders: true,
-    access_warehouse: true,
-    access_driver: true,
-    access_sales_rep: true,
-    access_customer_portal: true,
-    access_customer_setup: true,
-    access_product_setup: true,
-    access_accounts: true,
-    access_reports: true,
-    can_receive_order: true,
-    can_change_order_status_in_progress: true,
-    can_add_product_to_order: true,
-    can_move_to_warehouse: true,
-    can_print: true,
-    can_cancel_order: true,
-    can_archive_order: true,
-    can_edit_pricing: true,
-    can_edit_security: true,
-  },
-  Admin: {
-    access_received_orders: true,
-    access_warehouse: true,
-    access_driver: true,
-    access_sales_rep: true,
-    access_customer_portal: true,
-    access_customer_setup: true,
-    access_product_setup: true,
-    access_accounts: true,
-    access_reports: true,
-    can_receive_order: true,
-    can_change_order_status_in_progress: true,
-    can_add_product_to_order: true,
-    can_move_to_warehouse: true,
-    can_print: true,
-    can_cancel_order: true,
-    can_archive_order: true,
-    can_edit_pricing: true,
-    can_edit_security: false,
-  },
-  Warehouse: {
-    access_received_orders: true,
-    access_warehouse: true,
-    access_driver: false,
-    access_sales_rep: false,
-    access_customer_portal: false,
-    access_customer_setup: false,
-    access_product_setup: false,
-    access_accounts: false,
-    access_reports: false,
-    can_receive_order: true,
-    can_change_order_status_in_progress: true,
-    can_add_product_to_order: true,
-    can_move_to_warehouse: true,
-    can_print: true,
-    can_cancel_order: false,
-    can_archive_order: false,
-    can_edit_pricing: false,
-    can_edit_security: false,
-  },
-  Driver: {
-    access_received_orders: false,
-    access_warehouse: false,
-    access_driver: true,
-    access_sales_rep: false,
-    access_customer_portal: false,
-    access_customer_setup: false,
-    access_product_setup: false,
-    access_accounts: false,
-    access_reports: false,
-    can_receive_order: false,
-    can_change_order_status_in_progress: false,
-    can_add_product_to_order: false,
-    can_move_to_warehouse: false,
-    can_print: false,
-    can_cancel_order: false,
-    can_archive_order: false,
-    can_edit_pricing: false,
-    can_edit_security: false,
-  },
-  "Sales Rep": {
-    access_received_orders: false,
-    access_warehouse: false,
-    access_driver: false,
-    access_sales_rep: true,
-    access_customer_portal: false,
-    access_customer_setup: false,
-    access_product_setup: false,
-    access_accounts: false,
-    access_reports: false,
-    can_receive_order: false,
-    can_change_order_status_in_progress: false,
-    can_add_product_to_order: false,
-    can_move_to_warehouse: false,
-    can_print: false,
-    can_cancel_order: false,
-    can_archive_order: false,
-    can_edit_pricing: false,
-    can_edit_security: false,
-  },
-};
-
 export function mergePermissions(role, savedPermissions) {
-  return {
-    ...(DEFAULT_PERMISSIONS[role] || {}),
-    ...(savedPermissions || {}),
-  };
+  void role;
+  return { ...(savedPermissions || {}) };
 }
 
 export function normalizeStaffRole(role) {
@@ -117,6 +12,8 @@ export function normalizeStaffRole(role) {
   if (normalized === "superadmin") return "Super Admin";
   if (["admin", "administrator", "backofficeadmin"].includes(normalized)) return "Admin";
   if (normalized === "salesrep" || normalized === "salesrepresentative") return "Sales Rep";
+  if (normalized === "accounts") return "Accounts";
+  if (normalized === "accountant") return "Accountant";
   if (normalized === "warehouse") return "Warehouse";
   if (normalized === "driver") return "Driver";
   if (normalized === "customer") return "Customer";
