@@ -18,7 +18,23 @@ import {
 
 
 
+
+
+
+
+
+
+
+
 const RECEIVED_ORDER_STATUSES = new Set(["received", "in progress"]);
+
+
+
+
+
+
+
+
 
 
 
@@ -41,8 +57,24 @@ const isPromotionFreeLine = (item = {}) =>
 
 
 
+
+
+
+
+
+
+
+
 const getOrderPriceMode = (order = {}) =>
   order.priceMode || order.price_mode || "vat";
+
+
+
+
+
+
+
+
 
 
 
@@ -61,6 +93,14 @@ const getOrderDiscountPercent = (order = {}) =>
 
 
 
+
+
+
+
+
+
+
+
 const getItemProductId = (item = {}) =>
   item.productId || item.product_id || item.id || null;
 
@@ -71,8 +111,24 @@ const getItemProductId = (item = {}) =>
 
 
 
+
+
+
+
+
+
+
+
 const getItemDbId = (item = {}) =>
   item.dbId || item.order_item_id || item.orderItemId || null;
+
+
+
+
+
+
+
+
 
 
 
@@ -100,10 +156,26 @@ const getItemPrice = (item = {}) =>
 
 
 
+
+
+
+
+
+
+
+
 export const normalizeReceivedOrderPromotionItem = (item = {}) => {
   const productId = getItemProductId(item);
   const price = getItemPrice(item);
   const qty = Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
+
+
+
+
+
+
+
+
 
 
 
@@ -152,6 +224,14 @@ export const normalizeReceivedOrderPromotionItem = (item = {}) => {
 
 
 
+
+
+
+
+
+
+
+
 export const calculateReceivedOrderPromotionState = ({
   order = {},
   items = [],
@@ -164,11 +244,19 @@ export const calculateReceivedOrderPromotionState = ({
 
 
 
+
+
+
+
   // Manual Free is a real current-order line. Promotion recalculation must not
   // restore it to In Stock or bring back its old financial value.
   const manualFreeItems = normalizedItems.filter((item) =>
     isFreeStatus(item.sourceStatus || item.source_status)
   );
+
+
+
+
 
 
 
@@ -187,6 +275,10 @@ export const calculateReceivedOrderPromotionState = ({
 
 
 
+
+
+
+
   const promotedCart = applyPromotionRulesToCart(
     paidItems,
     activePromotionRules || [],
@@ -196,10 +288,18 @@ export const calculateReceivedOrderPromotionState = ({
 
 
 
+
+
+
+
   const calculatedPaidItems = calculateCartOrderItems(promotedCart, {
     priceMode,
     discountPercent,
   });
+
+
+
+
 
 
 
@@ -233,6 +333,10 @@ export const calculateReceivedOrderPromotionState = ({
 
 
 
+
+
+
+
   const calculatedItems = [...calculatedPaidItems, ...calculatedFreeItems];
   const totals = calculateCartTotals(
     [
@@ -253,6 +357,10 @@ export const calculateReceivedOrderPromotionState = ({
 
 
 
+
+
+
+
   return {
     priceMode,
     discountPercent,
@@ -262,6 +370,10 @@ export const calculateReceivedOrderPromotionState = ({
     totals,
   };
 };
+
+
+
+
 
 
 
@@ -293,9 +405,19 @@ const buildOrderItemInsertPayload = ({ order, item, calculatedItem }) => ({
 
 
 
+
+
+
+
+
+
+
+
 const updateCalculatedOrderItem = async (item) => {
   const dbId = getItemDbId(item);
   if (!dbId) return;
+
+
 
 
   const isFree = isFreeStatus(item.sourceStatus || item.source_status);
@@ -307,6 +429,8 @@ const updateCalculatedOrderItem = async (item) => {
   };
 
 
+
+
   if (isFree) {
     payload.source_status = "Free";
     payload.include_in_picking = true;
@@ -315,10 +439,14 @@ const updateCalculatedOrderItem = async (item) => {
   }
 
 
+
+
   const { error } = await supabase
     .from("order_items")
     .update(payload)
     .eq("id", dbId);
+
+
 
 
   if (error) throw error;
@@ -327,9 +455,21 @@ const updateCalculatedOrderItem = async (item) => {
 
 
 
+
+
+
+
 const updateReceivedOrderTotals = async (order, totals) => {
   const orderNumber = order.orderId || order.order_number || order.orderNumber;
   if (!orderNumber) throw new Error("Order number not found for promotion recalculation.");
+
+
+
+
+
+
+
+
 
 
 
@@ -359,8 +499,24 @@ const updateReceivedOrderTotals = async (order, totals) => {
 
 
 
+
+
+
+
+
+
+
+
   if (error) throw error;
 };
+
+
+
+
+
+
+
+
 
 
 
@@ -422,6 +578,14 @@ export async function updateReceivedOrderItemWithPromotions({ order, itemId, upd
 
 
 
+
+
+
+
+
+
+
+
   // A current Received-order line that is entitled to the active Buy/Get-Free
   // promotion is automatically marked Free. This never scans or rewrites old
   // invoices/credit records; it only affects the current editable order.
@@ -436,6 +600,14 @@ export async function updateReceivedOrderItemWithPromotions({ order, itemId, upd
       remaining = 0;
     });
   });
+
+
+
+
+
+
+
+
 
 
 
@@ -485,6 +657,14 @@ export async function updateReceivedOrderItemWithPromotions({ order, itemId, upd
 
 
 
+
+
+
+
+
+
+
+
   for (const item of state.calculatedItems) await updateCalculatedOrderItem(item);
   await updateReceivedOrderTotals(order, state.totals);
   const finalFreeSelected = isFreeStatus(mergedItem.sourceStatus || mergedItem.source_status);
@@ -508,8 +688,52 @@ export async function updateReceivedOrderItemWithPromotions({ order, itemId, upd
       console.warn("Free warehouse activity could not be recorded:", activityError?.message || activityError);
     }
   }
-  return { promotionApplied: state.promotionLines.length > 0, promotionLines: state.promotionLines, totals: state.totals };
+  const persistedItem =
+    state.calculatedItems.find(
+      (item) =>
+        String(getItemDbId(item) || getItemProductId(item)) ===
+        String(getItemDbId(currentItem) || getItemProductId(currentItem) || itemId)
+    ) || mergedItem;
+
+
+  return {
+    promotionApplied: state.promotionLines.length > 0,
+    promotionLines: state.promotionLines,
+    totals: state.totals,
+    updatedItem: {
+      ...persistedItem,
+      ...(isFreeStatus(persistedItem.sourceStatus || persistedItem.source_status)
+        ? {
+            sourceStatus: "Free",
+            source_status: "Free",
+            includeInPicking: true,
+            include_in_picking: true,
+            price: 0,
+            selectedPrice: 0,
+            selected_price: 0,
+            unit_price: 0,
+            unitPrice: 0,
+            lineTotal: 0,
+            line_total: 0,
+            netTotal: 0,
+            net_total: 0,
+            grossTotal: 0,
+            gross_total: 0,
+            vatTotal: 0,
+            vat_total: 0,
+          }
+        : {}),
+    },
+  };
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -534,10 +758,26 @@ export async function addReceivedOrderItemWithPromotions({
 
 
 
+
+
+
+
+
+
+
+
   const orderStatus = statusKey(order.status);
   if (orderStatus && !RECEIVED_ORDER_STATUSES.has(orderStatus)) {
     throw new Error("Promotional item changes are only allowed on Received or In Progress orders.");
   }
+
+
+
+
+
+
+
+
 
 
 
@@ -573,9 +813,25 @@ export async function addReceivedOrderItemWithPromotions({
 
 
 
+
+
+
+
+
+
+
+
   if (!calculatedNewItem) {
     throw new Error("Could not calculate the added order item.");
   }
+
+
+
+
+
+
+
+
 
 
 
@@ -597,11 +853,27 @@ export async function addReceivedOrderItemWithPromotions({
 
 
 
+
+
+
+
+
+
+
+
   let insertResult = await supabase
     .from("order_items")
     .insert(insertPayload)
     .select("id")
     .single();
+
+
+
+
+
+
+
+
 
 
 
@@ -632,7 +904,23 @@ export async function addReceivedOrderItemWithPromotions({
 
 
 
+
+
+
+
+
+
+
+
   if (insertResult.error) throw insertResult.error;
+
+
+
+
+
+
+
+
 
 
 
@@ -655,6 +943,14 @@ export async function addReceivedOrderItemWithPromotions({
 
 
 
+
+
+
+
+
+
+
+
   // Recalculate every financial line from the same promotion engine used by a
   // normal customer order. This is what makes a Received-order edit preserve
   // the exact Buy/Get-Free and promotion-price outcome.
@@ -662,6 +958,14 @@ export async function addReceivedOrderItemWithPromotions({
     await updateCalculatedOrderItem(item);
   }
   await updateReceivedOrderTotals(order, state.totals);
+
+
+
+
+
+
+
+
 
 
 
