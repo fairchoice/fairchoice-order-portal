@@ -2985,11 +2985,32 @@ const openBackOffice = async () => {
       );
 
 
-      // Status movement is status-only. Warehouse/POS quantities and supply
-      // decisions are final and must survive backward/forward workflow moves.
-      // The only later quantity/supply changes are explicit Warehouse
-      // Pre-Order Supply actions through their dedicated item update functions.
+      // Warehouse/Driver keeps the completed quantity final. The one explicit
+      // exception is "Back to Received": that re-opens the current order so
+      // Received Orders can correct quantity/status and run picking again.
       const updatedOrder = await updateOrderStatus(orderNumber, status);
+
+      if (
+        String(status || "").trim().toLowerCase() === "received" &&
+        String(existingOrder?.picking_status || "").trim().toLowerCase() === "completed"
+      ) {
+        const orderDbId = existingOrder?.dbId || existingOrder?.id || updatedOrder?.id;
+        if (orderDbId) {
+          const { error: reopenError } = await supabase
+            .from("orders")
+            .update({
+              picking_status: "Not Started",
+              picking_completed_at: null,
+              picking_completed_by: null,
+              picking_completed_by_name: null,
+              picking_locked_by: null,
+              picking_locked_by_name: null,
+              picking_locked_at: null,
+            })
+            .eq("id", orderDbId);
+          if (reopenError) throw reopenError;
+        }
+      }
 
 
       if (!isActivePreOrderSupplyOrder({ status })) {
