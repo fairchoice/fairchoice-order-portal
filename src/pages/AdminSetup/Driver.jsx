@@ -228,7 +228,8 @@ const cleanLegacyTestAmount = (value, order = {}) => {
     if (["in stock", "available"].includes(status)) return 1;
     if (["need supplier", "pre-order", "pre order", "supply needed", "next supplier"].includes(status)) return 2;
     if (status === "cannot supply") return 3;
-    return 4;
+    if (status === "free" || status === "promotion free") return 4;
+    return 5;
   };
 
 
