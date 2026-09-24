@@ -1080,8 +1080,11 @@ const loadCustomerWalletBalance = useCallback(async () => {
 }, [isCustomer, selectedCustomerAccount?.id, activeUser?.username, activeUser?.fc_session_token, activeUser?.session_token, activeUser?.sessionToken]);
 
 useEffect(() => {
+  // Wallet is opt-in for every customer/order. Changing customer must never
+  // carry a previous Wallet=Yes choice into the next checkout.
+  setWalletUseRequested(false);
   void loadCustomerWalletBalance();
-}, [loadCustomerWalletBalance]);
+}, [selectedCustomerAccount?.id, loadCustomerWalletBalance]);
 
 
 const [cart, setCart] = useState(() => {
@@ -4134,9 +4137,8 @@ const submitOrder = async () => {
       userProfile,
       orderCountry,
       creditLimit,
-      walletUseRequested: Number(customerWallet.balance || 0) > 0
-        ? walletUseRequested
-        : false,
+      walletUseRequested: Boolean(walletUseRequested),
+      walletBalance: Number(customerWallet.balance || 0),
     });
 
 
@@ -4271,8 +4273,10 @@ const newOrder = {
      ? orderPaymentChoice === "bank_transfer_now" ? "PENDING_VERIFICATION" : "PAID"
      : "UNPAID",
    paymentChoice: orderPaymentChoice,
-   walletUseRequested: Number(customerWallet.balance || 0) > 0 ? Boolean(walletUseRequested) : false,
-   wallet_use_requested: Number(customerWallet.balance || 0) > 0 ? Boolean(walletUseRequested) : false,
+   walletUseRequested: Boolean(orderRequest.wallet_use_requested),
+   wallet_use_requested: Boolean(orderRequest.wallet_use_requested),
+   walletRequestedAmount: Number(orderRequest.wallet_requested_amount || 0),
+   wallet_requested_amount: Number(orderRequest.wallet_requested_amount || 0),
    items: paidCartForOrder,
     };
 
@@ -4299,9 +4303,7 @@ const newOrder = {
     localStorage.removeItem(orderSubmissionStorageKey);
 
 
-    const submittedWalletReservation = walletUseRequested
-      ? Math.min(Math.max(Number(customerWallet.balance || 0), 0), Math.max(Number(orderTotal || 0), 0))
-      : 0;
+    const submittedWalletReservation = Number(orderRequest.wallet_requested_amount || 0);
 
     if (submittedWalletReservation > 0) {
       setCustomerWallet((current) => ({

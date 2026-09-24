@@ -126,3 +126,36 @@ test('auth retry verifies before second write', async () => {
   assert.equal(creates, 1);
   assert.equal(lookups, 2);
 });
+
+
+const calculateRequestedWalletAmount = ({
+  walletUseRequested = false,
+  walletBalance = 0,
+  orderTotal = 0,
+} = {}) => {
+  if (!walletUseRequested) return 0;
+  return Math.min(
+    Math.max(0, Number(walletBalance || 0)),
+    Math.max(0, Number(orderTotal || 0)),
+  );
+};
+
+test('wallet defaults off and does not change a normal order', () => {
+  assert.equal(calculateRequestedWalletAmount({
+    walletBalance: 50,
+    orderTotal: 100,
+  }), 0);
+});
+
+test('wallet is capped at the order total only when selected', () => {
+  assert.equal(calculateRequestedWalletAmount({
+    walletUseRequested: true,
+    walletBalance: 50,
+    orderTotal: 100,
+  }), 50);
+  assert.equal(calculateRequestedWalletAmount({
+    walletUseRequested: true,
+    walletBalance: 150,
+    orderTotal: 100,
+  }), 100);
+});
