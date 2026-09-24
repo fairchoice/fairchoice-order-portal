@@ -4273,8 +4273,10 @@ const newOrder = {
      ? orderPaymentChoice === "bank_transfer_now" ? "PENDING_VERIFICATION" : "PAID"
      : "UNPAID",
    paymentChoice: orderPaymentChoice,
-   walletUseRequested: Number(customerWallet.balance || 0) > 0 ? Boolean(walletUseRequested) : false,
-   wallet_use_requested: Number(customerWallet.balance || 0) > 0 ? Boolean(walletUseRequested) : false,
+   walletUseRequested: Boolean(orderRequest.wallet_use_requested),
+   wallet_use_requested: Boolean(orderRequest.wallet_use_requested),
+   walletRequestedAmount: Number(orderRequest.wallet_requested_amount || 0),
+   wallet_requested_amount: Number(orderRequest.wallet_requested_amount || 0),
    items: paidCartForOrder,
     };
 
