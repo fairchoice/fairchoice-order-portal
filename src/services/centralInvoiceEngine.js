@@ -22,14 +22,6 @@ import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
 
 
-
-
-
-
-
-
-
-
 const getOrderReference = (order = {}) =>
   order.canonical_order_number ||
   order.full_order_number ||
@@ -52,14 +44,6 @@ const getInvoiceReference = (row = {}) =>
   "";
 const getInvoiceReferenceCandidates = (rowOrReference = {}) => {
   if (typeof rowOrReference === "string") return [rowOrReference];
-
-
-
-
-
-
-
-
 
 
 
@@ -92,27 +76,11 @@ const getInvoiceReferenceCandidates = (rowOrReference = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const expanded = values.flatMap((value) => {
     const compact = value.toUpperCase().replace(/\s+/g, "");
     const bare = compact.replace(/^ORD-?/, "");
     return /^\d{6,}$/.test(bare) ? [value, `ORD-${bare}`] : [value];
   });
-
-
-
-
-
-
-
-
 
 
 
@@ -157,24 +125,8 @@ const activeProcessingQueueStatuses = ["queued", "pending", "processing"];
 
 
 
-
-
-
-
-
-
-
-
 export const getInvoiceLineQuantity = (item = {}) =>
   Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
-
-
-
-
-
-
-
-
 
 
 
@@ -193,21 +145,11 @@ export const isActiveInvoiceLine = (item = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const status = String(item.sourceStatus || item.source_status || item.status || "")
     .trim()
     .toLowerCase();
 
 
-
-
   if (inactiveInvoiceStatuses.has(status)) return false;
 
 
@@ -217,23 +159,7 @@ export const isActiveInvoiceLine = (item = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (inactiveInvoiceStatuses.has(status)) return false;
-
-
-
-
-
-
-
-
 
 
 
@@ -256,24 +182,8 @@ export const isActiveInvoiceLine = (item = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   return item.includeInPicking !== false && item.include_in_picking !== false;
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -292,24 +202,8 @@ export const filterActiveInvoiceLines = (items = []) =>
 
 
 
-
-
-
-
-
-
-
-
 const normalizeInvoiceOrder = (order = {}) => {
   const activeItems = filterActiveInvoiceLines(order.items || order.order_items || []);
-
-
-
-
-
-
-
-
 
 
 
@@ -350,24 +244,8 @@ const normalizeInvoiceOrder = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
 const ORDER_ITEMS_PAGE_SIZE = 1000;
 const ORDER_ITEMS_ORDER_ID_CHUNK_SIZE = 100;
-
-
-
-
-
-
-
-
 
 
 
@@ -387,23 +265,7 @@ async function fetchAllOrderItemsForOrderIds(orderIds = []) {
 
 
 
-
-
-
-
-
-
-
-
   const allItems = [];
-
-
-
-
-
-
-
-
 
 
 
@@ -417,14 +279,6 @@ async function fetchAllOrderItemsForOrderIds(orderIds = []) {
       chunkStart,
       chunkStart + ORDER_ITEMS_ORDER_ID_CHUNK_SIZE
     );
-
-
-
-
-
-
-
-
 
 
 
@@ -451,23 +305,7 @@ async function fetchAllOrderItemsForOrderIds(orderIds = []) {
 
 
 
-
-
-
-
-
-
-
-
       if (error) throw error;
-
-
-
-
-
-
-
-
 
 
 
@@ -478,14 +316,6 @@ async function fetchAllOrderItemsForOrderIds(orderIds = []) {
 
       const rows = data || [];
       allItems.push(...rows);
-
-
-
-
-
-
-
-
 
 
 
@@ -505,24 +335,8 @@ async function fetchAllOrderItemsForOrderIds(orderIds = []) {
 
 
 
-
-
-
-
-
-
-
-
   return allItems;
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -541,24 +355,8 @@ export async function hydrateOrdersWithFullOrderItems(orders = []) {
 
 
 
-
-
-
-
-
-
-
-
   const orderIds = orders.map((order) => order?.id).filter(Boolean);
   if (!orderIds.length) return orders;
-
-
-
-
-
-
-
-
 
 
 
@@ -582,27 +380,11 @@ export async function hydrateOrdersWithFullOrderItems(orders = []) {
 
 
 
-
-
-
-
-
-
-
-
   return orders.map((order) => ({
     ...order,
     order_items: itemsByOrderId[String(order.id)] || [],
   }));
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -621,23 +403,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-
-
-
-
-
-
-
-
   if (!references.length) throw new Error("Invoice reference is required.");
-
-
-
-
-
-
-
-
 
 
 
@@ -660,23 +426,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-
-
-
-
-
-
-
-
   if (error) throw error;
-
-
-
-
-
-
-
-
 
 
 
@@ -687,14 +437,6 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
   const order = Array.isArray(data) ? data[0] : data;
   if (!order) return null;
-
-
-
-
-
-
-
-
 
 
 
@@ -745,27 +487,11 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-
-
-
-
-
-
-
-
   const productIds = [
     ...new Set((orderItems || []).map((item) => item.product_id).filter(Boolean)),
   ];
   let productsById = {};
   let productsByName = {};
-
-
-
-
-
-
-
-
 
 
 
@@ -787,28 +513,12 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-
-
-
-
-
-
-
-
     if (!productsError) {
       productsById = Object.fromEntries(
         (products || []).map((product) => [String(product.id), product])
       );
     }
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -833,27 +543,11 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-
-
-
-
-
-
-
-
   if (missingCodeNames.length) {
     const { data: namedProducts, error: namedProductsError } = await supabase
       .from("products")
       .select("id, product_name, product_code, code, sku")
       .in("product_name", missingCodeNames);
-
-
-
-
-
-
-
-
 
 
 
@@ -877,14 +571,6 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-
-
-
-
-
-
-
-
       productsByName = Object.fromEntries(
         Object.entries(groupedByName)
           .filter(([, matches]) => matches.length === 1)
@@ -892,14 +578,6 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
       );
     }
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -951,14 +629,6 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-
-
-
-
-
-
-
-
         return {
           product_code: item.product_code || productCode,
           productCode: item.productCode || productCode,
@@ -969,14 +639,6 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     })),
   });
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -1000,28 +662,12 @@ const escapeHtml = (value) =>
 
 
 
-
-
-
-
-
-
-
-
 const escapePdfText = (value) =>
   String(value ?? "")
     .replace(/\\/g, "\\\\")
     .replace(/\(/g, "\\(")
     .replace(/\)/g, "\\)")
     .replace(/£/g, "\\243");
-
-
-
-
-
-
-
-
 
 
 
@@ -1043,14 +689,6 @@ const formatReceiptDateTime = (value) => {
 
 
 
-
-
-
-
-
-
-
-
 const isInvoiceGeneratedForOrder = (order = {}) => {
   if (order.invoice_number || order.invoiceNo || order.invoice_id || order.invoiceId) {
     return true;
@@ -1063,24 +701,8 @@ const isInvoiceGeneratedForOrder = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   return isDeliveredInvoiceStatus(order.status);
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1103,28 +725,12 @@ const pushAddressValue = (lines, value) => {
 
 
 
-
-
-
-
-
-
-
-
   String(value)
     .split(/\r?\n|,\s*/)
     .map((line) => line.trim())
     .filter(Boolean)
     .forEach((line) => lines.push(line));
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1150,14 +756,6 @@ const uniqueAddressLines = (lines = []) => {
 
 
 
-
-
-
-
-
-
-
-
 const getCustomerAccountAddressLines = (account = {}) => {
   const lines = [];
   pushAddressValue(lines, account.address_line_1 || account.addressLine1 || account.address);
@@ -1167,14 +765,6 @@ const getCustomerAccountAddressLines = (account = {}) => {
   pushAddressValue(lines, account.postcode || account.post_code);
   return uniqueAddressLines(lines);
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1200,14 +790,6 @@ const getOrderBillingAddressLines = (order = {}) => {
   pushAddressValue(lines, order.billing_postcode || order.billingPostcode);
   return uniqueAddressLines(lines);
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1247,23 +829,7 @@ export const getDeliveryAddressLines = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (branchLines.length) return uniqueAddressLines(branchLines);
-
-
-
-
-
-
-
-
 
 
 
@@ -1286,23 +852,7 @@ export const getDeliveryAddressLines = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (orderLines.length) return uniqueAddressLines(orderLines);
-
-
-
-
-
-
-
-
 
 
 
@@ -1333,23 +883,7 @@ export const getDeliveryAddressLines = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (customerLines.length) return uniqueAddressLines(customerLines);
-
-
-
-
-
-
-
-
 
 
 
@@ -1368,14 +902,6 @@ export const getDeliveryAddressLines = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
 export const getDeliveryAddress = (order = {}) =>
   getDeliveryAddressLines(order).join(", ");
 
@@ -1386,24 +912,8 @@ export const getDeliveryAddress = (order = {}) =>
 
 
 
-
-
-
-
-
-
-
-
 const getBillingAddress = (order = {}) => {
   const customerAccount = order.customer_accounts || order.customer || {};
-
-
-
-
-
-
-
-
 
 
 
@@ -1423,25 +933,9 @@ const getBillingAddress = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const accountBillingLines = [];
   pushAddressValue(accountBillingLines, customerAccount.billing_address);
   if (accountBillingLines.length) return uniqueAddressLines(accountBillingLines).join(", ");
-
-
-
-
-
-
-
-
 
 
 
@@ -1460,14 +954,6 @@ const getBillingAddress = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const orderBillingLines = getOrderBillingAddressLines(order);
   if (orderBillingLines.length) return orderBillingLines.join(", ");
 
@@ -1478,24 +964,8 @@ const getBillingAddress = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   return getDeliveryAddress(order);
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1519,27 +989,11 @@ const getDriverName = (order = {}) =>
 
 
 
-
-
-
-
-
-
-
-
 const parseMoneyValue = (value) => {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(String(value).replace(/[^0-9.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1561,24 +1015,8 @@ const firstMoneyValue = (...values) => {
 
 
 
-
-
-
-
-
-
-
-
   return null;
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1598,14 +1036,6 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const paymentStatus = String(order.payment_status || order.paymentStatus || "")
     .trim()
     .toLowerCase();
@@ -1617,23 +1047,7 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (paymentStatus === "paid") return true;
-
-
-
-
-
-
-
-
 
 
 
@@ -1662,14 +1076,6 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const amountDue = firstMoneyValue(
     order.amount_due,
     order.amountDue,
@@ -1688,25 +1094,9 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (amountDue !== null && amountDue <= 0) {
     return true;
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -1733,14 +1123,6 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (invoiceTotal !== null && invoiceTotal > 0 && paidAmount !== null && paidAmount >= invoiceTotal) {
     return true;
   }
@@ -1752,24 +1134,8 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   return false;
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1797,14 +1163,6 @@ const getInvoiceLedgerReferences = (order = {}) => [
 
 
 
-
-
-
-
-
-
-
-
 const getLedgerRowDebit = (row = {}) => {
   const type = String(row.entry_type || row.transaction_type || "").toUpperCase();
   const invoiceLikeAmount = type.includes("INVOICE") ? Number(row.amount || 0) : 0;
@@ -1816,14 +1174,6 @@ const getLedgerRowDebit = (row = {}) => {
     invoiceLikeAmount,
   );
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1854,14 +1204,6 @@ const getLedgerRowCredit = (row = {}) => {
 
 
 
-
-
-
-
-
-
-
-
 const getProductCodeFromInvoiceItem = (item = {}) =>
   item.product_code ||
   item.code ||
@@ -1876,14 +1218,6 @@ const getProductCodeFromInvoiceItem = (item = {}) =>
   item.product?.sku ||
   item.product?.productCode ||
   "";
-
-
-
-
-
-
-
-
 
 
 
@@ -1911,14 +1245,6 @@ const withProductCodeFallbacks = async (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const missingProductNames = [
     ...new Set(
       (items || [])
@@ -1935,23 +1261,7 @@ const withProductCodeFallbacks = async (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (!missingProductIds.length && !missingProductNames.length) return order;
-
-
-
-
-
-
-
-
 
 
 
@@ -1970,27 +1280,11 @@ const withProductCodeFallbacks = async (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (missingProductIds.length) {
     const { data, error } = await supabase
       .from("products")
       .select("id, product_name, product_code, code, sku")
       .in("id", missingProductIds);
-
-
-
-
-
-
-
-
 
 
 
@@ -2015,27 +1309,11 @@ const withProductCodeFallbacks = async (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (missingProductNames.length) {
     const { data, error } = await supabase
       .from("products")
       .select("id, product_name, product_code, code, sku")
       .in("product_name", missingProductNames);
-
-
-
-
-
-
-
-
 
 
 
@@ -2061,14 +1339,6 @@ const withProductCodeFallbacks = async (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
       productsByName = Object.fromEntries(
         Object.entries(groupedByName)
           .filter(([, matches]) => matches.length === 1)
@@ -2084,24 +1354,8 @@ const withProductCodeFallbacks = async (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const nextItems = (items || []).map((item) => {
     if (getProductCodeFromInvoiceItem(item)) return item;
-
-
-
-
-
-
-
-
 
 
 
@@ -2126,14 +1380,6 @@ const withProductCodeFallbacks = async (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
     return {
       ...item,
       product_code: productCode || item.product_code || "",
@@ -2142,14 +1388,6 @@ const withProductCodeFallbacks = async (order = {}) => {
       product: item.product || product || null,
     };
   });
-
-
-
-
-
-
-
-
 
 
 
@@ -2172,25 +1410,9 @@ const withProductCodeFallbacks = async (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
 export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
   const references = [...new Set(getInvoiceLedgerReferences(order))];
   if (!references.length) return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
-
-
-
-
-
-
-
-
 
 
 
@@ -2219,26 +1441,10 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
 
 
 
-
-
-
-
-
-
-
-
   if (error) {
     console.warn("Invoice ledger payment status lookup failed", error);
     return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -2262,24 +1468,8 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
 
 
 
-
-
-
-
-
-
-
-
     const rowBranchId = String(row.customer_branch_id || row.branch_id || "");
     if (branchId && rowBranchId && rowBranchId !== branchId) return false;
-
-
-
-
-
-
-
-
 
 
 
@@ -2299,14 +1489,6 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
     return true;
   });
   if (!rows.length) return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
-
-
-
-
-
-
-
-
 
 
 
@@ -2336,24 +1518,8 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
 
 
 
-
-
-
-
-
-
-
-
     return sum + debit - credit;
   }, 0);
-
-
-
-
-
-
-
-
 
 
 
@@ -2367,14 +1533,6 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
     return getLedgerRowDebit(row) > 0 || (type.includes("invoice") && Number(row.amount || 0) > 0);
   });
   const hasCredit = rows.some((row) => getLedgerRowCredit(row) > 0 || Number(row.amount || 0) < 0);
-
-
-
-
-
-
-
-
 
 
 
@@ -2397,26 +1555,10 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
 
 
 
-
-
-
-
-
-
-
-
 export async function withResolvedInvoicePaymentStatus(order = {}) {
   const productCodeOrder = await withProductCodeFallbacks(order);
   const invoiceOrder = normalizeInvoiceOrder(productCodeOrder);
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
-
-
-
-
-
-
-
-
 
 
 
@@ -2436,14 +1578,6 @@ export async function withResolvedInvoicePaymentStatus(order = {}) {
 
 
 
-
-
-
-
-
-
-
-
   const ledgerStatus = await resolveInvoiceLedgerPaymentStatus(invoiceOrder);
   return {
     ...invoiceOrder,
@@ -2451,14 +1585,6 @@ export async function withResolvedInvoicePaymentStatus(order = {}) {
     _ledgerBalance: ledgerStatus.ledgerBalance,
   };
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -2483,25 +1609,9 @@ const getInvoicePaymentStatus = (order = {}, totals = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (status === "PARTIALLY PAID") return "PART PAID";
   return status || "UNPAID";
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -2526,26 +1636,10 @@ const getInvoiceDocumentWatermark = (order = {}, totals = {}) =>
 
 
 
-
-
-
-
-
-
-
-
 export const getPrintTemplate = (priceMode) =>
   isServerManagerPriceMode(priceMode)
     ? "orderForm"
     : "salesInvoice";
-
-
-
-
-
-
-
-
 
 
 
@@ -2559,14 +1653,6 @@ const getThermalReceiptRows = (order = {}) => {
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
   const hasVat = Number(totals.vatTotal || 0) > 0;
   const isServerManager = isServerManagerPriceMode(invoiceOrder.priceMode || invoiceOrder.price_mode);
-
-
-
-
-
-
-
-
 
 
 
@@ -2611,29 +1697,10 @@ const getThermalReceiptRows = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
-const getThermalLineAmount = (item = {}) => {
-  const status = String(item.sourceStatus || item.source_status || item.status || "").trim().toLowerCase();
-  if (status === "free" || status === "promotion free" || item.isPromotionFree === true || item.promotionFreeItem === true) {
-    return 0;
-  }
-  return item.gross_total ?? item.grossTotal ?? item.line_total ?? item.lineTotal ?? item.net_total ?? 0;
-};
-
-
-
-
-
-
-
-
+const getThermalLineAmount = (item = {}) =>
+  isFreeInvoiceLine(item)
+    ? 0
+    : item.gross_total ?? item.grossTotal ?? item.line_total ?? item.lineTotal ?? item.net_total ?? 0;
 
 
 
@@ -2643,14 +1710,6 @@ const getThermalLineAmount = (item = {}) => {
 
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-
-
-
-
-
-
-
 
 
 
@@ -2671,14 +1730,6 @@ const getThermalOrderNumber = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   return orderNumber ? formatDisplayOrderId(orderNumber) : "Not available";
 };
 
@@ -2689,31 +1740,12 @@ const getThermalOrderNumber = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
 const getThermalUnitAmount = (item = {}) => {
-  const status = String(item.sourceStatus || item.source_status || item.status || "").trim().toLowerCase();
-  if (status === "free" || status === "promotion free" || item.isPromotionFree === true || item.promotionFreeItem === true) {
-    return 0;
-  }
+  if (isFreeInvoiceLine(item)) return 0;
   const savedUnitAmount = item.price ?? item.unit_price ?? item.unitPrice;
   if (savedUnitAmount !== null && savedUnitAmount !== undefined && savedUnitAmount !== "") {
     return Number(savedUnitAmount || 0);
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -2733,26 +1765,10 @@ const getThermalUnitAmount = (item = {}) => {
 
 
 
-
-
-
-
-
-
-
-
 const wrapText = (text, maxLength = 28) => {
   const words = String(text || "").split(/\s+/).filter(Boolean);
   const lines = [];
   let current = "";
-
-
-
-
-
-
-
-
 
 
 
@@ -2774,26 +1790,10 @@ const wrapText = (text, maxLength = 28) => {
 
 
 
-
-
-
-
-
-
-
-
     if (`${current} ${word}`.length <= maxLength) {
       current = `${current} ${word}`;
       return;
     }
-
-
-
-
-
-
-
-
 
 
 
@@ -2813,25 +1813,9 @@ const wrapText = (text, maxLength = 28) => {
 
 
 
-
-
-
-
-
-
-
-
   if (current) lines.push(current);
   return lines.length ? lines : [""];
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -2848,14 +1832,6 @@ export function buildThermalReceiptHtml(order = {}) {
     ? "SALES RECEIPT"
     : "ORDER RECEIPT";
   const orderNumber = getThermalOrderNumber(order);
-
-
-
-
-
-
-
-
 
 
 
@@ -2978,9 +1954,8 @@ export function buildThermalReceiptHtml(order = {}) {
         ${receipt.items
           .map((item) => {
             const quantity = getInvoiceLineQuantity(item);
-            const freeLine = isFreeInvoiceLine(item);
             return `<div class="product-item">
-              <div class="product-name">${escapeHtml(item.name || item.productName || item.product_name || "Product")}${freeLine ? " [FREE]" : ""}</div>
+              <div class="product-name">${escapeHtml(item.name || item.productName || item.product_name || "Product")}</div>
               <div class="item-detail"><span>Qty ${escapeHtml(quantity)}</span><span class="right">${escapeHtml(
                 formatCurrency(getThermalUnitAmount(item))
               )}</span><strong class="right">${escapeHtml(formatCurrency(getThermalLineAmount(item)))}</strong></div>
@@ -3001,14 +1976,6 @@ export function buildThermalReceiptHtml(order = {}) {
     </html>
   `;
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -3040,14 +2007,6 @@ const buildThermalReceiptPdf = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   lines.push({ text: "Delivery Address:", bold: true });
   if (receipt.deliveryAddressLines.length) {
     receipt.deliveryAddressLines.forEach((line) => {
@@ -3070,31 +2029,14 @@ const buildThermalReceiptPdf = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   receipt.items.forEach((item) => {
     const quantity = String(getInvoiceLineQuantity(item));
-    const freeLine = isFreeInvoiceLine(item);
     const unitAmount = formatCurrency(getThermalUnitAmount(item));
     const lineAmount = formatCurrency(getThermalLineAmount(item));
-    wrapText(`${item.name || item.productName || item.product_name || "Product"}${freeLine ? " [FREE]" : ""}`, 32)
+    wrapText(item.name || item.productName || item.product_name || "Product", 32)
       .forEach((text) => lines.push({ text, bold: true }));
     lines.push({ text: `Qty ${quantity.padEnd(6, " ")} ${unitAmount.padStart(8, " ")} ${lineAmount.padStart(8, " ")}` });
   });
-
-
-
-
-
-
-
-
 
 
 
@@ -3111,14 +2053,6 @@ const buildThermalReceiptPdf = (order = {}) => {
   }
   lines.push({ text: `TOTAL ${formatCurrency(receipt.totals.grandTotal)}`, size: 11, bold: true });
   lines.push({ text: "Thank you for your order" });
-
-
-
-
-
-
-
-
 
 
 
@@ -3147,14 +2081,6 @@ const buildThermalReceiptPdf = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   const objects = [
     "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
     "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
@@ -3167,14 +2093,6 @@ const buildThermalReceiptPdf = (order = {}) => {
     "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> endobj",
     `6 0 obj << /Length ${content.length} >> stream\n${content}\nendstream endobj`,
   ];
-
-
-
-
-
-
-
-
 
 
 
@@ -3205,28 +2123,12 @@ const buildThermalReceiptPdf = (order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
 export function printThermalReceipt(order = {}) {
   const win = window.open("", "_blank", "width=380,height=720");
   if (!win) {
     alert("Popup blocked. Please allow popups to print the thermal receipt.");
     return;
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -3248,14 +2150,6 @@ export function printThermalReceipt(order = {}) {
 
 
 
-
-
-
-
-
-
-
-
 export function downloadThermalReceipt(order = {}) {
   const orderNumber = getThermalOrderNumber(order).replace(/[^a-z0-9-]+/gi, "-") || "receipt";
   const blob = new Blob([buildThermalReceiptPdf(order)], { type: "application/pdf" });
@@ -3268,14 +2162,6 @@ export function downloadThermalReceipt(order = {}) {
   link.remove();
   URL.revokeObjectURL(url);
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -3307,24 +2193,8 @@ export const DEFAULT_INVOICE_SETTINGS = {
 
 
 
-
-
-
-
-
-
-
-
 export function getInvoiceSettings(overrides = {}) {
   let storedSettings = {};
-
-
-
-
-
-
-
-
 
 
 
@@ -3348,28 +2218,12 @@ export function getInvoiceSettings(overrides = {}) {
 
 
 
-
-
-
-
-
-
-
-
   return {
     ...DEFAULT_INVOICE_SETTINGS,
     ...storedSettings,
     ...overrides,
   };
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -3394,14 +2248,6 @@ export function saveInvoiceSettings(settings = {}) {
 
 
 
-
-
-
-
-
-
-
-
 const getOrderDate = (order = {}) =>
   order.invoiceDate ||
   order.invoice_date ||
@@ -3410,14 +2256,6 @@ const getOrderDate = (order = {}) =>
   order.orderDate ||
   order.order_date ||
   new Date();
-
-
-
-
-
-
-
-
 
 
 
@@ -3439,23 +2277,7 @@ const formatInvoiceDate = (value) => {
 
 
 
-
-
-
-
-
-
-
-
 const isSettingFalse = (...values) => values.some((value) => value === false || value === "false");
-
-
-
-
-
-
-
-
 
 
 
@@ -3483,14 +2305,6 @@ const shouldShowInvoiceHeaderFooter = (settings = {}, order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   if (
     isServerManagerPriceMode(order.priceMode || order.price_mode) &&
     (isSettingFalse(
@@ -3510,24 +2324,8 @@ const shouldShowInvoiceHeaderFooter = (settings = {}, order = {}) => {
 
 
 
-
-
-
-
-
-
-
-
   return true;
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -3547,24 +2345,8 @@ const getOrderItemsForInvoice = (order = {}) =>
 
 
 
-
-
-
-
-
-
-
-
 const getLineQuantity = (item = {}) =>
   getInvoiceLineQuantity(item);
-
-
-
-
-
-
-
-
 
 
 
@@ -3577,25 +2359,19 @@ const isFreeInvoiceLine = (item = {}) => {
   const status = String(item.sourceStatus || item.source_status || item.status || "")
     .trim()
     .toLowerCase();
-  return status === "free" || status === "promotion free" ||
-    item.isPromotionFree === true || item.promotionFreeItem === true;
+  return (
+    status === "free" ||
+    status === "promotion free" ||
+    item.isPromotionFree === true ||
+    item.promotionFreeItem === true
+  );
 };
-
-
 
 
 const getLinePrice = (item = {}) =>
   isFreeInvoiceLine(item)
     ? 0
     : Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
-
-
-
-
-
-
-
-
 
 
 
@@ -3614,23 +2390,7 @@ const getLineVatRate = (item = {}) =>
 
 
 
-
-
-
-
-
-
-
-
 const getInvoiceProductCode = (item = {}) => getProductCodeFromInvoiceItem(item);
-
-
-
-
-
-
-
-
 
 
 
@@ -3644,14 +2404,6 @@ const getPrintableCompanyAddress = (address = "") =>
     .split(/\r?\n/)
     .filter((line) => !/registered in england and wales no/i.test(line))
     .join("\n");
-
-
-
-
-
-
-
-
 
 
 
@@ -3712,18 +2464,10 @@ function buildLegacyStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
       return `
         <tr>
           <td>${escapeHtml(productCode)}</td>
-          <td>${escapeHtml(item.name || item.productName || item.product_name || "")}${freeLine ? ' <strong style="display:inline-block;margin-left:5px;padding:1px 5px;border:1px solid #166534;border-radius:4px;font-size:9px;color:#166534;">FREE</strong>' : ""}</td>
+          <td>${escapeHtml(item.name || item.productName || item.product_name || "")}${freeLine ? ' <strong style="display:inline-block;margin-left:4px;font-size:9px;">FREE</strong>' : ""}</td>
           <td class="right">${escapeHtml(quantity)}</td>
           ${
             showPrices
@@ -3738,14 +2482,6 @@ function buildLegacyStandardInvoiceHtml(
       `;
     })
     .join("");
-
-
-
-
-
-
-
-
 
 
 
@@ -3953,14 +2689,6 @@ function buildLegacyStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
             <section class="invoice-grid">
               <div class="invoice-to">
                 <div class="box-title">${isDeliveryNote ? "Deliver To:" : "Invoice To:"}</div>
@@ -3976,14 +2704,6 @@ function buildLegacyStandardInvoiceHtml(
                 <div class="details-row"><strong>${escapeHtml(referenceLabel)}</strong><span>${escapeHtml(reference)}</span></div>
               </div>
             </section>
-
-
-
-
-
-
-
-
 
 
 
@@ -4021,14 +2741,6 @@ function buildLegacyStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
             <section class="summary-area">
               <div class="qty-box">
                 <div>Total Quantity&nbsp;&nbsp;&nbsp; ${escapeHtml(totals.totalQuantity)}</div>
@@ -4054,28 +2766,12 @@ function buildLegacyStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
             <section class="deliver">
               <div class="box-title">Deliver To:</div>
               <div>${escapeHtml(customerName)}</div>
               ${branchName ? `<div>${escapeHtml(branchName)}</div>` : ""}
               ${deliveryAddress ? `<div>${escapeHtml(deliveryAddress)}</div>` : ""}
             </section>
-
-
-
-
-
-
-
-
 
 
 
@@ -4102,14 +2798,6 @@ function buildLegacyStandardInvoiceHtml(
     </html>
   `;
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -4273,14 +2961,6 @@ export function buildStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
       return `
         <tr>
           ${
@@ -4288,7 +2968,7 @@ export function buildStandardInvoiceHtml(
               ? ""
               : `<td class="code">${escapeHtml(productCode)}</td>`
           }
-          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}${freeLine ? ' <strong style="display:inline-block;margin-left:5px;padding:1px 5px;border:1px solid #166534;border-radius:4px;font-size:9px;color:#166534;">FREE</strong>' : ""}</td>
+          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}${freeLine ? ' <strong style="display:inline-block;margin-left:4px;font-size:9px;">FREE</strong>' : ""}</td>
           <td class="right">${escapeHtml(quantity)}</td>
           ${
             showPrices
@@ -4307,14 +2987,6 @@ export function buildStandardInvoiceHtml(
       `;
     })
     .join("");
-
-
-
-
-
-
-
-
 
 
 
@@ -4384,26 +3056,10 @@ export function buildStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
 .watermark.part-paid {
   color: rgba(124, 58, 237, 0.14);
   border-color: rgba(124, 58, 237, 0.18);
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -4727,14 +3383,6 @@ export function buildStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
             <section class="panel-grid">
               <div class="panel">
                 <div class="panel-title">Customer</div>
@@ -4755,14 +3403,6 @@ export function buildStandardInvoiceHtml(
                 </div>
               </div>
             </section>
-
-
-
-
-
-
-
-
 
 
 
@@ -4792,14 +3432,6 @@ export function buildStandardInvoiceHtml(
                 ${rows || `<tr><td colspan="${isOrderForm ? 4 : showPrices ? 6 : 3}">No supplied items.</td></tr>`}
               </tbody>
             </table>
-
-
-
-
-
-
-
-
 
 
 
@@ -4900,14 +3532,6 @@ export function buildStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
             ${
               `
                   <section class="deliver-bottom">
@@ -4918,14 +3542,6 @@ export function buildStandardInvoiceHtml(
                   </section>
                 `
             }
-
-
-
-
-
-
-
-
 
 
 
@@ -4964,14 +3580,6 @@ export function buildStandardInvoiceHtml(
 
 
 
-
-
-
-
-
-
-
-
 const openInvoiceHtml = (html, popupMessage = "Popup blocked. Please allow popups for invoices.") => {
   const win = window.open("", "_blank", "width=900,height=700");
   if (!win) {
@@ -4982,14 +3590,6 @@ const openInvoiceHtml = (html, popupMessage = "Popup blocked. Please allow popup
   win.document.close();
   return win;
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -5009,25 +3609,9 @@ export function previewInvoice(order = {}, options = {}) {
 
 
 
-
-
-
-
-
-
-
-
 export function printInvoice(order = {}, options = {}) {
   return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: true }));
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -5047,27 +3631,11 @@ export function printOrderForm(order = {}, options = {}) {
 
 
 
-
-
-
-
-
-
-
-
 export function printDeliveryNote(order = {}, options = {}) {
   return openInvoiceHtml(
     buildLegacyStandardInvoiceHtml(order, { ...options, documentType: "deliveryNote", autoPrint: true })
   );
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -5090,25 +3658,9 @@ export function downloadInvoice(order = {}, options = {}) {
 
 
 
-
-
-
-
-
-
-
-
 export async function createInvoice({ order, confirmedBy, currentUser } = {}) {
   return createOrUpdateInvoiceForDeliveredOrder({ order, confirmedBy, currentUser });
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -5143,25 +3695,9 @@ export async function createManualInvoice({
 
 
 
-
-
-
-
-
-
-
-
   const orderNumber = `ORD-${Date.now()}`;
   const calculatedTotals = calculateCartTotals(cart, { priceMode });
   const calculatedItems = calculateCartOrderItems(cart, { priceMode });
-
-
-
-
-
-
-
-
 
 
 
@@ -5206,27 +3742,11 @@ export async function createManualInvoice({
 
 
 
-
-
-
-
-
-
-
-
   let { data: savedOrder, error: orderError } = await supabase
     .from("orders")
     .insert(orderPayload)
     .select()
     .single();
-
-
-
-
-
-
-
-
 
 
 
@@ -5250,23 +3770,7 @@ export async function createManualInvoice({
 
 
 
-
-
-
-
-
-
-
-
   if (orderError) throw orderError;
-
-
-
-
-
-
-
-
 
 
 
@@ -5305,14 +3809,6 @@ export async function createManualInvoice({
 
 
 
-
-
-
-
-
-
-
-
   let { error: itemsError } = await supabase.from("order_items").insert(orderItems);
   if (itemsError) {
     const fallbackItems = orderItems.map((item) => {
@@ -5333,23 +3829,7 @@ export async function createManualInvoice({
 
 
 
-
-
-
-
-
-
-
-
   if (itemsError) throw itemsError;
-
-
-
-
-
-
-
-
 
 
 
@@ -5375,27 +3855,11 @@ export async function createManualInvoice({
 
 
 
-
-
-
-
-
-
-
-
   const invoice = await createInvoice({
     order: invoiceOrder,
     confirmedBy: confirmedBy || currentUser?.name || currentUser?.username || "Manual Invoice",
     currentUser,
   });
-
-
-
-
-
-
-
-
 
 
 
@@ -5416,24 +3880,8 @@ export async function createManualInvoice({
 
 
 
-
-
-
-
-
-
-
-
   return { order: invoiceOrder, invoice };
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -5461,14 +3909,6 @@ export async function amendInvoice({
 
 
 
-
-
-
-
-
-
-
-
   await recordInvoiceVersion({
     order,
     reason,
@@ -5477,14 +3917,6 @@ export async function amendInvoice({
     changedItems,
     currentUser,
   });
-
-
-
-
-
-
-
-
 
 
 
@@ -5503,14 +3935,6 @@ export async function amendInvoice({
 
 
 
-
-
-
-
-
-
-
-
 export async function createReturnInvoice({ order, confirmedBy, currentUser } = {}) {
   const invoice = await createInvoice({ order, confirmedBy, currentUser });
   return {
@@ -5519,14 +3943,6 @@ export async function createReturnInvoice({ order, confirmedBy, currentUser } = 
     invoiceType: "RETURN",
   };
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -5564,27 +3980,11 @@ export async function recordInvoiceVersion({
 
 
 
-
-
-
-
-
-
-
-
   let { data, error } = await supabase
     .from("invoice_version_history")
     .insert(payload)
     .select()
     .single();
-
-
-
-
-
-
-
-
 
 
 
@@ -5612,14 +4012,6 @@ export async function recordInvoiceVersion({
 
 
 
-
-
-
-
-
-
-
-
   if (error) {
     console.warn("Invoice version history unavailable:", error.message);
     return payload;
@@ -5632,24 +4024,8 @@ export async function recordInvoiceVersion({
 
 
 
-
-
-
-
-
-
-
-
   return data;
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -5670,26 +4046,10 @@ export function getInvoiceTotal(order = {}) {
 
 
 
-
-
-
-
-
-
-
-
 const getLedgerType = (row = {}) =>
   String(row.entry_type || row.transaction_type || "")
     .trim()
     .toUpperCase();
-
-
-
-
-
-
-
-
 
 
 
@@ -5717,24 +4077,8 @@ const getInvoiceLedgerTotal = (row = {}) =>
 
 
 
-
-
-
-
-
-
-
-
 const getPaymentLedgerTotal = (row = {}) =>
   roundMoney(Number(row.credit || row.amount || row.payment_amount || 0));
-
-
-
-
-
-
-
-
 
 
 
@@ -5746,14 +4090,6 @@ const getPaymentLedgerTotal = (row = {}) =>
 export const getInvoiceStatusFromAmounts = (invoiceTotal, paidAmount) => {
   const total = roundMoney(invoiceTotal);
   const paid = roundMoney(paidAmount);
-
-
-
-
-
-
-
-
 
 
 
@@ -5774,25 +4110,9 @@ export const getInvoiceStatusFromAmounts = (invoiceTotal, paidAmount) => {
 
 
 
-
-
-
-
-
-
-
-
 export function applyInvoicePaymentAllocations(ledgerRows = []) {
   const invoiceRows = [];
   let unappliedCredit = 0;
-
-
-
-
-
-
-
-
 
 
 
@@ -5811,14 +4131,6 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
 
 
 
-
-
-
-
-
-
-
-
     for (const invoice of invoiceRows) {
       if (remaining <= 0) break;
 
@@ -5829,24 +4141,8 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
 
 
 
-
-
-
-
-
-
-
-
       const currentRemaining = roundMoney(invoice.remaining_amount);
       if (currentRemaining <= 0) continue;
-
-
-
-
-
-
-
-
 
 
 
@@ -5874,14 +4170,6 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
 
 
 
-
-
-
-
-
-
-
-
     return remaining;
   };
 
@@ -5892,24 +4180,8 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
 
 
 
-
-
-
-
-
-
-
-
   return (ledgerRows || []).map((row) => {
     const type = getLedgerType(row);
-
-
-
-
-
-
-
-
 
 
 
@@ -5938,23 +4210,7 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
 
 
 
-
-
-
-
-
-
-
-
       invoiceRows.push(invoiceRow);
-
-
-
-
-
-
-
-
 
 
 
@@ -5974,24 +4230,8 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
 
 
 
-
-
-
-
-
-
-
-
       return invoiceRow;
     }
-
-
-
-
-
-
-
-
 
 
 
@@ -6009,25 +4249,9 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
 
 
 
-
-
-
-
-
-
-
-
     unappliedCredit = allocateCreditToOldestInvoices(
       roundMoney(unappliedCredit + getPaymentLedgerTotal(row))
     );
-
-
-
-
-
-
-
-
 
 
 
@@ -6051,25 +4275,9 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
 
 
 
-
-
-
-
-
-
-
-
 export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = {}) {
   const orderTotal = getInvoiceTotal(order);
   const invoiceDate = getDeliveredDate(order);
-
-
-
-
-
-
-
-
 
 
 
@@ -6092,14 +4300,6 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
 
 
 
-
-
-
-
-
-
-
-
     entry_type: "INVOICE",
     transaction_type: "INVOICE",
     reference_no: getOrderReference(order),
@@ -6107,14 +4307,6 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
     created_at: invoiceDate,
     delivered_date: invoiceDate,
     invoice_date: invoiceDate,
-
-
-
-
-
-
-
-
 
 
 
@@ -6139,25 +4331,9 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
 
 
 
-
-
-
-
-
-
-
-
     price_mode: order.priceMode || order.price_mode || null,
     order_price_mode: order.priceMode || order.price_mode || null,
     order_number: getOrderReference(order),
-
-
-
-
-
-
-
-
 
 
 
@@ -6182,25 +4358,9 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
 
 
 
-
-
-
-
-
-
-
-
 const stripUnsupportedColumns = (payload, errorMessage = "") => {
   const text = String(errorMessage).toLowerCase();
   const next = { ...payload };
-
-
-
-
-
-
-
-
 
 
 
@@ -6241,24 +4401,8 @@ const stripUnsupportedColumns = (payload, errorMessage = "") => {
 
 
 
-
-
-
-
-
-
-
-
   return next;
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -6277,14 +4421,6 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   const referenceNo = getOrderReference(order);
   if (!referenceNo) throw new Error("Order reference is required");
 
@@ -6295,23 +4431,7 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   const payload = buildInvoiceLedgerPayload({ order, confirmedBy, currentUser });
-
-
-
-
-
-
-
-
 
 
 
@@ -6335,14 +4455,6 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   if (existing.error) throw existing.error;
 
 
@@ -6352,23 +4464,7 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   const existingInvoice = Array.isArray(existing.data) ? existing.data[0] : existing.data;
-
-
-
-
-
-
-
-
 
 
 
@@ -6396,14 +4492,6 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   let query = existingInvoice?.id
     ? supabase.from("customer_ledger").update(payload).eq("id", existingInvoice.id)
     : supabase.from("customer_ledger").insert(payload);
@@ -6415,23 +4503,7 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   let { data, error } = await query.select().single();
-
-
-
-
-
-
-
-
 
 
 
@@ -6453,14 +4525,6 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
     const retry = await query.select().single();
     data = retry.data;
     error = retry.error;
@@ -6473,23 +4537,7 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   if (error) throw error;
-
-
-
-
-
-
-
-
 
 
 
@@ -6517,14 +4565,6 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   if (!canonicalOrderUuid) {
     const { data: orderRow, error: orderLookupError } = await supabase
       .from("orders")
@@ -6541,25 +4581,9 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
     if (orderLookupError) throw orderLookupError;
     canonicalOrderUuid = orderRow?.id || null;
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -6583,24 +4607,8 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-
-
-
-
-
-
-
-
   return data;
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -6625,14 +4633,6 @@ export async function allocateCustomerPaymentToInvoices({
 
 
 
-
-
-
-
-
-
-
-
   if (customerAccountId) {
     query = query.eq("customer_account_id", customerAccountId);
   } else if (customerName) {
@@ -6648,24 +4648,8 @@ export async function allocateCustomerPaymentToInvoices({
 
 
 
-
-
-
-
-
-
-
-
   const { data, error } = await query;
   if (error) throw error;
-
-
-
-
-
-
-
-
 
 
 
@@ -6692,24 +4676,8 @@ export async function allocateCustomerPaymentToInvoices({
 
 
 
-
-
-
-
-
-
-
-
   for (const invoice of invoiceRows) {
     if (!invoice.id || String(invoice.id).startsWith("delivered-invoice-")) continue;
-
-
-
-
-
-
-
-
 
 
 
@@ -6733,26 +4701,10 @@ export async function allocateCustomerPaymentToInvoices({
 
 
 
-
-
-
-
-
-
-
-
     let { error: updateError } = await supabase
       .from("customer_ledger")
       .update(payload)
       .eq("id", invoice.id);
-
-
-
-
-
-
-
-
 
 
 
@@ -6780,24 +4732,8 @@ export async function allocateCustomerPaymentToInvoices({
 
 
 
-
-
-
-
-
-
-
-
     if (updateError) throw updateError;
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -6816,26 +4752,10 @@ export async function allocateCustomerPaymentToInvoices({
 
 
 
-
-
-
-
-
-
-
-
 const isDeliveredInvoiceStatus = (status) =>
   ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
     String(status || "").trim().toLowerCase()
   );
-
-
-
-
-
-
-
-
 
 
 
@@ -6887,24 +4807,8 @@ const mapOrderItemForLedgerFallback = (item = {}) => ({
 
 
 
-
-
-
-
-
-
-
-
 const getProcessingQueueLineItems = (row = {}) => {
   const snapshot = row.transaction_snapshot || {};
-
-
-
-
-
-
-
-
 
 
 
@@ -6918,14 +4822,6 @@ const getProcessingQueueLineItems = (row = {}) => {
   if (Array.isArray(snapshot.items)) return snapshot.items;
   return [];
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -6962,14 +4858,6 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
     "";
   const priceMode = row.price_mode || snapshot.price_mode || "vat";
   const lineItems = getProcessingQueueLineItems(row);
-
-
-
-
-
-
-
-
 
 
 
@@ -7030,14 +4918,6 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
 
 
 
-
-
-
-
-
-
-
-
     subtotal: Number(row.subtotal || snapshot.subtotal || 0),
     net_total: Number(row.net_total || snapshot.net_total || snapshot.subtotal || 0),
     vatTotal: Number(row.vat_total || snapshot.vat_total || snapshot.total_vat || 0),
@@ -7062,28 +4942,12 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
 
 
 
-
-
-
-
-
-
-
-
 export const mergeOperationalOrders = (normalOrders = [], processingQueueOrders = []) => {
   const seenReferences = new Set(
     (normalOrders || [])
       .map((order) => String(order.orderId || order.order_number || order.orderNumber || "").trim())
       .filter(Boolean)
   );
-
-
-
-
-
-
-
-
 
 
 
@@ -7106,24 +4970,8 @@ export const mergeOperationalOrders = (normalOrders = [], processingQueueOrders 
 
 
 
-
-
-
-
-
-
-
-
   return [...(normalOrders || []), ...queueOnlyOrders];
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -7176,24 +5024,8 @@ export async function loadProcessingQueueOrders({
 
 
 
-
-
-
-
-
-
-
-
     query = buildQuery ? buildQuery(query) : query;
     const { data, error } = await query;
-
-
-
-
-
-
-
-
 
 
 
@@ -7214,24 +5046,8 @@ export async function loadProcessingQueueOrders({
 
 
 
-
-
-
-
-
-
-
-
     return data || [];
   };
-
-
-
-
-
-
-
-
 
 
 
@@ -7249,25 +5065,9 @@ export async function loadProcessingQueueOrders({
 
 
 
-
-
-
-
-
-
-
-
   if (customerAccountId) {
     rows = await runQuery((query) => query.eq("customer_account_id", customerAccountId));
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -7290,25 +5090,9 @@ export async function loadProcessingQueueOrders({
 
 
 
-
-
-
-
-
-
-
-
   if (!customerAccountId && !customerName) {
     rows = await runQuery();
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -7330,14 +5114,6 @@ export async function loadProcessingQueueOrders({
     })
     .map(mapProcessingQueueRowToOperationalOrder);
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -7385,14 +5161,6 @@ const mapOrderForLedgerFallback = (order = {}) => ({
 
 
 
-
-
-
-
-
-
-
-
 export function mergeDeliveredOrderInvoicesIntoLedgerRows(
   ledgerRows = [],
   deliveredOrders = []
@@ -7411,14 +5179,6 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
 
 
 
-
-
-
-
-
-
-
-
   const fallbackRows = deliveredOrders
     .filter((order) => {
       const referenceNo = String(getOrderReference(order) || "").trim();
@@ -7428,14 +5188,6 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
       const activeItems = filterActiveInvoiceLines(order.items || []);
       const totals = calculateDocumentTotals(activeItems, { ...order, items: activeItems });
       const invoiceTotal = roundMoney(totals.grandTotal);
-
-
-
-
-
-
-
-
 
 
 
@@ -7482,26 +5234,10 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
 
 
 
-
-
-
-
-
-
-
-
   return [...ledgerRows, ...fallbackRows].sort((a, b) => {
     const aTime = new Date(a.created_at || 0).getTime();
     const bTime = new Date(b.created_at || 0).getTime();
     if (aTime !== bTime) return aTime - bTime;
-
-
-
-
-
-
-
-
 
 
 
@@ -7517,14 +5253,6 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
     return 0;
   });
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -7552,14 +5280,6 @@ export const getAllocatedOutstanding = (ledgerRows = [], openingBalance = 0) =>
 
 
 
-
-
-
-
-
-
-
-
 export async function loadCustomerOutstandingSnapshot({
   customerAccountId,
   customerName,
@@ -7567,14 +5287,6 @@ export async function loadCustomerOutstandingSnapshot({
   if (!customerAccountId && !customerName) {
     return { openingBalance: 0, ledgerRows: [], allocatedRows: [], totalOutstanding: 0, branchOutstanding: {} };
   }
-
-
-
-
-
-
-
-
 
 
 
@@ -7609,24 +5321,8 @@ export async function loadCustomerOutstandingSnapshot({
 
 
 
-
-
-
-
-
-
-
-
   if (ledgerResult.error) throw ledgerResult.error;
   if (ordersResult.error) throw ordersResult.error;
-
-
-
-
-
-
-
-
 
 
 
@@ -7654,25 +5350,9 @@ export async function loadCustomerOutstandingSnapshot({
 
 
 
-
-
-
-
-
-
-
-
   allocatedRows.forEach((row) => {
     const branchKey = String(row.branch_id || row.customer_branch_id || row.branch_name || "");
     if (!branchKey) return;
-
-
-
-
-
-
-
-
 
 
 
@@ -7687,14 +5367,6 @@ export async function loadCustomerOutstandingSnapshot({
         getPaymentLedgerTotal(row)
     );
   });
-
-
-
-
-
-
-
-
 
 
 
