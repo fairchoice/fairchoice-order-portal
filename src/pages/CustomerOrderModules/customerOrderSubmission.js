@@ -37,7 +37,7 @@ export const buildCustomerOrderRequest = ({
   const shouldUseWallet = walletRequestedAmount > 0;
 
   return {
-  orderNumber,
+    orderNumber,
   companyName: customer?.account_name || "",
   priceMode,
   cart,
@@ -58,7 +58,7 @@ export const buildCustomerOrderRequest = ({
   wallet_use_requested: shouldUseWallet,
   wallet_requested_amount: walletRequestedAmount,
   wallet_requested_at: shouldUseWallet ? new Date().toISOString() : null,
-  notes: "Payment status: UNPAID. No Payment Now selected.",
+    notes: "Payment status: UNPAID. No Payment Now selected.",
   };
 };
 
