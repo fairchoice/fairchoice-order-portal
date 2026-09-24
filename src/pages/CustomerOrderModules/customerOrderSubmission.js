@@ -1,5 +1,18 @@
 import { persistPromotionRunForOrder } from "./promotionRunPersistence";
 
+export const calculateRequestedWalletAmount = ({
+  walletUseRequested = false,
+  walletBalance = 0,
+  orderTotal = 0,
+} = {}) => {
+  if (!walletUseRequested) return 0;
+
+  const availableWallet = Math.max(0, Number(walletBalance || 0));
+  const payableOrderTotal = Math.max(0, Number(orderTotal || 0));
+
+  return Math.min(availableWallet, payableOrderTotal);
+};
+
 export const buildCustomerOrderRequest = ({
   orderNumber,
   customer,
@@ -14,7 +27,16 @@ export const buildCustomerOrderRequest = ({
   orderCountry = "",
   creditLimit,
   walletUseRequested = false,
-} = {}) => ({
+  walletBalance = 0,
+} = {}) => {
+  const walletRequestedAmount = calculateRequestedWalletAmount({
+    walletUseRequested,
+    walletBalance,
+    orderTotal: finalTotal,
+  });
+  const shouldUseWallet = walletRequestedAmount > 0;
+
+  return {
   orderNumber,
   companyName: customer?.account_name || "",
   priceMode,
@@ -33,11 +55,12 @@ export const buildCustomerOrderRequest = ({
   delivery_postcode: branch?.postcode || "",
   customer_country: orderCountry,
   credit_limit: creditLimit,
-  wallet_use_requested: Boolean(walletUseRequested),
-  wallet_requested_amount: null,
-  wallet_requested_at: walletUseRequested ? new Date().toISOString() : null,
+  wallet_use_requested: shouldUseWallet,
+  wallet_requested_amount: walletRequestedAmount,
+  wallet_requested_at: shouldUseWallet ? new Date().toISOString() : null,
   notes: "Payment status: UNPAID. No Payment Now selected.",
-});
+  };
+};
 
 const persistPromotionRunWithoutBlockingOrder = async ({
   createdOrder,
