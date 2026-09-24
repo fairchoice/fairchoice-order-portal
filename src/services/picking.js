@@ -1,6 +1,7 @@
-import { supabase } from "./supabase.js";
+﻿import { supabase } from "./supabase.js";
 import { getFcSessionState } from "./fcSession.js";
 import { resolveOrderInventoryCountry } from "./locationStock.js";
+
 
 const requireSupabase = () => { if (!supabase) throw new Error("Supabase is not configured."); };
 const requireSession = (user = {}) => {
@@ -8,6 +9,7 @@ const requireSession = (user = {}) => {
   if (!session.valid) throw new Error("A valid Fair Choice staff session is required.");
   return session;
 };
+
 
 export const createClientActionId = () => {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -23,10 +25,12 @@ export const createClientActionId = () => {
   return `${hex.slice(0,4).join("")}-${hex.slice(4,6).join("")}-${hex.slice(6,8).join("")}-${hex.slice(8,10).join("")}-${hex.slice(10).join("")}`;
 };
 
+
 export const getPickerIdentity = (user = {}) => ({ id: String(user.staff_id || user.id || ""), name: String(user.staff_name || user.name || user.username || "Staff") });
 export const getOrderedQty = (item = {}) => Number(item.pickingOrderedQty ?? item.picking_ordered_qty ?? item.qty ?? item.quantity ?? 0);
 export const getResolvedQty = (item = {}) => Number(item.pickingInStockQty ?? item.picking_in_stock_qty ?? 0) + Number(item.pickingPreOrderQty ?? item.picking_pre_order_qty ?? 0) + Number(item.pickingReplacedQty ?? item.picking_replaced_qty ?? 0);
 export const getRemainingPickingQty = (item = {}) => Math.max(0, getOrderedQty(item) - getResolvedQty(item));
+
 
 export async function claimOrderForPicking(orderNumber, user) {
   requireSupabase();
@@ -37,6 +41,7 @@ export async function claimOrderForPicking(orderNumber, user) {
   if (!result?.claimed) throw new Error(result?.message || "This order is already being picked by another person.");
   return result;
 }
+
 
 export async function savePickingDecision({ order, orderItemId, action, quantity, user, replacement = null, clientActionId = createClientActionId() }) {
   requireSupabase();
@@ -59,6 +64,7 @@ export async function savePickingDecision({ order, orderItemId, action, quantity
   return Array.isArray(data) ? data[0] : data;
 }
 
+
 export async function recallPickingDecision(orderItemId, user) {
   requireSupabase();
   const session = requireSession(user);
@@ -67,6 +73,7 @@ export async function recallPickingDecision(orderItemId, user) {
   return Array.isArray(data) ? data[0] : data;
 }
 
+
 export async function pauseOrderPicking(orderNumber, user) {
   requireSupabase();
   const picker = getPickerIdentity(user);
@@ -74,6 +81,7 @@ export async function pauseOrderPicking(orderNumber, user) {
   if (error) throw error;
   return data;
 }
+
 
 export async function completeOrderPicking(orderNumber, user) {
   requireSupabase();

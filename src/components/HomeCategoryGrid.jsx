@@ -140,6 +140,10 @@ export default function HomeCategoryGrid({
   cartItemCount,
   onCartClick,
   menuItems = [],
+  walletBalance = null,
+  walletLoading = false,
+  walletUseRequested = false,
+  onWalletClick = null,
   headerOnly = false,
   hideHeader = false,
   children,
@@ -336,32 +340,47 @@ export default function HomeCategoryGrid({
               </div>
             </div>
 
-            {visibleMenuItems.length > 0 && (
-              <div ref={menuRef} className="relative shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setMenuOpen((open) => !open)}
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                  aria-label="Order menu"
-                  className="flex h-11 w-11 items-center justify-center rounded-lg border border-white/20 text-2xl font-black hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
-                >
-                  ☰
-                </button>
-                {menuOpen && (
-                  <div role="menu" className="absolute right-0 top-12 z-[80] w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-slate-900 shadow-2xl">
-                    {visibleMenuItems.map((item) => (
-                      <button
-                        key={item.label}
-                        type="button"
-                        role="menuitem"
-                        disabled={item.disabled}
-                        onClick={() => runMenuAction(item)}
-                        className={`flex w-full items-center px-4 py-3 text-left text-sm font-bold transition ${item.divider ? "border-t border-slate-200" : ""} ${item.danger ? "text-red-700 hover:bg-red-50" : "text-slate-800 hover:bg-slate-100"} disabled:cursor-not-allowed disabled:opacity-40`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
+            {(onWalletClick || visibleMenuItems.length > 0) && (
+              <div className="flex shrink-0 items-center gap-2">
+                {onWalletClick && (
+                  <button
+                    type="button"
+                    onClick={onWalletClick}
+                    aria-label="Customer Wallet"
+                    className={`flex h-11 items-center gap-2 rounded-lg border px-3 text-xs font-black transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 sm:text-sm ${walletUseRequested ? "border-emerald-300 bg-emerald-500/20 text-emerald-100" : "border-white/20 bg-white/5 text-white hover:bg-white/10"}`}
+                  >
+                    <span className="hidden sm:inline">Wallet</span>
+                    <span>{walletLoading ? "..." : walletBalance === null || walletBalance === undefined ? "--" : formatCurrency(Number(walletBalance || 0))}</span>
+                  </button>
+                )}
+                {visibleMenuItems.length > 0 && (
+                  <div ref={menuRef} className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setMenuOpen((open) => !open)}
+                      aria-haspopup="menu"
+                      aria-expanded={menuOpen}
+                      aria-label="Order menu"
+                      className="flex h-11 w-11 items-center justify-center rounded-lg border border-white/20 text-2xl font-black hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
+                    >
+                      ☰
+                    </button>
+                    {menuOpen && (
+                      <div role="menu" className="absolute right-0 top-12 z-[80] w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-slate-900 shadow-2xl">
+                        {visibleMenuItems.map((item) => (
+                          <button
+                            key={item.label}
+                            type="button"
+                            role="menuitem"
+                            disabled={item.disabled}
+                            onClick={() => runMenuAction(item)}
+                            className={`flex w-full items-center px-4 py-3 text-left text-sm font-bold transition ${item.divider ? "border-t border-slate-200" : ""} ${item.danger ? "text-red-700 hover:bg-red-50" : "text-slate-800 hover:bg-slate-100"} disabled:cursor-not-allowed disabled:opacity-40`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -24,6 +24,10 @@ export default function Cart({
   onPaymentChoiceChange,
   paymentChoiceValid = false,
   requireImmediatePayment = false,
+  walletBalance = 0,
+  walletLoading = false,
+  walletUseRequested = false,
+  onWalletUseChange,
   bankProofFile = null,
   onBankProofChange,
   readOnly = false,
@@ -173,13 +177,54 @@ export default function Cart({
         )}
 
         {!partnerReadOnly && (
-          <PaymentChoiceSelector
-            choice={paymentChoice}
-            onChoiceChange={onPaymentChoiceChange}
-            requireImmediatePayment={requireImmediatePayment}
-            bankProofFile={bankProofFile}
-            onBankProofChange={onBankProofChange}
-          />
+          <>
+            <PaymentChoiceSelector
+              choice={paymentChoice}
+              onChoiceChange={onPaymentChoiceChange}
+              requireImmediatePayment={requireImmediatePayment}
+              bankProofFile={bankProofFile}
+              onBankProofChange={onBankProofChange}
+            />
+
+            <div className="mt-3 rounded-2xl border border-emerald-300 bg-emerald-50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-emerald-950">Use Wallet Money?</div>
+                  <div className="mt-1 text-xs font-semibold text-slate-600">
+                    Available: {walletLoading ? "Loading..." : formatCurrency(Number(walletBalance || 0))}.
+                    Wallet money is deducted at delivery before payment is collected.
+                  </div>
+                </div>
+                <div className="shrink-0 text-lg font-black text-emerald-800">
+                  {walletLoading ? "..." : formatCurrency(Number(walletBalance || 0))}
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={walletLoading || Number(walletBalance || 0) <= 0}
+                  onClick={() => onWalletUseChange?.(true)}
+                  className={`rounded-xl border px-4 py-3 text-sm font-black ${walletUseRequested ? "border-emerald-700 bg-emerald-700 text-white" : "border-emerald-300 bg-white text-emerald-800"} disabled:cursor-not-allowed disabled:opacity-40`}
+                >
+                  Yes · Use Wallet
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onWalletUseChange?.(false)}
+                  className={`rounded-xl border px-4 py-3 text-sm font-black ${!walletUseRequested ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                >
+                  No · Keep Wallet
+                </button>
+              </div>
+
+              <div className="mt-2 text-xs font-bold text-slate-600">
+                Selected: <span className={walletUseRequested ? "text-emerald-700" : "text-slate-800"}>
+                  {walletUseRequested ? "USE WALLET AT DELIVERY" : "KEEP WALLET FOR LATER"}
+                </span>
+              </div>
+            </div>
+          </>
         )}
 
         {partnerReadOnly && (

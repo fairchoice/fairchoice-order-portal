@@ -74,6 +74,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
     items: [
       page("page.accounts.central_payment", "Central Payment", "centralPayment"),
       page("page.accounts.customer_credit", "Customer Credit", "credit", [], { hash: "#credit" }),
+      page("page.accounts.customer_wallet", "Customer Wallet", "customerWallet", ["Accounts", "Accountant", "Admin"]),
       page("page.accounts.invoices", "Invoices", "invoicesPortal"),
       page("page.accounts.weekly", "Weekly Account", "weeklyAccount"),
       page("page.accounts.supplier_accounts", "Supplier Accounts", "supplierAccounts"),

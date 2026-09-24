@@ -13,6 +13,7 @@ export const buildCustomerOrderRequest = ({
   userProfile = {},
   orderCountry = "",
   creditLimit,
+  walletUseRequested = false,
 } = {}) => ({
   orderNumber,
   companyName: customer?.account_name || "",
@@ -32,6 +33,9 @@ export const buildCustomerOrderRequest = ({
   delivery_postcode: branch?.postcode || "",
   customer_country: orderCountry,
   credit_limit: creditLimit,
+  wallet_use_requested: Boolean(walletUseRequested),
+  wallet_requested_amount: null,
+  wallet_requested_at: walletUseRequested ? new Date().toISOString() : null,
   notes: "Payment status: UNPAID. No Payment Now selected.",
 });
 

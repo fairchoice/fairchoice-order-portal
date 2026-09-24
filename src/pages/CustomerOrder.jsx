@@ -25,6 +25,7 @@ import StaffLogin from "./AdminSetup/StaffLogin";
 import CustomerLogin from "./AdminSetup/CustomerLogin";
 import PriceManagement from "./AdminSetup/PriceManagement";
 
+
 import { formatCurrency } from "../utils/currency";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import {
@@ -53,10 +54,13 @@ import {
 } from "../security/accessControlRegistry";
 
 
+
+
 import BackOfficeLayout, {
   ComingSoonPlaceholder,
 } from "./AdminSetup/BackOfficeLayout";
 import { getComingSoonTitle } from "./AdminSetup/backOfficePageHelpers";
+
 
 import Categories from "./AdminSetup/Categories";
 import Warehouse from "./Warehouse";
@@ -66,6 +70,7 @@ import StockReceipts from "./AdminSetup/StockReceipts";
 import StockHistory from "./AdminSetup/StockHistory";
 import StockTaking from "./AdminSetup/StockTaking";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
+import CustomerWallet from "./AdminSetup/CustomerWallet";
 import CentralPayment from "./AdminSetup/CentralPayment";
 import BranchSeparation from "./AdminSetup/BranchSeparation";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
@@ -85,6 +90,7 @@ import SalesRouteAnalysisReport from "./reports/SalesRouteAnalysisReport";
 import SalesRouteSetup from "./AdminSetup/SalesRouteSetup";
 import { EXCEPTION_ORDER_REASONS, loadTodaysSalesRoute, NO_ORDER_REASONS, recordSalesRouteVisit } from "../services/salesRouteService";
 
+
 import ProductCard, { ProductListRow } from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
 import {
@@ -95,6 +101,7 @@ import HomeCategoryGrid from "../components/HomeCategoryGrid";
 import HomepageTargetMessages from "../components/HomepageTargetMessages";
 import Cart from "../components/Cart.jsx";
 import ReturnRequestModal from "../components/ReturnRequestModal";
+
 
 import { getProducts, isActiveProduct } from "../services/products";
 import {
@@ -138,6 +145,7 @@ import {
   getOrderItemProductCode,
   roundMoney,
 
+
   getOrderItemQty,
 } from "../utils/orderTotals";
 import { calculateDocumentTotals } from "../utils/documentTotals";
@@ -156,6 +164,7 @@ import {
   getLedgerDebit,
 } from "../utils/customerCredit";
 
+
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
 import BulkCustomerCodePrices from "./AdminSetup/BulkCustomerCodePrices";
@@ -166,7 +175,10 @@ import { claimOrderForPicking } from "../services/picking";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
 
+
+
 import { getCustomerAccounts } from "../services/customerManagement";
+
 
 import {
   createCustomerOrder,
@@ -188,7 +200,7 @@ import {
   previewInvoice as previewCentralInvoice,
   withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
-import { mergeAuthenticatedProfile } from "../services/fcSession";
+import { getFcSessionState, mergeAuthenticatedProfile } from "../services/fcSession";
 import {
   CENTRAL_CART_ENABLED,
   beginCentralCartSubmission,
@@ -200,22 +212,28 @@ import {
   setCentralCartItemQuantity,
 } from "../services/customerCart";
 
+
 const LEGACY_CART_KEY = "fairchoice_cart";
+
 
 async function refreshSupabaseSessionIfNeeded() {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
 
+
   const session = data.session;
   if (!session) return null;
 
+
   const expiresAt = Number(session.expires_at || 0) * 1000;
   if (!expiresAt || expiresAt - Date.now() > 60_000) return session;
+
 
   const refreshed = await supabase.auth.refreshSession();
   if (refreshed.error) throw refreshed.error;
   return refreshed.data.session;
 }
+
 
 const readCheckoutBankProofDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -231,6 +249,7 @@ const readCheckoutBankProofDataUrl = (file) =>
     reader.onload = () => resolve(String(reader.result || ""));
     reader.readAsDataURL(file);
   });
+
 
 function normalizeProduct(raw) {
   return {
@@ -269,6 +288,7 @@ function normalizeProduct(raw) {
   };
 }
 
+
 const PRODUCT_LABEL_PRIORITY = [
   "comingSoon",
   "isNew",
@@ -278,11 +298,15 @@ const PRODUCT_LABEL_PRIORITY = [
   "topSeller",
 ];
 
+
 const PRODUCTS_PER_PAGE = 20;
+
+
 
 
 const getProductLabelValue = (product) =>
   PRODUCT_LABEL_PRIORITY.find((key) => product?.[key] === true) || "";
+
 
 const getProductLabelPayload = (labelValue) => ({
   is_new: labelValue === "isNew",
@@ -293,6 +317,7 @@ const getProductLabelPayload = (labelValue) => ({
   top_seller: labelValue === "topSeller",
 });
 
+
 const getProductLabelFormFlags = (labelValue) => ({
   isNew: labelValue === "isNew",
   isPromotion: labelValue === "isPromotion",
@@ -302,9 +327,11 @@ const getProductLabelFormFlags = (labelValue) => ({
   topSeller: labelValue === "topSeller",
 });
 
+
 const getOrderProductAvailabilityRank = (product) => {
   const sourceStatus = String(product?.sourceStatus || "").trim().toLowerCase();
   const productStatus = String(product?.status || "").trim().toLowerCase();
+
 
   if (
     sourceStatus === "cannot supply" ||
@@ -314,7 +341,9 @@ const getOrderProductAvailabilityRank = (product) => {
     return 3;
   }
 
+
   if (Number(product?.stock || 0) > 0) return 1;
+
 
   if (
     sourceStatus === "need supplier" ||
@@ -328,18 +357,23 @@ const getOrderProductAvailabilityRank = (product) => {
     return 2;
   }
 
+
   return 3;
 };
+
 
 const sortOrderProductsByAvailability = (items) =>
   [...items].sort((a, b) => {
     const rankDiff =
       getOrderProductAvailabilityRank(a) - getOrderProductAvailabilityRank(b);
 
+
     if (rankDiff !== 0) return rankDiff;
+
 
     return String(a.name || "").localeCompare(String(b.name || ""));
   });
+
 
 const getCustomerAddress = (customer, branch) =>
   branch?.delivery_address ||
@@ -349,8 +383,10 @@ const getCustomerAddress = (customer, branch) =>
   customer?.postcode ||
   "-";
 
+
 const getCreditBalance = (customer, ledger = [], openingBalance = 0) =>
   calculateCustomerCredit(customer, ledger, openingBalance).outstanding;
+
 
 const mapDeliveredOrderForCustomerLedger = (order = {}) => ({
   dbId: order.id,
@@ -434,15 +470,19 @@ const mapDeliveredOrderForCustomerLedger = (order = {}) => ({
   })),
 });
 
+
 const isDeliveredInvoiceStatus = (status) =>
   ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
     String(status || "").trim().toLowerCase()
   );
 
+
 const normalizeCountry = (value) => String(value || "").trim().toLowerCase();
+
 
 const getCustomerBranches = (customer) =>
   Array.isArray(customer?.customer_branches) ? customer.customer_branches : [];
+
 
 const getCustomerAccountCountry = (customer) =>
   customer?.country ||
@@ -451,22 +491,27 @@ const getCustomerAccountCountry = (customer) =>
   customer?.default_country ||
   "";
 
+
 const getCustomerBranchCountry = (customer) => {
   const branches = getCustomerBranches(customer);
   const defaultBranch =
     branches.find((branch) => branch.default_branch || branch.is_default) ||
     branches[0];
 
+
   return defaultBranch?.country || "";
 };
+
 
 const isOrderSelectableCustomer = (customer) => {
   return isOperationalCustomer(customer);
 };
 
+
 const customerMatchesSearch = (customer, searchTerm) => {
   const search = String(searchTerm || "").trim().toLowerCase();
   if (!search) return true;
+
 
   return [
     customer?.account_name,
@@ -480,12 +525,14 @@ const customerMatchesSearch = (customer, searchTerm) => {
     .some((value) => String(value).toLowerCase().includes(search));
 };
 
+
 const getCustomerPriceModeValue = (customer, pricingSettings = {}) => {
   const mode = normalizePriceMode(customer?.default_price_mode || "vat");
   const basePriceMode =
     ["server", "inc vat", "inc.vat", "royalty", "owner offer", "manager", "manager offer"].includes(mode)
       ? "inc vat"
       : "ex vat";
+
 
   if (customer?.customer_price_code_id) {
     const activeCode = (pricingSettings.price_codes || []).find(
@@ -508,13 +555,16 @@ const getCustomerPriceModeValue = (customer, pricingSettings = {}) => {
     }
   }
 
+
   return basePriceMode === "inc vat" ? "inc vat" : "vat";
 };
+
 
 const getAllowedPriceModesForCustomer = (customer, pricingSettings = {}) => {
   if (!customer) return ["vat"];
   return [getCustomerPriceModeValue(customer, pricingSettings)];
 };
+
 
 const getCustomerOrderPriceModeLabel = (priceMode, pricingSettings = {}) => {
   const value = String(priceMode || "").trim();
@@ -526,32 +576,41 @@ const getCustomerOrderPriceModeLabel = (priceMode, pricingSettings = {}) => {
 };
 
 
+
+
 const customerMatchesCountry = (customer, country) => {
   const selectedCountry = normalizeCountry(country);
   if (!selectedCountry) return true;
 
+
   const accountCountry = normalizeCountry(getCustomerAccountCountry(customer));
   if (accountCountry) return accountCountry === selectedCountry;
+
 
   return getCustomerBranches(customer).some(
     (branch) => normalizeCountry(branch.country) === selectedCountry
   );
 };
 
+
 const getCountryFilteredBranches = (customer, country, shouldFilter) => {
   const activeBranches = getCustomerBranches(customer).filter(
     (branch) => branch.active !== false
   );
 
+
   if (!shouldFilter) return activeBranches;
+
 
   const selectedCountry = normalizeCountry(country);
   if (!selectedCountry) return activeBranches;
+
 
   return activeBranches.filter(
     (branch) => normalizeCountry(branch.country) === selectedCountry
   );
 };
+
 
 const loadSalesRepOutstanding = async ({
   customer,
@@ -563,6 +622,7 @@ const loadSalesRepOutstanding = async ({
       outstandingState: { totalOutstanding: 0, branchOutstanding: {} },
     };
   }
+
 
   const creditSnapshot = await loadCentralPaymentSnapshot({
     customerAccountId: customer.id,
@@ -578,6 +638,7 @@ const loadSalesRepOutstanding = async ({
     })
   );
 
+
   return {
     creditSnapshot,
     outstandingState: {
@@ -587,11 +648,15 @@ const loadSalesRepOutstanding = async ({
   };
 };
 
+
 export default function CustomerOrder({ userProfile, onLogout, onProfileRefresh, activeDuty = "" }) {
+
 
 const loggedInUser =
   JSON.parse(localStorage.getItem("loggedInUser") || "null") ||
   JSON.parse(localStorage.getItem("fairchoice_user") || "null");
+
+
 
 
   const activeUser = userProfile || loggedInUser || {};
@@ -647,7 +712,9 @@ const loggedInUser =
   const defaultBackOfficePage =
     PAGE_REGISTRY.find((item) => canAccessPage(backOfficeUser, item.key))?.route || "orders";
 
+
   
+
 
  const portalRoleState = {
    isAdmin,
@@ -668,6 +735,7 @@ const loggedInUser =
  });
  const [accessControlStaffId, setAccessControlStaffId] = useState("");
  const [pickingOrderId, setPickingOrderId] = useState(null);
+
 
   const [customerAccounts, setCustomerAccounts] = useState([]);
   const [salesRouteRows, setSalesRouteRows] = useState([]);
@@ -704,6 +772,7 @@ const loggedInUser =
   const [customerCreditSnapshot, setCustomerCreditSnapshot] = useState(null);
   const [branchOutstandingRows, setBranchOutstandingRows] = useState([]);
 
+
   const [salesPaymentForm, setSalesPaymentForm] = useState({
   customerId: "",
   branchId: "",
@@ -721,12 +790,17 @@ const [salesOutstandingSnapshot, setSalesOutstandingSnapshot] = useState({
 
 
 
+
+
+
 const [savingSalesPayment, setSavingSalesPayment] = useState(false);
+
 
 const activeCustomerAccounts = useMemo(
   () => customerAccounts.filter(isOrderSelectableCustomer),
   [customerAccounts]
 );
+
 
 const selectedSalesPaymentCustomer = activeCustomerAccounts.find(
   (customer) => String(customer.id) === String(salesPaymentForm.customerId)
@@ -755,8 +829,10 @@ const selectedSalesReturnBranch =
     (branch) => String(branch.id) === String(salesReturnForm.branchId)
   ) || null;
 
+
 useEffect(() => {
   let active = true;
+
 
   const loadSalesOutstanding = async () => {
     if (!selectedSalesPaymentCustomer) {
@@ -764,11 +840,13 @@ useEffect(() => {
       return;
     }
 
+
     try {
       const { outstandingState } = await loadSalesRepOutstanding({
         customer: selectedSalesPaymentCustomer,
         selectedBranchId: selectedSalesPaymentBranch?.id || "",
       });
+
 
       if (active) setSalesOutstandingSnapshot(outstandingState);
     } catch (error) {
@@ -777,26 +855,33 @@ useEffect(() => {
     }
   };
 
+
   loadSalesOutstanding();
+
 
   return () => {
     active = false;
   };
 }, [selectedSalesPaymentCustomer?.id, selectedSalesPaymentBranch?.id]);
 
+
   const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
  
+
 
   const [priceMode, setPriceMode] = useState("vat");
   const [companyName, setCompanyName] = useState("");
 
+
   const [manualCountry, setManualCountry] = useState("Wales");
+
 
   const [pricingSettings, setPricingSettings] = useState({
     vat_percent: 20,
     server_discount_percent: 0,
     price_codes: [],
   });
+
 
 const refreshSalesRoute = useCallback(async () => {
   if (!salesRouteMode) return;
@@ -811,9 +896,11 @@ const refreshSalesRoute = useCallback(async () => {
   }
 }, [salesRouteMode, activeCustomerAccounts, activeUser?.staff_id, activeUser?.id]);
 
+
 useEffect(() => {
   if (salesRouteMode && activeCustomerAccounts.length) void refreshSalesRoute();
 }, [salesRouteMode, activeCustomerAccounts.length, refreshSalesRoute]);
+
 
 const filteredSalesRouteRows = useMemo(() =>
   salesRouteRows.filter((routeRow) =>
@@ -825,6 +912,7 @@ const salesRoutePageCount = Math.max(1, Math.ceil(filteredSalesRouteRows.length 
 const currentSalesRoutePage = Math.min(salesRoutePage, salesRoutePageCount);
 const visibleSalesRouteRows = filteredSalesRouteRows.slice((currentSalesRoutePage - 1) * 30, currentSalesRoutePage * 30);
 useEffect(() => { setSalesRoutePage(1); }, [salesRouteCountryFilter, salesRouteRows.length]);
+
 
 const resetSalesRouteCustomer = useCallback(() => {
   setSelectedCustomerId("");
@@ -843,6 +931,7 @@ const resetSalesRouteCustomer = useCallback(() => {
   setNoOrderNote("");
   setPage("order");
 }, []);
+
 
 const openSalesRouteCustomer = useCallback((routeRow) => {
   const customer = routeRow?.customer;
@@ -868,6 +957,7 @@ const openSalesRouteCustomer = useCallback((routeRow) => {
   setPage("order");
 }, [pricingSettings]);
 
+
 const confirmSalesRouteNoOrder = async () => {
   if (!selectedCustomerAccount) return;
   if (!noOrderReason) return alert("Select a No Order reason.");
@@ -886,6 +976,7 @@ const confirmSalesRouteNoOrder = async () => {
   await refreshSalesRoute();
 };
 
+
 const confirmSalesRouteException = () => {
   if (!routeExceptionReason) return alert("Select an exception reason.");
   if (routeExceptionReason === "Other" && !routeExceptionNote.trim()) return alert("Enter a note for Other.");
@@ -900,6 +991,8 @@ const confirmSalesRouteException = () => {
   setCustomerDetailsExpanded(true);
   setPage("order");
 };
+
+
 
 
   const [products, setProducts] = useState([]);
@@ -920,6 +1013,9 @@ const confirmSalesRouteException = () => {
   const [isCartEditing, setIsCartEditing] = useState(false);
   const [cartNotice, setCartNotice] = useState("");
   const [submissionFeedback, setSubmissionFeedback] = useState("");
+  const [customerWallet, setCustomerWallet] = useState({ balance: 0, loading: false, error: "" });
+  const [customerWalletOpen, setCustomerWalletOpen] = useState(false);
+  const [walletUseRequested, setWalletUseRequested] = useState(false);
   // Checkpoint 10.3: normal orders are always Pay on Delivery.
   // Cash collection must happen later in the Delivery/Collection workflow.
   // The separate Promotion Run workflow keeps its existing paid-sale behaviour.
@@ -935,8 +1031,58 @@ const confirmSalesRouteException = () => {
   const portalHistoryInitializedRef = useRef(false);
   const activePortalViewRef = useRef("home");
 
+
 const cartStorageKey = getCustomerCartStorageKey(activeUser);
 const orderSubmissionStorageKey = `${cartStorageKey}:submission`;
+
+const loadCustomerWalletBalance = useCallback(async () => {
+  if (!selectedCustomerAccount?.id) {
+    setCustomerWallet({ balance: 0, loading: false, error: "" });
+    setWalletUseRequested(false);
+    return;
+  }
+
+  const session = getFcSessionState(activeUser);
+  if (!session.valid) {
+    setCustomerWallet({ balance: 0, loading: false, error: "Wallet session is unavailable." });
+    return;
+  }
+
+  setCustomerWallet((current) => ({ ...current, loading: true, error: "" }));
+
+  const rpcName = isCustomer
+    ? "fc_customer_wallet_portal_v1"
+    : "fc_order_wallet_balance_v1";
+  const rpcArgs = isCustomer
+    ? {
+        p_username: session.username,
+        p_session_token: session.token,
+      }
+    : {
+        p_username: session.username,
+        p_session_token: session.token,
+        p_customer_account_id: selectedCustomerAccount.id,
+      };
+
+  const { data, error } = await supabase.rpc(rpcName, rpcArgs);
+
+  if (error) {
+    console.error("Customer Wallet loading error:", error);
+    setCustomerWallet({ balance: 0, loading: false, error: error.message || "Could not load Wallet." });
+    return;
+  }
+
+  setCustomerWallet({
+    balance: Number(data?.wallet_balance || 0),
+    loading: false,
+    error: "",
+  });
+}, [isCustomer, selectedCustomerAccount?.id, activeUser?.username, activeUser?.fc_session_token, activeUser?.session_token, activeUser?.sessionToken]);
+
+useEffect(() => {
+  void loadCustomerWalletBalance();
+}, [loadCustomerWalletBalance]);
+
 
 const [cart, setCart] = useState(() => {
   try {
@@ -948,15 +1094,18 @@ const [cart, setCart] = useState(() => {
   }
 });
 
+
 const cartRef = useRef(cart);
 const centralCartMutationQueueRef = useRef(Promise.resolve());
 const centralCartMutatingRef = useRef(false);
 const centralCartLoadedScopeRef = useRef("");
 const [centralCartId, setCentralCartId] = useState(null);
 
+
 useEffect(() => {
   cartRef.current = cart;
 }, [cart]);
+
 
 useEffect(
   () => () => {
@@ -967,6 +1116,7 @@ useEffect(
   []
 );
 
+
 useEffect(() => {
   if (!cartNotice) return undefined;
   const noticeTimer = setTimeout(() => setCartNotice(""), 2500);
@@ -974,10 +1124,13 @@ useEffect(() => {
 }, [cartNotice]);
 
 
+
+
 useEffect(() => {
   localStorage.setItem(cartStorageKey, JSON.stringify(cart));
   localStorage.removeItem(LEGACY_CART_KEY);
 }, [cart, cartStorageKey]);
+
 
 const applyCartPromotions = (cartLines) =>
   applyCustomerOrderPromotions({
@@ -988,6 +1141,7 @@ const applyCartPromotions = (cartLines) =>
     audienceType: promotionAudienceType,
   });
 
+
 const refreshPromotionRules = async () => {
   try {
     const rules = await getActivePromotionRules();
@@ -997,6 +1151,7 @@ const refreshPromotionRules = async () => {
   }
 };
 
+
 const refreshProductDisplayMessages = async () => {
   try {
     const { data, error } = await supabase
@@ -1005,12 +1160,14 @@ const refreshProductDisplayMessages = async () => {
       .eq("active", true)
       .order("updated_at", { ascending: false });
 
+
     if (error) throw error;
     setProductDisplayMessages(data || []);
   } catch {
     setProductDisplayMessages([]);
   }
 };
+
 
 useEffect(() => {
   setCart((oldCart) => {
@@ -1022,14 +1179,17 @@ useEffect(() => {
       audienceType: promotionAudienceType,
     });
 
+
     return JSON.stringify(recalculatedCart) === JSON.stringify(oldCart)
       ? oldCart
       : recalculatedCart;
   });
 }, [promotionRules, products, priceMode, promotionAudienceType]);
 
+
 const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) => {
   if (!customerName && !customerId) return [];
+
 
   let query = supabase
     .from("orders")
@@ -1037,18 +1197,22 @@ const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) =>
     .order("created_at", { ascending: true })
     .limit(250);
 
+
   if (customerId) {
     query = query.eq("customer_account_id", customerId);
   } else {
     query = query.eq("company_name", customerName);
   }
 
+
   const { data, error } = await query;
+
 
   if (error) {
     console.error("Delivered order invoice fallback loading error:", error);
     return [];
   }
+
 
   const deliveredOrders = (data || [])
     .filter((order) => isDeliveredInvoiceStatus(order.status))
@@ -1058,8 +1222,10 @@ const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) =>
     customerName,
   });
 
+
   return mergeOperationalOrders(deliveredOrders, processingQueueOrders);
 };
+
 
 const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders = []) => {
   const deliveredOrdersByReference = new Map(
@@ -1073,12 +1239,14 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
       .toUpperCase();
     const referenceNo = String(row.reference_no || row.order_number || "").trim();
 
+
     if (type === "INVOICE" && deliveredOrdersByReference.has(referenceNo)) {
       return {
         ...row,
         __order: deliveredOrdersByReference.get(referenceNo),
       };
     }
+
 
     return row;
   });
@@ -1094,6 +1262,7 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
       .filter(Boolean)
   );
 
+
   const fallbackInvoiceRows = deliveredOrders
     .filter((order) => {
       const referenceNo = String(order.orderId || "").trim();
@@ -1102,6 +1271,7 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
     .map((order) => {
       const totals = calculateDocumentTotals(order.items || [], order);
       const createdAt = order.deliveredAt || order.createdAt || new Date().toISOString();
+
 
       return {
         id: `delivered-invoice-${order.orderId}`,
@@ -1130,10 +1300,12 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
       };
     });
 
+
   return [...ledgerRowsWithOrders, ...fallbackInvoiceRows].sort((a, b) => {
     const aTime = new Date(a.created_at || 0).getTime();
     const bTime = new Date(b.created_at || 0).getTime();
     if (aTime !== bTime) return aTime - bTime;
+
 
     const aType = String(a.entry_type || a.transaction_type || "").toUpperCase();
     const bType = String(b.entry_type || b.transaction_type || "").toUpperCase();
@@ -1143,11 +1315,13 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
   });
 };
 
+
 const loadCustomerCreditSnapshot = async (
   customer = selectedCustomerAccount,
   branchId = paymentHistoryBranchId
 ) => {
   const customerName = customer?.account_name || companyName;
+
 
   if (!customerName || !customer?.id) {
     setCustomerLedger([]);
@@ -1157,6 +1331,7 @@ const loadCustomerCreditSnapshot = async (
     return null;
   }
 
+
   try {
     const selectedSnapshot = await loadReadOnlyCustomerCreditSnapshot({
       customerAccountId: customer.id,
@@ -1164,6 +1339,7 @@ const loadCustomerCreditSnapshot = async (
       customer,
       selectedBranchId: branchId || "",
     });
+
 
     const hiddenCustomerPortalPaymentStatuses = new Set([
       "VOID",
@@ -1181,6 +1357,7 @@ const loadCustomerCreditSnapshot = async (
         .toUpperCase();
       if (type !== "PAYMENT") return false;
 
+
       const source = row.source_record || {};
       const status = String(
         row.status ||
@@ -1192,6 +1369,7 @@ const loadCustomerCreditSnapshot = async (
         .trim()
         .toUpperCase();
 
+
       return (
         row.voided === true ||
         Boolean(row.voided_at || row.reversed_at) ||
@@ -1199,6 +1377,7 @@ const loadCustomerCreditSnapshot = async (
         hiddenCustomerPortalPaymentStatuses.has(status)
       );
     };
+
 
     const historyRows = (selectedSnapshot.transactionHistory || [])
       .filter((row) => !isHiddenVoidedCustomerPayment(row))
@@ -1221,6 +1400,7 @@ const loadCustomerCreditSnapshot = async (
         payment_status: row.status,
       }));
 
+
     setCustomerLedger(historyRows);
     setCustomerOpeningBalance(
       Number(
@@ -1231,6 +1411,7 @@ const loadCustomerCreditSnapshot = async (
     );
     setCustomerCreditSnapshot(selectedSnapshot);
 
+
     setBranchOutstandingRows(
       (selectedSnapshot.branchSummaries || []).map((branch) => ({
         id: branch.branchId || "main-unassigned",
@@ -1238,6 +1419,7 @@ const loadCustomerCreditSnapshot = async (
         outstanding: Number(branch.outstanding || 0),
       }))
     );
+
 
     return {
       ...selectedSnapshot,
@@ -1260,22 +1442,27 @@ const loadCustomerCreditSnapshot = async (
 };
 const fetchCustomerLedger = () => loadCustomerCreditSnapshot(selectedCustomerAccount, paymentHistoryBranchId);
 
+
 useEffect(() => {
   if (selectedCustomerAccount && (page === "paymentHistory" || page === "order")) {
     fetchCustomerLedger();
   }
 }, [page, selectedCustomerAccount?.id, userProfile?.customer_account_id, paymentHistoryBranchId]);
 
+
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const orderSubmissionLockRef = useRef(false);
 
+
   useEffect(() => {
     if (!isSubmittingOrder) return undefined;
+
 
     const warnBeforeLeaving = (event) => {
       event.preventDefault();
       event.returnValue = "";
     };
+
 
     window.addEventListener("beforeunload", warnBeforeLeaving);
     return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
@@ -1283,6 +1470,7 @@ useEffect(() => {
   const [orders, setOrders] = useState([]);
   const [expandedOrders, setExpandedOrders] = useState({});
   const [returnOrder, setReturnOrder] = useState(null);
+
 
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All Products");
@@ -1295,9 +1483,12 @@ useEffect(() => {
   );
   const [productPage, setProductPage] = useState(1);
 
+
   const [selectedImage, setSelectedImage] = useState(null);
 
+
   const [editingId, setEditingId] = useState(null);
+
 
   const [productForm, setProductForm] = useState({
     productCode: "",
@@ -1331,8 +1522,10 @@ useEffect(() => {
     active: true,
   });
 
+
   const getDefaultProductAccounts = async (category) => {
     const selectedCategory = String(category || "").trim();
+
 
     if (!selectedCategory) {
       return {
@@ -1341,12 +1534,14 @@ useEffect(() => {
       };
     }
 
+
     const { data, error } = await supabase
       .from("account_codes")
       .select("account_code, account_type, main_category")
       .eq("active", true)
       .eq("main_category", selectedCategory)
       .in("account_type", ["Sales", "Purchase"]);
+
 
     if (error) {
       console.error("Default account code loading error:", error);
@@ -1356,6 +1551,7 @@ useEffect(() => {
       };
     }
 
+
     const salesAccount = (data || []).find(
       (account) => account.account_type === "Sales"
     );
@@ -1363,11 +1559,13 @@ useEffect(() => {
       (account) => account.account_type === "Purchase"
     );
 
+
     return {
       salesAccount: salesAccount?.account_code || "",
       purchaseAccount: purchaseAccount?.account_code || "",
     };
   };
+
 
   const orderCountry =
   (isAdmin || isSalesRep)
@@ -1376,17 +1574,21 @@ useEffect(() => {
       selectedCustomerAccount?.country ||
       "Wales";
 
+
   const filteredCustomersForSalesRep = useMemo(() => {
     const searchFilteredCustomers = activeCustomerAccounts.filter((customer) =>
       customerMatchesSearch(customer, customerSearchTerm)
     );
 
+
     if (!isSalesRep) return searchFilteredCustomers;
+
 
     return searchFilteredCustomers.filter((customer) =>
       customerMatchesCountry(customer, orderCountry)
     );
   }, [activeCustomerAccounts, customerSearchTerm, isSalesRep, orderCountry]);
+
 
   const filteredBranchesForSelectedCustomer = useMemo(
     () =>
@@ -1398,11 +1600,13 @@ useEffect(() => {
     [selectedCustomerAccount, orderCountry, isSalesRep]
   );
 
+
   const allowedPriceModes = useMemo(() => {
     if (isAdmin || isSalesRep) {
       const customerMode = selectedCustomerAccount
         ? getCustomerPriceModeValue(selectedCustomerAccount, pricingSettings)
         : "";
+
 
       if (String(customerMode).toLowerCase().startsWith("code:")) {
         const { basePriceMode } = getPriceCodeModeParts(customerMode);
@@ -1410,6 +1614,7 @@ useEffect(() => {
           ? ["vat", customerMode]
           : [customerMode, "inc vat"];
       }
+
 
       return ["vat", "inc vat"];
     }
@@ -1434,6 +1639,7 @@ useEffect(() => {
       }
     : null;
 
+
 const getActivePromotionPriceRule = (product) =>
   findActivePromotionPriceRule({
     product,
@@ -1441,6 +1647,7 @@ const getActivePromotionPriceRule = (product) =>
     priceMode,
     audienceType: promotionAudienceType,
   });
+
 
 const getPromotionPrice = (product) =>
   getActivePromotionPrice({
@@ -1450,14 +1657,19 @@ const getPromotionPrice = (product) =>
     audienceType: promotionAudienceType,
   });
 
+
 const getPriceDetails = (product) =>
   getProductPriceDetailsForMode(product, priceMode, orderCountry, pricingSettings);
+
 
 const getPrice = (product) =>
   getProductPriceForMode(product, priceMode, orderCountry, pricingSettings);
 
+
 const normalizeHomepageCategoryType = (value) =>
   String(value || "main_category").trim().toLowerCase();
+
+
 
 
 const HOMEPAGE_PROMOTION_TARGET_SEPARATOR = "::";
@@ -1470,8 +1682,10 @@ const parseHomepagePromotionDestination = (rawValue) => {
   return { type: "promotion_flag", value };
 };
 
+
 const normalizeHomepagePromotionTarget = (value) =>
   String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+
 
 const productMatchesHomepagePromotion = (product, targetValue) => {
   const destination = parseHomepagePromotionDestination(targetValue);
@@ -1480,6 +1694,7 @@ const productMatchesHomepagePromotion = (product, targetValue) => {
   if (destination.type === "brand") return String(product.brand || "") === destination.value;
   if (destination.type === "series") return String(product.series || "") === destination.value;
   if (destination.type === "product") return String(product.id || "") === String(destination.value);
+
 
   const target = normalizeHomepagePromotionTarget(destination.value);
   if (target === "promotion" || target === "is_promotion") return product.isPromotion === true;
@@ -1490,33 +1705,41 @@ const productMatchesHomepagePromotion = (product, targetValue) => {
   return false;
 };
 
+
 const findHomepagePriceProduct = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
+
 
   return products.find((product) => {
     if (!isActiveProduct(product)) return false;
     if (orderCountry === "England" && !product.availableInEngland) return false;
     if (orderCountry === "Wales" && !product.availableInWales) return false;
 
+
     if (categoryType === "sub_category") {
       return product.subCategory === item.targetValue;
     }
+
 
     if (categoryType === "brand") {
       return product.brand === item.targetValue;
     }
 
+
     if (categoryType === "series") {
       return product.series === item.targetValue;
     }
+
 
     if (categoryType === "promotion") {
       return productMatchesHomepagePromotion(product, item.targetValue);
     }
 
+
     return product.category === item.targetValue;
   });
 };
+
 
 const getProductDisplayMessage = (product = {}) => {
   const candidates = [
@@ -1527,6 +1750,7 @@ const getProductDisplayMessage = (product = {}) => {
     ["sub_category", product.subCategory || product.sub_category],
     ["main_category", product.category || product.main_category],
   ];
+
 
   const match = candidates.reduce((found, [targetType, targetValue]) => {
     if (found || !targetValue) return found;
@@ -1539,6 +1763,7 @@ const getProductDisplayMessage = (product = {}) => {
     );
   }, null);
 
+
   return match
     ? {
         text: match.message,
@@ -1547,9 +1772,11 @@ const getProductDisplayMessage = (product = {}) => {
     : null;
 };
 
+
 const getHomepageDisplayPrice = (item) => {
   return getHomepagePriceForMode(item.price, priceMode, pricingSettings);
 };
+
 
 const getHomepageCardProducts = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
@@ -1566,6 +1793,7 @@ const getHomepageCardProducts = (item) => {
   });
 };
 
+
 const homepageCategoryCards = homepageItems.map((item) => {
   const matchingProducts = getHomepageCardProducts(item);
   const brandNames = new Set(
@@ -1577,6 +1805,7 @@ const homepageCategoryCards = homepageItems.map((item) => {
     brandCount: brandNames.size,
   };
 });
+
 
 const messageContextProduct = products.find((product) => {
   if (!isActiveProduct(product)) return false;
@@ -1590,6 +1819,7 @@ const messageSelectedCategory =
     ? selectedCategory
     : messageContextProduct?.category || selectedCategory;
 
+
 const matchingHomepageMessages = getMatchingHomepageMessages(homepageMessages, {
   selectedCategory: messageSelectedCategory,
   selectedSubCategory,
@@ -1599,6 +1829,7 @@ const matchingHomepageMessages = getMatchingHomepageMessages(homepageMessages, {
 const selectedProductNotices = getMatchingHomepageMessages(homepageMessages, {
   selectedProductId: selectedImage?.id,
 }).filter((message) => message.targetType === "product");
+
 
 const recordCustomerPortalView = useCallback(
   (view, portalPage = "order") => {
@@ -1621,6 +1852,7 @@ const recordCustomerPortalView = useCallback(
   [isCustomer]
 );
 
+
 const restoreCustomerHome = useCallback(() => {
   activePortalViewRef.current = "home";
   setShowHomepage(true);
@@ -1638,6 +1870,7 @@ const restoreCustomerHome = useCallback(() => {
   setSelectedImage(null);
   setIsCartEditing(false);
 
+
   if (isCustomer || isSalesRep) {
     const homeHash = getCustomerPortalHash("order", {
       isCustomer,
@@ -1652,6 +1885,7 @@ const restoreCustomerHome = useCallback(() => {
       homeHash || window.location.href
     );
   }
+
 
   requestAnimationFrame(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1674,6 +1908,7 @@ const restoreCustomerHome = useCallback(() => {
   setShowHomepage,
 ]);
 
+
 const goToCustomerHome = useCallback(() => {
   if (
     isCustomer &&
@@ -1686,6 +1921,7 @@ const goToCustomerHome = useCallback(() => {
   restoreCustomerHome();
 }, [isCustomer, restoreCustomerHome]);
 
+
 useEffect(() => {
   if (!isCustomer || portalHistoryInitializedRef.current) return;
   portalHistoryInitializedRef.current = true;
@@ -1696,6 +1932,7 @@ useEffect(() => {
     hasSelectedProduct: Boolean(selectedImage),
   });
 
+
   window.history.replaceState(
     buildCustomerPortalHistoryState(window.history.state, {
       page: "order",
@@ -1704,6 +1941,7 @@ useEffect(() => {
     "",
     initialUrl
   );
+
 
   if (!startsAtHome) {
     activePortalViewRef.current = selectedImage ? "product" : page;
@@ -1718,6 +1956,7 @@ useEffect(() => {
   }
 }, [isCustomer, page, selectedImage, showHomepage]);
 
+
 useEffect(() => {
   if (!isCustomer) return undefined;
   const handlePortalPopState = () => {
@@ -1731,9 +1970,11 @@ useEffect(() => {
     }
   };
 
+
   window.addEventListener("popstate", handlePortalPopState);
   return () => window.removeEventListener("popstate", handlePortalPopState);
 }, [isCustomer, page, restoreCustomerHome, selectedImage, showHomepage]);
+
 
 const updateHomepageSearch = (value) => {
   if (!String(search || "").trim() && String(value || "").trim()) {
@@ -1742,23 +1983,28 @@ const updateHomepageSearch = (value) => {
   setSearch(value);
 };
 
+
 const openProductDetails = (product) => {
   recordCustomerPortalView("product");
   setSelectedImage(product);
 };
+
 
 const openCustomerCart = () => {
   recordCustomerPortalView("cart");
   changeCartEditing(true);
 };
 
+
 const openCustomerCheckout = () => {
   recordCustomerPortalView("checkout");
   changeCartEditing(true);
 };
 
+
 const openHomepageItem = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
+
 
   if (categoryType === "custom_link") {
     const target = String(item.targetValue || "").trim();
@@ -1769,6 +2015,7 @@ const openHomepageItem = (item) => {
     }
     return;
   }
+
 
   recordCustomerPortalView(categoryType);
   setShowHomepage(false);
@@ -1782,12 +2029,14 @@ const openHomepageItem = (item) => {
   setSelectedBrand("All Brands");
   setSelectedSeries("All Series");
 
+
   if (categoryType === "product_set") {
     setSelectedCategory("All Products");
     setSelectedSubCategory("All Sub Categories");
     setHomepageProductSetIds((item.productIds || []).map(String));
     return;
   }
+
 
   if (categoryType === "sub_category") {
     const targetSubCategory = item.targetValue || "All Sub Categories";
@@ -1799,6 +2048,7 @@ const openHomepageItem = (item) => {
     return;
   }
 
+
   if (categoryType === "flavour") {
     setSelectedCategory("All Products");
     setSelectedSubCategory("All Sub Categories");
@@ -1808,6 +2058,7 @@ const openHomepageItem = (item) => {
     return;
   }
 
+
   if (categoryType === "series") {
     setSelectedCategory("All Products");
     setSelectedSubCategory("All Sub Categories");
@@ -1815,6 +2066,7 @@ const openHomepageItem = (item) => {
     setSelectedSeries(item.targetValue || "All Series");
     return;
   }
+
 
   if (categoryType === "promotion") {
     const destination = parseHomepagePromotionDestination(item.targetValue);
@@ -1824,6 +2076,7 @@ const openHomepageItem = (item) => {
     setSelectedSubCategory("All Sub Categories");
     setSelectedBrand("All Brands");
     setSelectedSeries("All Series");
+
 
     if (destination.type === "main_category") {
       setSelectedCategory(destination.value || "All Products");
@@ -1849,9 +2102,11 @@ const openHomepageItem = (item) => {
       return;
     }
 
+
     setHomepagePromotionTarget(destination.value || "");
     return;
   }
+
 
   if (categoryType === "brand") {
     setSelectedCategory("All Products");
@@ -1860,9 +2115,11 @@ const openHomepageItem = (item) => {
     return;
   }
 
+
   setSelectedCategory(item.targetValue || "All Products");
   setSelectedSubCategory("All Sub Categories");
 };
+
 
 const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   const quantity = Math.max(1, Number(nextQty || 1));
@@ -1873,6 +2130,7 @@ const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   const vatAmount = Number(priceDetails.vatAmount || 0);
   const incVatPrice = Number(priceDetails.grossPrice ?? selectedPrice);
   const lineTotal = quantity * selectedPrice;
+
 
   return {
     ...item,
@@ -1901,6 +2159,7 @@ const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   };
 };
 
+
 useEffect(() => {
   setCart((oldCart) => {
     const normalCart = oldCart.filter((item) => !item.isPromotionFree);
@@ -1909,11 +2168,13 @@ useEffect(() => {
     );
     const nextCart = applyCartPromotions(recalculatedCart);
 
+
     return JSON.stringify(nextCart) === JSON.stringify(oldCart)
       ? oldCart
       : nextCart;
   });
 }, [priceMode, orderCountry, pricingSettings, promotionRules, products]);
+
 
 const getCentralCartScope = () => {
   const customerAccountId = selectedCustomerAccount?.id || null;
@@ -1922,11 +2183,14 @@ const getCentralCartScope = () => {
     ? getCustomerBranches(selectedCustomerAccount).filter((branch) => branch.active !== false).length
     : 0;
 
+
   if (!customerAccountId) return null;
   if (branchCount > 0 && !customerBranchId) return null;
 
+
   return { customerAccountId, customerBranchId };
 };
+
 
 const buildCartFromCentralItems = (items = []) => {
   const normalCart = items
@@ -1951,20 +2215,25 @@ const buildCartFromCentralItems = (items = []) => {
     })
     .filter(Boolean);
 
+
   return applyCartPromotions(normalCart);
 };
+
 
 const loadCentralCartForCurrentScope = async ({ seedLocal = false } = {}) => {
   if (!CENTRAL_CART_ENABLED) return null;
   const scope = getCentralCartScope();
   if (!scope) return null;
 
+
   const remote = await loadCentralCart({
     profile: activeUser,
     ...scope,
   });
 
+
   setCentralCartId(remote.cartId);
+
 
   const localNormalCart = cartRef.current.filter((item) => !item.isPromotionFree);
   if (seedLocal && remote.items.length === 0 && localNormalCart.length > 0) {
@@ -1979,9 +2248,11 @@ const loadCentralCartForCurrentScope = async ({ seedLocal = false } = {}) => {
     return loadCentralCartForCurrentScope({ seedLocal: false });
   }
 
+
   setCart(buildCartFromCentralItems(remote.items));
   return remote;
 };
+
 
 const ensureCentralCartForCurrentScope = async () => {
   if (!CENTRAL_CART_ENABLED) return null;
@@ -1990,8 +2261,10 @@ const ensureCentralCartForCurrentScope = async () => {
   return remote?.cartId || null;
 };
 
+
 const queueCentralCartMutation = (mutation) => {
   if (!CENTRAL_CART_ENABLED) return;
+
 
   centralCartMutationQueueRef.current = centralCartMutationQueueRef.current
     .catch(() => undefined)
@@ -2011,6 +2284,7 @@ const queueCentralCartMutation = (mutation) => {
     });
 };
 
+
 useEffect(() => {
   if (!CENTRAL_CART_ENABLED || products.length === 0) return;
   const scope = getCentralCartScope();
@@ -2019,10 +2293,12 @@ useEffect(() => {
     return;
   }
 
+
   const scopeKey = `${scope.customerAccountId}:${scope.customerBranchId || "ACCOUNT"}`;
   if (centralCartLoadedScopeRef.current === scopeKey) return;
   centralCartLoadedScopeRef.current = scopeKey;
   setCentralCartId(null);
+
 
   loadCentralCartForCurrentScope({ seedLocal: true }).catch((error) => {
     centralCartLoadedScopeRef.current = "";
@@ -2031,8 +2307,10 @@ useEffect(() => {
   });
 }, [selectedCustomerAccount?.id, selectedBranch?.id, products.length]);
 
+
 useEffect(() => {
   if (!CENTRAL_CART_ENABLED || !centralCartId) return undefined;
+
 
   const refresh = () => {
     if (document.visibilityState !== "visible" || centralCartMutatingRef.current) return;
@@ -2041,6 +2319,7 @@ useEffect(() => {
     );
   };
 
+
   const timer = window.setInterval(refresh, 15000);
   window.addEventListener("focus", refresh);
   return () => {
@@ -2048,6 +2327,8 @@ useEffect(() => {
     window.removeEventListener("focus", refresh);
   };
 }, [centralCartId, selectedCustomerAccount?.id, selectedBranch?.id, products.length]);
+
+
 
 
 useEffect(() => {
@@ -2070,6 +2351,7 @@ useEffect(() => {
     );
   };
 
+
   window.addEventListener("hashchange", syncPageFromHash);
   const syncTimer = window.setTimeout(syncPageFromHash, 0);
   return () => {
@@ -2078,10 +2360,13 @@ useEffect(() => {
   };
 }, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash, defaultBackOfficePage]);
 
+
 useEffect(() => {
   const roleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash };
 
+
   if (!isCustomerPortalPageAllowed(page, roleState)) return;
+
 
   const nextHash = getCustomerPortalHash(page, roleState);
   if (nextHash && window.location.hash !== nextHash) {
@@ -2091,16 +2376,21 @@ useEffect(() => {
 
 
 
+
+
+
   useEffect(() => {
     if (!supabase) {
       setProductError("Supabase is not configured.");
       return;
     }
 
+
   
     fetchPricingSettings();
     refreshPromotionRules();
     refreshProductDisplayMessages();
+
 
  if (
   isAdmin ||
@@ -2120,6 +2410,7 @@ useEffect(() => {
 }
   }, []);
 
+
   useEffect(() => {
     async function loadCustomerAccounts() {
       try {
@@ -2130,22 +2421,27 @@ useEffect(() => {
       }
     }
 
+
     loadCustomerAccounts();
   }, [isCustomer]);
+
 
   useEffect(() => {
     if (!isCustomer) return;
     if (!userProfile?.customer_account_id) return;
     if (!customerAccounts.length) return;
 
+
     const customer = customerAccounts.find(
       (c) => String(c.id) === String(userProfile.customer_account_id)
     );
+
 
     if (!customer) {
       console.error("Linked customer account not found");
       return;
     }
+
 
     setSelectedCustomerId(customer.id);
     setSelectedCustomerAccount(customer);
@@ -2154,8 +2450,10 @@ useEffect(() => {
     setPriceMode(getCustomerPriceModeValue(customer, pricingSettings));
   }, [isCustomer, userProfile?.customer_account_id, customerAccounts, pricingSettings.price_codes]);
 
+
   useEffect(() => {
     if (!selectedCustomerAccount) return;
+
 
     if (filteredBranchesForSelectedCustomer.length === 1) {
       setSelectedBranchId(filteredBranchesForSelectedCustomer[0].id);
@@ -2164,8 +2462,10 @@ useEffect(() => {
     }
   }, [selectedCustomerAccount, filteredBranchesForSelectedCustomer]);
 
+
   useEffect(() => {
     if (!isSalesRep) return;
+
 
     if (
       selectedCustomerAccount &&
@@ -2184,6 +2484,7 @@ useEffect(() => {
       return;
     }
 
+
     if (
       selectedBranch &&
       normalizeCountry(selectedBranch.country) !== normalizeCountry(orderCountry)
@@ -2200,19 +2501,23 @@ useEffect(() => {
     orderSubmissionStorageKey,
   ]);
 
+
   const fetchProducts = async () => {
     setProductError("");
     setProductsLoading(true);
+
 
     try {
       const data = await getProducts();
       const productIds = (data || []).map((product) => product.id).filter(Boolean);
       let exactCodePricesByProduct = {};
 
+
       if (productIds.length) {
         const exactCodeRows = await getProductPriceCodeRows(productIds);
         exactCodePricesByProduct = buildProductPriceCodeMap(exactCodeRows);
       }
+
 
       const productsWithExactCodePrices = (data || []).map((product) => ({
         ...product,
@@ -2220,10 +2525,12 @@ useEffect(() => {
         price_code_prices: exactCodePricesByProduct[product.id] || product.price_code_prices || {},
       }));
 
+
       const productsForCountry = applyLocationStockToProducts(
         productsWithExactCodePrices,
         orderCountry
       );
+
 
       setProducts((productsForCountry || []).filter((p) => p.name));
     } catch (error) {
@@ -2231,11 +2538,14 @@ useEffect(() => {
       setProductError(error.message);
     }
 
+
     setProductsLoading(false);
   };
 
+
   const fetchHomepageContent = async () => {
     setHomepageLoading(true);
+
 
     const [itemsResult, messagesResult] = await Promise.allSettled([
       getHomepageItems(),
@@ -2254,11 +2564,14 @@ useEffect(() => {
       setHomepageMessages([]);
     }
 
+
     setHomepageLoading(false);
   };
 
+
   const fetchHomepageSalesAnalytics = async () => {
     const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
 
     try {
       const { data, error } = await supabase
@@ -2281,22 +2594,28 @@ useEffect(() => {
         .order("created_at", { ascending: false })
         .limit(2000);
 
+
       if (error) throw error;
+
 
       const metrics = {};
       const now = Date.now();
       const currentCountry = normalizeCountry(orderCountry);
 
+
       for (const order of data || []) {
         if (!isDeliveredInvoiceStatus(order.status)) continue;
 
+
         const soldCountry = normalizeCountry(order.customer_country || "");
         if (currentCountry && soldCountry && soldCountry !== currentCountry) continue;
+
 
         const createdAt = new Date(order.created_at || 0).getTime();
         const ageDays = Number.isFinite(createdAt)
           ? Math.max(0, (now - createdAt) / (24 * 60 * 60 * 1000))
           : 90;
+
 
         for (const item of order.order_items || []) {
           const aliases = [
@@ -2305,6 +2624,7 @@ useEffect(() => {
             item.product_name ? `name:${String(item.product_name).trim().toLowerCase()}` : "",
           ].filter(Boolean);
           if (!aliases.length) continue;
+
 
           let metric = aliases.map((key) => metrics[key]).find(Boolean);
           if (!metric) {
@@ -2318,6 +2638,7 @@ useEffect(() => {
           }
           aliases.forEach((key) => { metrics[key] = metric; });
 
+
           const qty = Math.max(0, Number(item.qty || 0));
           if (!qty) continue;
           metric.units90 += qty;
@@ -2328,12 +2649,14 @@ useEffect(() => {
         }
       }
 
+
       Object.values(metrics).forEach((metric) => {
         metric.velocityScore =
           Number(metric.units90 || 0) +
           Number(metric.units30 || 0) * 1.5 +
           Number(metric.units7 || 0) * 3;
       });
+
 
       setHomepageSalesMetrics(metrics);
     } catch (error) {
@@ -2342,6 +2665,7 @@ useEffect(() => {
     }
   };
 
+
   useEffect(() => {
     if (!supabase) return;
     // Load the visible ordering experience first. Products were previously
@@ -2349,8 +2673,10 @@ useEffect(() => {
     void Promise.all([fetchProducts(), fetchHomepageContent()]);
   }, [orderCountry]);
 
+
   useEffect(() => {
     if (!supabase || (!isCustomer && !isSalesRep)) return undefined;
+
 
     // Sales analytics power the homepage ranking carousels, but they are not
     // required for the first paint. Defer the 90-day order scan until the
@@ -2359,14 +2685,17 @@ useEffect(() => {
       void fetchHomepageSalesAnalytics();
     };
 
+
     if (typeof window.requestIdleCallback === "function") {
       const idleId = window.requestIdleCallback(loadAnalytics, { timeout: 1500 });
       return () => window.cancelIdleCallback?.(idleId);
     }
 
+
     const timerId = window.setTimeout(loadAnalytics, 250);
     return () => window.clearTimeout(timerId);
   }, [orderCountry, isCustomer, isSalesRep]);
+
 
   const fetchPricingSettings = async () => {
     const { data, error } = await supabase
@@ -2375,12 +2704,14 @@ useEffect(() => {
       .eq("id", 1)
       .single();
 
+
     let priceCodes = [];
     try {
       priceCodes = await getCustomerPriceCodes();
     } catch (priceCodeError) {
       console.warn("Customer price codes unavailable:", priceCodeError?.message || priceCodeError);
     }
+
 
     setPricingSettings({
       ...(error || !data ? {} : data),
@@ -2389,6 +2720,7 @@ useEffect(() => {
       price_codes: priceCodes || [],
     });
   };
+
 
 const fetchOrders = async ({ throwOnError = false } = {}) => {
   try {
@@ -2402,12 +2734,15 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       .order("created_at", { ascending: false })
       .limit(50);
 
+
     const [{ data, error }, processingQueueRaw] = await Promise.all([
       ordersPromise,
       processingQueuePromise,
     ]);
 
+
     if (error) throw error;
+
 
     const mappedOrders = (data || []).map((order) => ({
       dbId: order.id,
@@ -2456,6 +2791,7 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       picking_locked_by_name: order.picking_locked_by_name || null,
       picking_locked_at: order.picking_locked_at || null,
 
+
       driverName: order.driver_name || "",
       deliveredAt: order.delivered_at || "",
       paymentType: order.payment_type || "",
@@ -2474,6 +2810,7 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       payment_applies_to: order.payment_applies_to || "",
       paidBy: order.paid_by || "",
       receivedBy: order.received_by || "",
+
 
       items: (order.order_items || []).map((item) => ({
         dbId: item.id,
@@ -2522,6 +2859,7 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       })),
     }));
 
+
     const processingQueueOrders = (processingQueueRaw || []).map((order) => ({
       ...order,
       createdAt: order.createdAt
@@ -2529,12 +2867,14 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
         : order.created_at,
     }));
 
+
     setOrders(mergeOperationalOrders(mappedOrders, processingQueueOrders));
   } catch (error) {
     console.error("Orders loading error:", error);
     if (throwOnError) throw error;
   }
 };
+
 
 const openBackOffice = async () => {
   console.info("[BackOfficeNavigation] click", {
@@ -2544,7 +2884,9 @@ const openBackOffice = async () => {
     active: activeUser?.active !== false,
   });
 
+
   const brandPartnerAdminDuty = isBrandPartner && activeDuty === "admin";
+
 
   if (!brandPartnerAdminDuty && !isAdminStaffRole(activeUser?.role || activeUser?.access_level)) {
     console.warn("[BackOfficeNavigation] access denied", {
@@ -2555,9 +2897,11 @@ const openBackOffice = async () => {
     return;
   }
 
+
   try {
     const loginUserId = activeUser?.login_user_id || activeUser?.id;
     if (!loginUserId) throw new Error("The authenticated staff login ID is missing.");
+
 
     const loginResult = await supabase
       .from("login_users")
@@ -2566,11 +2910,13 @@ const openBackOffice = async () => {
       .eq("active", true)
       .maybeSingle();
 
+
     if (loginResult.error) throw loginResult.error;
     if (!loginResult.data) throw new Error("The staff login is inactive or unavailable.");
     if (!loginResult.data.staff_id) {
       throw new Error("This staff login is not linked to an individual staff record.");
     }
+
 
     const staffResult = await supabase
       .from("staff_users")
@@ -2579,9 +2925,11 @@ const openBackOffice = async () => {
       .eq("active", true)
       .maybeSingle();
 
+
     if (staffResult.error) throw staffResult.error;
     const staffProfile = buildLegacyStaffProfile(loginResult.data, staffResult.data);
     const access = resolveBackOfficeAccess(staffProfile);
+
 
     if (!access.allowed && !brandPartnerAdminDuty) {
       console.warn("[BackOfficeNavigation] access denied", {
@@ -2594,11 +2942,13 @@ const openBackOffice = async () => {
       return;
     }
 
+
     onProfileRefresh?.(
       mergeAuthenticatedProfile(activeUser, staffProfile)
     );
     window.history.replaceState(null, "", "#admin");
     setPage("orders");
+
 
     try {
       await fetchOrders({ throwOnError: true });
@@ -2623,6 +2973,7 @@ const openBackOffice = async () => {
   }
 };
 
+
   const changeOrderStatus = async (
     orderNumber,
     status,
@@ -2633,15 +2984,21 @@ const openBackOffice = async () => {
         (order) => String(order.orderId) === String(orderNumber)
       );
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> d3f031c (WIP wallet and warehouse development)
       // Status movement is status-only. Warehouse/POS quantities and supply
       // decisions are final and must survive backward/forward workflow moves.
       // The only later quantity/supply changes are explicit Warehouse
       // Pre-Order Supply actions through their dedicated item update functions.
       const updatedOrder = await updateOrderStatus(orderNumber, status);
 
+
       if (!isActivePreOrderSupplyOrder({ status })) {
         clearPendingPreOrderActionsForOrder(orderNumber);
       }
+
 
       if (shouldCreateInvoiceForStatus(status)) {
         await createOrUpdateInvoiceForDeliveredOrder({
@@ -2663,6 +3020,7 @@ const openBackOffice = async () => {
         });
       }
 
+
       setOrders((oldOrders) =>
         oldOrders.map((order) =>
           order.orderId === orderNumber
@@ -2675,6 +3033,7 @@ const openBackOffice = async () => {
         )
       );
 
+
       if (shouldCreateInvoiceForStatus(status) && page === "paymentHistory") {
         await fetchCustomerLedger();
       }
@@ -2683,6 +3042,7 @@ const openBackOffice = async () => {
       alert("Could not update order status.");
     }
   };
+
 
   const updateOrderExtraFields = async (orderNumber, updates) => {
     try {
@@ -2695,6 +3055,7 @@ const openBackOffice = async () => {
     }
   };
 
+
   const effectiveSelectedCategory =
     selectedCategory !== "All Products"
       ? selectedCategory
@@ -2702,6 +3063,7 @@ const openBackOffice = async () => {
         ? products.find((product) => isActiveProduct(product) && product.subCategory === selectedSubCategory)?.category ||
           "All Products"
         : "All Products";
+
 
   const subCategories = [
   "All Sub Categories",
@@ -2717,6 +3079,7 @@ const openBackOffice = async () => {
       .filter(Boolean)
   ),
 ];
+
 
 const brands = [
   "All Brands",
@@ -2734,6 +3097,7 @@ const brands = [
       .filter(Boolean)
   ),
 ];
+
 
 const seriesList = [
   "All Series",
@@ -2754,8 +3118,10 @@ const seriesList = [
   ),
 ];
 
+
 const filteredProducts = useMemo(() => {
   const keyword = search.trim().toLowerCase();
+
 
   return sortOrderProductsByAvailability(
     products.filter((product) => {
@@ -2766,10 +3132,12 @@ const filteredProducts = useMemo(() => {
         return false;
       }
 
+
       const productCategory = String(product.category || "").trim();
       const productSubCategory = String(product.subCategory || "").trim();
       const productBrand = String(product.brand || "").trim();
       const productSeries = String(product.series || "").trim();
+
 
       return (
         isActiveProduct(product) &&
@@ -2818,25 +3186,30 @@ const filteredProducts = useMemo(() => {
   priceMode,
 ]);
 
+
 const totalProductPages = Math.max(
   1,
   Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE)
 );
+
 
 const visibleProducts = filteredProducts.slice(
   (productPage - 1) * PRODUCTS_PER_PAGE,
   productPage * PRODUCTS_PER_PAGE
 );
 
+
 const homepageSearchKeyword = search.trim().toLowerCase();
 const homepageSearchProducts = useMemo(() => {
   if (!homepageSearchKeyword) return [];
+
 
   return sortOrderProductsByAvailability(
     products.filter((product) => {
       if (!isActiveProduct(product)) return false;
       if (orderCountry === "England" && !product.availableInEngland) return false;
       if (orderCountry === "Wales" && !product.availableInWales) return false;
+
 
       return [
         product.name,
@@ -2857,6 +3230,7 @@ const homepageVisibleSearchProducts = homepageSearchProducts.slice(
   productPage * PRODUCTS_PER_PAGE
 );
 
+
 useEffect(() => {
   setProductPage(1);
 }, [
@@ -2868,31 +3242,39 @@ useEffect(() => {
   selectedSeries,
 ]);
 
+
 const getHomepageSubtitle = (item) => {
   switch (String(item.description || "").trim().toLowerCase()) {
     case "big puff pre-filled kits-vape":
       return "Premium Disposable Vape Kits";
 
+
     case "pre-filled pod kits - refill":
       return "Replacement Pod Systems";
+
 
     case "smoking accessories":
       return "Smoking & Rolling Accessories";
 
+
     case "candy with fun toys assorted":
       return "Kids Candy & Novelty Toys";
 
+
     case "household items - cleaning, shoe accessories, house essentials":
       return "Cleaning & Home Essentials";
+
 
     default:
       return "Browse our latest products";
   }
 };
 
+
   const rememberCartProduct = (productId) => {
     lastCartProductIdRef.current = String(productId || "");
   };
+
 
   const returnToProductBrowsing = () => {
     const productId = lastCartProductIdRef.current;
@@ -2900,11 +3282,13 @@ const getHomepageSubtitle = (item) => {
       (element) => String(element.dataset.productId || "") === productId
     );
 
+
     if (!productCard) {
       window.scrollTo({ top: browseScrollPositionRef.current, behavior: "smooth" });
       setCartNotice("Cart updated");
       return;
     }
+
 
     productCard.scrollIntoView({ behavior: "smooth", block: "start" });
     productCard.classList.add("ring-4", "ring-orange-400", "ring-offset-2");
@@ -2915,6 +3299,7 @@ const getHomepageSubtitle = (item) => {
       productCard.classList.remove("ring-4", "ring-orange-400", "ring-offset-2");
     }, 1800);
   };
+
 
   const changeCartEditing = (nextEditing) => {
     if (nextEditing) {
@@ -2930,9 +3315,11 @@ const getHomepageSubtitle = (item) => {
       return;
     }
 
+
     setIsCartEditing(false);
     requestAnimationFrame(returnToProductBrowsing);
   };
+
 
   const addToCart = (product, qty = 1) => {
   const quantity = Math.max(1, Number(qty || 1));
@@ -2940,12 +3327,15 @@ const getHomepageSubtitle = (item) => {
   browseScrollPositionRef.current = window.scrollY;
   setCartNotice("");
 
+
   setCart((oldCart) => {
     const normalCart = oldCart.filter((item) => !item.isPromotionFree);
     const found = normalCart.find((item) => item.id === product.id);
 
+
     if (found) {
       const newQty = found.qty + quantity;
+
 
       const nextCart = normalCart.map((item) =>
         item.id === product.id
@@ -2962,8 +3352,10 @@ const getHomepageSubtitle = (item) => {
           : item
       );
 
+
       return applyCartPromotions(nextCart);
     }
+
 
     return applyCartPromotions([
       ...normalCart,
@@ -2980,6 +3372,7 @@ const getHomepageSubtitle = (item) => {
     ]);
   });
 
+
   queueCentralCartMutation((cartId) =>
     incrementCentralCartItem({
       profile: activeUser,
@@ -2989,6 +3382,7 @@ const getHomepageSubtitle = (item) => {
     })
   );
 };
+
 
   const increaseQty = (id) => {
     setCart((oldCart) =>
@@ -3019,6 +3413,7 @@ const getHomepageSubtitle = (item) => {
       })
     );
   };
+
 
   const decreaseQty = (id) => {
     setCart((oldCart) =>
@@ -3051,8 +3446,10 @@ const getHomepageSubtitle = (item) => {
     );
   };
 
+
   const changeQty = (id, value) => {
     const quantity = Math.max(1, Number(value || 1));
+
 
     setCart((oldCart) =>
       applyCartPromotions(
@@ -3083,6 +3480,7 @@ const getHomepageSubtitle = (item) => {
     );
   };
 
+
   const removeItem = (id) => {
     setCart((oldCart) =>
       applyCartPromotions(
@@ -3098,10 +3496,12 @@ const getHomepageSubtitle = (item) => {
     );
   };
 
+
   const promotionDiscountAmount = getPromotionDiscountAmount(cart);
   const effectiveOrderDiscountPercent = canManualCheckoutDiscount
     ? Number(orderDiscountPercent || 0)
     : 0;
+
 
   const cartTotals = calculateCartTotals(cart, {
     priceMode,
@@ -3114,6 +3514,7 @@ const getHomepageSubtitle = (item) => {
     ? orderPaymentChoice === "cash_now" ||
       (orderPaymentChoice === "bank_transfer_now" && Boolean(orderBankProofFile))
     : orderPaymentChoice === "no_payment";
+
 
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
@@ -3131,11 +3532,13 @@ const getPaymentMetadata = (row = {}) => {
   return {};
 };
 
+
 const normalizeCustomerCollectionType = (value) => {
   const normalized = String(value || "")
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "_");
+
 
   if (["OUTSTANDING_PAYMENT", "PREVIOUS_BALANCE", "PREVIOUS_CREDIT_BALANCE"].includes(normalized)) {
     return "OUTSTANDING_PAYMENT";
@@ -3149,6 +3552,7 @@ const normalizeCustomerCollectionType = (value) => {
   return normalized || "TODAY_INVOICE";
 };
 
+
 const getEffectiveCustomerCollectionType = (row = {}) => {
   const metadata = getPaymentMetadata(row);
   const collectionType = normalizeCustomerCollectionType(
@@ -3161,7 +3565,9 @@ const getEffectiveCustomerCollectionType = (row = {}) => {
       metadata.payment_applies_to
   );
 
+
   if (collectionType !== "UNALLOCATED_PAYMENT") return collectionType;
+
 
   return normalizeCustomerCollectionType(
     row.resolved_collection_type ||
@@ -3169,6 +3575,7 @@ const getEffectiveCustomerCollectionType = (row = {}) => {
       metadata.resolved_collection_type
   );
 };
+
 
 const getCustomerCollectionLabel = (row = {}) => {
   switch (getEffectiveCustomerCollectionType(row)) {
@@ -3183,10 +3590,12 @@ const getCustomerCollectionLabel = (row = {}) => {
   }
 };
 
+
 const sortCustomerPaymentHistory = (rows = []) => {
   const originalPosition = new Map(
     rows.map((row, index) => [row, index])
   );
+
 
   return [...rows].sort((a, b) => {
     const aDate = new Date(
@@ -3208,11 +3617,14 @@ const sortCustomerPaymentHistory = (rows = []) => {
         0
     ).getTime();
 
+
     if (aDate !== bDate) return bDate - aDate;
+
 
     return originalPosition.get(a) - originalPosition.get(b);
   });
 };
+
 
 const displayedCustomerLedgerRowsWithBalance = sortCustomerPaymentHistory(
   customerLedger
@@ -3222,6 +3634,7 @@ const displayedCustomerLedgerRowsWithBalance = sortCustomerPaymentHistory(
   credit: Number(row.credit || 0),
   balance: Number(row.running_balance || 0),
 }));
+
 
 const customerCreditSummary = paymentHistoryBranchId
   ? customerCreditSnapshot?.branchSummary || {}
@@ -3234,33 +3647,41 @@ const isFinalOrderStatus = (status) =>
     String(status || "").trim().toLowerCase()
   );
 
+
 const shouldCreateInvoiceForStatus = (status) =>
   ["delivered", "confirmed", "delivery confirmed"].includes(
     String(status || "").trim().toLowerCase()
   );
+
 
 const selectedCustomerAccountId = String(selectedCustomerAccount?.id || "");
 const selectedCustomerName = String(
   selectedCustomerAccount?.account_name || companyName || ""
 ).trim().toLowerCase();
 
+
 const completedCustomerOrdersFromOrders = orders.filter((order) => {
   if (!isFinalOrderStatus(order.status)) return false;
+
 
   const orderCustomerAccountId = String(
     order.customerAccountId || order.customer_account_id || ""
   );
 
+
   if (selectedCustomerAccountId && orderCustomerAccountId) {
     return orderCustomerAccountId === selectedCustomerAccountId;
   }
+
 
   const orderCustomerName = String(
     order.companyName || order.customerName || ""
   ).trim().toLowerCase();
 
+
   return Boolean(selectedCustomerName && orderCustomerName === selectedCustomerName);
 });
+
 
 const completedCustomerOrders = [
   ...completedCustomerOrdersFromOrders,
@@ -3280,20 +3701,25 @@ const completedCustomerOrders = [
     new Date(a.deliveredAt || a.createdAt || 0).getTime()
 );
 
+
 const getInvoiceOrderForLedgerRow = (row = {}) => {
   if (row.__order) return row.__order;
 
+
   const referenceNo = String(row.reference_no || row.order_number || "").trim();
   if (!referenceNo) return null;
+
 
   return completedCustomerOrders.find(
     (order) => String(order.orderId || "").trim() === referenceNo
   );
 };
 
+
 const getInvoiceLedgerRowForOrder = (order = {}) => {
   const orderReference = String(order.orderId || order.order_number || "").trim();
   if (!orderReference) return null;
+
 
   return allocatedCustomerLedger.find((row) => {
     const type = String(row.entry_type || row.transaction_type || "")
@@ -3303,6 +3729,7 @@ const getInvoiceLedgerRowForOrder = (order = {}) => {
     return type === "INVOICE" && reference === orderReference;
   });
 };
+
 
 const getCustomerInvoiceStatus = (row = {}) => {
   const status = normalizeInvoicePaymentStatus(
@@ -3314,12 +3741,14 @@ const getCustomerInvoiceStatus = (row = {}) => {
       ""
   );
 
+
   if (status === "PAID" || status === "UNPAID") {
     return status;
   }
   if (status === "PART PAID" || status === "PARTIALLY PAID") {
     return "PART PAID";
   }
+
 
   const invoiceTotal = Number(
     row.invoice_total ||
@@ -3331,12 +3760,15 @@ const getCustomerInvoiceStatus = (row = {}) => {
   );
   const paidAmount = Number(row.paid_amount || row.paidAmount || 0);
 
+
   if (paidAmount > 0 && invoiceTotal > 0 && paidAmount < invoiceTotal) {
     return "PART PAID";
   }
 
+
   return paidAmount >= invoiceTotal && invoiceTotal > 0 ? "PAID" : "UNPAID";
 };
+
 
   const toggleOrderExpanded = (orderId) => {
     setExpandedOrders((old) => ({
@@ -3345,8 +3777,10 @@ const getCustomerInvoiceStatus = (row = {}) => {
     }));
   };
 
+
   const saveSalesRepCollection = async () => {
   if (savingSalesPayment) return;
+
 
   const customer = selectedSalesPaymentCustomer;
   const salesCustomerBranches = selectedSalesPaymentBranches;
@@ -3360,25 +3794,30 @@ const getCustomerInvoiceStatus = (row = {}) => {
       )
     : Number(salesOutstandingSnapshot.totalOutstanding || 0);
 
+
   if (!customer) {
     alert("Please select customer.");
     return;
   }
+
 
   if (salesCustomerBranches.length > 0 && !selectedSalesBranch) {
     alert("Please select branch / shop.");
     return;
   }
 
+
   if (!(paymentAmount > 0)) {
     alert("Please enter amount.");
     return;
   }
 
+
   if (!salesPaymentForm.whoPaid.trim()) {
     alert("Please enter who paid.");
     return;
   }
+
 
   if (
     !window.confirm(
@@ -3388,7 +3827,9 @@ const getCustomerInvoiceStatus = (row = {}) => {
     return;
   }
 
+
   setSavingSalesPayment(true);
+
 
   try {
     const now = new Date();
@@ -3398,19 +3839,23 @@ const getCustomerInvoiceStatus = (row = {}) => {
       .toISOString()
       .split("T")[0];
 
+
     const selectedCollectionDate = String(
       salesPaymentForm.collectionDate || ""
     ).trim();
+
 
     const paymentDate =
       !selectedCollectionDate || selectedCollectionDate === localToday
         ? now.toISOString()
         : `${selectedCollectionDate}T12:00:00`;
 
+
     const unallocatedOutstanding = Math.max(
       0,
       selectedBranchOutstanding - paymentAmount
     );
+
 
     await postCanonicalCustomerPayment({
       customerAccountId: customer.id,
@@ -3458,12 +3903,15 @@ const getCustomerInvoiceStatus = (row = {}) => {
       allocations: [],
     });
 
+
     const { outstandingState } = await loadSalesRepOutstanding({
       customer,
       selectedBranchId: selectedSalesBranch?.id || "",
     });
 
+
     setSalesOutstandingSnapshot(outstandingState);
+
 
     if (
       String(selectedCustomerAccount?.id || "") ===
@@ -3472,7 +3920,9 @@ const getCustomerInvoiceStatus = (row = {}) => {
       await loadCustomerCreditSnapshot(selectedCustomerAccount);
     }
 
+
     alert("Collection saved successfully.");
+
 
     setSalesPaymentForm({
       customerId: customer.id,
@@ -3491,15 +3941,19 @@ const getCustomerInvoiceStatus = (row = {}) => {
   }
 };
 
+
 const submitOrder = async () => {
   if (isSubmittingOrder || orderSubmissionLockRef.current) return;
+
 
   if (!selectedCustomerAccount) {
     alert("Please select customer account.");
     return;
   }
 
+
   const branches = selectedCustomerAccount.customer_branches || [];
+
 
   if (branches.length > 0 && !selectedBranch) {
     alert("Please select delivery branch / shop.");
@@ -3507,10 +3961,12 @@ const submitOrder = async () => {
   }
   const paidCartForOrder = cart.filter((item) => !item.isPromotionFree);
 
+
   if (paidCartForOrder.length === 0) {
     alert("Please add at least one product.");
     return;
   }
+
 
   if (!orderPaymentChoiceValid) {
     alert(
@@ -3521,6 +3977,7 @@ const submitOrder = async () => {
     return;
   }
 
+
   const belowCostSpecialLines = paidCartForOrder.filter((item) => {
     if (!item.specialPriceApplied && !item.special_price_applied) return false;
     const unitPrice = Number(
@@ -3529,6 +3986,7 @@ const submitOrder = async () => {
     const costPrice = Number(item.costPrice ?? item.cost_price ?? 0);
     return costPrice > 0 && unitPrice > 0 && unitPrice < costPrice;
   });
+
 
   if (belowCostSpecialLines.length > 0) {
     const message =
@@ -3543,15 +4001,18 @@ const submitOrder = async () => {
         })
         .join("\n");
 
+
     if (!isNisstajAdmin) {
       alert(`${message}\n\nOnly nisstaj_admin can approve below-cost special pricing.`);
       return;
     }
 
+
     if (!window.confirm(`${message}\n\nApprove below-cost special pricing?`)) {
       return;
     }
   }
+
 
   let checkoutBankProofDataUrl = "";
   if (salesCheckoutPaymentRequired && orderPaymentChoice === "bank_transfer_now") {
@@ -3563,20 +4024,24 @@ const submitOrder = async () => {
     }
   }
 
+
   orderSubmissionLockRef.current = true;
   setIsSubmittingOrder(true);
   setSubmissionFeedback("sending");
   let requiresReauthentication = false;
   let submissionOrderNumber = "";
 
+
   try {
     await refreshSupabaseSessionIfNeeded();
+
 
   const accountStatus = getCustomerStatusLabel(
     selectedCustomerAccount?.account_status ||
       selectedCustomerAccount?.status ||
       "Active"
   );
+
 
   const creditSnapshot = await loadCustomerCreditSnapshot(selectedCustomerAccount);
   if (!creditSnapshot) {
@@ -3591,8 +4056,10 @@ const submitOrder = async () => {
   const creditLimit = creditSummary.creditLimit;
   const outstandingBalance = creditSummary.outstanding;
 
+
   const orderTotal = roundMoney(finalTotal || 0);
   const projectedBalance = outstandingBalance + orderTotal;
+
 
   if (accountStatus === "On Hold") {
     setSubmissionFeedback("");
@@ -3600,11 +4067,13 @@ const submitOrder = async () => {
     return;
   }
 
+
   if (accountStatus === "Inactive") {
     setSubmissionFeedback("");
     alert("Customer account is Inactive. Please contact Accounts.");
     return;
   }
+
 
   if (!salesCheckoutPaymentRequired && creditLimit > 0 && projectedBalance > creditLimit) {
     setSubmissionFeedback("");
@@ -3618,11 +4087,13 @@ const submitOrder = async () => {
     return;
   }
 
+
     const submissionFingerprint = JSON.stringify({
       customerAccountId: selectedCustomerAccount.id,
       customerBranchId: selectedBranch?.id || null,
       priceMode,
       paymentChoice: orderPaymentChoice,
+      walletUseRequested: Boolean(walletUseRequested),
       total: orderTotal,
       discountPercent: Number(effectiveOrderDiscountPercent || 0),
       cart: paidCartForOrder.map((item) => ({
@@ -3633,21 +4104,25 @@ const submitOrder = async () => {
     });
     let savedSubmission = null;
 
+
     try {
       savedSubmission = JSON.parse(localStorage.getItem(orderSubmissionStorageKey) || "null");
     } catch {
       savedSubmission = null;
     }
 
+
     submissionOrderNumber =
       savedSubmission?.fingerprint === submissionFingerprint && savedSubmission?.orderNumber
         ? savedSubmission.orderNumber
         : `ORD-${Date.now()}-${globalThis.crypto?.randomUUID?.().slice(0, 8) || Math.random().toString(36).slice(2, 10)}`;
 
+
     localStorage.setItem(
       orderSubmissionStorageKey,
       JSON.stringify({ orderNumber: submissionOrderNumber, fingerprint: submissionFingerprint })
     );
+
 
     const orderRequest = buildCustomerOrderRequest({
       orderNumber: submissionOrderNumber,
@@ -3662,12 +4137,17 @@ const submitOrder = async () => {
       userProfile,
       orderCountry,
       creditLimit,
+      walletUseRequested: Number(customerWallet.balance || 0) > 0
+        ? walletUseRequested
+        : false,
     });
+
 
     let createdOrder;
     const submittingCentralCartId = CENTRAL_CART_ENABLED && !salesRouteMode
       ? await ensureCentralCartForCurrentScope()
       : null;
+
 
     if (submittingCentralCartId) {
       await centralCartMutationQueueRef.current.catch(() => undefined);
@@ -3677,6 +4157,7 @@ const submitOrder = async () => {
         orderNumber: submissionOrderNumber,
       });
     }
+
 
     try {
       createdOrder = await createCustomerOrderWithSessionRetry({
@@ -3708,7 +4189,9 @@ const submitOrder = async () => {
       throw error;
     }
 
+
     const { orderNumber } = createdOrder;
+
 
     if (salesCheckoutPaymentRequired) {
       const checkoutPaymentMethod =
@@ -3753,6 +4236,7 @@ const submitOrder = async () => {
       }
     }
 
+
     if (submittingCentralCartId) {
       await finalizeCentralCartSubmission({
         profile: activeUser,
@@ -3767,12 +4251,15 @@ const submitOrder = async () => {
       centralCartLoadedScopeRef.current = "";
     }
 
+
 const newOrder = {
     orderId: orderNumber,
     customerName: selectedCustomerAccount.account_name,
     companyName: selectedCustomerAccount.account_name,
 
+
     branchName: selectedBranch?.branch_name || "",
+
 
    deliveryAddress: selectedBranch?.delivery_address || "",
    priceMode,
@@ -3787,10 +4274,14 @@ const newOrder = {
      ? orderPaymentChoice === "bank_transfer_now" ? "PENDING_VERIFICATION" : "PAID"
      : "UNPAID",
    paymentChoice: orderPaymentChoice,
+   walletUseRequested: Number(customerWallet.balance || 0) > 0 ? Boolean(walletUseRequested) : false,
+   wallet_use_requested: Number(customerWallet.balance || 0) > 0 ? Boolean(walletUseRequested) : false,
    items: paidCartForOrder,
     };
 
+
     setOrders((oldOrders) => [newOrder, ...oldOrders]);
+
 
     if (salesRouteMode) {
       await recordSalesRouteVisit({
@@ -3806,15 +4297,32 @@ const newOrder = {
       });
     }
 
+
     localStorage.removeItem(cartStorageKey);
     localStorage.removeItem(orderSubmissionStorageKey);
+
+
+    const submittedWalletReservation = walletUseRequested
+      ? Math.min(Math.max(Number(customerWallet.balance || 0), 0), Math.max(Number(orderTotal || 0), 0))
+      : 0;
+
+    if (submittedWalletReservation > 0) {
+      setCustomerWallet((current) => ({
+        ...current,
+        balance: Math.max(0, Number(current.balance || 0) - submittedWalletReservation),
+        loading: false,
+        error: "",
+      }));
+    }
 
     setCart([]);
     setIsCartEditing(false);
     setOrderPaymentChoice(salesCheckoutPaymentRequired ? "cash_now" : "no_payment");
+    setWalletUseRequested(false);
     setOrderBankProofFile(null);
     setOrderPaymentIntentId(createPaymentIntentId());
     setOrderDiscountPercent(0);
+
 
     if (!isCustomer) {
       if (salesRouteMode) {
@@ -3829,20 +4337,31 @@ const newOrder = {
       }
     }
 
+
     await fetchProducts();
+    if (isCustomer) {
+      await loadCustomerWalletBalance();
+    }
+
 
     setSubmissionFeedback("success");
+
 
     alert(
   `Ã¢Å“â€¦ Order Submitted Successfully
 
+
 Order Number: ${formatDisplayOrderId(orderNumber)}
+
 
 Thank you for your order.
 
+
 Your order has been received and is being processed by FairChoice.
 
+
 Please quote your Order Number if you need assistance.`
+
 
 );
   } catch (error) {
@@ -3872,16 +4391,19 @@ Please quote your Order Number if you need assistance.`
     setIsSubmittingOrder(false);
   }
 
+
   if (requiresReauthentication && onLogout) {
     await onLogout();
   }
 };
+
 
 const recalculateOrder = (order, updatedItems) => {
   const totals = calculateOrderTotals(updatedItems, {
     priceMode: order.priceMode || order.price_mode,
     discountPercent: order.discount_percent,
   });
+
 
   return {
     ...order,
@@ -3894,11 +4416,14 @@ const recalculateOrder = (order, updatedItems) => {
 };
 
 
+
+
 const saveOrderTotalsToDatabase = async (orderId, items, order = {}) => {
   const totals = calculateOrderTotals(items || [], {
     priceMode: order.priceMode || order.price_mode,
     discountPercent: order.discount_percent,
   });
+
 
   const { error } = await supabase
     .from("orders")
@@ -3914,15 +4439,18 @@ const saveOrderTotalsToDatabase = async (orderId, items, order = {}) => {
 })
     .eq("order_number", orderId);
 
+
   if (error) {
     console.error("Order total update error:", error);
   }
 };
 
+
 const getCalculatedOrderItemForSave = (item, order = {}) =>
   calculateCartOrderItems([item], {
     priceMode: order.priceMode || order.price_mode,
   })[0] || item;
+
 
 const updateOrderItem = async (orderId, itemId, updates) => {
   const order = orders.find((entry) => entry.orderId === orderId);
@@ -3937,15 +4465,18 @@ const updateOrderItem = async (orderId, itemId, updates) => {
   }
 };
 
+
 const updatePreOrderSupplyItem = async (orderId, itemId, updates = {}) => {
   const order = orders.find((entry) => String(entry.orderId) === String(orderId));
   const item = order?.items?.find((entry) => String(entry.dbId || entry.id) === String(itemId));
   if (!order || !item) return false;
 
+
   const updateKeys = Object.keys(updates || {});
   const statusOnly =
     updateKeys.length > 0 &&
     updateKeys.every((key) => ["sourceStatus", "source_status"].includes(key));
+
 
   if (statusOnly) {
     const sourceStatus = updates.sourceStatus ?? updates.source_status;
@@ -3954,15 +4485,18 @@ const updatePreOrderSupplyItem = async (orderId, itemId, updates = {}) => {
       .update({ source_status: sourceStatus })
       .eq("id", item.dbId || itemId);
 
+
     if (error) {
       console.error("Pre-order supply status update error:", error);
       return false;
     }
 
+
     // Status-only means status-only: do not touch qty, picked_qty, packed state,
     // inclusion flags, line totals, VAT, or order totals.
     return true;
   }
+
 
   const merged = { ...item, ...updates };
   const calculated = getCalculatedOrderItemForSave(merged, order);
@@ -3977,11 +4511,13 @@ const updatePreOrderSupplyItem = async (orderId, itemId, updates = {}) => {
     vat_amount: Number(calculated.vat_total || 0).toFixed(2),
   };
 
+
   const { error } = await supabase.from("order_items").update(payload).eq("id", item.dbId || itemId);
   if (error) {
     console.error("Pre-order supply item update error:", error);
     return false;
   }
+
 
   const updatedItems = (order.items || []).map((entry) =>
     String(entry.dbId || entry.id) === String(itemId) ? { ...entry, ...merged, ...calculated } : entry
@@ -3991,6 +4527,7 @@ const updatePreOrderSupplyItem = async (orderId, itemId, updates = {}) => {
   // Avoid a full orders + processing_queue reload for every individual item.
   return true;
 };
+
 
 const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restoreQty) => {
   const order = orders.find((entry) => String(entry.orderId) === String(orderId));
@@ -4036,6 +4573,7 @@ const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restor
 const addOrderItem = async (orderId, newItem) => {
   const order = orders.find((entry) => entry.orderId === orderId);
 
+
   try {
     const result = await addReceivedOrderItemWithPromotions({ order, newItem });
     await fetchOrders();
@@ -4047,6 +4585,7 @@ const addOrderItem = async (orderId, newItem) => {
   }
 };
 
+
 const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) => {
   const order = orders.find((o) => o.orderId === orderId);
   const item = order?.items?.find((currentItem) => {
@@ -4055,10 +4594,12 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     return String(currentKey) === String(itemId);
   });
 
+
   if (!order?.dbId || !item) {
     alert("Order item not found for pre-order split.");
     return null;
   }
+
 
   const price = roundMoney(item.price || item.selectedPrice || item.unit_price || item.unitPrice || 0);
   const availableItem = getCalculatedOrderItemForSave(
@@ -4076,6 +4617,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     order
   );
 
+
   const remainingItem = getCalculatedOrderItemForSave(
     {
       ...item,
@@ -4091,6 +4633,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     order
   );
 
+
   const { error: updateError } = await supabase
     .from("order_items")
     .update({
@@ -4105,11 +4648,13 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     })
     .eq("id", item.dbId || itemId);
 
+
   if (updateError) {
     console.error("Pre-order split update error:", updateError);
     alert(updateError.message);
     return null;
   }
+
 
   const { data, error: insertError } = await supabase
     .from("order_items")
@@ -4134,16 +4679,19 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     .select("id")
     .single();
 
+
   if (insertError) {
     console.error("Pre-order split insert error:", insertError);
     alert(insertError.message);
     return null;
   }
 
+
   const updatedItems = (order.items || []).map((currentItem) => {
     const currentKey =
       currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
     if (String(currentKey) !== String(itemId)) return currentItem;
+
 
     return {
       ...currentItem,
@@ -4161,6 +4709,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       vat_total: remainingItem.vat_total,
     };
   });
+
 
   updatedItems.push({
     ...item,
@@ -4180,10 +4729,12 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     vat_total: availableItem.vat_total,
   });
 
+
   await saveOrderTotalsToDatabase(orderId, updatedItems, order);
   // Do not reload all orders/processing_queue for each split in a 30-item batch.
   return data;
 };
+
 
   const saveProduct = async () => {
     if (!supabase) {
@@ -4191,16 +4742,19 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       return;
     }
 
+
     if (!productForm.name || !productForm.category || !productForm.vatPrice) {
       alert("Please fill product name, category, and VAT price.");
       return;
     }
+
 
     const defaultAccounts = await getDefaultProductAccounts(productForm.category);
     const productFormForSave = {
       ...productForm,
       ...getProductLabelFormFlags(getProductLabelValue(productForm)),
     };
+
 
     const payload = {
       product_code: productFormForSave.productCode,
@@ -4237,6 +4791,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
            
     };
 
+
     const response = editingId
       ? await supabase
           .from("products")
@@ -4246,11 +4801,13 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
           .single()
       : await supabase.from("products").insert(payload).select().single();
 
+
     if (response.error) {
       console.error("Product save error:", response.error);
       alert("Product save failed.");
       return;
     }
+
 
     try {
       await saveProductLocationStock(
@@ -4265,6 +4822,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       return;
     }
 
+
     try {
       const priceCodeEntries = Object.entries(productFormForSave.priceCodePrices || {}).map(
         ([priceCodeId, price]) => ({ priceCodeId, price })
@@ -4275,6 +4833,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       alert(`Product was saved, but customer-code prices could not be saved.\n\n${priceCodeError.message || priceCodeError}`);
       return;
     }
+
 
     setEditingId(null);
     setProductForm({
@@ -4309,15 +4868,18 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       active: true,
     });
 
+
     await fetchProducts();
     alert("Product saved.");
   };
+
 
   const editProduct = async (product) => {
     setEditingId(product.id);
     const productLabelFormFlags = getProductLabelFormFlags(
       getProductLabelValue(product)
     );
+
 
     let freshPriceCodePrices = product.priceCodePrices || product.price_code_prices || {};
     try {
@@ -4326,6 +4888,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     } catch (priceCodeError) {
       console.error("Product customer-code prices reload error:", priceCodeError);
     }
+
 
     setProductForm({
       productCode: product.productCode || "",
@@ -4359,12 +4922,15 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       active: product.active !== false,
     });
 
+
     setPage("products");
   };
+
 
   const printPickingList = (order) => {
     const totals = calculateDocumentTotals(order.items || [], order);
     const printableItems = sortPrintItems(totals.invoiceItems);
+
 
     const rows = printableItems
       .map(
@@ -4382,6 +4948,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
         `
       )
       .join("");
+
 
     const html = `
       <html>
@@ -4416,16 +4983,20 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       </html>
     `;
 
+
     const win = window.open("", "_blank", "width=360,height=700");
+
 
     if (!win) {
       alert("Popup blocked. Please allow popups to print the picking list.");
       return;
     }
 
+
     win.document.write(html);
     win.document.close();
   };
+
 
   const openCustomerInvoiceDocument = async (
     order,
@@ -4440,6 +5011,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
         throw new Error("This invoice is not linked to an order document.");
       }
 
+
       const watermark = getCustomerInvoiceWatermark(invoiceStatus);
       const resolvedOrder = await withResolvedInvoicePaymentStatus({
         ...(freshOrder || order),
@@ -4448,10 +5020,12 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
         invoicePaymentStatus: invoiceStatus,
       });
 
+
       if (download) {
         await downloadCentralInvoice(resolvedOrder);
         return;
       }
+
 
       await previewCentralInvoice(resolvedOrder);
     } catch (error) {
@@ -4464,6 +5038,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     }
   };
 
+
   const openPickingOrder = async (order) => {
     try {
       await claimOrderForPicking(order.orderId, loggedInUser);
@@ -4475,16 +5050,20 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     }
   };
 
+
   const closePickingOrder = () => {
     setPickingOrderId(null);
     setPage("orders");
   };
 
+
   const activePickingOrder = orders.find(
     (order) => String(order.orderId) === String(pickingOrderId)
   );
 
+
   const comingSoonTitle = getComingSoonTitle(page);
+
 
 const backOfficeContent = comingSoonTitle ? (
   <ComingSoonPlaceholder title={comingSoonTitle} />
@@ -4506,6 +5085,7 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
     {page === "picking" && activePickingOrder && (
       <OrderPicking
         order={activePickingOrder}
@@ -4516,6 +5096,7 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
     {page === "warehouse" && (
       <Warehouse
         orders={orders}
@@ -4525,6 +5106,7 @@ const backOfficeContent = comingSoonTitle ? (
         refreshOrders={fetchOrders}
       />
     )}
+
 
     {page === "preOrderSupply" && (
       <PreOrderSupply
@@ -4538,6 +5120,7 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
     {page === "posPurchaseHistory" && (
       <PreOrderSupply
         orders={[]}
@@ -4545,6 +5128,7 @@ const backOfficeContent = comingSoonTitle ? (
         historyOnly
       />
     )}
+
 
     {page === "driver" && (
       <Driver
@@ -4555,9 +5139,11 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
     {page === "customers" && <Customers />}
     {page === "salesRouteSetup" && <SalesRouteSetup currentUser={activeUser} />}
     {page === "homePageImages" && <HomePageImages currentUser={activeUser} />}
+
 
     {page === "products" && (
       <AdminProducts
@@ -4572,7 +5158,9 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
     {page === "credit" && <CustomerCredit />}
+    {page === "customerWallet" && <CustomerWallet currentUser={activeUser} />}
     {page === "centralPayment" && (
       <CentralPayment
         currentUser={activeUser}
@@ -4606,9 +5194,11 @@ const backOfficeContent = comingSoonTitle ? (
       <StockTaking products={products} fetchProducts={fetchProducts} />
     )}
 
+
     {page === "stockreceipts" && (
       <StockReceipts products={products} fetchProducts={fetchProducts} />
     )}
+
 
     {page === "staff" && <Staff currentUser={activeUser} onOpenAccessControl={(staffId) => { setAccessControlStaffId(staffId); setPage("accessControl"); }} />}
     {page === "staffLogin" && <StaffLogin initialStaffId={accessControlStaffId} onOpenAccessControl={(staffId) => { setAccessControlStaffId(staffId); setPage("accessControl"); }} />}
@@ -4628,6 +5218,7 @@ const backOfficeContent = comingSoonTitle ? (
     pricingSettings={pricingSettings}
   />
 )}
+
 
     {page === "categories" && <Categories />}
     {page === "productImportExport" && (
@@ -4652,13 +5243,17 @@ const backOfficeContent = comingSoonTitle ? (
   </>
 );
 
+
 const brandPartnerReadOnlyOrder = isBrandPartner && activeDuty === "admin";
+
 
 const portalPageIsAllowed = page === "order" && !isCustomer
   ? (isSalesRep || brandPartnerReadOnlyOrder)
   : isCustomerPortalPageAllowed(page, portalRoleState);
 
+
   const isBackOfficePage = Boolean(PAGE_BY_ROUTE[page]) || ["picking", "stockhistory", "stockreceipts", "loginSetup"].includes(page);
+
 
   if (!isCustomer && isBackOfficePage && page !== "order") {
     return (
@@ -4679,6 +5274,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     );
   }
 
+
   return (
     <div className="customer-portal-shell min-h-screen bg-slate-100 p-4 pb-40">
       <div className="customer-portal-container max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
@@ -4697,6 +5293,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         FairChoice Order Portal
       </h1>
 
+
       <p className="portal-subtitle text-blue-100 text-sm">
         {isAdmin
           ? "Backoffice product and order management"
@@ -4706,6 +5303,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
       </p>
       </div>
     </div>
+
 
     <div className="portal-actions flex flex-col items-end gap-2">
       <button
@@ -4719,6 +5317,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         Logout
       </button>
 
+
       {isCustomer && (
         <div className="customer-nav-buttons flex gap-2">
           <button
@@ -4727,6 +5326,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           >
             Order
           </button>
+
 
           <button
             onClick={async () => {
@@ -4741,6 +5341,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </div>
       )}
 
+
       {isAdmin && page === "order" && (
         <button
           type="button"
@@ -4750,6 +5351,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           Back Office
         </button>
       )}
+
 
       {isSalesRep && (
         <div className="customer-nav-buttons flex gap-1 sm:gap-2">
@@ -4771,8 +5373,10 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   </div>
 
+
 </div>
         )}
+
 
         {showSalesRouteModal && salesRouteMode && (
           <div
@@ -4792,6 +5396,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 </div>
                 <button type="button" onClick={() => setShowSalesRouteModal(false)} className="min-h-11 rounded-xl border border-slate-300 px-4 text-sm font-bold text-slate-700">Close</button>
               </div>
+
 
               <div className="flex flex-wrap items-center gap-2 border-b bg-slate-50 px-4 py-3">
                 <select
@@ -4813,6 +5418,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 </button>
                 <button type="button" onClick={refreshSalesRoute} className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold">Refresh</button>
               </div>
+
 
               <div className="overflow-y-auto p-3 sm:p-4">
                 {salesRouteLoading ? (
@@ -4858,6 +5464,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         )}
 
+
         {showRouteExceptionForm && salesRouteMode && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
@@ -4869,6 +5476,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             </div>
           </div>
         )}
+
 
         {showNoOrderForm && salesRouteMode && selectedCustomerAccount && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -4882,6 +5490,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         )}
 
+
         {!portalPageIsAllowed && (
           <div className="m-4 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-slate-800">
             <p className="font-bold">Opening the Order page...</p>
@@ -4889,8 +5498,10 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         )}
 
+
         {(isSalesRep || isCustomer || brandPartnerReadOnlyOrder) && page === "order" && (
           <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
+
 
             <div className="lg:col-span-4">
                 <HomeCategoryGrid
@@ -4904,6 +5515,16 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                   onHome={goToCustomerHome}
                   cartItemCount={cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + Number(item.qty || 0), 0)}
                   onCartClick={openCustomerCart}
+                  walletBalance={selectedCustomerAccount?.id ? customerWallet.balance : null}
+                  walletLoading={selectedCustomerAccount?.id ? customerWallet.loading : false}
+                  walletUseRequested={Boolean(selectedCustomerAccount?.id && walletUseRequested)}
+                  onWalletClick={() => {
+                    if (!selectedCustomerAccount?.id) {
+                      alert("Select a customer first to view Wallet money.");
+                      return;
+                    }
+                    setCustomerWalletOpen(true);
+                  }}
                   menuItems={
                     isSalesRep
                       ? [
@@ -4928,6 +5549,58 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 />
               </div>
 
+            {customerWalletOpen && selectedCustomerAccount && (
+              <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 p-4">
+                <div className="w-full max-w-md rounded-2xl bg-white p-5 text-slate-900 shadow-2xl">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-xl font-black">Customer Wallet</h3>
+                      <p className="mt-1 text-sm text-slate-500">Available Wallet money</p>
+                    </div>
+                    <button type="button" onClick={() => setCustomerWalletOpen(false)} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100">Close</button>
+                  </div>
+
+                  <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-center">
+                    <div className="text-xs font-extrabold uppercase tracking-wide text-emerald-700">Wallet Balance</div>
+                    <div className="mt-1 text-3xl font-black text-emerald-900">{customerWallet.loading ? "..." : formatCurrency(customerWallet.balance)}</div>
+                  </div>
+
+                  {customerWallet.error && (
+                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{customerWallet.error}</div>
+                  )}
+
+                  <div className="mt-4 rounded-xl border border-slate-200 p-4">
+                    <div className="font-black">Do you want to use Wallet money on this order?</div>
+                    <p className="mt-2 text-sm leading-5 text-slate-600">
+                      If you choose <strong>Yes</strong>, available Wallet money will be deducted at delivery before payment is collected. If you choose <strong>No</strong>, the full invoice will be collected and the Wallet money stays for another order.
+                    </p>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        disabled={customerWallet.loading || Number(customerWallet.balance || 0) <= 0}
+                        onClick={() => { setWalletUseRequested(true); setCustomerWalletOpen(false); }}
+                        className={`rounded-xl border px-4 py-3 font-black ${walletUseRequested ? "border-emerald-700 bg-emerald-700 text-white" : "border-emerald-300 bg-emerald-50 text-emerald-800"} disabled:cursor-not-allowed disabled:opacity-40`}
+                      >
+                        Yes · Use Wallet
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setWalletUseRequested(false); setCustomerWalletOpen(false); }}
+                        className={`rounded-xl border px-4 py-3 font-black ${!walletUseRequested ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                      >
+                        No · Keep Wallet
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-center text-xs font-bold text-slate-500">
+                    Choice for this order: <span className={walletUseRequested ? "text-emerald-700" : "text-slate-700"}>{walletUseRequested ? "USE WALLET" : "KEEP WALLET"}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+
             {selectedCustomerAccount && (
               <div className="lg:col-span-4 overflow-x-auto border-y border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 [scrollbar-width:none] sm:px-4">
                 <div className="flex min-w-max items-center gap-5 font-semibold">
@@ -4939,6 +5612,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 </div>
               </div>
             )}
+
 
             {!showHomepage && (
             <div className="lg:col-span-4">
@@ -4957,6 +5631,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   subCategories={subCategories}
   selectedSubCategory={selectedSubCategory}
 
+
   setSelectedSubCategory={(value) => {
     setShowHomepage(false);
     setSelectedSubCategory(value);
@@ -4964,11 +5639,13 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     setSelectedSeries("All Series");
   }}
 
+
   setSelectedBrand={(value) => {
     setShowHomepage(false);
     setSelectedBrand(value);
     setSelectedSeries("All Series");
   }}
+
 
   setSelectedSeries={(value) => {
     setShowHomepage(false);
@@ -4979,10 +5656,13 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   onClearAll={() => setProductPage(1)}
 />
 
+
             </div>
             )}
 
+
  <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
+
 
   {salesRouteMode && salesRouteExceptionMode && (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm">
@@ -4991,9 +5671,11 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   )}
 
+
   {(!salesRouteMode || salesRouteExceptionMode || selectedCustomerAccount) && (!selectedCustomerAccount || customerDetailsExpanded) && (
   <div id="order-customer-details" className="transition-all duration-200">
   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3 text-sm font-bold">
+
 
     <div className="grid w-full grid-cols-1 items-center gap-2 text-slate-700 md:grid-cols-[minmax(220px,1fr)_auto_auto_auto]">
       <div className="font-semibold truncate">
@@ -5008,12 +5690,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   </div>
 
+
   <div className="grid grid-cols-1 md:grid-cols-[minmax(150px,0.8fr)_minmax(230px,1.2fr)_minmax(230px,1fr)_minmax(120px,0.45fr)] gap-3 mb-3 items-end">
    {!isCustomer && (!salesRouteMode || salesRouteExceptionMode) && (
   <div>
     <label className="font-bold text-sm block mb-1">
       Search
     </label>
+
 
     <input
       className="border rounded-xl p-3 w-full"
@@ -5024,11 +5708,13 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
     )}
 
+
    {!isCustomer && (!salesRouteMode || salesRouteExceptionMode) && (
   <div>
     <label className="font-bold text-sm block mb-1">
       Customer Details
     </label>
+
 
     <select
       className="border rounded-xl p-3 w-full"
@@ -5036,9 +5722,11 @@ const portalPageIsAllowed = page === "order" && !isCustomer
       onChange={(e) => {
         const customerId = e.target.value;
 
+
         const customer = activeCustomerAccounts.find(
           (c) => String(c.id) === String(customerId)
         );
+
 
         setSelectedCustomerId(customerId);
         setSelectedCustomerAccount(customer || null);
@@ -5051,8 +5739,10 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           !customer || getCustomerBranches(customer).length > 0
         );
 
+
         if (customer) {
           setCompanyName(customer.account_name);
+
 
           const allowedModes = isAdmin
             ? [
@@ -5062,7 +5752,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
               ]
             : getAllowedPriceModesForCustomer(customer, pricingSettings);
 
+
           const defaultMode = getCustomerPriceModeValue(customer, pricingSettings);
+
 
           setPriceMode(
             allowedModes.includes(defaultMode)
@@ -5081,6 +5773,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           : "Select Customer"}
       </option>
 
+
       {filteredCustomersForSalesRep.map((customer) => (
         <option key={customer.id} value={customer.id}>
           {customer.account_name}
@@ -5090,11 +5783,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
     )}
 
+
     {(() => {
    const activeBranches = filteredBranchesForSelectedCustomer;
    const showBranchSelector = (!salesRouteMode || salesRouteExceptionMode) && (!isCustomer || activeBranches.length > 1);
 
+
    if (!showBranchSelector && !showPriceModeSelector) return null;
+
 
    return (
    <div
@@ -5113,9 +5809,11 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             onChange={(e) => {
               const branchId = e.target.value;
 
+
               const branch = activeBranches.find(
                 (b) => String(b.id) === String(branchId)
               );
+
 
               setSelectedBranchId(branchId);
               setSelectedBranch(branch || null);
@@ -5123,6 +5821,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             }}
           >
             <option value="">Select Branch / Shop</option>
+
 
             {activeBranches.map((branch) => (
               <option key={branch.id} value={branch.id}>
@@ -5132,6 +5831,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </select>
         </div>
       )}
+
 
       {showPriceModeSelector && (
   <div
@@ -5147,6 +5847,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     >
       Price Mode
     </label>
+
 
     <select
       value={priceMode}
@@ -5169,11 +5870,13 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   );
 })()}
 
+
 {(isAdmin || isSalesRep) && (
   <div className="md:max-w-[150px]">
     <label className="font-bold text-sm block mb-1">
       Country
     </label>
+
 
     <select
       value={manualCountry}
@@ -5189,6 +5892,8 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
   </div>
   )}
+
+
 
 
 {!showHomepage && (
@@ -5210,7 +5915,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 )}
 
+
 </div>
+
 
             <div className="lg:col-span-4">
               {showHomepage ? (
@@ -5306,11 +6013,13 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 </div>
               )}
 
+
               {productError && (
                 <div className="bg-slate-50 border rounded-3xl p-5 mb-4 text-red-600 font-bold">
                   {productError}
                 </div>
               )}
+
 
               {!productsLoading &&
                 !productError &&
@@ -5320,12 +6029,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                   </div>
                 )}
 
+
               {productView === "grid" ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2 md:gap-3">
                   {visibleProducts.map((product) => (
                     (() => {
                       const activePromotionPriceRule =
                         getActivePromotionPriceRule(product);
+
 
                       return (
                     <ProductCard
@@ -5359,6 +6070,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                       const activePromotionPriceRule =
                         getActivePromotionPriceRule(product);
 
+
                       return (
                     <ProductListRow
                       key={product.id}
@@ -5386,6 +6098,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 </div>
               )}
 
+
               {filteredProducts.length > 0 && (
                 <div className="mt-4 flex items-center justify-center gap-3">
                   <button
@@ -5399,9 +6112,11 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                     Previous
                   </button>
 
+
                   <span className="text-sm font-bold text-slate-600">
                     Page {productPage} of {totalProductPages}
                   </span>
+
 
                   <button
                     type="button"
@@ -5420,6 +6135,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 </>
               )}
             </div>
+
 
            {isCartEditing && (
              <div className="lg:col-span-4">
@@ -5443,6 +6159,10 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 onEditingChange={changeCartEditing}
                 onItemEdited={rememberCartProduct}
                 paymentChoice={orderPaymentChoice}
+                walletBalance={selectedCustomerAccount?.id ? customerWallet.balance : 0}
+                walletLoading={selectedCustomerAccount?.id ? customerWallet.loading : false}
+                walletUseRequested={Boolean(selectedCustomerAccount?.id && walletUseRequested)}
+                onWalletUseChange={(useWallet) => setWalletUseRequested(Boolean(useWallet))}
                 onPaymentChoiceChange={(choice) => {
                   setOrderPaymentChoice(choice);
                   if (choice !== "bank_transfer_now") setOrderBankProofFile(null);
@@ -5459,15 +6179,18 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         )}
 
+
        
           {isCustomer && page === "paymentHistory" && (
   <div className="customer-payment-history p-4">
     <div className="payment-history-card bg-white rounded-2xl shadow-sm border p-4">
 
+
       <div className="payment-history-summary flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">
           Customer Credit Account
         </h2>
+
 
         <div className="payment-history-outstanding border rounded-xl px-4 py-2 text-right">
           <div className="text-xs text-slate-500 font-bold">Total Outstanding</div>
@@ -5476,6 +6199,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         </div>
       </div>
+
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
         <div className="border rounded-xl p-3 bg-slate-50">
@@ -5506,9 +6230,11 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         )}
       </div>
 
+
       <h3 className="font-bold text-lg mb-3">
         Statement: {selectedCustomerAccount?.account_name || companyName}
       </h3>
+
 
       {selectedCustomerBranches.length > 0 && (
         <div className="mb-4 space-y-3">
@@ -5526,6 +6252,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             ))}
           </select>
 
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {branchOutstandingRows.map((branch) => (
               <div key={branch.id} className="border rounded-xl p-3 bg-slate-50">
@@ -5541,6 +6268,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </div>
       )}
 
+
       <div className="customer-ledger-table-wrap overflow-x-auto border rounded-2xl">
         <table className="customer-ledger-table w-full text-sm">
           <thead className="bg-slate-100">
@@ -5554,19 +6282,23 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             </tr>
           </thead>
 
+
           <tbody>
             {displayedCustomerLedgerRowsWithBalance.map(({ row, debit, credit, balance }) => {
               const type = String(
                 row.entry_type || row.transaction_type || ""
               ).toUpperCase();
 
+
               const isInvoice = type === "INVOICE";
               const isPayment = type === "PAYMENT";
+
 
               const status = isInvoice ? getCustomerInvoiceStatus(row) : "";
               const invoiceOrder = isInvoice ? getInvoiceOrderForLedgerRow(row) : null;
               const invoiceActionTarget = invoiceOrder || row;
               const displayBalance = balance;
+
 
               return (
                 <tr key={row.id} className="border-b">
@@ -5574,14 +6306,17 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                     {row.type === "OPENING" ? "-" : new Date(row.created_at).toLocaleDateString("en-GB")}
                   </td>
 
+
                   <td className="p-3 font-bold">
                     {type === "OPENING" ? "Opening Balance" : isInvoice ? "Invoice" : "Payment"}
+
 
                     {row.branch_name && (
                       <div className="text-xs text-slate-500 font-normal mt-1">
                         Branch: {row.branch_name}
                       </div>
                     )}
+
 
                     {isPayment && (
                       <div className="text-xs text-slate-500 font-normal mt-1">
@@ -5591,6 +6326,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                       </div>
                     )}
                   </td>
+
 
                   <td className="p-3">
                     {type === "OPENING" ? (
@@ -5604,6 +6340,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                     )}
                   </td>
 
+
                   <td
                     className={`p-3 text-right font-bold ${
                       isPayment ? "text-green-600" : "text-red-600"
@@ -5613,8 +6350,10 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                     {formatCurrency(isPayment ? credit : debit)}
                   </td>
 
+
                   <td className="p-3 text-right font-bold">{formatCurrency(displayBalance)}
                   </td>
+
 
                   <td className="p-3 text-center">
                     {isInvoice ? (
@@ -5658,9 +6397,11 @@ const portalPageIsAllowed = page === "order" && !isCustomer
               );
             })}
 
+
           </tbody>
         </table>
       </div>
+
 
     </div>
   </div>
@@ -5672,6 +6413,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         Sales Rep Cash Collection
       </h2>
 
+
       {salesRouteMode && selectedCustomerAccount ? (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
       ) : <>
@@ -5679,6 +6421,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         <select value={salesPaymentForm.customerId} onChange={(e) => setSalesPaymentForm({ ...salesPaymentForm, customerId: e.target.value, branchId: "" })} className="w-full border rounded-xl p-3"><option value="">Select Customer</option>{filteredSalesPaymentCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.account_name}</option>)}</select>
         {selectedSalesPaymentBranches.length > 0 && <select value={salesPaymentForm.branchId} onChange={(e) => setSalesPaymentForm({ ...salesPaymentForm, branchId: e.target.value })} className="w-full border rounded-xl p-3"><option value="">Select Branch / Shop</option>{selectedSalesPaymentBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.branch_name}{branch.postcode ? ` - ${branch.postcode}` : ""}</option>)}</select>}
       </>}
+
 
       {selectedSalesPaymentCustomer && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -5690,6 +6433,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
               {formatCurrency(salesOutstandingSnapshot.totalOutstanding || 0)}
             </div>
           </div>
+
 
           {selectedSalesPaymentBranch && (
             <div className="border rounded-xl p-3 bg-slate-50">
@@ -5712,6 +6456,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </div>
       )}
 
+
       <input
         type="number"
         placeholder="Amount Collected"
@@ -5724,6 +6469,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         }
         className="w-full border rounded-xl p-3"
       />
+
 
       <select
         value={salesPaymentForm.paymentType}
@@ -5742,6 +6488,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         <option value="Cheque">Cheque</option>
       </select>
 
+
       <input
         placeholder="Who Paid / Shop Staff Name"
         value={salesPaymentForm.whoPaid}
@@ -5753,6 +6500,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         }
         className="w-full border rounded-xl p-3"
       />
+
 
       <input
         type="date"
@@ -5766,6 +6514,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         className="w-full border rounded-xl p-3"
       />
 
+
       <textarea
         placeholder="Notes"
         value={salesPaymentForm.notes}
@@ -5777,6 +6526,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         }
         className="w-full border rounded-xl p-3"
       />
+
 
       <button
         onClick={saveSalesRepCollection}
@@ -5791,14 +6541,17 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 )}      
 
+
        {isSalesRep && page === "salesCreditHistory" && (
         <CustomerCredit readOnly />
        )}
+
 
        {isSalesRep && page === "salesReturn" && (
   <div className="p-4">
     <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-3">
       <h2 className="text-xl font-bold">Sales Rep Return</h2>
+
 
       {salesRouteMode && selectedCustomerAccount ? (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount?.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
@@ -5807,6 +6560,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         <select disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnForm.customerId} onChange={(e) => setSalesReturnForm({ ...salesReturnForm, customerId: e.target.value, branchId: "" })} className="w-full border rounded-xl p-3"><option value="">Select Customer</option>{filteredSalesReturnCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.account_name}</option>)}</select>
         {selectedSalesReturnBranches.length > 0 && <select disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnForm.branchId} onChange={(e) => setSalesReturnForm({ ...salesReturnForm, branchId: e.target.value })} className="w-full border rounded-xl p-3"><option value="">Select Branch / Shop</option>{selectedSalesReturnBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.branch_name}{branch.postcode ? ` - ${branch.postcode}` : ""}</option>)}</select>}
       </>}
+
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         <label className="space-y-1">
@@ -5840,6 +6594,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           />
         </label>
       </div>
+
 
       {salesReturnOrder ? (
         <div className="rounded-2xl border bg-slate-50">
@@ -5904,11 +6659,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 className="w-full max-h-[500px] object-contain"
               />
 
+
               <h3 className="font-bold text-lg mt-3">
                 {selectedImage.name}
               </h3>
 
+
               <HomepageTargetMessages messages={selectedProductNotices} />
+
 
               <button
                 onClick={() => setSelectedImage(null)}
@@ -5920,6 +6678,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             </div>
           </div>
         )}
+
 
       {page === "order" && (isSalesRep || isCustomer) && (
   <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-xl sm:p-3">
@@ -5970,6 +6729,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           )}
         </div>
 
+
         <button
           type="button"
           onClick={() => {
@@ -5981,6 +6741,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           {isSubmittingOrder ? "Submitting..." : "Submit Order"}
         </button>
       </div>
+
 
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
         <button
@@ -6005,6 +6766,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 )}
 
+
 {(isCustomer || isSalesRep || (isAdmin && page === "order")) && (
   <div className="fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] right-3 z-50 flex gap-2 sm:right-4">
     <button
@@ -6018,12 +6780,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 )}
 
+
 <div className="sr-only" aria-live="polite">{cartNotice}</div>
 {cartNotice && (
   <div className="fixed bottom-40 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-bold text-white shadow-lg">
     {cartNotice}
   </div>
 )}
+
 
 {isSubmittingOrder && (
   <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4" role="status" aria-live="assertive">
@@ -6035,6 +6799,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   </div>
 )}
+
 
 {submissionFeedback === "success" && (
   <div className="fixed left-1/2 top-4 z-[85] flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-emerald-700 px-4 py-3 font-bold text-white shadow-xl" role="status" aria-live="polite">
@@ -6049,7 +6814,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 )}
 
+
       </div>
+
 
       {returnOrder && (
         <ReturnRequestModal
@@ -6070,4 +6837,3 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   );
 }
-

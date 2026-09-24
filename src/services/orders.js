@@ -342,6 +342,9 @@ export async function createCustomerOrder({
   delivery_address = "",
   delivery_postcode = "",
   customer_country = "",
+  wallet_use_requested = false,
+  wallet_requested_amount = null,
+  wallet_requested_at = null,
   notes = "",
 }) {
   const orderNumber = requestedOrderNumber || "ORD-" + Date.now();
@@ -366,6 +369,12 @@ const orderPayload = {
   delivery_address: delivery_address || "",
   delivery_postcode: delivery_postcode || "",
   customer_country: customer_country || "",
+  wallet_use_requested: Boolean(wallet_use_requested),
+  wallet_requested_amount:
+    wallet_requested_amount === null || wallet_requested_amount === undefined
+      ? null
+      : Number(wallet_requested_amount || 0),
+  wallet_requested_at: wallet_requested_at || null,
 
   postcode: delivery_postcode || "",
   price_mode: priceMode.toUpperCase(),

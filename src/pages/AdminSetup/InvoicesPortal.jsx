@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
@@ -42,6 +42,7 @@ import {
   voidDuplicateInvoiceFinancially,
 } from "../../services/financialCorrectionService";
 
+
 const getCreatedDate = (row) => row.created_at || row.invoice_date || row.date || "";
 const getReference = (row) =>
   row.canonical_order_number ||
@@ -84,6 +85,7 @@ const getOrderPaymentStatus = (order = {}, invoiceTotal = 0) => {
     .toUpperCase();
   if (["PAID", "PART PAID", "UNPAID"].includes(explicitStatus)) return explicitStatus;
 
+
   const paymentCollected = String(order.payment_collected || order.paymentCollected || "")
     .trim()
     .toLowerCase();
@@ -94,6 +96,7 @@ const getOrderPaymentStatus = (order = {}, invoiceTotal = 0) => {
       order.paidAmount ??
       0
   );
+
 
   if (paymentCollected === "yes" || paymentCollected === "true") return "PAID";
   if (invoiceTotal > 0 && paymentAmount >= invoiceTotal - 0.01) return "PAID";
@@ -107,7 +110,9 @@ const getLedgerRowForOrder = (ledgerRowsByReference, order = {}) => {
 const mergeLedgerMetadataIntoOrderRow = (orderRow = {}, ledgerRow = null) => {
   if (!ledgerRow) return orderRow;
 
+
   const invoiceTotal = getInvoiceTotal(orderRow._freshOrder || orderRow);
+
 
   return {
     ...ledgerRow,
@@ -139,8 +144,10 @@ const getOrderSearch = (value) => {
   const compact = normalizeOrderSearchText(value);
   if (!compact) return null;
 
+
   const bareOrder = stripOrderPrefix(compact);
   if (!bareOrder || !/^\d{6,}$/.test(bareOrder)) return null;
+
 
   return {
     compact,
@@ -151,8 +158,10 @@ const getOrderSearch = (value) => {
 const orderFieldMatches = (value, orderSearch) => {
   if (!orderSearch || !value) return false;
 
+
   const compact = normalizeOrderSearchText(value);
   const bareOrder = stripOrderPrefix(compact);
+
 
   return (
     compact.includes(orderSearch.compact) ||
@@ -197,6 +206,7 @@ const getOrderInvoiceListRow = (order = {}) => {
   });
   const invoiceStatus = getOrderPaymentStatus(order, invoiceTotal);
 
+
   return {
     id: `order-invoice-${order.order_number}`,
     order_uuid: order.id || order.dbId || order.order_id || null,
@@ -238,6 +248,7 @@ const getOrderInvoiceListRow = (order = {}) => {
   };
 };
 
+
 // Both the normal list and exact-order search must pass through this loader.
 // Rows without a stable customer account retain their existing compatibility
 // status because allocations cannot be scoped safely for them.
@@ -250,6 +261,7 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
     ),
   ];
 
+
   const allocationsResult = customerAccountIds.length
     ? await supabase
         .from("customer_payment_allocations")
@@ -257,16 +269,19 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
         .in("customer_account_id", customerAccountIds)
     : { data: [], error: null };
 
+
   if (allocationsResult.error) {
     if (!isSchemaCompatibilityError(allocationsResult.error)) {
       console.warn("Could not resolve invoice payment allocations:", allocationsResult.error);
     }
   }
 
+
   const allocations = allocationsResult.error ? [] : allocationsResult.data || [];
   const paymentIds = [
     ...new Set(allocations.map((row) => row.payment_id).filter(Boolean)),
   ];
+
 
   const fullReferences = [
     ...new Set(
@@ -287,6 +302,7 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
   };
   const referenceChunks = chunkValues(fullReferences);
   const sourceIdChunks = chunkValues(sourceIds);
+
 
   const canonicalPaymentResults = await Promise.all([
     ...(paymentIds.length
@@ -315,8 +331,10 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
     });
   });
 
+
   const legacyLedgerPayments = [];
   const seenLegacyLedgerPaymentIds = new Set();
+
 
   const ledgerResults = await Promise.all(
     referenceChunks.flatMap((referenceChunk) => [
@@ -335,6 +353,7 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
     ])
   );
 
+
   ledgerResults.forEach((result) => {
     if (result.error) {
       if (!isSchemaCompatibilityError(result.error)) {
@@ -342,6 +361,7 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
       }
       return;
     }
+
 
     (result.data || []).forEach((payment) => {
       const identity = String(
@@ -354,8 +374,10 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
     });
   });
 
+
   return invoiceRows.map((row) => {
     const customerAccountId = row.customer_account_id || row._freshOrder?.customer_account_id;
+
 
     return resolveInvoiceRowFromAllocations({
       row,
@@ -384,6 +406,7 @@ const getProductSearchText = (product) =>
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+
 
 export default function InvoicesPortal() {
   const [invoices, setInvoices] = useState([]);
@@ -424,6 +447,11 @@ export default function InvoicesPortal() {
   const [voidReason, setVoidReason] = useState("");
   const [voidLoading, setVoidLoading] = useState(false);
   const [voidError, setVoidError] = useState("");
+  const [returnPrintRow, setReturnPrintRow] = useState(null);
+  const [returnPrintOptions, setReturnPrintOptions] = useState([]);
+  const [selectedReturnIds, setSelectedReturnIds] = useState([]);
+  const [returnPrintLoading, setReturnPrintLoading] = useState(false);
+  const [returnPrintError, setReturnPrintError] = useState("");
   const loggedInUser = JSON.parse(
     localStorage.getItem("loggedInUser") ||
       localStorage.getItem("fairchoice_user") ||
@@ -441,6 +469,7 @@ export default function InvoicesPortal() {
     [form.lines]
   );
 
+
   const formTotals = useMemo(
     () => calculateCartTotals(activeFormLines, { priceMode: form.priceMode }),
     [activeFormLines, form.priceMode]
@@ -457,12 +486,14 @@ export default function InvoicesPortal() {
     return "vat_price";
   };
 
+
   const getOrderForInvoice = async (row) => {
     const order = await fetchInvoiceOrderFromDb(row);
     if (!order) {
       alert("Original order not found for this invoice.");
       return null;
     }
+
 
     return {
       ...order,
@@ -480,6 +511,7 @@ export default function InvoicesPortal() {
       items: order.items || order.order_items || [],
     };
   };
+
 
   const selectedCustomer = customers.find(
     (customer) => String(customer.id) === String(form.customerId)
@@ -502,10 +534,12 @@ export default function InvoicesPortal() {
   const matchingProducts = useMemo(() => {
     if (!canAddWorkbenchProduct || !productSearchValue) return [];
 
+
     return products
       .filter((product) => getProductSearchText(product).includes(productSearchValue))
       .slice(0, 20);
   }, [canAddWorkbenchProduct, productSearchValue, products]);
+
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -513,8 +547,10 @@ export default function InvoicesPortal() {
       setHighlightedProductIndex(0);
     }, 120);
 
+
     return () => window.clearTimeout(timer);
   }, [productSearch]);
+
 
   useEffect(() => {
     if (!canAddWorkbenchProduct) {
@@ -528,9 +564,11 @@ export default function InvoicesPortal() {
     }
   }, [canAddWorkbenchProduct]);
 
+
   const focusProductSearch = () => {
     window.setTimeout(() => productSearchInputRef.current?.focus(), 0);
   };
+
 
   const clearProductPicker = ({ focus = false } = {}) => {
     setProductSearch("");
@@ -540,8 +578,10 @@ export default function InvoicesPortal() {
     if (focus) focusProductSearch();
   };
 
+
   const selectProduct = (product) => {
     if (!product) return;
+
 
     setForm((current) => ({ ...current, productId: product.id }));
     setProductSearch(getProductName(product));
@@ -550,13 +590,16 @@ export default function InvoicesPortal() {
     setHighlightedProductIndex(0);
   };
 
+
   const highlightSearchText = (text) => {
     const value = String(text || "");
     const query = productSearch.trim();
     if (!query) return value;
 
+
     const index = value.toLowerCase().indexOf(query.toLowerCase());
     if (index === -1) return value;
+
 
     return (
       <>
@@ -569,17 +612,21 @@ export default function InvoicesPortal() {
     );
   };
 
+
   const handleProductSearchKeyDown = (event) => {
     if (event.key === "Escape") {
       setProductSearchOpen(false);
       return;
     }
 
+
     if (!productSearchOpen && ["ArrowDown", "ArrowUp"].includes(event.key)) {
       setProductSearchOpen(true);
     }
 
+
     if (!matchingProducts.length) return;
+
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -594,6 +641,7 @@ export default function InvoicesPortal() {
       selectProduct(matchingProducts[highlightedProductIndex] || matchingProducts[0]);
     }
   };
+
 
   const resetForm = () => {
     setWorkbenchMode("");
@@ -612,6 +660,7 @@ export default function InvoicesPortal() {
     });
   };
 
+
   const addSelectedProductLine = () => {
     if (setupLoading || setupError) {
       alert(setupError || "Invoice setup data is still loading.");
@@ -622,13 +671,16 @@ export default function InvoicesPortal() {
       return;
     }
 
+
     const product = products.find((item) => String(item.id) === String(form.productId));
     const qty = Number(form.qty || 0);
+
 
     if (!product || qty <= 0) {
       alert("Select a product and quantity.");
       return;
     }
+
 
     const price = getProductPriceForMode(
       product,
@@ -659,6 +711,7 @@ export default function InvoicesPortal() {
       includeInPicking: true,
     };
 
+
     setForm((current) => ({
       ...current,
       productId: "",
@@ -667,6 +720,7 @@ export default function InvoicesPortal() {
     }));
     clearProductPicker({ focus: true });
   };
+
 
   const updateFormLine = (index, updates) => {
     setForm((current) => ({
@@ -677,12 +731,14 @@ export default function InvoicesPortal() {
     }));
   };
 
+
   const removeFormLine = (index) => {
     setForm((current) => ({
       ...current,
       lines: current.lines.filter((_, lineIndex) => lineIndex !== index),
     }));
   };
+
 
   const openAmendForm = async (row) => {
     if (!isAdminUser) {
@@ -691,6 +747,7 @@ export default function InvoicesPortal() {
     }
     const order = await getOrderForInvoice(row);
     if (!order) return;
+
 
     setAmendOrder(order);
     setWorkbenchMode("amend");
@@ -723,6 +780,7 @@ export default function InvoicesPortal() {
     });
   };
 
+
   const closeVoidInvoiceDialog = () => {
     if (voidLoading) return;
     setVoidInvoiceRow(null);
@@ -730,6 +788,7 @@ export default function InvoicesPortal() {
     setVoidReason("");
     setVoidError("");
   };
+
 
   const openVoidInvoiceDialog = async (row) => {
     if (!isNisstajAdmin) {
@@ -745,6 +804,7 @@ export default function InvoicesPortal() {
     setVoidReason("");
     setVoidError("");
     setVoidLoading(true);
+
 
     try {
       const preview = await previewInvoiceFinancialCorrection({
@@ -763,6 +823,7 @@ export default function InvoicesPortal() {
     }
   };
 
+
   const confirmVoidInvoice = async () => {
     if (!isNisstajAdmin) {
       setVoidError("Only nisstaj_admin can financially void an invoice.");
@@ -770,17 +831,20 @@ export default function InvoicesPortal() {
     }
     if (!voidInvoiceRow || !voidPreview || voidPreview.already_voided) return;
 
+
     const reason = voidReason.trim();
     if (!reason) {
       setVoidError("Enter the reason this delivered invoice is a duplicate.");
       return;
     }
 
+
     const reference = getReference(voidInvoiceRow);
     const confirmed = window.confirm(
       "Void invoice and return stock?"
     );
     if (!confirmed) return;
+
 
     setVoidLoading(true);
     setVoidError("");
@@ -804,6 +868,7 @@ export default function InvoicesPortal() {
     }
   };
 
+
   const saveManualInvoice = async () => {
     if (!selectedCustomer) {
       alert("Select customer.");
@@ -817,6 +882,7 @@ export default function InvoicesPortal() {
       alert("Add at least one product.");
       return;
     }
+
 
     setSaving(true);
     try {
@@ -835,6 +901,7 @@ export default function InvoicesPortal() {
         currentUser: loggedInUser,
       });
 
+
       await loadInvoices();
       resetForm();
       if (result?.order) previewInvoice(result.order);
@@ -846,6 +913,7 @@ export default function InvoicesPortal() {
     }
   };
 
+
   const saveReturnInvoice = async () => {
     if (!selectedCustomer) {
       alert("Select customer.");
@@ -855,6 +923,7 @@ export default function InvoicesPortal() {
       alert("Add at least one returned product.");
       return;
     }
+
 
     setSaving(true);
     try {
@@ -877,6 +946,7 @@ export default function InvoicesPortal() {
         currentUser: loggedInUser,
       });
 
+
       await confirmReturnCredit({ returnRequest, currentUser: loggedInUser });
       await loadInvoices();
       resetForm();
@@ -896,6 +966,7 @@ export default function InvoicesPortal() {
     }
   };
 
+
   const saveAmendment = async () => {
     if (!isAdminUser) {
       alert("Only admin users can amend invoices.");
@@ -910,6 +981,7 @@ export default function InvoicesPortal() {
       alert("Amendment reason / notes are required.");
       return;
     }
+
 
     setSaving(true);
     try {
@@ -957,6 +1029,7 @@ export default function InvoicesPortal() {
           action: "Removed",
         }));
 
+
       const { error: orderUpdateError } = await supabase
         .from("orders")
         .update({
@@ -970,7 +1043,9 @@ export default function InvoicesPortal() {
         })
         .eq("order_number", amendOrder.order_number || amendOrder.orderId);
 
+
       if (orderUpdateError) throw orderUpdateError;
+
 
       for (const line of calculatedItems) {
         if (line.dbId) {
@@ -992,6 +1067,7 @@ export default function InvoicesPortal() {
             })
             .eq("id", line.dbId);
 
+
           if (itemUpdateError) throw itemUpdateError;
         } else {
           const { data: orderRow, error: orderLookupError } = await supabase
@@ -1000,7 +1076,9 @@ export default function InvoicesPortal() {
             .eq("order_number", amendOrder.order_number || amendOrder.orderId)
             .single();
 
+
           if (orderLookupError) throw orderLookupError;
+
 
           const { error: itemInsertError } = await supabase.from("order_items").insert({
             order_id: orderRow?.id || amendOrder.id,
@@ -1023,13 +1101,16 @@ export default function InvoicesPortal() {
             include_in_picking: true,
           });
 
+
           if (itemInsertError) throw itemInsertError;
         }
       }
 
+
       const removedLines = (amendOrder.items || []).filter(
         (item) => item.id && !activeDbIds.has(String(item.id))
       );
+
 
       for (const line of removedLines) {
         const { error: removedLineError } = await supabase
@@ -1047,8 +1128,10 @@ export default function InvoicesPortal() {
           })
           .eq("id", line.id);
 
+
         if (removedLineError) throw removedLineError;
       }
+
 
       const amendedOrder = {
         ...amendOrder,
@@ -1068,6 +1151,7 @@ export default function InvoicesPortal() {
         amendOrder.orderId ||
         freshAmendedOrder.order_number;
 
+
       if (invoiceReference) {
         const updatedAt = new Date().toISOString();
         const { error: customerInvoiceUpdateError } = await supabase
@@ -1078,12 +1162,14 @@ export default function InvoicesPortal() {
           })
           .eq("invoice_number", invoiceReference);
 
+
         if (
           customerInvoiceUpdateError &&
           !isSchemaCompatibilityError(customerInvoiceUpdateError)
         ) {
           throw customerInvoiceUpdateError;
         }
+
 
         const { error: ledgerUpdateError } = await supabase
           .from("customer_ledger")
@@ -1105,10 +1191,12 @@ export default function InvoicesPortal() {
           .eq("reference_no", invoiceReference)
           .eq("entry_type", "INVOICE");
 
+
         if (ledgerUpdateError && !isSchemaCompatibilityError(ledgerUpdateError)) {
           throw ledgerUpdateError;
         }
       }
+
 
       await amendInvoice({
         order: freshAmendedOrder,
@@ -1129,11 +1217,13 @@ export default function InvoicesPortal() {
     }
   };
 
+
   const updateCatalogPriceForLine = async (line) => {
     if (!isAdminUser) {
       alert("Only admin users can update product prices.");
       return;
     }
+
 
     const productId = line.productId || line.id;
     const price = Number(line.price || 0);
@@ -1142,21 +1232,25 @@ export default function InvoicesPortal() {
       return;
     }
 
+
     const column = getProductPriceColumnForMode(form.priceMode);
     const ok = window.confirm(
       `Update the current product ${column.replaceAll("_", " ")} to ${formatCurrency(price)}?`
     );
     if (!ok) return;
 
+
     const { error: updateError } = await supabase
       .from("products")
       .update({ [column]: price })
       .eq("id", productId);
 
+
     if (updateError) {
       alert("Could not update product price: " + updateError.message);
       return;
     }
+
 
     setProducts((current) =>
       current.map((product) =>
@@ -1166,15 +1260,18 @@ export default function InvoicesPortal() {
     alert("Current product price updated.");
   };
 
+
 const normalizeInvoicePaymentStatus = (value) => {
   const status = String(value || "")
     .trim()
     .replaceAll("_", " ")
     .toUpperCase();
 
+
   if (status === "PAID" || status === "COMPLETED" || status === "POSTED") {
     return "PAID";
   }
+
 
   if (
     status === "PART PAID" ||
@@ -1184,14 +1281,94 @@ const normalizeInvoicePaymentStatus = (value) => {
     return "PART PAID";
   }
 
+
   return "UNPAID";
 };
+
+
+const openReturnPrintDialog = async (row) => {
+  if (String(row.entry_type || row.transaction_type || "").toUpperCase() === "RETURN_INVOICE") {
+    alert("A return invoice cannot have another return added to it.");
+    return;
+  }
+
+
+  setReturnPrintRow(row);
+  setReturnPrintOptions([]);
+  setSelectedReturnIds([]);
+  setReturnPrintError("");
+  setReturnPrintLoading(true);
+
+
+  try {
+    const customerAccountId =
+      row.customer_account_id ||
+      row._freshOrder?.customer_account_id ||
+      row._freshOrder?.customerAccountId ||
+      null;
+    const customerName = getCustomer(row);
+
+
+    let query = supabase
+      .from("customer_returns")
+      .select("id, return_number, order_number, customer_account_id, customer_name, branch_name, return_type, status, return_total, total_qty, confirmed_at, reversed_at")
+      .eq("status", "Confirmed")
+      .is("reversed_at", null)
+      .order("confirmed_at", { ascending: false });
+
+
+    query = customerAccountId
+      ? query.eq("customer_account_id", customerAccountId)
+      : query.eq("customer_name", customerName);
+
+
+    const { data, error: returnError } = await query;
+    if (returnError) throw returnError;
+
+
+    setReturnPrintOptions(data || []);
+  } catch (err) {
+    console.error("Invoice return selection loading error:", err);
+    setReturnPrintError(err.message || "Could not load confirmed returns for this customer.");
+  } finally {
+    setReturnPrintLoading(false);
+  }
+};
+
+
+const closeReturnPrintDialog = () => {
+  if (returnPrintLoading) return;
+  setReturnPrintRow(null);
+  setReturnPrintOptions([]);
+  setSelectedReturnIds([]);
+  setReturnPrintError("");
+};
+
+
+const toggleReturnForPrint = (returnId) => {
+  setSelectedReturnIds((current) =>
+    current.includes(returnId)
+      ? current.filter((id) => id !== returnId)
+      : [...current, returnId]
+  );
+};
+
+
+const printInvoiceWithSelectedReturns = async () => {
+  if (!returnPrintRow || !selectedReturnIds.length) return;
+  const selectedReturns = returnPrintOptions.filter((row) => selectedReturnIds.includes(row.id));
+  await runInvoiceAction(returnPrintRow, (order) =>
+    printInvoice(order, { returnAdjustments: selectedReturns })
+  );
+};
+
 
 const runInvoiceAction = async (row, action) => {
   try {
     const isReturnInvoice =
       String(row.entry_type || row.transaction_type || "").toUpperCase() ===
       "RETURN_INVOICE";
+
 
     if (isReturnInvoice) {
       const { data: returnHeader, error: returnHeaderError } = await supabase
@@ -1200,7 +1377,9 @@ const runInvoiceAction = async (row, action) => {
         .eq("return_number", row.reference_no)
         .maybeSingle();
 
+
       if (returnHeaderError) throw returnHeaderError;
+
 
       const { data: returnItems, error: returnItemsError } = await supabase
         .from("customer_return_items")
@@ -1208,7 +1387,9 @@ const runInvoiceAction = async (row, action) => {
         .eq("return_number", row.reference_no)
         .order("created_at", { ascending: true });
 
+
       if (returnItemsError) throw returnItemsError;
+
 
       const returnInvoiceOrder = {
         id: returnHeader?.id || row.id,
@@ -1256,14 +1437,18 @@ const runInvoiceAction = async (row, action) => {
         })),
       };
 
+
       action(returnInvoiceOrder, { documentType: "returnInvoice" });
       return;
     }
 
+
     const order = await getOrderForInvoice(row);
     if (!order) return;
 
+
     const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+
 
     // The invoice list has already resolved the ledger allocation.
     // Preserve PAID from the list when the fresh order still contains
@@ -1275,11 +1460,13 @@ const runInvoiceAction = async (row, action) => {
         row.status
     );
 
+
     const engineStatus = normalizeInvoicePaymentStatus(
       resolvedOrder.invoice_status ||
         resolvedOrder.payment_status ||
         resolvedOrder.paymentStatus
     );
+
 
     const paymentStatus =
       listStatus === "PAID"
@@ -1290,7 +1477,9 @@ const runInvoiceAction = async (row, action) => {
         ? "PART PAID"
         : "UNPAID";
 
+
     const invoiceTotal = getInvoiceTotal(resolvedOrder);
+
 
     const paidAmount =
       paymentStatus === "PAID"
@@ -1303,20 +1492,25 @@ const runInvoiceAction = async (row, action) => {
               0
           );
 
+
     action({
       ...resolvedOrder,
+
 
       payment_status: paymentStatus,
       paymentStatus,
       invoice_status: paymentStatus,
 
+
       paid_amount: paidAmount,
       amount_paid: paidAmount,
+
 
       remaining_amount:
         paymentStatus === "PAID"
           ? 0
           : Math.max(0, invoiceTotal - paidAmount),
+
 
       outstanding_amount:
         paymentStatus === "PAID"
@@ -1329,9 +1523,11 @@ const runInvoiceAction = async (row, action) => {
   }
 };
 
+
   const loadInvoices = async () => {
     setLoading(true);
     setError("");
+
 
     try {
       const [ledgerResult, ordersResult, processingQueueOrders, confirmedReturnsResult] = await Promise.all([
@@ -1355,10 +1551,13 @@ const runInvoiceAction = async (row, action) => {
           .order("created_at", { ascending: false }),
       ]);
 
+
       let data = (ledgerResult.data || []).filter(canShowInvoiceRow);
       let ledgerError = ledgerResult.error;
 
+
       if (ordersResult.error) throw ordersResult.error;
+
 
       if (ledgerError) {
         const retry = await supabase
@@ -1370,7 +1569,9 @@ const runInvoiceAction = async (row, action) => {
         ledgerError = retry.error;
       }
 
+
       if (ledgerError) throw ledgerError;
+
 
       const confirmedReturnRows = confirmedReturnsResult.error
         ? []
@@ -1383,6 +1584,7 @@ const runInvoiceAction = async (row, action) => {
               const amount = Number(
                 row.return_total || row.grand_total || row.amount || row.invoice_total || 0
               );
+
 
               return {
                 id: `return-invoice-${row.id || row.return_number}`,
@@ -1417,9 +1619,11 @@ const runInvoiceAction = async (row, action) => {
               };
             });
 
+
       if (confirmedReturnsResult.error && !isSchemaCompatibilityError(confirmedReturnsResult.error)) {
         console.warn("Could not load confirmed return invoices:", confirmedReturnsResult.error);
       }
+
 
       const ledgerRows = [...(data || [])];
       const existingReturnReferences = new Set(
@@ -1429,12 +1633,14 @@ const runInvoiceAction = async (row, action) => {
           .filter(Boolean)
       );
 
+
       confirmedReturnRows.forEach((row) => {
         const reference = String(row.reference_no || "").trim();
         if (reference && !existingReturnReferences.has(reference)) {
           ledgerRows.push(row);
         }
       });
+
 
       const ledgerRowsByReference = new Map();
       ledgerRows.forEach((row) => {
@@ -1445,6 +1651,7 @@ const runInvoiceAction = async (row, action) => {
         });
       });
 
+
       const fullOrders = await hydrateOrdersWithFullOrderItems(ordersResult.data || []);
       const deliveredOrders = fullOrders
         .filter(isDeliveredInvoiceRow)
@@ -1454,10 +1661,12 @@ const runInvoiceAction = async (row, action) => {
         processingQueueOrders
       );
 
+
       const rowsByReference = new Map();
       operationalOrders.forEach((order) => {
         const reference = order.order_number || order.orderId;
         if (!reference) return;
+
 
         const orderRow = {
           ...getOrderInvoiceListRow(order),
@@ -1469,22 +1678,26 @@ const runInvoiceAction = async (row, action) => {
         rowsByReference.set(reference, mergeLedgerMetadataIntoOrderRow(orderRow, ledgerRow));
       });
 
+
       ledgerRows.forEach((row) => {
         const references = getReferenceCandidates(row);
         const hasCanonicalOrder = references.some((reference) =>
           rowsByReference.has(reference)
         );
 
+
         if (!hasCanonicalOrder) {
           rowsByReference.set(getReference(row), row);
         }
       });
+
 
       const mergedRows = [...rowsByReference.values()].sort(
         (a, b) =>
           new Date(getCreatedDate(b) || 0).getTime() -
           new Date(getCreatedDate(a) || 0).getTime()
       );
+
 
       // Every operational order above already carries a fully hydrated _freshOrder.
       // Do not re-fetch every invoice one-by-one here: fetchInvoiceOrderFromDb()
@@ -1493,7 +1706,9 @@ const runInvoiceAction = async (row, action) => {
       // fetch the canonical order on demand.
       const invoiceRows = mergedRows;
 
+
       const resolvedInvoiceRows = await resolveInvoiceRowsWithAllocationData(invoiceRows);
+
 
       setInvoices(resolvedInvoiceRows.filter(canShowInvoiceRow));
     } catch (err) {
@@ -1505,12 +1720,15 @@ const runInvoiceAction = async (row, action) => {
     }
   };
 
+
   useEffect(() => {
     loadInvoices();
+
 
     const loadSetupData = async () => {
       setSetupLoading(true);
       setSetupError("");
+
 
       try {
         const [customerRows, productRows, pricingResult] = await Promise.all([
@@ -1531,8 +1749,10 @@ const runInvoiceAction = async (row, action) => {
       }
     };
 
+
     loadSetupData();
   }, []);
+
 
   useEffect(() => {
     const orderSearch = getOrderSearch(search);
@@ -1541,11 +1761,14 @@ const runInvoiceAction = async (row, action) => {
       return;
     }
 
+
     let cancelled = false;
+
 
     const loadExactSearchInvoice = async () => {
       const rowsByReference = new Map();
       const hiddenProtectedReferences = new Set();
+
 
       try {
         const order = await fetchInvoiceOrderFromDb(orderSearch.canonical);
@@ -1564,6 +1787,7 @@ const runInvoiceAction = async (row, action) => {
         console.warn("Order exact invoice search failed:", err);
       }
 
+
       try {
         const { data: ledgerRows, error: ledgerSearchError } = await supabase
           .from("customer_ledger")
@@ -1573,7 +1797,9 @@ const runInvoiceAction = async (row, action) => {
           )
           .order("created_at", { ascending: false });
 
+
         if (ledgerSearchError) throw ledgerSearchError;
+
 
         (ledgerRows || []).filter(canShowInvoiceRow).forEach((row) => {
           const reference = getReference(row);
@@ -1588,6 +1814,7 @@ const runInvoiceAction = async (row, action) => {
         console.warn("Ledger exact invoice search failed:", err);
       }
 
+
       if (!cancelled) {
         const exactRows = [...rowsByReference.values()].filter(canShowInvoiceRow);
         const resolvedExactRows = await resolveInvoiceRowsWithAllocationData(exactRows);
@@ -1597,12 +1824,15 @@ const runInvoiceAction = async (row, action) => {
       }
     };
 
+
     loadExactSearchInvoice();
+
 
     return () => {
       cancelled = true;
     };
   }, [canViewServerManagerInvoices, search]);
+
 
   const filteredInvoices = useMemo(() => {
     const value = normalizeSearchText(search);
@@ -1612,6 +1842,7 @@ const runInvoiceAction = async (row, action) => {
       rowsByReference.set(getReference(row), row);
     });
     const searchableInvoices = [...rowsByReference.values()];
+
 
     return searchableInvoices.filter((row) => {
       if (!canShowInvoiceRow(row)) return false;
@@ -1634,29 +1865,36 @@ const runInvoiceAction = async (row, action) => {
         return true;
       }
 
+
       return fields.join(" ").toLowerCase().includes(value);
     });
   }, [canViewServerManagerInvoices, dateFrom, dateTo, exactSearchInvoices, invoices, search]);
 
+
   useEffect(() => {
     setInvoicePage(1);
   }, [dateFrom, dateTo, search]);
+
 
   const invoiceTotalPages = Math.max(
     1,
     Math.ceil(filteredInvoices.length / invoicePageSize)
   );
 
+
   useEffect(() => {
     setInvoicePage((current) => Math.min(current, invoiceTotalPages));
   }, [invoiceTotalPages]);
+
 
   const pagedInvoices = useMemo(() => {
     const start = (invoicePage - 1) * invoicePageSize;
     return filteredInvoices.slice(start, start + invoicePageSize);
   }, [filteredInvoices, invoicePage, invoicePageSize]);
 
+
   const totalOutstanding = sumResolvedInvoiceOutstanding(filteredInvoices);
+
 
   return (
     <div className="space-y-5">
@@ -1670,6 +1908,7 @@ const runInvoiceAction = async (row, action) => {
             Refresh
           </button>
         </div>
+
 
         <div className="mt-4 flex flex-wrap gap-2">
           <button
@@ -1696,6 +1935,7 @@ const runInvoiceAction = async (row, action) => {
           </button>
         </div>
 
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-5">
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
             <div className="text-xs font-bold text-slate-500 uppercase">Invoices</div>
@@ -1710,6 +1950,7 @@ const runInvoiceAction = async (row, action) => {
             <div className="text-2xl font-extrabold">{formatCurrency(totalOutstanding)}</div>
           </div>
         </div>
+
 
         <div className="mt-5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_180px_180px_auto] gap-2">
           <input
@@ -1756,12 +1997,14 @@ const runInvoiceAction = async (row, action) => {
         </div>
       </div>
 
+
       {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4">{error}</div>}
       {setupError && (
         <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4">
           {setupError}
         </div>
       )}
+
 
       {workbenchMode && (
         <div className="w-full max-w-full overflow-hidden bg-white rounded-2xl shadow-sm border border-slate-200 p-4 md:p-5 space-y-4">
@@ -1782,17 +2025,20 @@ const runInvoiceAction = async (row, action) => {
             </button>
           </div>
 
+
           {setupLoading && (
             <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-sm font-bold text-blue-800">
               Loading customers and products...
             </div>
           )}
 
+
           {!setupLoading && !setupError && (!customers.length || !products.length) && (
             <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm font-bold text-amber-800">
               Customer or product setup data is missing. Add customers and products before creating invoices.
             </div>
           )}
+
 
           {workbenchMode !== "amend" && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1815,6 +2061,7 @@ const runInvoiceAction = async (row, action) => {
                 ))}
               </select>
 
+
               <select
                 value={form.branchId}
                 onChange={(event) =>
@@ -1830,6 +2077,7 @@ const runInvoiceAction = async (row, action) => {
                   </option>
                 ))}
               </select>
+
 
               {workbenchMode === "manual" ? (
                 <select
@@ -1862,12 +2110,14 @@ const runInvoiceAction = async (row, action) => {
             </div>
           )}
 
+
           {workbenchMode === "amend" && amendOrder && (
             <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm font-bold text-amber-800">
               Amending {formatDisplayOrderId(amendOrder.orderId || amendOrder.order_number)} for{" "}
               {amendOrder.companyName || amendOrder.company_name}
             </div>
           )}
+
 
           <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(90px,120px)_minmax(130px,auto)] gap-3">
             <div className="relative min-w-0">
@@ -1918,6 +2168,7 @@ const runInvoiceAction = async (row, action) => {
                         pricingSettings
                       );
                       const highlighted = index === highlightedProductIndex;
+
 
                       return (
                         <button
@@ -1973,6 +2224,7 @@ const runInvoiceAction = async (row, action) => {
               Add Product
             </button>
           </div>
+
 
           <div className="w-full max-w-full overflow-hidden border border-slate-200 rounded-xl">
             <table className="w-full table-fixed text-sm">
@@ -2054,6 +2306,7 @@ const runInvoiceAction = async (row, action) => {
             </table>
           </div>
 
+
           <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
             <div className="rounded-xl bg-slate-50 border p-3">
               <div className="text-[11px] font-bold uppercase text-slate-500">Total Quantity</div>
@@ -2077,6 +2330,7 @@ const runInvoiceAction = async (row, action) => {
             </div>
           </div>
 
+
           <textarea
             value={form.notes}
             onChange={(event) =>
@@ -2089,6 +2343,7 @@ const runInvoiceAction = async (row, action) => {
             }
             className="w-full max-w-full border border-slate-300 rounded-xl p-3"
           />
+
 
           <button
             type="button"
@@ -2106,6 +2361,7 @@ const runInvoiceAction = async (row, action) => {
           </button>
         </div>
       )}
+
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
@@ -2131,6 +2387,7 @@ const runInvoiceAction = async (row, action) => {
                   const displayStatus = getInvoiceDisplayStatus(row);
                   const financiallyVoided = isInvoiceFinanciallyVoided(row);
 
+
                   return (
                     <tr key={row.id || getReference(row)} className="border-t border-slate-100">
                       <td className="p-3 font-bold text-slate-900">{getReference(row)}</td>
@@ -2143,6 +2400,9 @@ const runInvoiceAction = async (row, action) => {
                           <button type="button" onClick={() => runInvoiceAction(row, previewInvoice)} className="bg-slate-100 text-slate-800 px-3 py-1 rounded-lg text-xs font-bold">View</button>
                           <button type="button" onClick={() => runInvoiceAction(row, downloadInvoice)} className="bg-blue-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Download PDF</button>
                           <button type="button" onClick={() => runInvoiceAction(row, printInvoice)} className="bg-black text-white px-3 py-1 rounded-lg text-xs font-bold">Print</button>
+                          {!financiallyVoided && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
+                            <button type="button" onClick={() => openReturnPrintDialog(row)} className="bg-emerald-700 text-white px-3 py-1 rounded-lg text-xs font-bold">Add Return</button>
+                          )}
                           {isAdminUser && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
                           )}
@@ -2205,6 +2465,79 @@ const runInvoiceAction = async (row, action) => {
         </div>
       </div>
 
+
+      {returnPrintRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="return-print-title">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="return-print-title" className="text-xl font-extrabold text-slate-900">Add Return to Printed Invoice</h3>
+                <p className="mt-1 text-sm text-slate-600">Invoice {formatDisplayOrderId(getReference(returnPrintRow))} · {getCustomer(returnPrintRow)}</p>
+              </div>
+              <button type="button" onClick={closeReturnPrintDialog} disabled={returnPrintLoading} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Close</button>
+            </div>
+
+
+            <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+              Print-only option. It does not change the order, invoice, payment allocation, customer credit, or previous records.
+            </div>
+
+
+            {returnPrintLoading ? (
+              <p className="mt-4 text-sm font-bold text-slate-600">Loading confirmed returns from the test database...</p>
+            ) : returnPrintError ? (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{returnPrintError}</div>
+            ) : returnPrintOptions.length === 0 ? (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">No confirmed, unreversed returns were found for this customer.</div>
+            ) : (
+              <div className="mt-4 max-h-80 overflow-auto rounded-xl border border-slate-200">
+                {returnPrintOptions.map((ret) => {
+                  const selected = selectedReturnIds.includes(ret.id);
+                  return (
+                    <label key={ret.id} className={`flex cursor-pointer items-center justify-between gap-4 border-b border-slate-100 p-3 last:border-b-0 ${selected ? "bg-emerald-50" : "bg-white"}`}>
+                      <div className="flex items-start gap-3">
+                        <input type="checkbox" checked={selected} onChange={() => toggleReturnForPrint(ret.id)} className="mt-1 h-4 w-4" />
+                        <div>
+                          <div className="font-extrabold text-slate-900">{ret.return_number}</div>
+                          <div className="text-xs text-slate-500">Original order: {formatDisplayOrderId(ret.order_number) || "-"} · {ret.return_type || "Return"} · {ret.branch_name || "Main / unassigned"}</div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-extrabold text-emerald-700">-{formatCurrency(Number(ret.return_total || 0))}</div>
+                        <div className="text-xs text-slate-500">Qty {Number(ret.total_qty || 0)}</div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+
+
+            {(() => {
+              const invoiceAmount = Number(getAmount(returnPrintRow) || 0);
+              const returnAmount = returnPrintOptions
+                .filter((ret) => selectedReturnIds.includes(ret.id))
+                .reduce((sum, ret) => sum + Number(ret.return_total || 0), 0);
+              const adjustedAmount = invoiceAmount - returnAmount;
+              return (
+                <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+                  <div className="rounded-xl border border-slate-200 p-3"><div className="text-xs font-bold uppercase text-slate-500">Invoice Total</div><div className="mt-1 font-extrabold">{formatCurrency(invoiceAmount)}</div></div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3"><div className="text-xs font-bold uppercase text-emerald-700">Return Total</div><div className="mt-1 font-extrabold text-emerald-800">-{formatCurrency(returnAmount)}</div></div>
+                  <div className="rounded-xl border border-slate-900 bg-slate-900 p-3 text-white"><div className="text-xs font-bold uppercase text-slate-300">Total After Return</div><div className="mt-1 font-extrabold">{formatCurrency(adjustedAmount)}</div></div>
+                </div>
+              );
+            })()}
+
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={closeReturnPrintDialog} disabled={returnPrintLoading} className="rounded-xl border border-slate-300 px-4 py-2 font-bold text-slate-700">Cancel</button>
+              <button type="button" onClick={printInvoiceWithSelectedReturns} disabled={returnPrintLoading || selectedReturnIds.length === 0} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white disabled:bg-slate-400">Print Invoice with Return</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
       {voidInvoiceRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="void-invoice-title">
           <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-2xl">
@@ -2216,9 +2549,11 @@ const runInvoiceAction = async (row, action) => {
               <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50" aria-label="Close void invoice dialog">Close</button>
             </div>
 
+
             <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
               This will void the invoice and return its stock to inventory.
             </div>
+
 
             {voidLoading && !voidPreview ? (
               <p className="mt-4 text-sm font-bold text-slate-600">Reviewing invoice and payment allocations...</p>
@@ -2229,10 +2564,13 @@ const runInvoiceAction = async (row, action) => {
               </div>
             ) : null}
 
+
             {voidError && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{voidError}</div>}
+
 
             <label className="mt-4 block text-sm font-bold text-slate-700" htmlFor="void-invoice-reason">Reason this invoice is a duplicate</label>
             <textarea id="void-invoice-reason" value={voidReason} onChange={(event) => setVoidReason(event.target.value)} disabled={voidLoading || !voidPreview || voidPreview?.already_voided} rows="3" placeholder="Enter a clear audit reason" className="mt-2 w-full rounded-xl border border-slate-300 p-3 disabled:bg-slate-100" />
+
 
             <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-xl border border-slate-300 px-4 py-2 font-bold text-slate-700 disabled:opacity-50">Cancel</button>
