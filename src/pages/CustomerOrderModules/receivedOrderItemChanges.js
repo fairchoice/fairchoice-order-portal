@@ -3,6 +3,7 @@ import {
   applyPromotionRulesToCart,
   getActivePromotionRules,
 } from "../../services/promotionRules";
+import { recordReceivedOrderFreeActivity } from "../../services/warehouseActivity";
 import {
   calculateCartOrderItems,
   calculateCartTotals,
@@ -14,6 +15,10 @@ const RECEIVED_ORDER_STATUSES = new Set(["received", "in progress"]);
 
 const text = (value) => String(value || "").trim();
 const statusKey = (value) => text(value).toLowerCase();
+const isFreeStatus = (value) => ["free", "promotion free"].includes(statusKey(value));
+const isPromotionFreeLine = (item = {}) =>
+  item?.isPromotionFree === true || item?.promotionFreeItem === true ||
+  isFreeStatus(item?.sourceStatus || item?.source_status);
 
 const getOrderPriceMode = (order = {}) =>
   order.priceMode || order.price_mode || "vat";
@@ -71,8 +76,8 @@ export const normalizeReceivedOrderPromotionItem = (item = {}) => {
     source_status: item.source_status || item.sourceStatus || "In Stock",
     includeInPicking: item.includeInPicking !== false && item.include_in_picking !== false,
     include_in_picking: item.include_in_picking !== false && item.includeInPicking !== false,
-    isPromotionFree: false,
-    promotionFreeItem: false,
+    isPromotionFree: isFreeStatus(item.sourceStatus || item.source_status),
+    promotionFreeItem: isFreeStatus(item.sourceStatus || item.source_status),
     promotionDiscountLine: false,
   };
 };
@@ -103,7 +108,22 @@ export const calculateReceivedOrderPromotionState = ({
   const calculatedItems = calculateCartOrderItems(promotedCart, {
     priceMode,
     discountPercent,
-  });
+  }).map((item) => isPromotionFreeLine(item) ? {
+    ...item,
+    price: 0,
+    selectedPrice: 0,
+    selected_price: 0,
+    unit_price: 0,
+    unitPrice: 0,
+    lineTotal: 0,
+    line_total: 0,
+    netTotal: 0,
+    net_total: 0,
+    grossTotal: 0,
+    gross_total: 0,
+    vatTotal: 0,
+    vat_total: 0,
+  } : item);
   const totals = calculateCartTotals(promotedCart, {
     priceMode,
     discountPercent,
@@ -177,7 +197,7 @@ const updateReceivedOrderTotals = async (order, totals) => {
   if (error) throw error;
 };
 
-export async function updateReceivedOrderItemWithPromotions({ order, itemId, updates = {} } = {}) {
+export async function updateReceivedOrderItemWithPromotions({ order, itemId, updates = {}, user = null } = {}) {
   if (!order?.dbId && !order?.id) throw new Error("Order database ID not found.");
   if (!itemId) throw new Error("Order item is required.");
   const orderStatus = statusKey(order.status);
@@ -185,18 +205,65 @@ export async function updateReceivedOrderItemWithPromotions({ order, itemId, upd
   const currentItem = (order.items || []).find((item) => String(getItemDbId(item) || getItemProductId(item)) === String(itemId));
   if (!currentItem) throw new Error("Order item not found.");
   const mergedItem = normalizeReceivedOrderPromotionItem({ ...currentItem, ...updates, qty: updates.qty ?? currentItem.qty ?? currentItem.quantity ?? 0, pickedQty: updates.pickedQty ?? updates.picked_qty ?? updates.qty ?? currentItem.pickedQty ?? currentItem.picked_qty ?? currentItem.qty ?? 0, sourceStatus: updates.sourceStatus ?? updates.source_status ?? currentItem.sourceStatus ?? currentItem.source_status, includeInPicking: updates.includeInPicking ?? updates.include_in_picking ?? currentItem.includeInPicking ?? currentItem.include_in_picking });
+  const freeSelected = isFreeStatus(mergedItem.sourceStatus || mergedItem.source_status);
+  if (freeSelected) {
+    mergedItem.sourceStatus = "Free";
+    mergedItem.source_status = "Free";
+    mergedItem.includeInPicking = true;
+    mergedItem.include_in_picking = true;
+    mergedItem.pickedQty = Number(mergedItem.qty || 0);
+    mergedItem.picked_qty = Number(mergedItem.qty || 0);
+    mergedItem.price = 0;
+    mergedItem.selectedPrice = 0;
+    mergedItem.selected_price = 0;
+    mergedItem.unit_price = 0;
+    mergedItem.unitPrice = 0;
+    mergedItem.isPromotionFree = true;
+    mergedItem.promotionFreeItem = true;
+  }
   const directUpdates = {};
   if (updates.qty !== undefined) directUpdates.qty = Number(updates.qty || 0);
   if (updates.pickedQty !== undefined || updates.picked_qty !== undefined || updates.qty !== undefined) directUpdates.picked_qty = Number(updates.pickedQty ?? updates.picked_qty ?? updates.qty ?? mergedItem.pickedQty ?? 0);
   if (updates.sourceStatus !== undefined || updates.source_status !== undefined) directUpdates.source_status = updates.sourceStatus ?? updates.source_status;
   if (updates.includeInPicking !== undefined || updates.include_in_picking !== undefined) directUpdates.include_in_picking = updates.includeInPicking ?? updates.include_in_picking;
-  if (updates.price !== undefined || updates.selectedPrice !== undefined || updates.selected_price !== undefined || updates.unit_price !== undefined || updates.unitPrice !== undefined) directUpdates.price = getItemPrice(mergedItem).toFixed(2);
+  if (freeSelected) {
+    directUpdates.source_status = "Free";
+    directUpdates.include_in_picking = true;
+    directUpdates.picked_qty = Number(mergedItem.qty || 0);
+    directUpdates.price = "0.00";
+    directUpdates.line_total = "0.00";
+    directUpdates.net_total = "0.00";
+    directUpdates.gross_total = "0.00";
+    directUpdates.vat_amount = "0.00";
+  } else if (updates.price !== undefined || updates.selectedPrice !== undefined || updates.selected_price !== undefined || updates.unit_price !== undefined || updates.unitPrice !== undefined) {
+    directUpdates.price = getItemPrice(mergedItem).toFixed(2);
+  }
   if (Object.keys(directUpdates).length) { const { error } = await supabase.from("order_items").update(directUpdates).eq("id", getItemDbId(currentItem) || itemId); if (error) throw error; }
   const nextItems = (order.items || []).map((item) => String(getItemDbId(item) || getItemProductId(item)) === String(itemId) ? { ...item, ...mergedItem } : item);
   const activePromotionRules = await getActivePromotionRules();
   const state = calculateReceivedOrderPromotionState({ order, items: nextItems, activePromotionRules });
   for (const item of state.calculatedItems) await updateCalculatedOrderItem(item);
   await updateReceivedOrderTotals(order, state.totals);
+  if (freeSelected && user) {
+    try {
+      await recordReceivedOrderFreeActivity({
+        order,
+        item: { ...currentItem, ...mergedItem },
+        oldStatus: currentItem.sourceStatus || currentItem.source_status || "In Stock",
+        newStatus: "Free",
+        actionType: "Free",
+        quantity: Number(mergedItem.qty || 0),
+        sourceModule: "Received Orders",
+        reason: updates.freeReason || "Free item selected in Received Orders",
+        metadata: {
+          promotionMatched: updates.promotionMatched === true,
+          promotionName: updates.promotionName || null,
+        },
+      }, user);
+    } catch (activityError) {
+      console.warn("Free warehouse activity could not be recorded:", activityError?.message || activityError);
+    }
+  }
   return { promotionApplied: state.promotionLines.length > 0, promotionLines: state.promotionLines, totals: state.totals };
 }
 
