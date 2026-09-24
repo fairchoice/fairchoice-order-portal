@@ -241,7 +241,57 @@ export async function updateReceivedOrderItemWithPromotions({ order, itemId, upd
   if (Object.keys(directUpdates).length) { const { error } = await supabase.from("order_items").update(directUpdates).eq("id", getItemDbId(currentItem) || itemId); if (error) throw error; }
   const nextItems = (order.items || []).map((item) => String(getItemDbId(item) || getItemProductId(item)) === String(itemId) ? { ...item, ...mergedItem } : item);
   const activePromotionRules = await getActivePromotionRules();
-  const state = calculateReceivedOrderPromotionState({ order, items: nextItems, activePromotionRules });
+  let state = calculateReceivedOrderPromotionState({ order, items: nextItems, activePromotionRules });
+
+  // A current Received-order line that is entitled to the active Buy/Get-Free
+  // promotion is automatically marked Free. This never scans or rewrites old
+  // invoices/credit records; it only affects the current editable order.
+  const automaticFreeQtyByName = new Map();
+  state.promotionLines.forEach((line) => {
+    const names = line.discountedProductNames || line.discounted_product_names || [];
+    let remaining = Number(line.promotionFreeQtyApplied ?? line.promotion_free_qty_applied ?? line.qty ?? 0);
+    names.forEach((name) => {
+      if (remaining <= 0) return;
+      const key = statusKey(name);
+      automaticFreeQtyByName.set(key, Number(automaticFreeQtyByName.get(key) || 0) + remaining);
+      remaining = 0;
+    });
+  });
+
+  if (!freeSelected && automaticFreeQtyByName.size) {
+    const currentName = statusKey(mergedItem.name || mergedItem.productName || mergedItem.product_name);
+    if (Number(automaticFreeQtyByName.get(currentName) || 0) >= Number(mergedItem.qty || 0) && Number(mergedItem.qty || 0) > 0) {
+      mergedItem.sourceStatus = "Free";
+      mergedItem.source_status = "Free";
+      mergedItem.includeInPicking = true;
+      mergedItem.include_in_picking = true;
+      mergedItem.pickedQty = Number(mergedItem.qty || 0);
+      mergedItem.picked_qty = Number(mergedItem.qty || 0);
+      mergedItem.price = 0;
+      mergedItem.selectedPrice = 0;
+      mergedItem.unit_price = 0;
+      mergedItem.isPromotionFree = true;
+      mergedItem.promotionFreeItem = true;
+      const { error: autoFreeError } = await supabase.from("order_items").update({
+        source_status: "Free",
+        include_in_picking: true,
+        picked_qty: Number(mergedItem.qty || 0),
+        price: "0.00",
+        line_total: "0.00",
+        net_total: "0.00",
+        gross_total: "0.00",
+        vat_amount: "0.00",
+      }).eq("id", getItemDbId(currentItem) || itemId);
+      if (autoFreeError) throw autoFreeError;
+      const promotedItems = nextItems.map((entry) =>
+        String(getItemDbId(entry) || getItemProductId(entry)) === String(itemId)
+          ? { ...entry, ...mergedItem }
+          : entry
+      );
+      state = calculateReceivedOrderPromotionState({ order, items: promotedItems, activePromotionRules });
+    }
+  }
+
   for (const item of state.calculatedItems) await updateCalculatedOrderItem(item);
   await updateReceivedOrderTotals(order, state.totals);
   if (freeSelected && user) {
