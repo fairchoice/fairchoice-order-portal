@@ -1080,8 +1080,11 @@ const loadCustomerWalletBalance = useCallback(async () => {
 }, [isCustomer, selectedCustomerAccount?.id, activeUser?.username, activeUser?.fc_session_token, activeUser?.session_token, activeUser?.sessionToken]);
 
 useEffect(() => {
+  // Wallet is opt-in for every customer/order. Changing customer must never
+  // carry a previous Wallet=Yes choice into the next checkout.
+  setWalletUseRequested(false);
   void loadCustomerWalletBalance();
-}, [loadCustomerWalletBalance]);
+}, [selectedCustomerAccount?.id, loadCustomerWalletBalance]);
 
 
 const [cart, setCart] = useState(() => {
