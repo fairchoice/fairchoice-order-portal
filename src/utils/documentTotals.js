@@ -9,6 +9,14 @@ const hasMoneyValue = (value) =>
 const getQuantity = (item = {}) =>
   Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
 
+const isFreeDocumentItem = (item = {}) => {
+  const status = String(item.sourceStatus || item.source_status || item.status || "")
+    .trim()
+    .toLowerCase();
+  return status === "free" || status === "promotion free" ||
+    item.isPromotionFree === true || item.promotionFreeItem === true;
+};
+
 const isPrintableDocumentItem = (item = {}) => {
   const sourceStatus = String(item.sourceStatus || item.source_status || "")
     .trim()
@@ -27,6 +35,7 @@ const isPrintableDocumentItem = (item = {}) => {
   ]);
 
   if (excludedStatuses.has(sourceStatus)) return false;
+  if (sourceStatus === "free" || sourceStatus === "promotion free") return true;
 
   // Warehouse Pre-Order Supply is status-only, so an item can correctly be
   // In Stock while retaining an old include_in_picking=false flag. Supplied
@@ -59,6 +68,10 @@ const getSavedVatRate = (item = {}) => {
 };
 
 const getDocumentItemTotals = (item = {}, { includeVat = true } = {}) => {
+  if (isFreeDocumentItem(item)) {
+    return { netTotal: 0, grossTotal: 0, vatRate: 0 };
+  }
+
   const savedNet = item.net_total ?? item.netTotal;
   const savedPrice = item.price ?? item.unit_price ?? item.unitPrice;
   const vatRate = includeVat ? getSavedVatRate(item) : 0;
