@@ -1262,6 +1262,10 @@ const getThermalOrderNumber = (order = {}) => {
 
 
 const getThermalUnitAmount = (item = {}) => {
+  const status = String(item.sourceStatus || item.source_status || item.status || "").trim().toLowerCase();
+  if (status === "free" || status === "promotion free" || item.isPromotionFree === true || item.promotionFreeItem === true) {
+    return 0;
+  }
   const savedUnitAmount = item.price ?? item.unit_price ?? item.unitPrice;
   if (savedUnitAmount !== null && savedUnitAmount !== undefined && savedUnitAmount !== "") {
     return Number(savedUnitAmount || 0);
@@ -1747,8 +1751,18 @@ const getLineQuantity = (item = {}) =>
 
 
 
+const isFreeInvoiceLine = (item = {}) => {
+  const status = String(item.sourceStatus || item.source_status || item.status || "")
+    .trim()
+    .toLowerCase();
+  return status === "free" || status === "promotion free" ||
+    item.isPromotionFree === true || item.promotionFreeItem === true;
+};
+
 const getLinePrice = (item = {}) =>
-  Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
+  isFreeInvoiceLine(item)
+    ? 0
+    : Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
 
 
 
