@@ -14,10 +14,6 @@ import { loadPreOrderSupplyHistory } from "../services/preOrderSupplyHistory";
 
 
 
-
-
-
-
 import {
   calculateDocumentTotals,
   getCustomerDocumentType,
@@ -34,15 +30,7 @@ import {
 
 
 
-
-
-
-
 const PREORDER_SUPPLIER_HIGHLIGHT_KEY = "fc_preorder_supplier_highlights_v1";
-
-
-
-
 
 
 
@@ -61,10 +49,6 @@ const SUPPLIER_LIGHT_COLORS = [
 
 
 
-
-
-
-
 const supplierColorFor = (supplierId, supplierName) => {
   const seed = String(supplierId || supplierName || "Supplier");
   let hash = 0;
@@ -73,10 +57,6 @@ const supplierColorFor = (supplierId, supplierName) => {
   }
   return SUPPLIER_LIGHT_COLORS[Math.abs(hash) % SUPPLIER_LIGHT_COLORS.length];
 };
-
-
-
-
 
 
 
@@ -92,10 +72,6 @@ const readSupplierHighlights = () => {
 
 
 
-
-
-
-
 const buildSharedSupplierHighlights = (events = []) => {
   const recalledIds = new Set(
     (events || [])
@@ -104,10 +80,6 @@ const buildSharedSupplierHighlights = (events = []) => {
       .filter(Boolean)
       .map(String)
   );
-
-
-
-
 
 
 
@@ -135,16 +107,8 @@ const buildSharedSupplierHighlights = (events = []) => {
 
 
 
-
-
-
-
   return highlights;
 };
-
-
-
-
 
 
 
@@ -160,10 +124,6 @@ const buildSharedSupplierHighlights = (events = []) => {
   - Assign driver
   - Confirm order ready for driver
 */
-
-
-
-
 
 
 
@@ -190,19 +150,11 @@ export default function Warehouse({
 
 
 
-
-
-
-
   // Visual supplier highlights are read from the compact cache written by POS sync.
   // This deliberately performs no database request, so Warehouse navigation stays fast.
   useEffect(() => {
     setSupplierHighlights(readSupplierHighlights());
   }, [orders]);
-
-
-
-
 
 
 
@@ -224,23 +176,11 @@ export default function Warehouse({
 
 
 
-
-
-
-
-
-
-
-
   // Supplier colours must survive navigation, refreshes, and different devices.
   // Local storage is only a fast same-browser cache; the persisted POS purchase
   // history is the shared source. This is read-only and never changes order data.
   useEffect(() => {
     let active = true;
-
-
-
-
 
 
 
@@ -264,10 +204,6 @@ export default function Warehouse({
 
 
 
-
-
-
-
     refreshSharedSupplierHighlights();
     window.addEventListener("focus", refreshSharedSupplierHighlights);
     return () => {
@@ -279,25 +215,13 @@ export default function Warehouse({
 
 
 
-
-
-
-
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
 
 
 
 
-
-
-
-
   const [assignedDrivers, setAssignedDrivers] = useState({});
-
-
-
-
 
 
 
@@ -310,17 +234,9 @@ export default function Warehouse({
 
 
 
-
-
-
-
   const getOrderTimestamp = (order) => {
     const rawDate = getOrderDateValue(order);
     if (!rawDate) return 0;
-
-
-
-
 
 
 
@@ -330,16 +246,8 @@ export default function Warehouse({
 
 
 
-
-
-
-
     const parsed = new Date(rawDate).getTime();
     if (!Number.isNaN(parsed)) return parsed;
-
-
-
-
 
 
 
@@ -351,15 +259,7 @@ export default function Warehouse({
 
 
 
-
-
-
-
     if (!match) return 0;
-
-
-
-
 
 
 
@@ -378,10 +278,6 @@ export default function Warehouse({
 
 
 
-
-
-
-
   /*
     Company information for invoice print.
     Future change:
@@ -390,10 +286,6 @@ export default function Warehouse({
   */
   const LOGO_URL =
     "https://naobitwzrkovmwvzvgvf.supabase.co/storage/v1/object/public/product-images/Logo.png";
-
-
-
-
 
 
 
@@ -414,10 +306,6 @@ export default function Warehouse({
 
 
 
-
-
-
-
   /*
     Load active drivers from Supabase.
   */
@@ -431,18 +319,10 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   if (error) {
     console.error("Driver load error:", error);
     return;
   }
-
-
-
-
 
 
 
@@ -458,17 +338,9 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   useEffect(() => {
     fetchDrivers();
   }, []);
-
-
-
-
 
 
 
@@ -482,10 +354,6 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
     return orders
   .filter((order) => ["Warehouse Packing", "Ready For Driver"].includes(order.status))
   .filter((order) => {
@@ -494,15 +362,7 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
     if (!keyword) return true;
-
-
-
-
 
 
 
@@ -535,16 +395,8 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
     const orderTime = getOrderTimestamp(order);
     if (!orderTime) return false;
-
-
-
-
 
 
 
@@ -556,10 +408,6 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
     const toTime = toDate
       ? new Date(`${toDate}T23:59:59`).getTime()
       : null;
@@ -567,16 +415,8 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
     if (fromTime && orderTime < fromTime) return false;
     if (toTime && orderTime > toTime) return false;
-
-
-
-
 
 
 
@@ -593,10 +433,6 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   const warehousePackingCount = orders.filter(
     (order) => order.status === "Warehouse Packing"
   ).length;
@@ -604,10 +440,6 @@ const fetchDrivers = async () => {
     (order) => order.status === "Ready For Driver"
   ).length;
   const allWarehouseCount = warehousePackingCount + readyForDriverCount;
-
-
-
-
 
 
 
@@ -625,10 +457,6 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   /*
     Printable items:
     includeInPicking === false means the item was removed/cannot supply.
@@ -636,10 +464,6 @@ const fetchDrivers = async () => {
   */
  const getPrintableItems = (order) =>
   sortPrintItems(calculateDocumentTotals(order.items || [], order).invoiceItems);
-
-
-
-
 
 
 
@@ -652,19 +476,11 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   /*
     Product quantity helper.
     Supports different possible field names from your order object.
   */
   const getLineQty = getOrderItemQty;
-
-
-
-
 
 
 
@@ -684,10 +500,6 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   const withWarehousePackedQuantities = (order = {}) => ({
     ...order,
     items: (order.items || []).map((item) => ({
@@ -696,14 +508,6 @@ const fetchDrivers = async () => {
       quantity: getWarehousePackedQty(item),
     })),
   });
-
-
-
-
-
-
-
-
 
 
 
@@ -726,20 +530,12 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   const isPrintExcludedSupplyItem = (item = {}) =>
     PRINT_EXCLUDED_SUPPLY_STATUSES.has(
       String(item.sourceStatus || item.source_status || item.status || "")
         .trim()
         .toLowerCase()
     );
-
-
-
-
 
 
 
@@ -754,72 +550,68 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   const getWarehousePrintOrder = (order = {}) =>
     withWarehousePrintableItems(withWarehousePackedQuantities(order));
 
 
 
 
-  // Fresh invoice hydration can lag behind the current Warehouse card state.
-  // For customer documents, preserve the current operational item status by
-  // matching the live Warehouse line back onto the freshly hydrated order.
   const withCurrentWarehouseItemStatuses = (freshOrder = {}, currentOrder = {}) => {
     const currentItems = currentOrder.items || currentOrder.order_items || [];
-    const currentByKey = new Map(
-      currentItems.map((item) => [
-        String(item.dbId || item.order_item_id || item.id || item.productId || item.product_id || ""),
-        item,
-      ])
-    );
+    const currentById = new Map();
+    const currentByProduct = new Map();
 
 
-    const mergeItems = (items = []) =>
-      items.map((item) => {
-        const key = String(
-          item.dbId || item.order_item_id || item.id || item.productId || item.product_id || ""
-        );
-        const current = currentByKey.get(key);
-        if (!current) return item;
+    currentItems.forEach((item) => {
+      const itemId = String(item.dbId || item.order_item_id || item.orderItemId || "");
+      const productId = String(item.productId || item.product_id || item.id || "");
+      if (itemId) currentById.set(itemId, item);
+      if (productId) currentByProduct.set(productId, item);
+    });
 
 
-        const currentStatus =
-          current.sourceStatus || current.source_status || current.status || null;
-        if (!currentStatus) return item;
+    const mergedItems = (freshOrder.items || freshOrder.order_items || []).map((item) => {
+      const itemId = String(item.dbId || item.order_item_id || item.orderItemId || "");
+      const productId = String(item.productId || item.product_id || item.id || "");
+      const current = currentById.get(itemId) || currentByProduct.get(productId);
+      if (!current) return item;
 
 
-        const isFree = ["free", "promotion free"].includes(
-          String(currentStatus).trim().toLowerCase()
-        );
+      const currentStatus =
+        current.sourceStatus || current.source_status || current.status || null;
+      if (!currentStatus) return item;
 
 
-        return {
-          ...item,
-          sourceStatus: currentStatus,
-          source_status: currentStatus,
-          ...(isFree
-            ? {
-                price: 0,
-                unit_price: 0,
-                unitPrice: 0,
-                line_total: 0,
-                lineTotal: 0,
-                net_total: 0,
-                netTotal: 0,
-                gross_total: 0,
-                grossTotal: 0,
-                vat_amount: 0,
-                vat_total: 0,
-              }
-            : {}),
-        };
-      });
+      const free = ["free", "promotion free"].includes(
+        String(currentStatus).trim().toLowerCase()
+      );
 
 
-    const mergedItems = mergeItems(freshOrder.items || freshOrder.order_items || []);
+      return {
+        ...item,
+        sourceStatus: currentStatus,
+        source_status: currentStatus,
+        ...(free
+          ? {
+              price: 0,
+              selectedPrice: 0,
+              selected_price: 0,
+              unit_price: 0,
+              unitPrice: 0,
+              lineTotal: 0,
+              line_total: 0,
+              netTotal: 0,
+              net_total: 0,
+              grossTotal: 0,
+              gross_total: 0,
+              vatTotal: 0,
+              vat_total: 0,
+            }
+          : {}),
+      };
+    });
+
+
     return {
       ...freshOrder,
       items: mergedItems,
@@ -830,34 +622,14 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
- const isWarehouseFreeItem = (item = {}) =>
-  ["free", "promotion free"].includes(
-    String(item.sourceStatus || item.source_status || item.status || "").trim().toLowerCase()
-  );
-
-
-
-
  const getSavedLinePrice = (item = {}) =>
-  isWarehouseFreeItem(item) ? 0 : Number(item.price ?? item.unit_price ?? 0);
-
-
-
-
+  Number(item.price ?? item.unit_price ?? 0);
 
 
 
 
  const getSavedLineNetTotal = (item = {}) =>
-  isWarehouseFreeItem(item) ? 0 : Number(item.net_total ?? item.netTotal ?? 0);
-
-
-
-
+  Number(item.net_total ?? item.netTotal ?? 0);
 
 
 
@@ -868,16 +640,8 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
   const getWarehouseStatus = (item = {}) =>
     String(item.sourceStatus || item.source_status || item.status || "In Stock");
-
-
-
-
 
 
 
@@ -888,28 +652,15 @@ const fetchDrivers = async () => {
 
 
 
-
-
-
-
     if (status === "in stock" || status === "available") return 1;
     if (status === "need supplier" || status === "pre-order" || status === "pre order") return 2;
     if (status === "cannot supply" || status === "supply needed") return 3;
-    if (status === "free" || status === "promotion free") return 4;
 
 
 
 
-
-
-
-
-    return 5;
+    return 4;
   };
-
-
-
-
 
 
 
@@ -923,19 +674,11 @@ const getInitialWarehouseItemOrder = (items = []) => {
 
 
 
-
-
-
-
     const productDifference = compareWarehouseProducts(left, right);
     if (productDifference !== 0) return productDifference;
     return itemKey(left).localeCompare(itemKey(right));
   });
 };
-
-
-
-
 
 
 
@@ -951,10 +694,6 @@ const captureStableWarehouseItems = (order = {}) => {
 
 
 
-
-
-
-
 // Group once when an order is first opened in Warehouse, then preserve that
 // visual snapshot while staff change statuses. Re-entering Warehouse creates a
 // new component instance and therefore a fresh grouping snapshot.
@@ -962,10 +701,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   const key = String(orderId || "");
   const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
   const snapshot = stableItemOrders[key] || getInitialWarehouseItemOrder(items).map(itemKey);
-
-
-
-
 
 
 
@@ -979,10 +714,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   }
   return result;
 };
-
-
-
-
 
 
 
@@ -1006,10 +737,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   printOrderFormDocument(order);
   await logAction({
     user: loggedInUser,
@@ -1020,10 +747,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     new_value: "Customer Document",
   });
 };
-
-
-
-
 
 
 
@@ -1043,17 +766,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
     const printOrderFormDocument = (order) => {
     printCentralOrderForm(getWarehousePrintOrder(order));
     return;
-
-
-
-
 
 
 
@@ -1067,19 +782,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
-
-
-
-
   const totals = getInvoiceTotals(order);
-
-
-
-
 
 
 
@@ -1087,10 +790,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   const orderDate = order.createdAt
     ? new Date(order.createdAt).toLocaleDateString()
     : new Date().toLocaleDateString();
-
-
-
-
 
 
 
@@ -1104,19 +803,11 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
      return `
           <tr>
             <td class="product-code">
               ${item.productCode || item.product_code || ""}
             </td>
-
-
-
-
 
 
 
@@ -1128,10 +819,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
             <td class="qty-col">
               ${qty.toFixed(2)}
             </td>
@@ -1139,17 +826,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
             <td class="price-col">
               ${price.toFixed(2)}
             </td>
-
-
-
-
 
 
 
@@ -1165,10 +844,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   const html = `
     <html>
       <head>
@@ -1177,16 +852,8 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
         <style>
           @page { size: A4; margin: 10mm; }
-
-
-
-
 
 
 
@@ -1201,17 +868,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .page {
             min-height: 277mm;
           }
-
-
-
-
 
 
 
@@ -1226,20 +885,12 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .sub-title {
             text-align: center;
             font-size: 18px;
             font-weight: 900;
             margin-bottom: 20px;
           }
-
-
-
-
 
 
 
@@ -1254,18 +905,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .box-title {
             font-weight: 700;
             margin-bottom: 5px;
           }
-
-
-
-
 
 
 
@@ -1275,10 +918,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             grid-template-columns: 95px 1fr;
             margin-bottom: 4px;
           }
-
-
-
-
 
 
 
@@ -1293,10 +932,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
                 table {
                   width: 100%;
                   border-collapse: collapse;
@@ -1304,10 +939,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
                   table-layout: fixed;
                   font-size: 11px;
                 }
-
-
-
-
 
 
 
@@ -1325,18 +956,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
                 thead,
                 thead tr {
                   background-color: #d9e2f3 !important;
                 }
-
-
-
-
 
 
 
@@ -1350,10 +973,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
               .th-code {
                 width: 90px;
                 
@@ -1362,18 +981,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
               .th-desc {
                 width: auto;
                 
               }
-
-
-
-
 
 
 
@@ -1387,19 +998,11 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
               .th-price,
                 .price-col {
                   width: 70px;
                   text-align: center;
                 }
-
-
-
-
 
 
 
@@ -1413,10 +1016,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
                             .th-net,
                 .net-col {
                   width: 75px;
@@ -1426,18 +1025,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
               .desc-col {
                 font-size: 11px;
                 font-weight: 400;
               }
-
-
-
-
 
 
 
@@ -1453,17 +1044,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .right {
             text-align: right;
           }
-
-
-
-
 
 
 
@@ -1479,10 +1062,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .qty-box {
             margin-top: 28px;
             font-size: 13px;
@@ -1493,17 +1072,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .summary-box {
             border: 1px solid #000;
           }
-
-
-
-
 
 
 
@@ -1517,17 +1088,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .summary-row:last-child {
             border-bottom: none;
           }
-
-
-
-
 
 
 
@@ -1540,17 +1103,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .summary-label {
             font-weight: 700;
           }
-
-
-
-
 
 
 
@@ -1562,18 +1117,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .grand {
             font-size: 14px;
             font-weight: 900;
           }
-
-
-
-
 
 
 
@@ -1588,18 +1135,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
       <body>
         <div class="page">
           <div class="main-title">ORDER FORM</div>
           <div class="sub-title">NOT AN INVOICE</div>
-
-
-
-
 
 
 
@@ -1616,19 +1155,11 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
             <div>
               <div class="details-row">
                 <strong>Order Date</strong>
                 <span>${orderDate}</span>
               </div>
-
-
-
-
 
 
 
@@ -1641,20 +1172,12 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
               <div class="details-row">
                 <strong>Order Number</strong>
                 <span>${order.orderId || "-"}</span>
               </div>
             </div>
           </div>
-
-
-
-
 
 
 
@@ -1673,18 +1196,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
             <tbody>
               ${rows}
             </tbody>
           </table>
-
-
-
-
 
 
 
@@ -1698,10 +1213,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
             <div class="summary-box">
               <div class="summary-row grand">
                 <div class="summary-label">TOTAL</div>
@@ -1709,10 +1220,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
               </div>
             </div>
           </div>
-
-
-
-
 
 
 
@@ -1729,10 +1236,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
         <script>
           window.print();
         </script>
@@ -1743,15 +1246,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   const w = window.open("", "_blank");
-
-
-
-
 
 
 
@@ -1764,17 +1259,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   w.document.write(html);
   w.document.close();
 };
-
-
-
-
 
 
 
@@ -1792,10 +1279,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   const rows = items
     .map(
       (item) => `
@@ -1806,10 +1289,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
       `
     )
     .join("");
-
-
-
-
 
 
 
@@ -1829,10 +1308,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           h1 {
             text-align: center;
             font-size: 22px;
@@ -1842,18 +1317,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .info {
             margin-bottom: 16px;
             line-height: 1.7;
           }
-
-
-
-
 
 
 
@@ -1868,18 +1335,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           th {
             background: #e5e7eb;
             font-weight: 700;
           }
-
-
-
-
 
 
 
@@ -1893,19 +1352,11 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
           .totals {
             margin-top: 16px;
             font-weight: bold;
             line-height: 1.7;
           }
-
-
-
-
 
 
 
@@ -1916,10 +1367,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             justify-content: space-between;
             gap: 40px;
           }
-
-
-
-
 
 
 
@@ -1936,16 +1383,8 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
       <body>
         <h1>Delivery Note</h1>
-
-
-
-
 
 
 
@@ -1956,10 +1395,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
           <div><strong>Driver:</strong> ${order.driverName || "-"}</div>
           <div><strong>Date:</strong> ${new Date().toLocaleDateString()}</div>
         </div>
-
-
-
-
 
 
 
@@ -1979,10 +1414,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
         <div class="totals">
           <div>Total Lines: ${totals.totalLines}</div>
           <div>Total Quantity: ${totals.totalQty}</div>
@@ -1991,18 +1422,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
         <div class="signatures">
           <div class="signature">Driver Signature</div>
           <div class="signature">Customer Signature</div>
         </div>
-
-
-
-
 
 
 
@@ -2017,15 +1440,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   const printWindow = window.open("", "_blank");
-
-
-
-
 
 
 
@@ -2034,10 +1449,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     alert("Popup blocked. Please allow popups to print delivery note.");
     return;
   }
-
-
-
-
 
 
 
@@ -2066,18 +1477,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
     if (supplierIssueItems.length === 0) {
       alert("No supplier issue items to export.");
       return;
     }
-
-
-
-
 
 
 
@@ -2087,16 +1490,8 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
     supplierIssueItems.forEach((item) => {
       const key = item.product;
-
-
-
-
 
 
 
@@ -2112,16 +1507,8 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
       grouped[key].Qty += item.qty;
     });
-
-
-
-
 
 
 
@@ -2133,17 +1520,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
     XLSX.utils.book_append_sheet(workbook, worksheet, "Supplier Summary");
     XLSX.writeFile(workbook, "supplier-issues-summary.xlsx");
   };
-
-
-
-
 
 
 
@@ -2157,10 +1536,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
     warehouseOrders.forEach((order) => {
       (order.items || []).forEach((item) => {
         const sourceStatus = getWarehouseStatus(item).trim();
@@ -2169,15 +1544,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
         if (!normalizedStatuses.has(normalizedStatus)) return;
-
-
-
-
 
 
 
@@ -2188,15 +1555,7 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
         if (!key) return;
-
-
-
-
 
 
 
@@ -2211,10 +1570,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
         groupedItems[key].Qty += getLineQty(item);
       });
     });
@@ -2222,17 +1577,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
     const exportRows = Object.values(groupedItems).sort((a, b) =>
       String(a.Product).localeCompare(String(b.Product))
     );
-
-
-
-
 
 
 
@@ -2245,16 +1592,8 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
     const workbook = XLSX.utils.book_new();
-
-
-
-
 
 
 
@@ -2262,10 +1601,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
     XLSX.writeFile(workbook, fileName);
   };
-
-
-
-
 
 
 
@@ -2281,10 +1616,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   const exportPreOrderList = () => {
     exportWarehouseItems(
       ["Pre-Order"],
@@ -2292,10 +1623,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
       "Pre-Order List"
     );
   };
-
-
-
-
 
 
 
@@ -2316,20 +1643,12 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   /*
     Assign driver to order.
   */
  const assignDriver = async (order, driverName) => {
   const orderId = getOrderId(order);
   const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
-
-
-
-
 
 
 
@@ -2342,18 +1661,10 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
   setAssignedDrivers((prev) => ({
     ...prev,
     [orderId]: driverName,
   }));
-
-
-
-
 
 
 
@@ -2366,16 +1677,8 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 
-
-
-
-
 const printProtectedOrderForm = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
-
-
-
-
 
 
 
@@ -2394,26 +1697,18 @@ const printProtectedOrderForm = async (order) => {
 
 
 
-
-
-
-
 const printProtectedInvoice = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
 
 
 
-
-
-
-
   const freshOrder = await fetchInvoiceOrderFromDb(order).catch(() => null);
-  const currentStatusOrder = freshOrder
+  const invoiceOrder = freshOrder
     ? withCurrentWarehouseItemStatuses(freshOrder, order)
     : order;
   const resolvedOrder = await withResolvedInvoicePaymentStatus(
-    getWarehousePrintOrder(currentStatusOrder)
+    getWarehousePrintOrder(invoiceOrder)
   );
   printCentralInvoice(resolvedOrder);
   await logAction({
@@ -2429,26 +1724,18 @@ const printProtectedInvoice = async (order) => {
 
 
 
-
-
-
-
 const printProtectedDeliveryNote = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print delivery notes.")) return;
 
 
 
 
-
-
-
-
   const freshOrder = await fetchInvoiceOrderFromDb(order).catch(() => null);
-  const currentStatusOrder = freshOrder
+  const deliveryOrder = freshOrder
     ? withCurrentWarehouseItemStatuses(freshOrder, order)
     : order;
   const resolvedOrder = await withResolvedInvoicePaymentStatus(
-    getWarehousePrintOrder(currentStatusOrder)
+    getWarehousePrintOrder(deliveryOrder)
   );
   printCentralDeliveryNote(resolvedOrder);
   await logAction({
@@ -2460,10 +1747,6 @@ const printProtectedDeliveryNote = async (order) => {
     new_value: "Delivery Note",
   });
 };
-
-
-
-
 
 
 
@@ -2482,10 +1765,6 @@ const backToReceived = async (order) => {
 
 
 
-
-
-
-
   await changeOrderStatus(order.orderId, "Received");
   await logAction({
     user: loggedInUser,
@@ -2496,10 +1775,6 @@ const backToReceived = async (order) => {
     new_value: "Received",
   });
 };
-
-
-
-
 
 
 
@@ -2518,16 +1793,8 @@ const confirmForDriver = async (order) => {
 
 
 
-
-
-
-
   const orderId = order.orderId || order.order_number;
   const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
-
-
-
-
 
 
 
@@ -2540,18 +1807,10 @@ const confirmForDriver = async (order) => {
 
 
 
-
-
-
-
   const driverName =
     assignedDrivers[orderId] ||
     order.driverName ||
     order.driver_name;
-
-
-
-
 
 
 
@@ -2564,17 +1823,9 @@ const confirmForDriver = async (order) => {
 
 
 
-
-
-
-
   await updateOrderExtraFields(orderId, {
     driver_name: driverName,
   });
-
-
-
-
 
 
 
@@ -2589,10 +1840,6 @@ const confirmForDriver = async (order) => {
     new_value: "Ready For Driver",
   });
 };
-
-
-
-
 
 
 
@@ -2618,16 +1865,8 @@ const orderValue = cardTotals.grandTotal;
 
 
 
-
-
-
-
 const customerPrintLabel =
   documentType === "order_form" ? "Print Order Form" : "Print Invoice";
-
-
-
-
 
 
 
@@ -2648,10 +1887,6 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
     return (
       <div key={orderId} className="bg-white border rounded-2xl p-3">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
@@ -2661,10 +1896,6 @@ const printCustomerDocumentForMode =
               {branchName ? ` | ${branchName}` : ""}
             </h3>
           </div>
-
-
-
-
 
 
 
@@ -2692,10 +1923,6 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
           </div>
         </div>
         <div
@@ -2717,10 +1944,6 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
         {expandedOrders[orderId] && (
           <div className="mt-3 space-y-3">
             <div className="hidden md:grid grid-cols-[1fr_70px_140px] border-b font-bold text-xs text-slate-600 px-3 py-2">
@@ -2728,10 +1951,6 @@ const printCustomerDocumentForMode =
               <div className="text-center">Qty</div>
               <div className="text-center">Status</div>
             </div>
-
-
-
-
 
 
 
@@ -2769,17 +1988,9 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
                   <div className="text-center font-semibold">
                     {getWarehousePackedQty(item, order)}
                   </div>
-
-
-
-
 
 
 
@@ -2799,17 +2010,9 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
                 </div>
               );
             })}
-
-
-
-
 
 
 
@@ -2827,10 +2030,6 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
               {hasPermission(loggedInUser, "can_print") && (
                 <button
                   onClick={() => printProtectedDeliveryNote(order)}
@@ -2839,10 +2038,6 @@ const printCustomerDocumentForMode =
                   Delivery Note
                 </button>
               )}
-
-
-
-
 
 
 
@@ -2859,10 +2054,6 @@ const printCustomerDocumentForMode =
                   Thermal Print
                 </button>
               )}
-
-
-
-
 
 
 
@@ -2886,10 +2077,6 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
               {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
                 <button
                   onClick={() => confirmForDriver(order)}
@@ -2898,10 +2085,6 @@ const printCustomerDocumentForMode =
                   Ready For Driver
                 </button>
               )}
-
-
-
-
 
 
 
@@ -2924,20 +2107,12 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
   const warehousePackingOrders = warehouseOrders.filter(
     (order) => order.status === "Warehouse Packing"
   );
   const readyForDriverOrders = warehouseOrders.filter(
     (order) => order.status === "Ready For Driver"
   );
-
-
-
-
 
 
 
@@ -2957,10 +2132,6 @@ const printCustomerDocumentForMode =
       })()}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <h2 className="text-xl font-bold">Warehouse</h2>
-
-
-
-
 
 
 
@@ -2990,10 +2161,6 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
       <div className="bg-white border rounded-2xl p-3">
         <label className="block text-xs font-bold text-slate-500 mb-1">
           Search
@@ -3005,10 +2172,6 @@ const printCustomerDocumentForMode =
           className="w-full border rounded-xl px-3 py-2 text-sm"
         />
       </div>
-
-
-
-
 
 
 
@@ -3026,10 +2189,6 @@ const printCustomerDocumentForMode =
               className="w-full border rounded-xl px-3 py-2 text-sm"
             />
           </label>
-
-
-
-
 
 
 
@@ -3052,10 +2211,6 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
           <label className="block">
             <span className="block text-xs font-bold text-slate-500 mb-1">
               To date
@@ -3067,10 +2222,6 @@ const printCustomerDocumentForMode =
               className="w-full border rounded-xl px-3 py-2 text-sm"
             />
           </label>
-
-
-
-
 
 
 
@@ -3091,10 +2242,6 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
         <div className="flex flex-wrap gap-2 justify-end">
           <button
             type="button"
@@ -3109,19 +2256,11 @@ const printCustomerDocumentForMode =
 
 
 
-
-
-
-
       {warehouseOrders.length === 0 && (
         <div className="bg-slate-50 border rounded-2xl p-4 text-sm">
           No warehouse orders.
         </div>
       )}
-
-
-
-
 
 
 
@@ -3135,10 +2274,6 @@ const printCustomerDocumentForMode =
             {warehousePackingOrders.map(renderWarehouseCard)}
           </section>
         )}
-
-
-
-
 
 
 
