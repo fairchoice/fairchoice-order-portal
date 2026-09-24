@@ -1,7 +1,7 @@
 import { getFcSessionState } from "./fcSession.js";
 import { supabase } from "./supabase.js";
 
-export const WAREHOUSE_STATUSES = Object.freeze(["In Stock", "Pre-Order", "Cannot Supply"]);
+export const WAREHOUSE_STATUSES = Object.freeze(["In Stock", "Pre-Order", "Cannot Supply", "Free"]);
 
 export const PICKING_MISMATCH_ACTION = "Picking Mismatch";
 
@@ -53,6 +53,7 @@ export const normalizeWarehouseStatus = (value) => {
     return "Pre-Order";
   }
   if (status === "cannot supply") return "Cannot Supply";
+  if (["free", "promotion free"].includes(status)) return "Free";
   return String(value || "").trim();
 };
 
@@ -197,6 +198,18 @@ export async function recordWarehouseOperationalActivity(activity, user) {
   const session = sessionArgs(user);
   const event = buildWarehouseActivityEvent(activity);
   const { data, error } = await supabase.rpc("fc_record_warehouse_operational_event_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
+    p_event: event,
+  });
+  if (error) throw error;
+  return normalizeWarehouseActivity(Array.isArray(data) ? data[0] : data);
+}
+
+export async function recordReceivedOrderFreeActivity(activity, user) {
+  const session = sessionArgs(user);
+  const event = buildWarehouseActivityEvent(activity);
+  const { data, error } = await supabase.rpc("fc_record_received_order_free_event_v1", {
     p_username: session.username,
     p_session_token: session.token,
     p_event: event,
