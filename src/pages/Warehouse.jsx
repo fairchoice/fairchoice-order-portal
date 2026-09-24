@@ -450,12 +450,17 @@ const fetchDrivers = async () => {
     withWarehousePrintableItems(withWarehousePackedQuantities(order));
 
 
+ const isWarehouseFreeItem = (item = {}) =>
+  ["free", "promotion free"].includes(
+    String(item.sourceStatus || item.source_status || item.status || "").trim().toLowerCase()
+  );
+
  const getSavedLinePrice = (item = {}) =>
-  Number(item.price ?? item.unit_price ?? 0);
+  isWarehouseFreeItem(item) ? 0 : Number(item.price ?? item.unit_price ?? 0);
 
 
  const getSavedLineNetTotal = (item = {}) =>
-  Number(item.net_total ?? item.netTotal ?? 0);
+  isWarehouseFreeItem(item) ? 0 : Number(item.net_total ?? item.netTotal ?? 0);
 
 
   const getInvoiceTotals = (order = {}) =>
@@ -473,9 +478,10 @@ const fetchDrivers = async () => {
     if (status === "in stock" || status === "available") return 1;
     if (status === "need supplier" || status === "pre-order" || status === "pre order") return 2;
     if (status === "cannot supply" || status === "supply needed") return 3;
+    if (status === "free" || status === "promotion free") return 4;
 
 
-    return 4;
+    return 5;
   };
 
 
