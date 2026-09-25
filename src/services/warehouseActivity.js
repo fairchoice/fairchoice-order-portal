@@ -1,7 +1,7 @@
-import { getFcSessionState } from "./fcSession.js";
+﻿import { getFcSessionState } from "./fcSession.js";
 import { supabase } from "./supabase.js";
 
-export const WAREHOUSE_STATUSES = Object.freeze(["In Stock", "Pre-Order", "Cannot Supply"]);
+export const WAREHOUSE_STATUSES = Object.freeze(["In Stock", "Pre-Order", "Cannot Supply", "Free"]);
 
 export const PICKING_MISMATCH_ACTION = "Picking Mismatch";
 
@@ -53,6 +53,7 @@ export const normalizeWarehouseStatus = (value) => {
     return "Pre-Order";
   }
   if (status === "cannot supply") return "Cannot Supply";
+  if (["free", "promotion free"].includes(status)) return "Free";
   return String(value || "").trim();
 };
 
@@ -233,7 +234,6 @@ export async function loadWarehouseActivityReport(user, { dateFrom = "", dateTo 
   if (error) throw error;
   return (data || []).map(normalizeWarehouseActivity);
 }
-
 
 export async function loadReceivedOrderActivityReport(user, { dateFrom = "", dateTo = "" } = {}) {
   const session = sessionArgs(user);
