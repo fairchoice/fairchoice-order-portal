@@ -1130,8 +1130,26 @@ useEffect(() => {
 
 
 useEffect(() => {
-  localStorage.setItem(cartStorageKey, JSON.stringify(cart));
-  localStorage.removeItem(LEGACY_CART_KEY);
+  try {
+    localStorage.setItem(cartStorageKey, JSON.stringify(cart));
+    localStorage.removeItem(LEGACY_CART_KEY);
+  } catch (error) {
+    const storageQuotaExceeded =
+      error?.name === "QuotaExceededError" || error?.code === 22 || error?.code === 1014;
+
+    if (storageQuotaExceeded) {
+      console.warn("Customer cart cache skipped because browser storage is full.");
+      try {
+        localStorage.removeItem(cartStorageKey);
+        localStorage.removeItem(LEGACY_CART_KEY);
+      } catch {
+        // The server-backed cart remains the source of truth.
+      }
+      return;
+    }
+
+    console.warn("Unable to persist customer cart cache:", error);
+  }
 }, [cart, cartStorageKey]);
 
 
@@ -4118,10 +4136,14 @@ const submitOrder = async () => {
         : `ORD-${Date.now()}-${globalThis.crypto?.randomUUID?.().slice(0, 8) || Math.random().toString(36).slice(2, 10)}`;
 
 
-    localStorage.setItem(
-      orderSubmissionStorageKey,
-      JSON.stringify({ orderNumber: submissionOrderNumber, fingerprint: submissionFingerprint })
-    );
+    try {
+      localStorage.setItem(
+        orderSubmissionStorageKey,
+        JSON.stringify({ orderNumber: submissionOrderNumber, fingerprint: submissionFingerprint })
+      );
+    } catch (error) {
+      console.warn("Unable to persist order submission cache; continuing with order placement:", error);
+    }
 
 
     const orderRequest = buildCustomerOrderRequest({
