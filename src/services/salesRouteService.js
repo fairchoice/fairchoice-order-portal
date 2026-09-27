@@ -30,6 +30,31 @@ const readLocal = (key) => {
   try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; }
 };
 const writeLocal = (key, rows) => localStorage.setItem(key, JSON.stringify(rows || []));
+const VISIT_CACHE_MAX_ROWS = 500;
+const VISIT_CACHE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const cleanupVisitCache = (serverRows = [], extraRows = null) => {
+  try {
+    const syncedIds = new Set((serverRows || []).map((row) => String(row?.id || "")).filter(Boolean));
+    const syncedOrderNumbers = new Set((serverRows || []).map((row) => String(row?.order_number || "").trim()).filter(Boolean));
+    const cutoff = Date.now() - VISIT_CACHE_RETENTION_MS;
+    const sourceRows = extraRows || readLocal(VISITS_KEY);
+    const rows = sourceRows
+      .filter((row) => {
+        const visitedAt = new Date(row?.visited_at || 0).getTime();
+        if (Number.isFinite(visitedAt) && visitedAt > 0 && visitedAt < cutoff) return false;
+        if (syncedIds.has(String(row?.id || ""))) return false;
+        const orderNumber = String(row?.order_number || "").trim();
+        return !orderNumber || !syncedOrderNumbers.has(orderNumber);
+      })
+      .slice(-VISIT_CACHE_MAX_ROWS);
+
+    if (rows.length) writeLocal(VISITS_KEY, rows);
+    else localStorage.removeItem(VISITS_KEY);
+  } catch (error) {
+    try { localStorage.removeItem(VISITS_KEY); } catch {}
+    console.warn("Sales route local cache skipped because browser storage is full.", error?.message || error);
+  }
+};
 const missingRelation = (error) => ["42P01", "PGRST205", "PGRST204", "42703"].includes(error?.code) || /does not exist|schema cache/i.test(String(error?.message || ""));
 const routeVisitWriteUnavailable = (error) =>
   missingRelation(error) ||
@@ -90,7 +115,11 @@ export async function loadRouteVisits({ dateFrom = null, dateTo = null } = {}) {
   if (dateFrom) query = query.gte("business_date", dateFrom);
   if (dateTo) query = query.lte("business_date", dateTo);
   const { data, error } = await query;
-  if (!error) return data || [];
+  if (!error) {
+    const visits = data || [];
+    cleanupVisitCache(visits);
+    return visits;
+  }
   if (!missingRelation(error)) throw error;
   return readLocal(VISITS_KEY).filter((row) => (!dateFrom || row.business_date >= dateFrom) && (!dateTo || row.business_date <= dateTo));
 }
@@ -123,11 +152,16 @@ export async function recordSalesRouteVisit({
     visited_at: new Date().toISOString(),
   };
   const { data, error } = await supabase.from("sales_route_visits").insert(row).select("*").single();
-  if (!error) return data;
+  if (!error) {
+    cleanupVisitCache([data]);
+    return data;
+  }
   if (!routeVisitWriteUnavailable(error)) throw error;
   console.warn("Sales route visit tracking unavailable; continuing without blocking order flow:", error?.message || error);
   const rows = readLocal(VISITS_KEY);
-  rows.push(row); writeLocal(VISITS_KEY, rows); return row;
+  rows.push(row);
+  cleanupVisitCache([], rows);
+  return row;
 }
 
 export async function loadTodaysSalesRoute({ customers = [], currentUser = null, date = new Date() } = {}) {
