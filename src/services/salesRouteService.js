@@ -1,7 +1,9 @@
 import { supabase } from "./supabase";
 
+
 const ROUTES_KEY = "fairchoice_sales_route_assignments_v1";
 const VISITS_KEY = "fairchoice_sales_route_visits_v1";
+
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 export const SALES_ROUTE_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -14,6 +16,7 @@ export const EXCEPTION_ORDER_REASONS = [
   "Other",
 ];
 
+
 export const NO_ORDER_REASONS = [
   "Customer has enough stock",
   "Buyer / owner unavailable",
@@ -25,6 +28,7 @@ export const NO_ORDER_REASONS = [
   "Temporarily not trading",
   "Other",
 ];
+
 
 const readLocal = (key) => {
   try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; }
@@ -48,6 +52,7 @@ const cleanupVisitCache = (serverRows = [], extraRows = null) => {
       })
       .slice(-VISIT_CACHE_MAX_ROWS);
 
+
     if (rows.length) writeLocal(VISITS_KEY, rows);
     else localStorage.removeItem(VISITS_KEY);
   } catch (error) {
@@ -68,11 +73,13 @@ export const getBusinessDate = (value = new Date()) => {
   return local.toISOString().slice(0, 10);
 };
 
+
 export async function loadSalesRouteStaff() {
   const { data, error } = await supabase.from("staff_users").select("id, staff_code, staff_name, role, active").eq("active", true).order("staff_name");
   if (error) return [];
   return (data || []).filter((row) => /sales|admin/i.test(String(row.role || "")));
 }
+
 
 export async function loadRouteAssignments() {
   const { data, error } = await supabase.from("sales_route_assignments").select("*").order("day_of_week").order("visit_sequence");
@@ -80,6 +87,7 @@ export async function loadRouteAssignments() {
   if (!missingRelation(error)) throw error;
   return readLocal(ROUTES_KEY);
 }
+
 
 export async function saveRouteAssignment(input = {}) {
   const row = {
@@ -103,12 +111,14 @@ export async function saveRouteAssignment(input = {}) {
   return row;
 }
 
+
 export async function removeRouteAssignment(id) {
   const { error } = await supabase.from("sales_route_assignments").delete().eq("id", id);
   if (!error) return;
   if (!missingRelation(error)) throw error;
   writeLocal(ROUTES_KEY, readLocal(ROUTES_KEY).filter((row) => String(row.id) !== String(id)));
 }
+
 
 export async function loadRouteVisits({ dateFrom = null, dateTo = null } = {}) {
   let query = supabase.from("sales_route_visits").select("*").order("visited_at", { ascending: false });
@@ -123,6 +133,7 @@ export async function loadRouteVisits({ dateFrom = null, dateTo = null } = {}) {
   if (!missingRelation(error)) throw error;
   return readLocal(VISITS_KEY).filter((row) => (!dateFrom || row.business_date >= dateFrom) && (!dateTo || row.business_date <= dateTo));
 }
+
 
 export async function recordSalesRouteVisit({
   customerAccountId,
@@ -164,6 +175,7 @@ export async function recordSalesRouteVisit({
   return row;
 }
 
+
 export async function loadTodaysSalesRoute({ customers = [], currentUser = null, date = new Date() } = {}) {
   const day = getRouteDay(date);
   const dateKey = getBusinessDate(date);
@@ -189,6 +201,7 @@ export async function loadTodaysSalesRoute({ customers = [], currentUser = null,
     .filter((row) => row.customer)
     .sort((a, b) => Number(a.visit_sequence || 0) - Number(b.visit_sequence || 0));
 }
+
 
 export async function loadSalesRouteAnalysis({ customers = [] } = {}) {
   const [assignments, visits, ordersResult] = await Promise.all([
@@ -245,6 +258,7 @@ export async function loadSalesRouteAnalysis({ customers = [] } = {}) {
     .map((route) => ({ route, customer: (customers || []).find((customer) => String(customer.id) === String(route.customer_account_id)) }))
     .filter((row) => row.customer)
     .sort((a, b) => Number(a.route.visit_sequence || 0) - Number(b.route.visit_sequence || 0));
+
 
   return {
     assignments,

@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase.js";
 import { getFcSessionState } from "../../services/fcSession.js";
 import { formatCurrency } from "../../utils/currency";
 
+
 const money = (v) => formatCurrency(Number(v || 0));
 const dateTime = (v) => v ? new Date(v).toLocaleString("en-GB") : "-";
+const isMissingWalletRpc = (error = {}) =>
+  ["42883", "PGRST202"].includes(String(error?.code || "")) ||
+  /could not find the function|schema cache/i.test(String(error?.message || ""));
+
 
 export default function CustomerWallet({ currentUser }) {
   const [accounts, setAccounts] = useState([]);
@@ -18,7 +23,9 @@ export default function CustomerWallet({ currentUser }) {
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState("");
 
+
   const session = useMemo(() => getFcSessionState(currentUser), [currentUser]);
+
 
   const loadAccounts = useCallback(async () => {
     if (!session.valid) return;
@@ -29,9 +36,17 @@ export default function CustomerWallet({ currentUser }) {
       });
       if (rpcError) throw rpcError;
       setAccounts(Array.isArray(data) ? data : []);
-    } catch (e) { setError(e.message || "Could not load customer wallets."); }
+    } catch (e) {
+      if (isMissingWalletRpc(e)) {
+        setAccounts([]);
+        setError("Customer Wallet setup is not active on this database yet. Existing invoices, payments and credit are unchanged.");
+      } else {
+        setError(e.message || "Could not load customer wallets.");
+      }
+    }
     finally { setLoading(false); }
   }, [session.valid, session.token, session.username]);
+
 
   const loadDetail = useCallback(async (customerAccountId) => {
     if (!session.valid || !customerAccountId) return;
@@ -45,8 +60,10 @@ export default function CustomerWallet({ currentUser }) {
     setSelectedInvoiceId(""); setApplyAmount("");
   }, [session.valid, session.token, session.username]);
 
+
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
   useEffect(() => { if (selectedId) loadDetail(selectedId); }, [selectedId, loadDetail]);
+
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -58,9 +75,11 @@ export default function CustomerWallet({ currentUser }) {
     });
   }, [accounts, search, balanceFilter]);
 
+
   const selectedAccount = accounts.find((a) => a.customer_account_id === selectedId);
   const invoices = Array.isArray(detail?.recent_invoices) ? detail.recent_invoices : [];
   const transactions = Array.isArray(detail?.transactions) ? detail.transactions : [];
+
 
   const applyWallet = async () => {
     if (!selectedInvoiceId) return;
@@ -79,6 +98,7 @@ export default function CustomerWallet({ currentUser }) {
     finally { setApplying(false); }
   };
 
+
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -94,7 +114,9 @@ export default function CustomerWallet({ currentUser }) {
         </div>
       </div>
 
+
       {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 font-bold text-red-700">{error}</div>}
+
 
       <div className="grid gap-4 xl:grid-cols-[1.1fr_1fr]">
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -107,12 +129,14 @@ export default function CustomerWallet({ currentUser }) {
           </div>
         </div>
 
+
         <div className="space-y-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-xs font-black uppercase text-slate-500">Selected Customer</div>
             <div className="mt-1 text-xl font-black">{selectedAccount?.customer_name || "Select a customer"}</div>
             <div className="mt-4 grid grid-cols-3 gap-2 text-center"><div className="rounded-xl bg-emerald-50 p-3"><div className="text-xs font-bold text-emerald-700">Available</div><div className="font-black text-emerald-800">{money(detail?.balance)}</div></div><div className="rounded-xl bg-slate-50 p-3"><div className="text-xs font-bold text-slate-500">Credits</div><div className="font-black">{money(selectedAccount?.wallet_credits)}</div></div><div className="rounded-xl bg-slate-50 p-3"><div className="text-xs font-bold text-slate-500">Used</div><div className="font-black">{money(selectedAccount?.wallet_debits)}</div></div></div>
           </div>
+
 
           {selectedId && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 className="font-black text-slate-900">Apply Wallet to Invoice</h3><p className="mt-1 text-xs text-slate-500">If you do not choose an invoice manually, Wallet applies automatically to today&apos;s current unpaid invoice. If today&apos;s invoice is already paid, Wallet stays available for the next invoice unless you deliberately select today&apos;s paid invoice below. Applying to today&apos;s paid invoice keeps the PAID watermark.</p>
@@ -122,6 +146,7 @@ export default function CustomerWallet({ currentUser }) {
             </select>
             <div className="mt-3 flex gap-2"><input type="number" min="0" step="0.01" value={applyAmount} onChange={(e)=>setApplyAmount(e.target.value)} placeholder="Amount (blank = maximum available)" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-2"/><button disabled={!selectedInvoiceId || applying || Number(detail?.balance||0)<=0} onClick={applyWallet} className="rounded-xl bg-emerald-700 px-4 py-2 font-black text-white disabled:bg-slate-300">{applying?"Applying...":"Apply Return"}</button></div>
           </div>}
+
 
           {selectedId && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h3 className="font-black">Wallet History</h3><div className="mt-3 max-h-72 overflow-auto">{transactions.length===0?<div className="text-sm text-slate-500">No Wallet transactions.</div>:transactions.map((t)=><div key={t.id} className="flex justify-between gap-3 border-b py-2 text-sm"><div><div className="font-bold">{t.reference || t.transaction_type}</div><div className="text-xs text-slate-500">{t.notes || t.source_type} · {dateTime(t.created_at)}</div></div><div className={`font-black ${t.direction==="CREDIT"?"text-emerald-700":"text-red-700"}`}>{t.direction==="CREDIT"?"+":"-"}{money(t.amount)}</div></div>)}</div></div>}
         </div>

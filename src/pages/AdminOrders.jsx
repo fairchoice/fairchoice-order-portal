@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { hasPermission, requirePermission } from "../utils/permissions";
 import { logAction } from "../utils/auditLog";
 import { formatCurrency } from "../utils/currency";
@@ -7,7 +7,10 @@ import { formatDisplayOrderId } from "../utils/orderDisplay";
 import { supabase } from "../services/supabase";
 import { FC_PERMISSIONS } from "../security/fcPermissions";
 
+
 import { calculateDocumentTotals } from "../utils/documentTotals";
+
+
 
 
 export default function AdminOrders({
@@ -27,9 +30,11 @@ export default function AdminOrders({
   
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
 
+
   const [showArchive, setShowArchive] = useState(false);
   const [statusFilter, setStatusFilter] = useState("All");
   const [stableItemOrders, setStableItemOrders] = useState({});
+
 
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -38,35 +43,45 @@ export default function AdminOrders({
   const [addQty, setAddQty] = useState(1);
   const [editedQty, setEditedQty] = useState({});
 
+
   const [editedStatus] = useState({});
   const [refreshFilters, setRefreshFilters] = useState({});
+
 
   const [customerFilter, setCustomerFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [countryFilter, setCountryFilter] = useState("All");
 
+
   const receivedOrders = orders.filter(
     (order) => order.status === "Received" || order.status === "In Progress"
   );
 
+
   const parseOrderDate = (value) => {
   if (!value) return null;
 
+
   const text = String(value).split(",")[0].trim();
   const [day, month, year] = text.split("/");
+
 
   if (!day || !month || !year) {
     const fallback = new Date(value);
     return Number.isNaN(fallback.getTime()) ? null : fallback;
   }
 
+
   return new Date(Number(year), Number(month) - 1, Number(day));
 };
 
+
   const archiveOrders = orders.filter((order) => order.status === "Archived");
 
+
   let visibleOrders = showArchive ? archiveOrders : receivedOrders;
+
 
 visibleOrders = visibleOrders.filter((order) => {
   const customerName = String(
@@ -76,13 +91,16 @@ visibleOrders = visibleOrders.filter((order) => {
     ""
   ).toLowerCase();
 
+
   const rawDate =
     order.created_at ||
     order.createdAt ||
     order.orderDate ||
     "";
 
+
   const orderDate = parseOrderDate(rawDate);
+
 
   if (
     customerFilter &&
@@ -90,6 +108,7 @@ visibleOrders = visibleOrders.filter((order) => {
   ) {
     return false;
   }
+
 
   if (countryFilter !== "All") {
     const country = String(
@@ -104,18 +123,22 @@ visibleOrders = visibleOrders.filter((order) => {
     if (!country.includes(countryFilter.toLowerCase())) return false;
   }
 
+
   if (dateFrom && orderDate) {
     const from = new Date(dateFrom + "T00:00:00");
     if (orderDate < from) return false;
   }
+
 
   if (dateTo && orderDate) {
     const to = new Date(dateTo + "T23:59:59");
     if (orderDate > to) return false;
   }
 
+
   return true;
 });
+
 
   if (!showArchive && statusFilter !== "All") {
     visibleOrders = visibleOrders.filter(
@@ -123,7 +146,9 @@ visibleOrders = visibleOrders.filter((order) => {
     );
   }
 
+
   const findOrder = (orderId) => orders.find((order) => order.orderId === orderId);
+
 
   const initialOrderItemSort = (items = []) =>
     [...items].sort((a, b) => {
@@ -133,6 +158,7 @@ visibleOrders = visibleOrders.filter((order) => {
         "Pre-Order": 2,
         "Pre Order": 2,
         "Cannot Supply": 3,
+        "Free": 4,
       };
       const aRank = statusRank[a.sourceStatus] || 99;
       const bRank = statusRank[b.sourceStatus] || 99;
@@ -142,6 +168,7 @@ visibleOrders = visibleOrders.filter((order) => {
       return aGroup.localeCompare(bGroup);
     });
 
+
   const captureStableOrderItems = (order = {}) => {
     const key = String(order.orderId || "");
     const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
@@ -149,6 +176,7 @@ visibleOrders = visibleOrders.filter((order) => {
       ? previous
       : { ...previous, [key]: initialOrderItemSort(order.items || []).map(itemKey) });
   };
+
 
   const getStableOrderItems = (orderId, items = []) => {
     const key = String(orderId || "");
@@ -165,6 +193,7 @@ visibleOrders = visibleOrders.filter((order) => {
     return result;
   };
 
+
   const putBackToReceived = async (orderId) => {
     if (
       !requirePermission(
@@ -175,6 +204,7 @@ visibleOrders = visibleOrders.filter((order) => {
     ) {
       return;
     }
+
 
     const order = findOrder(orderId);
     await changeOrderStatus(orderId, "Received");
@@ -188,11 +218,14 @@ visibleOrders = visibleOrders.filter((order) => {
     });
   };
 
+
   const moveToWarehouse = async (orderId) => {
     if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_STATUS_CHANGE, "You cannot move orders to warehouse.")) return;
 
+
     const ok = window.confirm("Move this order to Warehouse Packing?");
     if (!ok) return;
+
 
     const order = findOrder(orderId);
     await changeOrderStatus(orderId, "Warehouse Packing");
@@ -206,11 +239,14 @@ visibleOrders = visibleOrders.filter((order) => {
     });
   };
 
+
   const archiveOrder = async (orderId) => {
     if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_ARCHIVE, "You cannot archive orders.")) return;
 
+
     const ok = window.confirm(`Archive order ${formatDisplayOrderId(orderId)}?`);
     if (!ok) return;
+
 
     const order = findOrder(orderId);
     await changeOrderStatus(orderId, "Archived");
@@ -225,11 +261,14 @@ visibleOrders = visibleOrders.filter((order) => {
     });
   };
 
+
   const cancelOrder = async (orderId) => {
     if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_CANCEL, "You cannot cancel orders.")) return;
 
+
     const reason = window.prompt("Reason for cancellation?");
     if (!reason) return;
+
 
     const order = findOrder(orderId);
     await changeOrderStatus(orderId, "Cancelled");
@@ -243,11 +282,14 @@ visibleOrders = visibleOrders.filter((order) => {
     });
   };
 
+
   const restoreOrder = async (orderId) => {
     if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_ARCHIVE, "You cannot restore orders.")) return;
 
+
     const ok = window.confirm("Restore this order back to Received Orders?");
     if (!ok) return;
+
 
     const order = findOrder(orderId);
     await changeOrderStatus(orderId, "Received");
@@ -261,20 +303,25 @@ visibleOrders = visibleOrders.filter((order) => {
     });
   };
 
+
   const deleteArchivedOrder = async (orderId) => {
     if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_DELETE, "You cannot permanently delete orders.")) return;
+
 
     const ok = window.confirm(
       `Permanently delete archived order ${formatDisplayOrderId(orderId)}? This cannot be undone.`
     );
     if (!ok) return;
 
+
     const order = findOrder(orderId);
     const orderDbId = order?.dbId || order?.id;
+
 
     if (orderDbId) {
       await supabase.from("order_items").delete().eq("order_id", orderDbId);
     }
+
 
     const deleteMatch = `order_number.eq.${orderId}${orderDbId ? `,id.eq.${orderDbId}` : ""}`;
     const { error } = await supabase
@@ -282,10 +329,12 @@ visibleOrders = visibleOrders.filter((order) => {
       .delete()
       .or(deleteMatch);
 
+
     if (error) {
       alert("Could not delete archived order: " + error.message);
       return;
     }
+
 
     await logAction({
       user: loggedInUser,
@@ -298,8 +347,10 @@ visibleOrders = visibleOrders.filter((order) => {
     await fetchOrders();
   };
 
+
   const openAddItemModal = (order) => {
   if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_ITEMS_CHANGE, "You cannot add products to orders.")) return;
+
 
   setSelectedOrder(order);
   setProductSearch("");
@@ -308,8 +359,10 @@ visibleOrders = visibleOrders.filter((order) => {
   setShowAddItemModal(true);
 };
 
+
 const filteredProducts = products.filter((p) => {
   const search = productSearch.toLowerCase();
+
 
   return (
     String(p.name || p.productName || p.product_name || "").toLowerCase().includes(search) ||
@@ -319,9 +372,12 @@ const filteredProducts = products.filter((p) => {
   );
 });
 
+
 const confirmAddItem = async () => {
   if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_ITEMS_CHANGE, "You cannot add products to orders.")) return;
   if (!selectedOrder || !selectedProduct) return;
+
+
 
 
   const priceMode = selectedOrder.priceMode || selectedOrder.price_mode || "vat";
@@ -332,6 +388,7 @@ const confirmAddItem = async () => {
   country,
   pricingSettings
 );
+
 
   const newItem = {
     id: crypto.randomUUID(),
@@ -352,6 +409,7 @@ const confirmAddItem = async () => {
     includeInPicking: true,
   };
 
+
   await addOrderItem(selectedOrder.orderId, newItem);
   await logAction({
     user: loggedInUser,
@@ -363,11 +421,14 @@ const confirmAddItem = async () => {
     new_value: newItem,
   });
 
+
   setShowAddItemModal(false);
 };
 
+
 const printOrderPickingList = async (order) => {
   if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
+
 
   await printPickingList(order);
   await logAction({
@@ -380,17 +441,13 @@ const printOrderPickingList = async (order) => {
   });
 };
 
+
 const updatePreparedItem = async (order, item, changes) => {
   if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_RECEIVE, "You cannot receive orders.")) return;
 
-  // A completed Warehouse pick is the final operational quantity snapshot.
-  // Moving the order back to Received is for workflow correction only; it must
-  // not allow Received Orders to overwrite Warehouse/POS quantities.
-  if (String(order?.picking_status || "").trim().toLowerCase() === "completed") {
-    alert("Warehouse quantity is final. Use Warehouse Pre-Order Supply for any later supply quantity change.");
-    return;
-  }
 
+  // Warehouse/Driver quantities remain final unless the order was explicitly
+  // returned to Received. That workflow reset re-opens this current order only.
   captureStableOrderItems(order);
   await updateOrderItem(order.orderId, item.dbId, changes);
   await logAction({
@@ -404,13 +461,17 @@ const updatePreparedItem = async (order, item, changes) => {
   });
 };
 
+
 const getOrderCountry = (order = {}) =>
   order.customer_country || order.customerCountry || order.country || "";
 
+
 const normalizeText = (value) => String(value || "").trim().toLowerCase();
+
 
 const hasValidMoney = (value) =>
   value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+
 
 const getSavedOrderItemPrice = (item = {}) => {
   if (hasValidMoney(item.price)) return Number(item.price);
@@ -421,6 +482,7 @@ const getSavedOrderItemPrice = (item = {}) => {
   return 0;
 };
 
+
 const loadFreshPricingSettings = async () => {
   const { data, error } = await supabase
     .from("pricing_settings")
@@ -428,35 +490,44 @@ const loadFreshPricingSettings = async () => {
     .eq("id", 1)
     .maybeSingle();
 
+
   if (error) {
     console.warn("Could not load latest pricing settings for price refresh:", error.message);
     return pricingSettings;
   }
 
+
   return data || pricingSettings;
 };
+
 
 const getProductDisplayName = (product = {}) =>
   product.name || product.productName || product.product_name || "";
 
+
 const getProductDisplayCode = (product = {}) =>
   product.productCode || product.product_code || product.code || "";
+
 
 const getItemDisplayName = (item = {}) =>
   item.productName || item.product_name || item.name || "";
 
+
 const getItemDisplayCode = (item = {}) =>
   item.productCode || item.product_code || item.code || "";
+
 
 const getLatestProductForItem = (item = {}) => {
   const itemProductId = item.productId || item.product_id || item.id;
   const itemCode = normalizeText(getItemDisplayCode(item));
   const itemName = normalizeText(getItemDisplayName(item));
 
+
   return (products || []).find((product) => {
     const productId = product.id;
     const productCode = normalizeText(getProductDisplayCode(product));
     const productName = normalizeText(getProductDisplayName(product));
+
 
     return (
       String(productId) === String(itemProductId) ||
@@ -466,15 +537,18 @@ const getLatestProductForItem = (item = {}) => {
   });
 };
 
+
 const getCatalogBrandForItem = (item = {}) => {
   const latestProduct = getLatestProductForItem(item);
   return latestProduct?.brand || item.brand || "";
 };
 
+
 const getCatalogSeriesForItem = (item = {}) => {
   const latestProduct = getLatestProductForItem(item);
   return latestProduct?.series || item.series || "";
 };
+
 
 const getSelectableProductBrands = () =>
   [
@@ -485,6 +559,7 @@ const getSelectableProductBrands = () =>
     ),
   ].sort((a, b) => String(a).localeCompare(String(b)));
 
+
 const getSelectableProductSeries = () =>
   [
     ...new Set(
@@ -494,12 +569,15 @@ const getSelectableProductSeries = () =>
     ),
   ].sort((a, b) => String(a).localeCompare(String(b)));
 
+
 const buildPriceRefreshPayload = async (order, item) => {
   const latestProduct = getLatestProductForItem(item);
+
 
   if (!latestProduct) {
     return { error: "Product not found in current product database." };
   }
+
 
   const priceMode = order.priceMode || order.price_mode || "vat";
   const country = getOrderCountry(order);
@@ -510,6 +588,7 @@ const buildPriceRefreshPayload = async (order, item) => {
     country,
     latestPricingSettings
   );
+
 
   return {
     latestProduct,
@@ -522,6 +601,7 @@ const buildPriceRefreshPayload = async (order, item) => {
   };
 };
 
+
 const setOrderRefreshFilter = (orderId, field, value) => {
   setRefreshFilters((old) => ({
     ...old,
@@ -532,17 +612,21 @@ const setOrderRefreshFilter = (orderId, field, value) => {
   }));
 };
 
+
 const bulkRefreshOrderPrices = async (order) => {
   if (!requirePermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE, "You cannot update received order prices.")) return;
+
 
   const filter = refreshFilters[order.orderId] || {};
   const brand = normalizeText(filter.brand);
   const series = normalizeText(filter.series);
 
+
   if (!brand && !series) {
     alert("Select a brand or series before bulk refreshing prices.");
     return;
   }
+
 
   const matchingItems = (order.items || []).filter((item) => {
     const catalogBrand = normalizeText(getCatalogBrandForItem(item));
@@ -551,11 +635,13 @@ const bulkRefreshOrderPrices = async (order) => {
     const itemSeries = normalizeText(item.series);
     const itemName = normalizeText(getItemDisplayName(item));
 
+
     const brandMatches =
       !brand ||
       catalogBrand === brand ||
       itemBrand === brand ||
       itemName.includes(brand);
+
 
     const seriesMatches =
       !series ||
@@ -563,15 +649,19 @@ const bulkRefreshOrderPrices = async (order) => {
       itemSeries === series ||
       itemName.includes(series);
 
+
     return brandMatches && seriesMatches;
   });
+
 
   if (matchingItems.length === 0) {
     alert("No matching order items found.");
     return;
   }
 
+
   if (!window.confirm(`Refresh prices for ${matchingItems.length} matching item(s) in this order?`)) return;
+
 
   for (const item of matchingItems) {
     const result = await buildPriceRefreshPayload(order, item);
@@ -580,8 +670,10 @@ const bulkRefreshOrderPrices = async (order) => {
     }
   }
 
+
   await fetchOrders();
 };
+
 
   return (
     <div className="admin-orders-page p-5">
@@ -591,6 +683,7 @@ const bulkRefreshOrderPrices = async (order) => {
             {showArchive ? "Archive Orders" : "Received Orders"}
           </h2>
         </div>
+
 
         <div className="flex flex-wrap items-center gap-2">
           {!showArchive && (
@@ -607,15 +700,18 @@ const bulkRefreshOrderPrices = async (order) => {
             </>
           )}
 
+
           <button onClick={() => setShowArchive(false)} className={`bg-slate-700 text-white ${btn}`}>
             Active: {receivedOrders.length}
           </button>
+
 
           <button onClick={() => setShowArchive(true)} className={`bg-slate-600 text-white ${btn}`}>
             Archive: {archiveOrders.length}
           </button>
         </div>
       </div>
+
 
       <div className="bg-white border rounded-2xl p-4 mb-4">
   <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
@@ -626,6 +722,7 @@ const bulkRefreshOrderPrices = async (order) => {
       onChange={(e) => setCustomerFilter(e.target.value)}
     />
 
+
     <input
       type="date"
       className="border rounded-lg p-2"
@@ -633,12 +730,14 @@ const bulkRefreshOrderPrices = async (order) => {
       onChange={(e) => setDateFrom(e.target.value)}
     />
 
+
     <input
       type="date"
       className="border rounded-lg p-2"
       value={dateTo}
       onChange={(e) => setDateTo(e.target.value)}
     />
+
 
     <select
       className="border rounded-lg p-2 bg-white"
@@ -649,6 +748,7 @@ const bulkRefreshOrderPrices = async (order) => {
       <option value="Wales">Wales</option>
       <option value="England">England</option>
     </select>
+
 
     <button
       type="button"
@@ -665,12 +765,14 @@ const bulkRefreshOrderPrices = async (order) => {
   </div>
 </div>
 
+
       <div className="space-y-3">
         {visibleOrders.length === 0 && (
           <div className="bg-slate-50 border rounded-2xl p-4 text-sm">
             No orders found.
           </div>
         )}
+
 
         {visibleOrders.map((order) => {
           const orderDateTime =
@@ -693,6 +795,7 @@ const bulkRefreshOrderPrices = async (order) => {
             ].filter((brand) => String(brand || "").trim() !== "")),
           ].sort((a, b) => String(a).localeCompare(String(b)));
 
+
           const orderItemSeries = [
             ...new Set([
               ...getSelectableProductSeries(),
@@ -700,6 +803,7 @@ const bulkRefreshOrderPrices = async (order) => {
               ...(order.items || []).map((item) => item.series),
             ].filter((series) => String(series || "").trim() !== "")),
           ].sort((a, b) => String(a).localeCompare(String(b)));
+
 
           return (
             <div key={order.orderId} className="received-order-card bg-white border rounded-2xl p-3">
@@ -718,6 +822,7 @@ const bulkRefreshOrderPrices = async (order) => {
                   </div>
                 </div>
 
+
                 <div className="received-card-top-actions flex flex-wrap gap-2 items-start lg:justify-end">
                   <button
                     onClick={() => toggleOrderExpanded(order.orderId)}
@@ -725,6 +830,7 @@ const bulkRefreshOrderPrices = async (order) => {
                   >
                     {expandedOrders[order.orderId] ? "Hide" : "View / Prepare"}
                   </button>
+
 
                   {!showArchive && (
                     <button
@@ -741,6 +847,7 @@ const bulkRefreshOrderPrices = async (order) => {
                     </button>
                   )}
 
+
                   {!showArchive && hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_ITEMS_CHANGE) && (
                     <button
                       onClick={() => openAddItemModal(order)}
@@ -751,6 +858,7 @@ const bulkRefreshOrderPrices = async (order) => {
                   )}
                 </div>
               </div>
+
 
                 {expandedOrders[order.orderId] && (
   <div className="mt-3 received-order-card">
@@ -766,6 +874,7 @@ const bulkRefreshOrderPrices = async (order) => {
         ))}
       </select>
 
+
       <select
         className="border rounded-lg px-3 py-2 text-sm"
         value={refreshFilter.series || ""}
@@ -777,6 +886,7 @@ const bulkRefreshOrderPrices = async (order) => {
         ))}
       </select>
 
+
       <button
         type="button"
         onClick={() => bulkRefreshOrderPrices(order)}
@@ -785,6 +895,7 @@ const bulkRefreshOrderPrices = async (order) => {
         Refresh Current Prices
       </button>
     </div>
+
 
     <div
       className="received-item-header"
@@ -798,6 +909,7 @@ const bulkRefreshOrderPrices = async (order) => {
       <div>Remove</div>
     </div>
 
+
     {getStableOrderItems(order.orderId, order.items).map((item) => {
       const savedLineValue =
   item.net_total ??
@@ -807,12 +919,18 @@ const bulkRefreshOrderPrices = async (order) => {
 const hasSavedLineTotal = hasValidMoney(savedLineValue);
 const savedLineTotal = hasSavedLineTotal ? Number(savedLineValue) : 0;
 
+
 const fallbackLineTotal =
   Number(item.qty ?? item.quantity ?? 0) *
   getSavedOrderItemPrice(item);
 
-const lineTotal = hasSavedLineTotal ? savedLineTotal : fallbackLineTotal;
-const savedUnitPrice = getSavedOrderItemPrice(item);
+
+const isFreeLine = ["free", "promotion free"].includes(
+  String(item.sourceStatus || item.source_status || "").trim().toLowerCase()
+);
+const lineTotal = isFreeLine ? 0 : (hasSavedLineTotal ? savedLineTotal : fallbackLineTotal);
+const savedUnitPrice = isFreeLine ? 0 : getSavedOrderItemPrice(item);
+
 
       return (
         <div
@@ -827,10 +945,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
               min="0"
               className="received-qty-input"
               value={editedQty[item.dbId] ?? item.qty ?? item.quantity ?? item.pickingOrderedQty ?? item.picking_ordered_qty ?? item.pickedQty ?? 0}
-              disabled={
-                !hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE) ||
-                String(order?.picking_status || "").trim().toLowerCase() === "completed"
-              }
+              disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE)}
               onChange={(e) =>
                 setEditedQty((prev) => ({
                   ...prev,
@@ -840,12 +955,12 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
             />
           </div>
           <div className="received-update-cell">
-            {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE) &&
-              String(order?.picking_status || "").trim().toLowerCase() !== "completed" && (
+            {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_QUANTITY_CHANGE) && (
               <button
                 onClick={() => {
                   const status =
                     editedStatus[item.dbId] || item.sourceStatus || "In Stock";
+
 
                   const qty = Number(
                     editedQty[item.dbId] ??
@@ -856,6 +971,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                       item.pickedQty ??
                       0
                   );
+
 
                   updatePreparedItem(order, item, {
                     qty,
@@ -868,6 +984,9 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                       status === "Need Supplier" || status === "Cannot Supply"
                         ? false
                         : true,
+                    ...(status === "Free"
+                      ? { price: 0, selectedPrice: 0, unit_price: 0, unitPrice: 0 }
+                      : {}),
                   });
                 }}
                 className="received-upt-btn"
@@ -902,12 +1021,16 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                     e.target.value === "Cannot Supply"
                       ? false
                       : true,
+                  ...(e.target.value === "Free"
+                    ? { price: 0, selectedPrice: 0, unit_price: 0, unitPrice: 0 }
+                    : {}),
                 })
               }
             >
               <option value="In Stock">In Stock</option>
               <option value="Need Supplier">Pre-Order</option>
               <option value="Cannot Supply">Cannot Supply</option>
+              <option value="Free">Free</option>
             </select>
           </div>
           <div className="received-line-total received-row-total">{formatCurrency(lineTotal)}</div>
@@ -933,6 +1056,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
       );
     })}
 
+
                   <div className="flex flex-wrap justify-end gap-2 pt-3">
                     {!showArchive &&
                       order.status === "In Progress" &&
@@ -945,6 +1069,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                       </button>
                     )}
 
+
                     {!showArchive && hasPermission(loggedInUser, "can_print") && (
                       <button
                         onClick={() => printOrderPickingList(order)}
@@ -953,6 +1078,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                         Picking List
                       </button>
                     )}
+
 
                     {showArchive ? (
                       <div className="flex flex-wrap gap-2">
@@ -984,6 +1110,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                         </button>
                         )}
 
+
                         {hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_CANCEL) && (
                         <button
                           onClick={() => cancelOrder(order.orderId)}
@@ -994,6 +1121,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
                         )}
                       </>
                     )}
+
 
                     {!showArchive && hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_STATUS_CHANGE) && (
                       <button
@@ -1012,10 +1140,13 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
       </div>
 
 
+
+
       {showAddItemModal && (
   <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
     <div className="bg-white rounded-2xl p-4 w-full max-w-xl">
       <h3 className="text-lg font-bold mb-3">Add Product</h3>
+
 
       <input
         type="text"
@@ -1024,6 +1155,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
         placeholder="Search product..."
         className="w-full border rounded-lg px-3 py-2 mb-3"
       />
+
 
       <div className="max-h-60 overflow-auto border rounded-lg mb-3">
        {filteredProducts.slice(0, 100).map((product) => (
@@ -1037,11 +1169,13 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
         ))}
       </div>
 
+
       {selectedProduct && (
         <div className="border rounded-lg p-3 mb-3">
           <div className="font-semibold">
             {selectedProduct.name || selectedProduct.productName}
           </div>
+
 
           <div className="flex items-center gap-3 mt-3">
             <label className="text-sm font-semibold">Qty</label>
@@ -1056,6 +1190,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
         </div>
       )}
 
+
       <div className="flex justify-end gap-2">
         <button
           onClick={() => setShowAddItemModal(false)}
@@ -1063,6 +1198,7 @@ const savedUnitPrice = getSavedOrderItemPrice(item);
         >
           Cancel
         </button>
+
 
         <button
           onClick={confirmAddItem}
