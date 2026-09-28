@@ -734,7 +734,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     Server / Manager Offer => Order Form - Not Invoice
   */
   const printCustomerDocument = async (order) => {
-  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
 
 
@@ -1680,7 +1679,6 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
 
 
 const printProtectedOrderForm = async (order) => {
-  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
 
 
@@ -1700,7 +1698,6 @@ const printProtectedOrderForm = async (order) => {
 
 
 const printProtectedInvoice = async (order) => {
-  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
 
 
@@ -1727,7 +1724,6 @@ const printProtectedInvoice = async (order) => {
 
 
 const printProtectedDeliveryNote = async (order) => {
-  if (!requirePermission(loggedInUser, "can_print", "You cannot print delivery notes.")) return;
 
 
 
@@ -2020,7 +2016,7 @@ const printCustomerDocumentForMode =
 
 
             <div className="border-t pt-3 flex flex-wrap justify-end gap-2">
-              {hasPermission(loggedInUser, "can_print") && (
+              {(
                 <button
                   onClick={() => printCustomerDocumentForMode(order)}
                   className={`bg-black text-white ${btn}`}
@@ -2032,7 +2028,7 @@ const printCustomerDocumentForMode =
 
 
 
-              {hasPermission(loggedInUser, "can_print") && (
+              {(
                 <button
                   onClick={() => printProtectedDeliveryNote(order)}
                   className={`bg-slate-800 text-white ${btn}`}
@@ -2044,7 +2040,7 @@ const printCustomerDocumentForMode =
 
 
 
-              {hasPermission(loggedInUser, "can_print") && (
+              {(
                 <button
                   onClick={async () =>
                     printThermalReceipt(
