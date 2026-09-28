@@ -6,6 +6,9 @@ import {
   rejectOwnerBankTransfer,
   createCentralPayment,
   listCentralPaymentRecords,
+  listOwnerUnallocatedPayments,
+  listOwnerUnallocatedPaymentTargets,
+  allocateOwnerUnallocatedPayment,
   loadCentralPaymentCustomers,
   loadCentralPaymentSnapshot,
 } from "../../services/centralPaymentService";
@@ -181,6 +184,250 @@ function PaymentRecordsPanel({ archived, currentUser, onInvalidSessionError }) {
         <span className="font-bold">Page {page} of {result.total_pages || 1}</span>
         <button type="button" disabled={page >= (result.total_pages || 1)} onClick={() => setPage((value) => value + 1)} className="rounded-lg border px-4 py-2 font-bold disabled:text-slate-300">Next</button>
       </div>
+    </section>
+  );
+}
+
+
+function UnallocatedPaymentsPanel({ currentUser, onInvalidSessionError }) {
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [result, setResult] = useState({ records: [], total: 0, total_pages: 1 });
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [selectedPayment, setSelectedPayment] = useState(null);
+  const [targets, setTargets] = useState([]);
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState("");
+  const [allocationAmount, setAllocationAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    setMessage("");
+    try {
+      const data = await listOwnerUnallocatedPayments({ currentUser, search, page });
+      setResult(data);
+      if (selectedPayment) {
+        const refreshed = (data.records || []).find((row) => row.id === selectedPayment.id);
+        if (!refreshed) {
+          setSelectedPayment(null);
+          setTargets([]);
+          setSelectedInvoiceId("");
+          setAllocationAmount("");
+          setReason("");
+        } else {
+          setSelectedPayment(refreshed);
+        }
+      }
+    } catch (error) {
+      if (await onInvalidSessionError?.(error)) return;
+      setMessage(error.message || "Could not load unallocated payments.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, [page, search, currentUser]);
+
+  const openAllocate = async (payment) => {
+    setSelectedPayment(payment);
+    setTargets([]);
+    setSelectedInvoiceId("");
+    setAllocationAmount(Number(payment.unallocated_amount || 0).toFixed(2));
+    setReason("");
+    setMessage("");
+    try {
+      const rows = await listOwnerUnallocatedPaymentTargets({
+        currentUser,
+        paymentId: payment.id,
+      });
+      setTargets(rows);
+      if (rows.length) {
+        setSelectedInvoiceId(rows[0].invoice_id);
+        setAllocationAmount(
+          Math.min(
+            Number(payment.unallocated_amount || 0),
+            Number(rows[0].outstanding_amount || 0)
+          ).toFixed(2)
+        );
+      }
+    } catch (error) {
+      if (await onInvalidSessionError?.(error)) return;
+      setMessage(error.message || "Could not load outstanding invoices for this payment.");
+    }
+  };
+
+  const selectedTarget = targets.find((row) => String(row.invoice_id) === String(selectedInvoiceId));
+
+  const saveAllocation = async () => {
+    if (!selectedPayment || !selectedTarget || saving) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await allocateOwnerUnallocatedPayment({
+        currentUser,
+        paymentId: selectedPayment.id,
+        invoiceId: selectedTarget.invoice_id,
+        amount: Number(allocationAmount),
+        reason,
+      });
+      setMessage("Payment allocation saved.");
+      setSelectedPayment(null);
+      setTargets([]);
+      setSelectedInvoiceId("");
+      setAllocationAmount("");
+      setReason("");
+      await load();
+    } catch (error) {
+      if (await onInvalidSessionError?.(error)) return;
+      setMessage(error.message || "Could not allocate this payment.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="rounded-2xl border bg-white p-4 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-xl font-extrabold">Unallocated Payments</h3>
+          <p className="text-sm text-slate-600">
+            Any confirmed payment balance not allocated to an active invoice stays here until you choose where to allocate it.
+          </p>
+        </div>
+        <span className="rounded-full bg-amber-100 px-3 py-2 text-xs font-bold text-amber-800">
+          {result.total || 0} payment{Number(result.total || 0) === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      <div className="mb-4 flex gap-2">
+        <input
+          value={search}
+          onChange={(event) => { setSearch(event.target.value); setPage(1); }}
+          placeholder="Search customer, reference, payer or notes"
+          className="w-full rounded-xl border p-3"
+        />
+      </div>
+
+      {message && <div className="mb-3 rounded-xl bg-slate-100 p-3 font-bold text-slate-700">{message}</div>}
+      {loading && <div className="mb-3 rounded-xl bg-blue-50 p-3 font-bold text-blue-800">Loading unallocated payments...</div>}
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[980px] text-sm">
+          <thead>
+            <tr className="border-b bg-slate-50 text-left">
+              <th className="p-3">Date</th>
+              <th className="p-3">Customer</th>
+              <th className="p-3">Reference</th>
+              <th className="p-3">Method</th>
+              <th className="p-3">Paid By</th>
+              <th className="p-3 text-right">Payment</th>
+              <th className="p-3 text-right">Allocated</th>
+              <th className="p-3 text-right">Unallocated</th>
+              <th className="p-3 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(result.records || []).map((payment) => (
+              <tr key={payment.id} className="border-b">
+                <td className="p-3">{new Date(payment.payment_date || payment.created_at).toLocaleDateString("en-GB")}</td>
+                <td className="p-3 font-semibold">{payment.customer_name || "-"}</td>
+                <td className="p-3 font-bold">{formatDisplayOrderId(payment.payment_reference) || "-"}</td>
+                <td className="p-3">{payment.payment_method || "-"}</td>
+                <td className="p-3">{payment.paid_by || "-"}</td>
+                <td className="p-3 text-right">{formatCurrency(payment.amount || 0)}</td>
+                <td className="p-3 text-right">{formatCurrency(payment.allocated_amount || 0)}</td>
+                <td className="p-3 text-right font-extrabold text-amber-700">{formatCurrency(payment.unallocated_amount || 0)}</td>
+                <td className="p-3 text-right">
+                  <button type="button" onClick={() => openAllocate(payment)} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">
+                    Allocate
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!result.records?.length && !loading && (
+              <tr><td colSpan="9" className="p-8 text-center text-slate-500">No unallocated payments found.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-4 flex items-center justify-end gap-3">
+        <button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)} className="rounded-lg border px-4 py-2 font-bold disabled:text-slate-300">Previous</button>
+        <span className="font-bold">Page {page} of {result.total_pages || 1}</span>
+        <button type="button" disabled={page >= (result.total_pages || 1)} onClick={() => setPage((value) => value + 1)} className="rounded-lg border px-4 py-2 font-bold disabled:text-slate-300">Next</button>
+      </div>
+
+      {selectedPayment && (
+        <div className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h4 className="font-extrabold text-blue-950">Allocate {formatCurrency(selectedPayment.unallocated_amount || 0)}</h4>
+              <p className="text-sm text-blue-800">{selectedPayment.customer_name || "Customer"} · {formatDisplayOrderId(selectedPayment.payment_reference) || "Payment"}</p>
+            </div>
+            <button type="button" onClick={() => setSelectedPayment(null)} className="rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-bold text-blue-900">Close</button>
+          </div>
+
+          {targets.length ? (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <select
+                value={selectedInvoiceId}
+                onChange={(event) => {
+                  const nextId = event.target.value;
+                  const nextTarget = targets.find((row) => String(row.invoice_id) === String(nextId));
+                  setSelectedInvoiceId(nextId);
+                  if (nextTarget) {
+                    setAllocationAmount(
+                      Math.min(
+                        Number(selectedPayment.unallocated_amount || 0),
+                        Number(nextTarget.outstanding_amount || 0)
+                      ).toFixed(2)
+                    );
+                  }
+                }}
+                className="rounded-xl border p-3"
+              >
+                {targets.map((invoice) => (
+                  <option key={invoice.invoice_id} value={invoice.invoice_id}>
+                    {formatDisplayOrderId(invoice.invoice_number)} · outstanding {formatCurrency(invoice.outstanding_amount || 0)}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                max={Math.min(Number(selectedPayment.unallocated_amount || 0), Number(selectedTarget?.outstanding_amount || 0))}
+                value={allocationAmount}
+                onChange={(event) => setAllocationAmount(event.target.value)}
+                placeholder="Amount to allocate"
+                className="rounded-xl border p-3"
+              />
+              <textarea
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="Allocation reason / note"
+                className="min-h-24 rounded-xl border p-3 md:col-span-2"
+              />
+              <button
+                type="button"
+                onClick={saveAllocation}
+                disabled={saving || !selectedInvoiceId || !(Number(allocationAmount) > 0) || !reason.trim()}
+                className="rounded-xl bg-green-700 px-4 py-3 font-bold text-white disabled:bg-slate-300 md:col-span-2"
+              >
+                {saving ? "Allocating..." : "Allocate payment"}
+              </button>
+            </div>
+          ) : (
+            <div className="rounded-xl bg-white p-3 text-sm font-bold text-slate-700">
+              This customer has no active outstanding invoice to allocate this payment to. The money will remain unallocated.
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -810,6 +1057,12 @@ export default function CentralPayment({ currentUser, onInvalidSession }) {
       {isNisstajAdmin && activeTab === "history" && (
         <PaymentRecordsPanel
           archived={false}
+          currentUser={currentUser}
+          onInvalidSessionError={handleInvalidSessionError}
+        />
+      )}
+      {isNisstajAdmin && activeTab === "unallocated" && (
+        <UnallocatedPaymentsPanel
           currentUser={currentUser}
           onInvalidSessionError={handleInvalidSessionError}
         />

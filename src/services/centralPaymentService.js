@@ -970,6 +970,107 @@ export async function listCentralPaymentRecords({
     total_pages: Number(data?.total_pages || 1),
   };
 }
+
+export async function listOwnerUnallocatedPayments({
+  currentUser,
+  search = "",
+  page = 1,
+} = {}) {
+  if (!isOwnerUser(currentUser)) {
+    throw new Error("Unallocated payments are restricted to nisstaj_admin.");
+  }
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
+  const safePage = Math.max(1, Number(page) || 1);
+  const { data, error } = await supabase.rpc(
+    "list_owner_unallocated_payments_v1",
+    {
+      p_username: fcSession.username,
+      p_session_token: fcSession.token,
+      p_search: String(search || "").trim(),
+      p_page: safePage,
+      p_page_size: 30,
+    }
+  );
+
+  if (error) throw error;
+
+  return {
+    records: Array.isArray(data?.records) ? data.records : [],
+    total: Number(data?.total || 0),
+    page: Number(data?.page || safePage),
+    page_size: Number(data?.page_size || 30),
+    total_pages: Number(data?.total_pages || 1),
+  };
+}
+
+export async function listOwnerUnallocatedPaymentTargets({
+  currentUser,
+  paymentId,
+} = {}) {
+  if (!isOwnerUser(currentUser)) {
+    throw new Error("Unallocated payments are restricted to nisstaj_admin.");
+  }
+  if (!paymentId) throw new Error("Payment is required.");
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
+  const { data, error } = await supabase.rpc(
+    "list_owner_unallocated_payment_targets_v1",
+    {
+      p_username: fcSession.username,
+      p_session_token: fcSession.token,
+      p_payment_id: paymentId,
+    }
+  );
+
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
+export async function allocateOwnerUnallocatedPayment({
+  currentUser,
+  paymentId,
+  invoiceId,
+  amount,
+  reason,
+} = {}) {
+  if (!isOwnerUser(currentUser)) {
+    throw new Error("Only nisstaj_admin can allocate unallocated payments.");
+  }
+  if (!paymentId) throw new Error("Payment is required.");
+  if (!invoiceId) throw new Error("Invoice is required.");
+  if (!(Number(amount) > 0)) throw new Error("Allocation amount must be greater than zero.");
+  if (!String(reason || "").trim()) throw new Error("Allocation reason is required.");
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
+  const { data, error } = await supabase.rpc(
+    "allocate_owner_unallocated_payment_v1",
+    {
+      p_username: fcSession.username,
+      p_session_token: fcSession.token,
+      p_payment_id: paymentId,
+      p_invoice_id: invoiceId,
+      p_amount: Number(amount),
+      p_reason: String(reason).trim(),
+    }
+  );
+
+  if (error) throw error;
+  return data || {};
+}
+
 export async function editCentralPayment({ currentUser, payment, changes, reason } = {}) {
   if (!canPerform(currentUser, "payments.edit")) throw new Error("You do not have permission to edit payments.");
   if (Number(changes?.amount) !== Number(payment?.amount) && !canPerform(currentUser, "payments.amount.change")) {

@@ -834,14 +834,17 @@ export default function InvoicesPortal() {
 
     const reason = voidReason.trim();
     if (!reason) {
-      setVoidError("Enter the reason this delivered invoice is a duplicate.");
+      setVoidError("Enter the reason for voiding this invoice.");
       return;
     }
 
 
     const reference = getReference(voidInvoiceRow);
+    const returnStockOnly = Boolean(voidPreview?.financial_already_voided);
     const confirmed = window.confirm(
-      "Void invoice and return stock?"
+      returnStockOnly
+        ? "Return this invoice stock to inventory?"
+        : "Do you want to delete this invoice?"
     );
     if (!confirmed) return;
 
@@ -853,13 +856,18 @@ export default function InvoicesPortal() {
         currentUser: loggedInUser,
         orderNumber: reference,
         reason,
+        returnStock: returnStockOnly,
       });
       setVoidInvoiceRow(null);
       setVoidPreview(null);
       setVoidReason("");
       setVoidError("");
       await loadInvoices();
-      alert(`Invoice ${reference} was voided and its deducted stock was returned.`);
+      alert(
+        returnStockOnly
+          ? `Stock for invoice ${reference} was returned to inventory.`
+          : `Invoice ${reference} was voided. Inventory was not changed.`
+      );
     } catch (voidActionError) {
       console.error("Invoice financial void error:", voidActionError);
       setVoidError(voidActionError.message || "Could not financially void this invoice.");
@@ -2386,11 +2394,15 @@ const runInvoiceAction = async (row, action) => {
                   const amount = getAmount(row);
                   const displayStatus = getInvoiceDisplayStatus(row);
                   const financiallyVoided = isInvoiceFinanciallyVoided(row);
+                  const stockAlreadyReturned = Boolean(
+                    row?.duplicate_void_inventory_reversed_at ||
+                    row?._freshOrder?.duplicate_void_inventory_reversed_at
+                  );
 
 
                   return (
                     <tr key={row.id || getReference(row)} className="border-t border-slate-100">
-                      <td className="p-3 font-bold text-slate-900">{getReference(row)}</td>
+                      <td className="p-3 font-bold text-slate-900">{formatDisplayOrderId(getReference(row))}</td>
                       <td className="p-3">{getCustomer(row)}</td>
                       <td className="p-3">{getCreatedDate(row) ? new Date(getCreatedDate(row)).toLocaleDateString() : "-"}</td>
                       <td className="p-3 text-right font-bold">{formatCurrency(amount)}</td>
@@ -2406,7 +2418,9 @@ const runInvoiceAction = async (row, action) => {
                           {isAdminUser && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
                           )}
-                          {isNisstajAdmin && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
+                          {isNisstajAdmin &&
+                            String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" &&
+                            (!financiallyVoided || !stockAlreadyReturned) && (
                             <button
                               type="button"
                               onClick={() => openVoidInvoiceDialog(row)}
@@ -2543,15 +2557,17 @@ const runInvoiceAction = async (row, action) => {
           <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 id="void-invoice-title" className="text-xl font-extrabold text-slate-900">Void Invoice</h3>
-                <p className="mt-1 text-sm text-slate-600">Invoice {getReference(voidInvoiceRow)} · {getCustomer(voidInvoiceRow)}</p>
+                <h3 id="void-invoice-title" className="text-xl font-extrabold text-slate-900">{voidPreview?.financial_already_voided ? "Return Stock" : "Void Invoice"}</h3>
+                <p className="mt-1 text-sm text-slate-600">Invoice {formatDisplayOrderId(getReference(voidInvoiceRow))} · {getCustomer(voidInvoiceRow)}</p>
               </div>
               <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50" aria-label="Close void invoice dialog">Close</button>
             </div>
 
 
             <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
-              This will void the invoice and return its stock to inventory.
+              {voidPreview?.financial_already_voided
+                ? "This will return the deducted stock to inventory. The invoice is already void."
+                : "This will void the invoice financially and remove it from customer credit/customer portal. Inventory will not be changed."}
             </div>
 
 
@@ -2568,13 +2584,13 @@ const runInvoiceAction = async (row, action) => {
             {voidError && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{voidError}</div>}
 
 
-            <label className="mt-4 block text-sm font-bold text-slate-700" htmlFor="void-invoice-reason">Reason this invoice is a duplicate</label>
+            <label className="mt-4 block text-sm font-bold text-slate-700" htmlFor="void-invoice-reason">{voidPreview?.financial_already_voided ? "Reason for returning stock" : "Reason for voiding this invoice"}</label>
             <textarea id="void-invoice-reason" value={voidReason} onChange={(event) => setVoidReason(event.target.value)} disabled={voidLoading || !voidPreview || voidPreview?.already_voided} rows="3" placeholder="Enter a clear audit reason" className="mt-2 w-full rounded-xl border border-slate-300 p-3 disabled:bg-slate-100" />
 
 
             <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button type="button" onClick={closeVoidInvoiceDialog} disabled={voidLoading} className="rounded-xl border border-slate-300 px-4 py-2 font-bold text-slate-700 disabled:opacity-50">Cancel</button>
-              <button type="button" onClick={confirmVoidInvoice} disabled={voidLoading || !voidPreview || voidPreview?.already_voided || !voidReason.trim()} className="rounded-xl bg-red-700 px-4 py-2 font-bold text-white disabled:bg-slate-400">{voidLoading ? "Processing..." : (voidPreview?.financial_already_voided ? "Return stock to inventory" : "Void invoice and return stock")}</button>
+              <button type="button" onClick={confirmVoidInvoice} disabled={voidLoading || !voidPreview || voidPreview?.already_voided || !voidReason.trim()} className="rounded-xl bg-red-700 px-4 py-2 font-bold text-white disabled:bg-slate-400">{voidLoading ? "Processing..." : (voidPreview?.financial_already_voided ? "Return stock to inventory" : "Void invoice")}</button>
             </div>
           </div>
         </div>
