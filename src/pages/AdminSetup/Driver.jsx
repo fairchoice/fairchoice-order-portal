@@ -673,7 +673,11 @@ const openCashCollection = async (order) => {
       console.warn("Delivery wallet preview failed:", walletError);
       setDeliveryWallet({
         balance: 0, useWallet: false, loading: false,
-        error: walletError.message || "Wallet could not be checked.",
+        error:
+          walletError?.code === "PGRST202" ||
+          /fc_get_delivery_wallet_preview_v1/i.test(walletError?.message || "")
+            ? ""
+            : walletError.message || "Wallet could not be checked.",
         invoiceId: null, invoiceTotal: invoiceAmount, amountToCollect: invoiceAmount,
         alreadyApplied: false, appliedAmount: 0,
       });
