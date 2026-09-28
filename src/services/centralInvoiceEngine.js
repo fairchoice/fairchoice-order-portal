@@ -2427,6 +2427,7 @@ function buildLegacyStandardInvoiceHtml(
   const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
   const isDeliveryNote = documentType === "deliveryNote";
   const isOrderForm = documentType === "orderForm";
+  const isReturnInvoice = documentType === "returnInvoice";
   const isServerManagerDocument = isServerManagerPriceMode(
     invoiceOrder.priceMode || invoiceOrder.price_mode
   );
@@ -2953,9 +2954,10 @@ export function buildStandardInvoiceHtml(
   const rows = items
     .map((item) => {
       const quantity = getLineQuantity(item);
-      const unitPrice = getLinePrice(item);
-      const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
-      const vatRate = getLineVatRate(item);
+      const freeLine = isFreeInvoiceLine(item);
+      const unitPrice = freeLine ? 0 : getLinePrice(item);
+      const netTotal = freeLine ? 0 : Number(item.net_total ?? item.netTotal ?? 0);
+      const vatRate = freeLine ? 0 : getLineVatRate(item);
       const productCode = getInvoiceProductCode(item);
 
 
