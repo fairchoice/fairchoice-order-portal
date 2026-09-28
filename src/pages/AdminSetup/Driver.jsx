@@ -40,10 +40,14 @@ import ReturnRequestModal from "../../components/ReturnRequestModal";
 import { loadPreOrderSupplyHistory } from "../../services/preOrderSupplyHistory";
 
 
+
+
 const COMPLETED_COLLECTION_STORAGE_KEY =
   "fairchoice_driver_completed_collection_orders";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+
 
 
 const SUPPLIER_LIGHT_COLORS = [
@@ -58,6 +62,8 @@ const SUPPLIER_LIGHT_COLORS = [
 ];
 
 
+
+
 const supplierColorFor = (supplierId, supplierName) => {
   const seed = String(supplierId || supplierName || "Supplier");
   let hash = 0;
@@ -66,6 +72,8 @@ const supplierColorFor = (supplierId, supplierName) => {
   }
   return SUPPLIER_LIGHT_COLORS[Math.abs(hash) % SUPPLIER_LIGHT_COLORS.length];
 };
+
+
 
 
 const buildSharedSupplierHighlights = (events = []) => {
@@ -98,22 +106,32 @@ const buildSharedSupplierHighlights = (events = []) => {
 };
 
 
+
+
 const PRINT_EXCLUDED_SUPPLY_STATUSES = new Set([
   "cannot supply", "need supplier", "pre-order", "pre order",
   "pre-order supply", "pre order supply", "supply needed", "next supplier",
 ]);
 
 
+
+
 const getDriverItemStatus = (item = {}) =>
   String(item.sourceStatus || item.source_status || item.status || "In Stock");
+
+
 
 
 const isDriverPrintExcluded = (item = {}) =>
   PRINT_EXCLUDED_SUPPLY_STATUSES.has(getDriverItemStatus(item).trim().toLowerCase());
 
 
+
+
 const getDriverPrintableSourceItems = (order = {}) =>
   (order.items || order.order_items || []).filter((item) => !isDriverPrintExcluded(item));
+
+
 
 
 const withDriverPrintableItems = (order = {}) => ({
@@ -121,6 +139,8 @@ const withDriverPrintableItems = (order = {}) => ({
   items: getDriverPrintableSourceItems(order),
   order_items: getDriverPrintableSourceItems(order),
 });
+
+
 
 
 const loadCompletedCollectionOrderIds = () => {
@@ -133,6 +153,10 @@ const loadCompletedCollectionOrderIds = () => {
     return new Set();
   }
 };
+
+
+
+
 
 
 
@@ -152,7 +176,13 @@ export default function Driver({
   const [selectedCreditBranchId, setSelectedCreditBranchId] = useState("");
 
 
+
+
   const [creditCustomers, setCreditCustomers] = useState([]);
+
+
+
+
 
 
 
@@ -170,12 +200,18 @@ const [cashCollectionOutstanding, setCashCollectionOutstanding] = useState({
 });
 
 
+
+
 const loggedInUser = JSON.parse(
   localStorage.getItem("loggedInUser") || "{}"
 );
 
 
+
+
 const [supplierHighlights, setSupplierHighlights] = useState({});
+
+
 
 
 useEffect(() => {
@@ -200,6 +236,8 @@ useEffect(() => {
 }, [loggedInUser?.id, loggedInUser?.staff_id, loggedInUser?.username]);
 
 
+
+
 const legacyTestTextValues = new Set(["nisstaj", "test", "test user", "test receiver"]);
 const isLegacyTestText = (value) =>
   legacyTestTextValues.has(String(value || "").trim().toLowerCase());
@@ -213,14 +251,20 @@ const cleanLegacyTestAmount = (value, order = {}) => {
 };
 
 
+
+
   // Driver summary must match the Warehouse order summary. Printing remains a
   // separate filtered view that excludes unresolved Pre-Order/Cannot Supply lines.
   const getDriverTotals = (order = {}) =>
     calculateDocumentTotals(order.items || order.order_items || [], order);
 
 
+
+
   const getDriverItems = (order) =>
     sortPrintItems(calculateDocumentTotals(getDriverPrintableSourceItems(order), order).invoiceItems);
+
+
 
 
   const getDriverStatusRank = (item = {}) => {
@@ -228,8 +272,11 @@ const cleanLegacyTestAmount = (value, order = {}) => {
     if (["in stock", "available"].includes(status)) return 1;
     if (["need supplier", "pre-order", "pre order", "supply needed", "next supplier"].includes(status)) return 2;
     if (status === "cannot supply") return 3;
-    return 4;
+    if (status === "free" || status === "promotion free") return 4;
+    return 5;
   };
+
+
 
 
   // Same Warehouse-style order: In Stock first, unresolved supplier lines next,
@@ -242,7 +289,11 @@ const cleanLegacyTestAmount = (value, order = {}) => {
     });
 
 
+
+
   const [showPreviousBalance, setShowPreviousBalance] = useState(false);
+
+
 
 
   const [previousBalanceForm, setPreviousBalanceForm] = useState({
@@ -252,6 +303,8 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   notes: "",
   paymentIntentId: createPreviousBalancePaymentIntentId(),
   });
+
+
 
 
   const printResolvedThermalReceipt = async (order) => {
@@ -270,6 +323,7 @@ const cleanLegacyTestAmount = (value, order = {}) => {
   paidBy: "",
 });
 
+
 const [deliveryWallet, setDeliveryWallet] = useState({
   balance: 0,
   useWallet: false,
@@ -283,11 +337,17 @@ const [deliveryWallet, setDeliveryWallet] = useState({
 });
 
 
+
+
 const getCollectionOrderKey = (order = {}) =>
   String(order.orderId || order.order_number || order.id || "");
 
 
+
+
 const normalizeCollectionType = normalizeDriverCollectionType;
+
+
 
 
 const activeCashCollectionOrder = orders.find(
@@ -317,6 +377,8 @@ const activeCashCollectionOutstanding = Number(
         0
     : cashCollectionOutstanding.totalOutstanding ?? 0
 );
+
+
 
 
 const applyCollectionType = useCallback(
@@ -350,6 +412,8 @@ const applyCollectionType = useCallback(
       ].every((field) => form[field] === current[field]);
 
 
+
+
       return unchanged ? current : form;
     });
   },
@@ -357,8 +421,12 @@ const applyCollectionType = useCallback(
 );
 
 
+
+
 useEffect(() => {
   if (!cashCollectionOrder) return undefined;
+
+
 
 
   let active = true;
@@ -369,6 +437,8 @@ useEffect(() => {
       resolvedCollectionType: paymentForm.resolvedCollectionType,
     });
   });
+
+
 
 
   return () => {
@@ -385,14 +455,20 @@ useEffect(() => {
 ]);
 
 
+
+
 const markCollectionCompleted = (order = {}) => {
   const completedOrderKey = getCollectionOrderKey(order);
   if (!completedOrderKey) return;
 
 
+
+
   setCompletedCollectionOrderIds((currentIds) => {
     const nextIds = new Set(currentIds);
     nextIds.add(completedOrderKey);
+
+
 
 
     localStorage.setItem(
@@ -401,12 +477,18 @@ const markCollectionCompleted = (order = {}) => {
     );
 
 
+
+
     return nextIds;
   });
 
 
+
+
   setCashCollectionOrder(null);
 };
+
+
 
 
 useEffect(() => {
@@ -414,9 +496,13 @@ useEffect(() => {
 }, []);
 
 
+
+
 useEffect(() => {
   loadCreditCustomers();
 }, []);
+
+
 
 
 const loadCreditCustomers = async () => {
@@ -428,11 +514,15 @@ const loadCreditCustomers = async () => {
     .order("account_name");
 
 
+
+
   if (error) {
     console.error(error);
     alert("Could not load customers.");
     return;
   }
+
+
 
 
   setCreditCustomers(
@@ -444,9 +534,13 @@ const loadCreditCustomers = async () => {
 };
 
 
+
+
 const selectedCreditCustomer = creditCustomers.find(
   (customer) => String(customer.id) === String(selectedCreditCustomerId)
 );
+
+
 
 
 const selectedCreditBranches =
@@ -455,13 +549,19 @@ const selectedCreditBranches =
   ) || [];
 
 
+
+
 const selectedCreditBranch = selectedCreditBranches.find(
   (branch) => String(branch.id) === String(selectedCreditBranchId)
 );
 
 
+
+
 useEffect(() => {
   let active = true;
+
+
 
 
   const loadOutstanding = async () => {
@@ -471,11 +571,15 @@ useEffect(() => {
     }
 
 
+
+
     try {
       const snapshot = await loadCustomerOutstandingSnapshot({
         customerAccountId: selectedCreditCustomer.id,
         customerName: selectedCreditCustomer.account_name,
       });
+
+
 
 
       if (active) setPreviousBalanceOutstanding(snapshot);
@@ -488,13 +592,19 @@ useEffect(() => {
   };
 
 
+
+
   loadOutstanding();
+
+
 
 
   return () => {
     active = false;
   };
 }, [selectedCreditCustomer?.id]);
+
+
 
 
   const driverNames = [
@@ -510,11 +620,17 @@ useEffect(() => {
   ];
 
 
+
+
       const driverOrders = orders.filter((order) => {
   const driverName = order.driverName || order.driver_name;
 
 
+
+
   const isReadyForDriver = order.status === "Ready For Driver";
+
+
 
 
   const isDeliveredWaitingPayment =
@@ -527,13 +643,19 @@ useEffect(() => {
     order.payment_collected !== true;
 
 
+
+
   const matchesDriver =
     selectedDriver === "All" || driverName === selectedDriver;
+
+
 
 
   const collectionCompletedLocally = completedCollectionOrderIds.has(
     String(order.orderId || order.order_number || order.id || "")
   );
+
+
 
 
   return (
@@ -557,16 +679,24 @@ const loadDriverCreditOutstanding = async ({
   });
 
 
+
+
   const branchOutstanding = {};
+
+
 
 
   (creditSnapshot.branchSummaries || []).forEach((branch) => {
     const outstanding = Number(branch.outstanding || 0);
 
 
+
+
     if (branch.branchId) {
       branchOutstanding[String(branch.branchId)] = outstanding;
     }
+
+
 
 
     if (branch.branchName) {
@@ -575,11 +705,15 @@ const loadDriverCreditOutstanding = async ({
   });
 
 
+
+
   const selectedBranchSummary =
     creditSnapshot.branchSummary ||
     (creditSnapshot.branchSummaries || []).find((branch) => {
       const idMatches =
         String(branch.branchId || "") === String(customerBranchId || "");
+
+
 
 
       const nameMatches =
@@ -591,8 +725,12 @@ const loadDriverCreditOutstanding = async ({
           .toLowerCase();
 
 
+
+
       return idMatches || nameMatches;
     });
+
+
 
 
   const totalOutstanding = Number(
@@ -600,9 +738,13 @@ const loadDriverCreditOutstanding = async ({
   );
 
 
+
+
   const selectedOutstanding = Number(
     selectedBranchSummary?.outstanding ?? totalOutstanding
   );
+
+
 
 
   return {
@@ -616,8 +758,12 @@ const loadDriverCreditOutstanding = async ({
 };
 
 
+
+
 const openCashCollection = async (order) => {
   setCashCollectionOrder(getCollectionOrderKey(order));
+
+
 
 
   setCashCollectionOutstanding({
@@ -627,8 +773,12 @@ const openCashCollection = async (order) => {
   });
 
 
+
+
   const openingPaymentType =
     order.paymentType || order.payment_type || "Cash";
+
+
 
 
   const openingCollectionType =
@@ -641,7 +791,10 @@ const openCashCollection = async (order) => {
         "TODAY_INVOICE";
 
 
+
+
   const invoiceAmount = Number(getDriverTotals(order).grandTotal || 0);
+
 
   let walletPreview = {
     wallet_balance: 0,
@@ -659,6 +812,7 @@ const openCashCollection = async (order) => {
     loggedInUser.sessionToken ||
     null;
 
+
   if (orderUuid && walletUsername && walletToken) {
     setDeliveryWallet((current) => ({ ...current, loading: true, error: "", useWallet: false }));
     const { data: walletData, error: walletError } = await supabase.rpc(
@@ -673,11 +827,7 @@ const openCashCollection = async (order) => {
       console.warn("Delivery wallet preview failed:", walletError);
       setDeliveryWallet({
         balance: 0, useWallet: false, loading: false,
-        error:
-          walletError?.code === "PGRST202" ||
-          /fc_get_delivery_wallet_preview_v1/i.test(walletError?.message || "")
-            ? ""
-            : walletError.message || "Wallet could not be checked.",
+        error: walletError.message || "Wallet could not be checked.",
         invoiceId: null, invoiceTotal: invoiceAmount, amountToCollect: invoiceAmount,
         alreadyApplied: false, appliedAmount: 0,
       });
@@ -711,6 +861,7 @@ const openCashCollection = async (order) => {
     });
   }
 
+
   const customerRequestedWallet = Boolean(
     order.walletUseRequested ?? order.wallet_use_requested
   );
@@ -720,6 +871,7 @@ const openCashCollection = async (order) => {
     : customerRequestedWallet && openingWalletBalance > 0
       ? Math.max(0, invoiceAmount - Math.min(openingWalletBalance, invoiceAmount))
       : invoiceAmount;
+
 
   const savedAmount = cleanLegacyTestAmount(
     order.paymentAmount || order.payment_amount,
@@ -747,7 +899,11 @@ const openCashCollection = async (order) => {
   );
 
 
+
+
   setPaymentForm(openingForm);
+
+
 
 
   try {
@@ -767,9 +923,13 @@ const openCashCollection = async (order) => {
     });
 
 
+
+
     setCashCollectionOutstanding(outstandingState);
   } catch (error) {
     console.error("Cash collection outstanding load error:", error);
+
+
 
 
     setCashCollectionOutstanding({
@@ -781,8 +941,12 @@ const openCashCollection = async (order) => {
 };
 
 
+
+
   const savePreviousBalancePayment = async () => {
   const paymentAmount = Number(previousBalanceForm.amount || 0);
+
+
 
 
   if (!selectedCreditCustomer) {
@@ -791,10 +955,14 @@ const openCashCollection = async (order) => {
   }
 
 
+
+
   if (selectedCreditBranches.length > 0 && !selectedCreditBranch) {
     alert("Please select branch / shop.");
     return;
   }
+
+
 
 
   if (!paymentAmount || paymentAmount <= 0) {
@@ -803,16 +971,22 @@ const openCashCollection = async (order) => {
   }
 
 
+
+
   if (!previousBalanceForm.whoPaid.trim()) {
     alert("Please enter who paid.");
     return;
   }
 
 
+
+
   if (isLegacyTestText(previousBalanceForm.whoPaid)) {
     alert("Please replace the test payer name before saving.");
     return;
   }
+
+
 
 
   const selectedOutstanding = selectedCreditBranch
@@ -826,6 +1000,8 @@ const openCashCollection = async (order) => {
     : Number(previousBalanceOutstanding.totalOutstanding || 0);
 
 
+
+
   if (
     selectedOutstanding > 0 &&
     paymentAmount > selectedOutstanding &&
@@ -837,9 +1013,13 @@ const openCashCollection = async (order) => {
   }
 
 
+
+
   setSavingPreviousBalance(true);
   try {
     const paymentDate = new Date().toISOString();
+
+
 
 
     await postPreviousBalanceCollection({
@@ -867,7 +1047,11 @@ const openCashCollection = async (order) => {
   }
 
 
+
+
   alert("Previous Balance Payment saved successfully.");
+
+
 
 
   setPreviousBalanceForm({
@@ -879,10 +1063,14 @@ const openCashCollection = async (order) => {
   });
 
 
+
+
   setSelectedCreditCustomerId("");
   setSelectedCreditBranchId("");
   setShowPreviousBalance(false);
 };
+
+
 
 
   const confirmDelivery = async (order, confirmedBy) => {
@@ -892,6 +1080,8 @@ const openCashCollection = async (order) => {
     });
 
 
+
+
     const getInvoiceStatusClass = (status) => {
   if (status === "PAID") return "status-paid";
   if (status === "PART PAID") return "status-part-paid";
@@ -899,7 +1089,11 @@ const openCashCollection = async (order) => {
   };
 
 
+
+
     await changeOrderStatus(order.orderId, "Delivered");
+
+
 
 
     await createOrUpdateInvoiceForDeliveredOrder({
@@ -907,6 +1101,8 @@ const openCashCollection = async (order) => {
       confirmedBy,
       currentUser: loggedInUser,
     });
+
+
 
 
     openCashCollection(order);
@@ -917,14 +1113,20 @@ const openCashCollection = async (order) => {
 };
 
 
+
+
 const moveBackToWarehouse = async (order) => {
   if (order.status === "Delivered") return;
   if (!window.confirm("Move this order back to Warehouse?")) return;
 
 
+
+
   await changeOrderStatus(order.orderId, "Warehouse Packing");
   await refreshOrders();
 };
+
+
 
 
 const printDeliveryNoteDocument = (order) => {
@@ -963,6 +1165,8 @@ const printDeliveryNoteDocument = (order) => {
   `;
 
 
+
+
   const win = window.open("", "_blank", "width=800,height=700");
   if (!win) {
     alert("Popup blocked. Please allow popups to print the delivery note.");
@@ -970,9 +1174,15 @@ const printDeliveryNoteDocument = (order) => {
   }
 
 
+
+
   win.document.write(html);
   win.document.close();
 };
+
+
+
+
 
 
 
@@ -992,6 +1202,8 @@ const getInvoiceOrderKeys = (invoice = {}) =>
     .filter(Boolean);
 
 
+
+
 const buildDeliveryPaymentAllocations = ({
   invoices = [],
   allocations = [],
@@ -1008,6 +1220,8 @@ const buildDeliveryPaymentAllocations = ({
   );
 
 
+
+
   const todayInvoices = availableInvoices.filter((invoice) =>
     getInvoiceOrderKeys(invoice).some((key) => orderKeys.has(key))
   );
@@ -1016,9 +1230,13 @@ const buildDeliveryPaymentAllocations = ({
   );
 
 
+
+
   const allocateSequence = (groups) => {
     let remaining = Number(amount || 0);
     const combined = [];
+
+
 
 
     groups.forEach((group) => {
@@ -1029,8 +1247,12 @@ const buildDeliveryPaymentAllocations = ({
     });
 
 
+
+
     return { allocations: combined, unallocatedAmount: remaining };
   };
+
+
 
 
   switch (String(mode || "TODAY_INVOICE").toUpperCase()) {
@@ -1046,11 +1268,17 @@ const buildDeliveryPaymentAllocations = ({
 };
 
 
+
+
   const saveCashCollection = async (order) => {
     if (savingPayment) return;
 
 
+
+
     const collectionOrderKey = getCollectionOrderKey(order);
+
+
 
 
     if (completedCollectionOrderIds.has(collectionOrderKey)) {
@@ -1058,6 +1286,8 @@ const buildDeliveryPaymentAllocations = ({
       setCashCollectionOrder(null);
       return;
     }
+
+
 
 
     const paymentType = String(paymentForm.paymentType || "Cash");
@@ -1075,9 +1305,13 @@ const buildDeliveryPaymentAllocations = ({
         : collectionType;
 
 
+
+
    const creditCollectionStatus = isCredit
   ? "NOT_COLLECTED"
   : "";
+
+
 
 
 const creditPaymentCollected = false;
@@ -1086,10 +1320,14 @@ const paymentCollected = isCredit ? "No" : "Yes";
     let invoiceAmount = Number(activeCashCollectionInvoiceAmount || 0);
 
 
+
+
     if (!paymentForm.paidBy.trim()) {
       alert("Please enter who paid / shop staff name.");
       return;
     }
+
+
 
 
     if (isLegacyTestText(paymentForm.paidBy)) {
@@ -1098,10 +1336,14 @@ const paymentCollected = isCredit ? "No" : "Yes";
     }
 
 
+
+
     if (isCredit && !creditCollectionStatus) {
       alert("Please select Payment Collected or Payment Not Collected.");
       return;
     }
+
+
 
 
     if (collectionType === "UNALLOCATED_PAYMENT" && !paymentForm.resolvedCollectionType) {
@@ -1110,10 +1352,14 @@ const paymentCollected = isCredit ? "No" : "Yes";
     }
 
 
+
+
     if ((!isCredit || creditPaymentCollected) && paymentAmount <= 0 && invoiceAmount > 0.01) {
       alert("Please enter a payment amount greater than zero.");
       return;
     }
+
+
 
 
     setSavingPayment(true);
@@ -1130,6 +1376,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
           throw new Error("Wallet cannot be applied because the delivery session or order ID is missing.");
         }
 
+
         const expectedCollect = Number(activeCashCollectionInvoiceAmount || 0);
         const { data: walletResult, error: walletError } = await supabase.rpc(
           "fc_apply_delivery_wallet_v1",
@@ -1140,6 +1387,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
           }
         );
         if (walletError) throw walletError;
+
 
         const actualCollect = Number(walletResult?.amount_to_collect ?? expectedCollect);
         const appliedTotal = Number(walletResult?.wallet_applied_total || 0);
@@ -1154,10 +1402,12 @@ const paymentCollected = isCredit ? "No" : "Yes";
         }));
         invoiceAmount = actualCollect;
 
+
         if (!isCredit && effectiveCollectionType === "TODAY_INVOICE") {
           paymentAmount = actualCollect;
           setPaymentForm((current) => ({ ...current, paymentAmount: String(actualCollect.toFixed(2)) }));
         }
+
 
         if (Math.abs(actualCollect - expectedCollect) > 0.01) {
           alert(
@@ -1180,11 +1430,15 @@ const paymentCollected = isCredit ? "No" : "Yes";
       );
 
 
+
+
       const availableAccountCredit = Math.max(0, -orderBranchOutstanding);
       const payablePartPaymentInvoice = Math.max(
         0,
         invoiceAmount - availableAccountCredit
       );
+
+
 
 
       if (
@@ -1201,6 +1455,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
       }
 
 
+
+
       if (
         !isCredit &&
         effectiveCollectionType === "OUTSTANDING_PAYMENT" &&
@@ -1214,6 +1470,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
       }
 
 
+
+
       const collectorName =
         loggedInUser.staff_name ||
         loggedInUser.name ||
@@ -1222,11 +1480,15 @@ const paymentCollected = isCredit ? "No" : "Yes";
         "";
 
 
+
+
       const transactionReason = isCredit
         ? creditPaymentCollected
           ? "OUTSTANDING_COLLECTED_WITH_NEW_CREDIT_INVOICE"
           : "WEEKLY_CREDIT_NOT_COLLECTED"
         : effectiveCollectionType;
+
+
 
 
    const cashCollectionPayload = {
@@ -1243,8 +1505,12 @@ const paymentCollected = isCredit ? "No" : "Yes";
 };
 
 
+
+
       const shouldPostPayment =
   !isCredit && paymentAmount > 0;
+
+
 
 
       if (
@@ -1266,6 +1532,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
           order.order_number || order.orderId || "";
 
 
+
+
         if (
           effectiveCollectionType === "TODAY_INVOICE" &&
           !canonicalOrderUuid
@@ -1276,6 +1544,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
             }. Refresh the order data and try again.`
           );
         }
+
+
 
 
         // Guarantee the delivered order has a canonical customer_invoices row
@@ -1293,6 +1563,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
         });
 
 
+
+
         const snapshotOptions = {
           customerAccountId,
           customerName:
@@ -1304,7 +1576,11 @@ const paymentCollected = isCredit ? "No" : "Yes";
         };
 
 
+
+
         let snapshot = await loadCentralPaymentSnapshot(snapshotOptions);
+
+
 
 
         // Outstanding collection must allocate only against saved canonical
@@ -1324,6 +1600,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
           ];
 
 
+
+
           if (legacyOrderIds.length) {
             for (const orderId of legacyOrderIds) {
               const { error: invoiceSyncError } = await supabase.rpc(
@@ -1335,6 +1613,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
             snapshot = await loadCentralPaymentSnapshot(snapshotOptions);
           }
         }
+
+
 
 
         const allocationMode = getDriverCashCollectionTypeSetup({
@@ -1362,6 +1642,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
           allocatedAmount: paymentAmount,
           customerBranchId,
         });
+
+
 
 
         await postCanonicalCustomerPayment({
@@ -1401,6 +1683,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
         });
 
 
+
+
         const { outstandingState } = await loadDriverCreditOutstanding({
           customerAccountId,
           customerName:
@@ -1413,7 +1697,11 @@ const paymentCollected = isCredit ? "No" : "Yes";
         });
 
 
+
+
         setCashCollectionOutstanding(outstandingState);
+
+
 
 
         // The canonical payment is now saved. Hide and lock this order
@@ -1422,9 +1710,12 @@ const paymentCollected = isCredit ? "No" : "Yes";
         markCollectionCompleted(order);
       }
 
+
       if (!shouldPostPayment && deliveryWallet.useWallet && invoiceAmount <= 0.01) {
         markCollectionCompleted(order);
       }
+
+
 
 
       try {
@@ -1441,6 +1732,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
           orderUpdateError
         );
       }
+
+
 
 
       await saveConfirmedServerManagerOrderToProcessingQueue({
@@ -1466,11 +1759,15 @@ const paymentCollected = isCredit ? "No" : "Yes";
       });
 
 
+
+
       // Credit-not-collected has no canonical payment, so mark it
       // completed after the weekly-credit queue entry is saved.
       if (!shouldPostPayment) {
         markCollectionCompleted(order);
       }
+
+
 
 
       alert(
@@ -1480,6 +1777,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
             : "Today's invoice saved to weekly credit as amount not collected."
           : "Payment collection saved."
       );
+
+
 
 
       try {
@@ -1496,11 +1795,15 @@ const paymentCollected = isCredit ? "No" : "Yes";
   };
 
 
+
+
   return (
     <div className="p-4">
       <div className="mb-4 text-center">
         <h2 className="text-2xl font-bold">Driver Portal</h2>
       </div>
+
+
 
 
       <div className="mb-4 flex justify-end">
@@ -1513,9 +1816,13 @@ const paymentCollected = isCredit ? "No" : "Yes";
 </div>
 
 
+
+
                 {showPreviousBalance && (
   <div className="mb-4 border rounded-2xl p-4 bg-slate-50 space-y-3">
     <h3 className="font-bold text-center">Previous Balance Collection</h3>
+
+
 
 
       <select
@@ -1524,6 +1831,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
         className="w-full border rounded-xl p-3 bg-white"
       >
         <option value="">Select Customer</option>
+
+
 
 
         {creditCustomers.map((customer) => (
@@ -1537,6 +1846,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
       </select>
 
 
+
+
       <select
   value={selectedCreditBranchId}
   onChange={(e) => setSelectedCreditBranchId(e.target.value)}
@@ -1544,6 +1855,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
   disabled={!selectedCreditCustomerId}
 >
   <option value="">Select Branch / Shop</option>
+
+
 
 
   {selectedCreditBranches.map((branch) => (
@@ -1556,6 +1869,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
 </select>
 
 
+
+
 {selectedCreditCustomer && (
   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
     <div className="border rounded-xl p-3 bg-white">
@@ -1564,6 +1879,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
         {formatCurrency(previousBalanceOutstanding.totalOutstanding || 0)}
       </div>
     </div>
+
+
 
 
     {selectedCreditBranch && (
@@ -1586,6 +1903,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
 )}
 
 
+
+
     <input
       type="number"
       placeholder="Amount Collected"
@@ -1598,6 +1917,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
       }
       className="w-full border rounded-xl p-3"
     />
+
+
 
 
     <select
@@ -1617,6 +1938,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
     </select>
 
 
+
+
     <input
       placeholder="Who paid / shop staff name"
       value={previousBalanceForm.whoPaid}
@@ -1628,6 +1951,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
       }
       className="w-full border rounded-xl p-3"
     />
+
+
 
 
     <textarea
@@ -1643,6 +1968,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
     />
 
 
+
+
       <button
         type="button"
         onClick={savePreviousBalancePayment}
@@ -1655,10 +1982,14 @@ const paymentCollected = isCredit ? "No" : "Yes";
         )}
 
 
+
+
       <div className="mb-4">
         <label className="block text-xs font-bold text-slate-500 mb-1">
           Driver Filter
         </label>
+
+
 
 
         <select
@@ -1675,11 +2006,15 @@ const paymentCollected = isCredit ? "No" : "Yes";
       </div>
 
 
+
+
       {driverOrders.length === 0 && (
         <div className="border rounded-2xl p-4 text-sm text-center">
           No driver orders.
         </div>
       )}
+
+
 
 
       <div className="space-y-3">
@@ -1696,6 +2031,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 </h3>
 
 
+
+
                 <div className="text-base font-extrabold text-red-600">
                   Order Value: {formatCurrency(getDriverTotals(order).grandTotal)}
                 <p className="text-xs text-slate-500">
@@ -1703,6 +2040,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 </p>
               </div>
               </div>
+
+
 
 
               <div className="flex flex-wrap justify-center gap-2">
@@ -1718,12 +2057,16 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 </button>
 
 
+
+
                 <button
                   onClick={() => printResolvedThermalReceipt(order)}
                   className="bg-black text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[145px]"
                 >
                   Print Thermal Receipt
                 </button>
+
+
 
 
                 {order.status === "Ready For Driver" && (
@@ -1734,10 +2077,14 @@ const paymentCollected = isCredit ? "No" : "Yes";
                     );
 
 
+
+
                     if (!confirmedBy?.trim()) {
                       alert("Please enter who confirmed the order.");
                       return;
                     }
+
+
 
 
                     confirmDelivery(order, confirmedBy.trim());
@@ -1747,6 +2094,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
                     Delivered
                   </button>
                 )}
+
+
 
 
                 {order.status === "Ready For Driver" && (
@@ -1761,6 +2110,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 )}
 
 
+
+
                 {order.status === "Delivered" &&
                     order.payment_collected !== "Yes" &&
                     order.payment_collected !== true && (
@@ -1773,6 +2124,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 )}
 
 
+
+
                 {order.status === "Delivered" && (
                   <button
                     onClick={() => setReturnOrder(order)}
@@ -1783,6 +2136,10 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 )}
               </div>
             </div>
+
+
+
+
 
 
 
@@ -1826,9 +2183,13 @@ const paymentCollected = isCredit ? "No" : "Yes";
             )}
 
 
+
+
             {cashCollectionOrder === getCollectionOrderKey(order) && (
               <div className="mt-4 border rounded-2xl p-3 bg-slate-50 space-y-3">
                 <h4 className="font-bold text-center">Cash Collection</h4>
+
+
 
 
                 <div className="grid grid-cols-1 gap-2">
@@ -1842,12 +2203,16 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 </div>
 
 
+
+
                 {(() => {
                   const displayBranchKey =
                     order.customerBranchId ||
                     order.customer_branch_id ||
                     order.branchName ||
                     order.branch_name;
+
+
 
 
                   const displayOutstanding = Number(
@@ -1857,6 +2222,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
                           0
                       : cashCollectionOutstanding.totalOutstanding ?? 0
                   );
+
+
 
 
                   return (
@@ -1872,10 +2239,14 @@ const paymentCollected = isCredit ? "No" : "Yes";
                 })()}
 
 
+
+
                 {(() => {
   const invoiceAmount = Number(
     getDriverTotals(order).grandTotal || 0
   );
+
+
 
 
   const branchKey =
@@ -1883,6 +2254,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
     order.customer_branch_id ||
     order.branchName ||
     order.branch_name;
+
+
 
 
   const currentOutstanding = Number(
@@ -1901,6 +2274,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
   });
 
 
+
+
   /*
    * Positive outstanding means money is owed.
    * Negative outstanding means the customer has account credit.
@@ -1911,7 +2286,11 @@ const paymentCollected = isCredit ? "No" : "Yes";
   const availableAccountCredit = Math.max(0, -currentOutstanding);
 
 
+
+
   const accountBalanceIncludingToday = Math.abs(currentOutstanding);
+
+
 
 
   const collectionType = collectionSetup.collectionType;
@@ -1919,8 +2298,12 @@ const paymentCollected = isCredit ? "No" : "Yes";
     collectionSetup.effectiveCollectionType;
 
 
+
+
   const isCredit =
     paymentForm.paymentType === "Credit";
+
+
 
 
   const creditCollectionStatus = String(
@@ -1928,17 +2311,25 @@ const paymentCollected = isCredit ? "No" : "Yes";
   ).toUpperCase();
 
 
+
+
   const creditPaymentCollected =
     isCredit &&
     creditCollectionStatus === "COLLECTED";
 
 
+
+
   const amountIsFixed = collectionSetup.amountIsFixed;
+
+
 
 
   const enteredAmount = Number(
     paymentForm.paymentAmount || 0
   );
+
+
 
 
   /*
@@ -1953,16 +2344,22 @@ const paymentCollected = isCredit ? "No" : "Yes";
     : availableAccountCredit;
 
 
+
+
   const payablePartPaymentInvoice = Math.max(
     0,
     invoiceAmount - creditAppliedToPartPayment
   );
 
 
+
+
   const remainingToday = Math.max(
     0,
     payablePartPaymentInvoice - enteredAmount
   );
+
+
 
 
   /*
@@ -1976,8 +2373,12 @@ const paymentCollected = isCredit ? "No" : "Yes";
   );
 
 
+
+
   const partPaymentAvailable =
     payablePartPaymentInvoice > 0;
+
+
 
 
     console.log({
@@ -1987,6 +2388,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
   collectionType,
   paidBy: paymentForm.paidBy,
 });
+
+
 
 
 const canSave =
@@ -2008,6 +2411,8 @@ const canSave =
       );
 
 
+
+
   return (
     <>
       <label className="text-xs font-bold uppercase text-slate-500">
@@ -2015,11 +2420,15 @@ const canSave =
       </label>
 
 
+
+
       <select
         value={paymentForm.paymentType}
         onChange={(e) => {
           const paymentType = e.target.value;
           const isNextCredit = paymentType === "Credit";
+
+
 
 
           applyCollectionType(
@@ -2048,6 +2457,8 @@ const canSave =
         <option value="Card">Card</option>
         <option value="Credit">Credit</option>
       </select>
+
+
 
 
       {(deliveryWallet.loading || deliveryWallet.balance > 0 || deliveryWallet.alreadyApplied || deliveryWallet.error) && (
@@ -2091,11 +2502,14 @@ const canSave =
         </div>
       )}
 
+
       {!isCredit && (
         <>
           <label className="text-xs font-bold uppercase text-slate-500">
             Collection Type
           </label>
+
+
 
 
           <select
@@ -2113,9 +2527,13 @@ const canSave =
             </option>
 
 
+
+
             <option value="OUTSTANDING_PAYMENT">
               Outstanding Payment
             </option>
+
+
 
 
             <option
@@ -2126,12 +2544,16 @@ const canSave =
             </option>
 
 
+
+
             <option value="UNALLOCATED_PAYMENT">
               Unallocated Payment
             </option>
           </select>
         </>
       )}
+
+
 
 
     {isCredit && (
@@ -2142,12 +2564,16 @@ const canSave =
 )}
 
 
+
+
       {!isCredit &&
         collectionType === "UNALLOCATED_PAYMENT" && (
           <>
             <label className="text-xs font-bold uppercase text-slate-500">
               Resolve As
             </label>
+
+
 
 
             <select
@@ -2167,14 +2593,20 @@ const canSave =
               </option>
 
 
+
+
               <option value="TODAY_INVOICE">
                 Today's Invoice Error
               </option>
 
 
+
+
               <option value="OUTSTANDING_PAYMENT">
                 Outstanding Payment Error
               </option>
+
+
 
 
               <option
@@ -2188,11 +2620,15 @@ const canSave =
         )}
 
 
+
+
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         <div className="border rounded-xl p-3 bg-white">
           <div className="text-xs font-bold text-slate-500">
             Today's invoice
           </div>
+
+
 
 
           <div className="text-lg font-extrabold text-slate-900">
@@ -2206,10 +2642,14 @@ const canSave =
         </div>
 
 
+
+
         <div className="border rounded-xl p-3 bg-white">
           <div className="text-xs font-bold text-slate-500">
             Account balance including today's invoice
           </div>
+
+
 
 
           <div className="text-lg font-extrabold text-red-700">
@@ -2221,11 +2661,15 @@ const canSave =
       </div>
 
 
+
+
       {(!isCredit || creditPaymentCollected) && (
         <>
           <label className="text-xs font-bold uppercase text-slate-500">
             Amount Collected
           </label>
+
+
 
 
           <input
@@ -2257,6 +2701,8 @@ const canSave =
       )}
 
 
+
+
       {!isCredit &&
         effectiveCollectionType ===
           "PART_PAYMENT" && (
@@ -2267,11 +2713,15 @@ const canSave =
             </div>
 
 
+
+
             <div className="text-xl font-extrabold text-amber-900">
               {formatCurrency(remainingToday)}
             </div>
           </div>
         )}
+
+
 
 
       {!isCredit &&
@@ -2285,6 +2735,8 @@ const canSave =
             </div>
 
 
+
+
             <div className="text-xl font-extrabold text-blue-900">
               {formatCurrency(
                 remainingAccountCredit
@@ -2292,6 +2744,8 @@ const canSave =
             </div>
           </div>
         )}
+
+
 
 
       {isCredit &&
@@ -2305,6 +2759,8 @@ const canSave =
         )}
 
 
+
+
       {isCredit &&
         creditCollectionStatus ===
           "NOT_COLLECTED" && (
@@ -2316,9 +2772,13 @@ const canSave =
         )}
 
 
+
+
       <label className="text-xs font-bold uppercase text-slate-500">
         Who Paid / Shop Staff Name
       </label>
+
+
 
 
       <input
@@ -2334,6 +2794,8 @@ const canSave =
       />
 
 
+
+
       <div className="rounded-xl border bg-white p-3 text-xs font-semibold text-slate-600">
         Collected/processed by:{" "}
         {loggedInUser.staff_name ||
@@ -2342,6 +2804,8 @@ const canSave =
           loggedInUser.username ||
           "Logged-in staff"}
       </div>
+
+
 
 
       <button
@@ -2365,6 +2829,8 @@ const canSave =
           </div>
         ))}
       </div>
+
+
 
 
       {returnOrder && (
