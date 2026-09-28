@@ -2461,7 +2461,7 @@ const canSave =
 
 
 
-      {(deliveryWallet.loading || deliveryWallet.balance > 0 || deliveryWallet.alreadyApplied || deliveryWallet.error) && (
+      {activeCashCollectionOrder && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
           <div className="flex items-start justify-between gap-3">
             <div>
