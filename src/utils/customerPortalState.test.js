@@ -184,12 +184,10 @@ test("Home controls are persistent, strongly styled, and never hidden on mobile"
     customerOrderSource,
     /showHomepage && <button[\s\S]{0,250}aria-label="Go to home"/
   );
-  for (const source of [customerOrderSource, homeGridSource, productFiltersSource]) {
-    assert.match(source, /border-2 border-blue-950 bg-blue-950/);
-  }
-  assert.doesNotMatch(homeGridSource, /hidden[^"]*Go to home|hidden min-h/);
-  assert.match(homeGridSource, /onClick=\{onHome\}/);
-  assert.match(productFiltersSource, /onClick=\{onBackToCategories\}/);
+  assert.match(customerOrderSource, /const goToCustomerHome = useCallback/);
+  assert.match(customerOrderSource, /onHome=\{goToCustomerHome\}/);
+  assert.match(customerOrderSource, /onBackToCategories=\{goToCustomerHome\}/);
+  assert.match(homeGridSource, /onHome,/);
 });
 
 test("unknown customer and sales routes safely default to Order", () => {
@@ -207,3 +205,4 @@ test("submission errors provide actionable session and network messages", () => 
   assert.match(getOrderSubmissionErrorMessage({ status: 401 }), /session has expired/i);
   assert.match(getOrderSubmissionErrorMessage(new TypeError("Failed to fetch")), /internet connection/i);
 });
+

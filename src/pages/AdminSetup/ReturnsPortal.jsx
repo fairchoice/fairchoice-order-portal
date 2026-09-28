@@ -163,7 +163,7 @@ export default function ReturnsPortal() {
   const pendingCount = filteredReturns.filter(isPendingReturn).length;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 pb-24">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
@@ -282,7 +282,7 @@ export default function ReturnsPortal() {
                       ) : (
                         <div className="flex justify-end gap-2">
                           <button type="button" onClick={() => setViewingId((value) => value === row.id ? null : row.id)} className="rounded-lg border px-3 py-2 text-xs font-bold">View</button>
-                          {row.status === "Confirmed" && canReverseReturns && (
+                          {row.status === "Confirmed" && !row.reversed_at && canReverseReturns && (
                             <button type="button" onClick={() => setReversalModal({ row, reason: "" })} className="rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white">Reverse Approval</button>
                           )}
                         </div>
@@ -292,7 +292,9 @@ export default function ReturnsPortal() {
                   {viewingId === row.id && (
                     <tr className="border-t bg-slate-50">
                       <td colSpan="9" className="p-4">
-                        <ReturnProductDetails row={row} />
+                        <div className="max-h-[70vh] overflow-y-auto overscroll-contain pr-1">
+                          <ReturnProductDetails row={row} />
+                        </div>
                       </td>
                     </tr>
                   )}
@@ -370,7 +372,15 @@ function ReturnProductDetails({ row }) {
 }
 
 function DialogShell({ children }) {
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">{children}</div></div>;
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4 sm:p-6">
+      <div className="flex min-h-full items-start justify-center py-2 sm:items-center">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-2xl bg-white p-5 shadow-2xl sm:max-h-[calc(100vh-3rem)]">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ReturnApprovalDialog({ state, busy, onChange, onCancel, onConfirm }) {

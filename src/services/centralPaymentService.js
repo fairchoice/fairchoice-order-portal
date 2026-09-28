@@ -242,7 +242,7 @@ export async function loadDeliveredInvoices({ customerAccountId, customerName } 
       reference_no: order.order_number || order.orderId || invoiceReference,
       order_number: order.order_number || order.orderId || invoiceReference,
       order_id: order.id,
-      invoice_date: order.delivered_at || order.delivery_confirmed_at || order.updated_at || order.created_at,
+      invoice_date: order.delivered_at || order.delivery_confirmed_at || order.created_at || order.updated_at,
       invoice_total: invoiceTotal,
       invoice_amount: invoiceTotal,
       amount: invoiceTotal,
@@ -714,15 +714,11 @@ export async function createCentralPayment({
   if (!accountId) throw new Error("Select a customer before saving a transaction.");
   if (paymentAmount <= 0) throw new Error("Amount must be greater than zero.");
   if (type === "DISCOUNT" && !String(notes || "").trim()) throw new Error("A detailed discount reason is compulsory.");
-  if (type === "DISCOUNT") {
-    if (actor !== "nisstaj_admin") {
-      throw new Error("Only nisstaj_admin can post Central Payment discounts.");
-    }
-    if (!ownerPassword) throw new Error("Owner financial password is required.");
+  if (type === "DISCOUNT" && actor !== "nisstaj_admin") {
+    throw new Error("Only nisstaj_admin can post Central Payment discounts.");
   }
-  const fcSession =
-    type === "PAYMENT" ? getFcSessionState(currentUser) : null;
-  if (type === "PAYMENT" && !fcSession.valid) {
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
     throw new Error(
       fcSession.expired
         ? "FC session is invalid or expired. Please sign in again."
@@ -737,7 +733,18 @@ export async function createCentralPayment({
   if (activeDuplicate) return { duplicate: true, payment: activeDuplicate, allocations: [] };
 
   const snapshot = await loadCentralPaymentSnapshot({ customerAccountId: accountId, customerName: customer?.account_name, customer, selectedBranchId: customerBranchId || "" });
-  const preview = buildPaymentPreview({ invoices: snapshot.invoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
+  const canonicalInvoicesResult = await safeSelect("customer_invoices", (query) =>
+    query
+      .select("*")
+      .eq("customer_account_id", accountId)
+      .neq("status", "CANCELLED")
+      .order("invoice_date", { ascending: true })
+  );
+  if (canonicalInvoicesResult.error) throw canonicalInvoicesResult.error;
+  const allocationInvoices = canonicalInvoicesResult.data?.length
+    ? canonicalInvoicesResult.data
+    : snapshot.invoices;
+  const preview = buildPaymentPreview({ invoices: allocationInvoices, allocations: snapshot.allocations, amount: paymentAmount, branchId: customerBranchId || "" });
   const isPendingBank = type === "PAYMENT" && paymentMethod === "Bank Transfer";
 
   if (type === "PAYMENT") {
@@ -777,7 +784,30 @@ export async function createCentralPayment({
     }
   }
 
-  const { data, error } = await supabase.rpc("post_owner_central_transaction", {
+  const { data, error } = await supabase.rpc("post_owner_central_discount_v2", {
+    p_fc_username: fcSession.username,
+    p_fc_session_token: fcSession.token,
+    p_customer_account_id: accountId,
+    p_customer_branch_id: customerBranchId || null,
+    p_payment_date: paymentDate || new Date().toISOString(),
+    p_amount: paymentAmount,
+    p_paid_by: paidBy || "",
+    p_external_reference: String(externalReference || "").trim() || null,
+    p_notes: notes || "",
+    p_idempotency_key: idempotencyKey,
+    p_allocations: preview.allocations,
+  });
+  if (!error) {
+    notifyCanonicalPaymentPosted(data);
+    return { ...(data || {}), preview };
+  }
+  if (!isMissingRpcError(error)) throw error;
+
+  // Temporary compatibility fallback until the session-authorised discount RPC is installed.
+  if (!ownerPassword) {
+    throw new Error("Session-authorised Central Payment discount is not installed yet. Apply the latest additive migration first.");
+  }
+  const legacy = await supabase.rpc("post_owner_central_transaction", {
     p_owner_username: "nisstaj_admin",
     p_owner_password: ownerPassword,
     p_customer_account_id: accountId,
@@ -792,12 +822,9 @@ export async function createCentralPayment({
     p_idempotency_key: idempotencyKey,
     p_allocations: preview.allocations,
   });
-  if (!error) {
-    notifyCanonicalPaymentPosted(data);
-    return { ...(data || {}), preview };
-  }
-  if (isMissingRpcError(error)) throw new Error("Protected Central Payment is not installed. Review and apply the additive owner-security migration first.");
-  throw error;
+  if (legacy.error) throw legacy.error;
+  notifyCanonicalPaymentPosted(legacy.data);
+  return { ...(legacy.data || {}), preview };
 }
 
 export async function confirmOwnerBankTransfer({
@@ -943,6 +970,107 @@ export async function listCentralPaymentRecords({
     total_pages: Number(data?.total_pages || 1),
   };
 }
+
+export async function listOwnerUnallocatedPayments({
+  currentUser,
+  search = "",
+  page = 1,
+} = {}) {
+  if (!isOwnerUser(currentUser)) {
+    throw new Error("Unallocated payments are restricted to nisstaj_admin.");
+  }
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
+  const safePage = Math.max(1, Number(page) || 1);
+  const { data, error } = await supabase.rpc(
+    "list_owner_unallocated_payments_v1",
+    {
+      p_username: fcSession.username,
+      p_session_token: fcSession.token,
+      p_search: String(search || "").trim(),
+      p_page: safePage,
+      p_page_size: 30,
+    }
+  );
+
+  if (error) throw error;
+
+  return {
+    records: Array.isArray(data?.records) ? data.records : [],
+    total: Number(data?.total || 0),
+    page: Number(data?.page || safePage),
+    page_size: Number(data?.page_size || 30),
+    total_pages: Number(data?.total_pages || 1),
+  };
+}
+
+export async function listOwnerUnallocatedPaymentTargets({
+  currentUser,
+  paymentId,
+} = {}) {
+  if (!isOwnerUser(currentUser)) {
+    throw new Error("Unallocated payments are restricted to nisstaj_admin.");
+  }
+  if (!paymentId) throw new Error("Payment is required.");
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
+  const { data, error } = await supabase.rpc(
+    "list_owner_unallocated_payment_targets_v1",
+    {
+      p_username: fcSession.username,
+      p_session_token: fcSession.token,
+      p_payment_id: paymentId,
+    }
+  );
+
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
+export async function allocateOwnerUnallocatedPayment({
+  currentUser,
+  paymentId,
+  invoiceId,
+  amount,
+  reason,
+} = {}) {
+  if (!isOwnerUser(currentUser)) {
+    throw new Error("Only nisstaj_admin can allocate unallocated payments.");
+  }
+  if (!paymentId) throw new Error("Payment is required.");
+  if (!invoiceId) throw new Error("Invoice is required.");
+  if (!(Number(amount) > 0)) throw new Error("Allocation amount must be greater than zero.");
+  if (!String(reason || "").trim()) throw new Error("Allocation reason is required.");
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
+  const { data, error } = await supabase.rpc(
+    "allocate_owner_unallocated_payment_v1",
+    {
+      p_username: fcSession.username,
+      p_session_token: fcSession.token,
+      p_payment_id: paymentId,
+      p_invoice_id: invoiceId,
+      p_amount: Number(amount),
+      p_reason: String(reason).trim(),
+    }
+  );
+
+  if (error) throw error;
+  return data || {};
+}
+
 export async function editCentralPayment({ currentUser, payment, changes, reason } = {}) {
   if (!canPerform(currentUser, "payments.edit")) throw new Error("You do not have permission to edit payments.");
   if (Number(changes?.amount) !== Number(payment?.amount) && !canPerform(currentUser, "payments.amount.change")) {
@@ -970,6 +1098,13 @@ export async function editCentralPayment({ currentUser, payment, changes, reason
 
 export async function loadPaymentAuditHistory(customerAccountId) {
   if (!customerAccountId) return [];
+
+  // This audit table is intentionally protected by Supabase Auth/RLS.
+  // FairChoice staff normally use the separate FC session, so a direct
+  // PostgREST read would only create a 401 and is not required for balances.
+  const { data: authData } = await supabase.auth.getSession();
+  if (!authData?.session?.access_token) return [];
+
   const { data, error } = await safeSelect("central_payment_lifecycle_audit", (query) =>
     query
       .select("*")
@@ -1251,5 +1386,74 @@ export async function applyBranchSeparation({
     if (isMissingRpcError(error)) throw new Error(branchSeparationUnavailableMessage);
     throw error;
   }
+  return data;
+}
+
+export async function attachOwnerBankTransferProof({ payment, currentUser, proofDataUrl, proofName } = {}) {
+  if (getActor(currentUser).toLowerCase() !== "nisstaj_admin") {
+    throw new Error("Only nisstaj_admin can attach bank transfer proof.");
+  }
+
+  if (!payment?.id) throw new Error("Pending bank transfer is required.");
+
+  const fcSession = getFcSessionState(currentUser);
+  if (!fcSession.valid) {
+    throw new Error("FC login session is missing or expired. Sign in again.");
+  }
+
+  const proof = String(proofDataUrl || "");
+
+  if (!proof.startsWith("data:image/")) {
+    throw new Error("Bank payment proof must be an image / screenshot.");
+  }
+
+  if (proof.length > 3600000) {
+    throw new Error("Bank payment screenshot is too large. Please use an image under 2.5 MB.");
+  }
+
+  const { data: currentPayment, error: loadError } = await supabase
+    .from("customer_payments")
+    .select("id, payment_method, verification_status, metadata")
+    .eq("id", payment.id)
+    .maybeSingle();
+
+  if (loadError) throw loadError;
+  if (!currentPayment) throw new Error("Pending bank transfer could not be found.");
+
+  if (currentPayment.payment_method !== "Bank Transfer") {
+    throw new Error("Proof can only be attached to a bank transfer.");
+  }
+
+  if (currentPayment.verification_status !== "PENDING_VERIFICATION") {
+    throw new Error("This bank transfer is no longer awaiting approval.");
+  }
+
+  let metadata = currentPayment.metadata;
+
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    metadata = {};
+  }
+
+  const now = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("customer_payments")
+    .update({
+      metadata: {
+        ...metadata,
+        bank_proof_data_url: proof,
+        bank_proof_name: String(proofName || "Bank payment proof").slice(0, 255),
+        bank_proof_added_at: now,
+        bank_proof_added_by: getActor(currentUser),
+      },
+      updated_at: now,
+    })
+    .eq("id", payment.id)
+    .eq("payment_method", "Bank Transfer")
+    .eq("verification_status", "PENDING_VERIFICATION")
+    .select("*")
+    .single();
+
+  if (error) throw error;
   return data;
 }

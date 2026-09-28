@@ -1,197 +1,292 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bookPurchaseStockIn,
   emptyPurchasePlanningFilters,
   filterPurchasePlanningRows,
   getPurchasePlanningFilterOptions,
   loadPurchasePlanningReport,
   PURCHASE_PLANNING_COUNTRIES,
   reconcilePurchasePlanningFilters,
-  sortPurchasePlanningRows,
   updatePurchasePlanningHierarchy,
 } from "../../services/purchasePlanningReport.js";
 
 const PAGE_SIZE = 30;
-const quantity = (value) => new Intl.NumberFormat("en-GB", { maximumFractionDigits: 1 }).format(Number(value || 0));
-const dateTime = (value) => {
-  if (!value) return "Not recorded";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Not recorded";
-  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
-};
-const reportValue = (available, value) => available ? value : "Unavailable";
+const PURCHASE_CYCLE_DAYS = 7;
+const FAST_LINE_14D_THRESHOLD = 14;
+const FAST_LINE_BUFFER = 2;
+const qty = (value) => new Intl.NumberFormat("en-GB", { maximumFractionDigits: 1 }).format(Number(value || 0));
+const money = (value) => new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(Number(value || 0));
+const normalize = (value) => String(value || "").trim().toLowerCase();
 
 function FilterSelect({ label, value, options, onChange }) {
-  return <label className="ppr-filter"><span>{label}</span><select value={value} onChange={(e) => onChange(e.target.value)}><option value="All">All</option>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>;
+  return <label className="pp-filter"><span>{label}</span><select value={value} onChange={(e) => onChange(e.target.value)}><option value="All">All</option>{options.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>;
 }
 
-function planningFor(row, leadDays, safetyDays) {
-  const sold30 = Number(row.soldLast30 || 0);
-  const dailyDemand = sold30 / 30;
-  const currentStock = Math.max(0, Number(row.currentStock || 0));
-  const incomingQty = Math.max(0, Number(row.incomingQty ?? row.preOrderIncomingQty ?? 0));
+function suggestion(row, leadDays, safetyDays) {
+  const soldLast14 = Math.max(0, Number(row.soldLast14 ?? (Number(row.soldLast7 || 0) + Number(row.soldPrevious7 || 0))));
+  const daily = soldLast14 / 14;
+  const incoming = Math.max(0, Number(row.incomingQty || 0));
+  const current = Math.max(0, Number(row.currentStock || 0));
   const outstanding = Math.max(0, Number(row.preOrderOutstandingQty || 0));
-  const topUpQty = Math.max(0, Number(row.preOrderBoughtQty || 0));
-  const topUpEvents = Array.isArray(row.preOrderPurchases) ? row.preOrderPurchases.length : 0;
-  const learningBufferDays = dailyDemand > 0 && topUpQty > 0 ? Math.min(2, Math.max(0.5, (topUpQty / dailyDemand) * 0.1)) : 0;
-  const targetDays = Number(leadDays) + Number(safetyDays) + learningBufferDays;
-  const targetStock = Math.ceil((dailyDemand * targetDays) + outstanding);
-  const availableStock = currentStock + incomingQty;
-  const suggestedBuy = Math.ceil(Math.max(0, targetStock - availableStock));
-  const daysCover = dailyDemand > 0 ? availableStock / dailyDemand : null;
-
-  let quality = "Balanced";
-  if (sold30 <= 0) quality = currentStock > 0 ? "Over Ordered" : "Learning";
-  else if (topUpQty > 0 && (daysCover === null || daysCover < targetDays)) quality = "Under Ordered";
-  else if (daysCover !== null && daysCover > Math.max(targetDays * 2, targetDays + 14)) quality = "Over Ordered";
-
+  const topups = Math.max(Number(row.preOrderBoughtQty || 0), Number(row.topUpReceived30 || 0));
+  const targetDays = PURCHASE_CYCLE_DAYS + Number(leadDays) + Number(safetyDays);
+  const fastLine = soldLast14 >= FAST_LINE_14D_THRESHOLD;
+  const fastLineBuffer = fastLine ? FAST_LINE_BUFFER : 0;
+  const target = Math.ceil(daily * targetDays + outstanding + fastLineBuffer);
+  const available = current + incoming;
+  const suggested = Math.max(0, Math.ceil(target - available));
+  const daysCover = daily > 0 ? available / daily : null;
   let risk = "Covered";
-  if (sold30 <= 0) risk = currentStock > 0 ? "Excess Stock" : "Learning";
-  else if (daysCover !== null && daysCover < Number(leadDays)) risk = "Buy Now";
-  else if (daysCover !== null && daysCover < targetDays) risk = "Buy Soon";
-  else if (daysCover !== null && daysCover > Math.max(targetDays * 2, targetDays + 14)) risk = "Excess Stock";
-
-  const dependency = topUpEvents >= 3 || topUpQty >= sold30 * 0.25 ? "High" : topUpEvents >= 1 || topUpQty > 0 ? "Medium" : "Low";
-  const nextAction = quality === "Under Ordered" ? "Increase the next main order modestly" : quality === "Over Ordered" ? "Reduce / pause the next purchase" : quality === "Learning" ? "Collect more sales history" : "Maintain current buying pattern";
-  return { ...row, dailyDemand, currentStock, incomingQty, outstanding, topUpQty, topUpEvents, learningBufferDays, targetDays, targetStock, availableStock, suggestedBuy, daysCover, quality, risk, dependency, nextAction };
+  if (!daily) risk = current > 0 ? "Excess Stock" : "Learning";
+  else if (daysCover < Number(leadDays)) risk = "Buy Now";
+  else if (daysCover < targetDays) risk = "Buy Soon";
+  else if (daysCover > Math.max(targetDays * 2, targetDays + 14)) risk = "Excess Stock";
+  let quality = "Balanced";
+  if (!daily) quality = current > 0 ? "Over Ordered" : "Learning";
+  else if (topups > 0 && (daysCover == null || daysCover < targetDays)) quality = "Under Ordered";
+  else if (daysCover > Math.max(targetDays * 2, targetDays + 14)) quality = "Over Ordered";
+  return {
+    ...row,
+    soldLast14,
+    daily,
+    targetDays,
+    target,
+    available,
+    suggested,
+    daysCover,
+    risk,
+    quality,
+    topups,
+    fastLine,
+    fastLineBuffer,
+  };
 }
 
-function StatusPill({ value }) {
-  return <span className={`ppr-pill ppr-${String(value || "").toLowerCase().replace(/[^a-z]+/g, "-")}`}>{value}</span>;
-}
+function Pill({ children }) { return <span className={`pp-pill pp-${normalize(children).replace(/[^a-z]+/g, "-")}`}>{children}</span>; }
 
-function ProductMeta({ row }) {
-  return <button type="button" className="ppr-product-button"><strong>{row.productName}</strong><span>{[row.productCode, row.brand, row.series, row.country].filter(Boolean).join(" · ")}</span></button>;
-}
-
-function PurchaseDetails({ row, leadDays, safetyDays }) {
-  return <div className="ppr-details">
-    <section><h4>Demand</h4><dl>
-      <div><dt>Last 7 Days</dt><dd>{reportValue(row.salesAvailable, quantity(row.soldLast7))}</dd></div>
-      <div><dt>Last 30 Days</dt><dd>{reportValue(row.salesAvailable, quantity(row.soldLast30))}</dd></div>
-      <div><dt>Average / Day</dt><dd>{reportValue(row.salesAvailable, row.dailyDemand.toFixed(2))}</dd></div>
-      <div><dt>Current Days Cover</dt><dd>{row.daysCover == null ? "—" : row.daysCover.toFixed(1)}</dd></div>
-    </dl></section>
-    <section><h4>Stock Position</h4><dl>
-      <div><dt>Current Stock</dt><dd>{quantity(row.currentStock)}</dd></div>
-      <div><dt>Incoming</dt><dd>{quantity(row.incomingQty)}</dd></div>
-      <div><dt>Outstanding Customer Demand</dt><dd>{quantity(row.outstanding)}</dd></div>
-      <div><dt>Warehouse / Country</dt><dd>{row.stockLocationName || row.country || "—"}</dd></div>
-    </dl></section>
-    <section><h4>Planning Target</h4><dl>
-      <div><dt>Supplier Lead Time</dt><dd>{leadDays} days</dd></div>
-      <div><dt>Safety Cover</dt><dd>{safetyDays} days</dd></div>
-      <div><dt>Learning Buffer</dt><dd>+{row.learningBufferDays.toFixed(1)} days</dd></div>
-      <div><dt>Target Stock</dt><dd>{quantity(row.targetStock)}</dd></div>
-    </dl></section>
-    <section className="ppr-decision"><h4>Recommendation</h4><div className="ppr-big">Buy {quantity(row.suggestedBuy)}</div><div><StatusPill value={row.risk} /> <StatusPill value={row.quality} /></div><p>{row.suggestedBuy > 0 ? `Target ${quantity(row.targetStock)} − stock/incoming ${quantity(row.availableStock)} = ${quantity(row.suggestedBuy)} units.` : `Current stock plus incoming stock already covers the ${row.targetDays.toFixed(1)}-day operating target.`}</p></section>
-    <section className="ppr-purchases"><h4>Why / Top-up Learning</h4>{row.topUpQty > 0 ? <p className="ppr-warning-text">The system found {quantity(row.topUpQty)} units bought through the current top-up / Pre-Order Supply flow ({row.topUpEvents} event{row.topUpEvents === 1 ? "" : "s"}). This marks the product as an under-order risk and adds only a small capped learning buffer, so the planner learns without double-counting incoming stock.</p> : <p>No additional top-up buying is currently recorded for this product.</p>}
-      {row.preOrderPurchases?.length > 0 && <div className="ppr-purchase-list">{row.preOrderPurchases.map((purchase) => <article key={purchase.id || `${purchase.orderNumber}-${purchase.date}`}><strong>{purchase.action}</strong> · {quantity(purchase.quantity)} units<div>{purchase.supplierName || "Supplier not recorded"}</div><div>{dateTime(purchase.date)}</div><div>Order {purchase.orderNumber || "—"}</div></article>)}</div>}
-      <p className="ppr-advisory"><strong>Advisory only:</strong> this report does not create or change purchase orders automatically.</p>
-    </section>
-  </div>;
-}
-
-function pageNumbers(page, count) {
-  if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
-  const values = new Set([1, count, page - 1, page, page + 1]);
-  return [...values].filter((v) => v >= 1 && v <= count).sort((a, b) => a - b);
-}
-
-function Row({ row, cells, open, onToggle, colSpan, leadDays, safetyDays }) {
-  return <><tr onClick={onToggle} className="ppr-click-row">{cells.map((cell, i) => <td key={i} className={i > 0 && typeof cell !== "object" ? "ppr-number" : ""}>{cell}</td>)}</tr>{open && <tr className="ppr-detail-row"><td colSpan={colSpan}><PurchaseDetails row={row} leadDays={leadDays} safetyDays={safetyDays}/></td></tr>}</>;
-}
-
-function Table({ rows, tab, expanded, toggle, leadDays, safetyDays }) {
-  const headers = tab === "quality"
-    ? ["Product", "30d Sold", "Stock", "Top-up Qty", "Top-up Events", "Days Cover", "Quality", "Next Action"]
-    : tab === "dependency"
-      ? ["Product", "Supplier", "30d Sold", "Top-up Qty", "Top-up Events", "Dependency", "Quality", "Suggested Buy"]
-      : tab === "risk"
-        ? ["Product", "Stock", "Incoming", "Avg/Day", "Days Cover", "Target Days", "Risk", "Suggested Buy"]
-        : ["Product", "Stock", "Incoming", "30d Sold", "Avg/Day", "Days Cover", "Top-up", "Suggested Buy", "Risk", "Quality"];
-  const cells = (r) => tab === "quality"
-    ? [<ProductMeta row={r}/>, quantity(r.soldLast30), quantity(r.currentStock), quantity(r.topUpQty), r.topUpEvents, r.daysCover == null ? "—" : r.daysCover.toFixed(1), <StatusPill value={r.quality}/>, r.nextAction]
-    : tab === "dependency"
-      ? [<ProductMeta row={r}/>, r.supplierName || "—", quantity(r.soldLast30), quantity(r.topUpQty), r.topUpEvents, <StatusPill value={r.dependency}/>, <StatusPill value={r.quality}/>, quantity(r.suggestedBuy)]
-      : tab === "risk"
-        ? [<ProductMeta row={r}/>, quantity(r.currentStock), quantity(r.incomingQty), r.dailyDemand.toFixed(2), r.daysCover == null ? "—" : r.daysCover.toFixed(1), r.targetDays.toFixed(1), <StatusPill value={r.risk}/>, quantity(r.suggestedBuy)]
-        : [<ProductMeta row={r}/>, quantity(r.currentStock), quantity(r.incomingQty), quantity(r.soldLast30), r.dailyDemand.toFixed(2), r.daysCover == null ? "—" : r.daysCover.toFixed(1), quantity(r.topUpQty), quantity(r.suggestedBuy), <StatusPill value={r.risk}/>, <StatusPill value={r.quality}/>];
-  return <div className="ppr-table-wrap"><table><thead><tr>{headers.map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row) => <Row key={row.rowKey} row={row} cells={cells(row)} open={expanded.has(row.rowKey)} onToggle={() => toggle(row.rowKey)} colSpan={headers.length} leadDays={leadDays} safetyDays={safetyDays}/>)}</tbody></table></div>;
-}
-
-export default function PurchasePlanningReport({ products = [], currentUser = null }) {
+export default function PurchasePlanningReport({ products = [], currentUser = null, fetchProducts }) {
   const [rows, setRows] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [filters, setFilters] = useState({ ...emptyPurchasePlanningFilters });
+  const [sortBy, setSortBy] = useState("sales_desc");
   const [riskFilter, setRiskFilter] = useState("All");
-  const [qualityFilter, setQualityFilter] = useState("All");
   const [leadDays, setLeadDays] = useState(3);
   const [safetyDays, setSafetyDays] = useState(2);
   const [tab, setTab] = useState("plan");
-  const [expanded, setExpanded] = useState(new Set());
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [preOrderWarning, setPreOrderWarning] = useState("");
-  const [loadedAt, setLoadedAt] = useState("");
-  const [page, setPage] = useState(1);
-  const requestIdRef = useRef(0);
+  const [warning, setWarning] = useState("");
+  const [plan, setPlan] = useState({});
+  const [removed, setRemoved] = useState({});
+  const [stockIn, setStockIn] = useState({ rowKey: "", locationId: "", quantity: "", supplierName: "", invoiceNumber: "", costPrice: "" });
+  const [stockSearch, setStockSearch] = useState("");
+  const [bulkStockIn, setBulkStockIn] = useState({});
+  const [bulkInvoiceNumber, setBulkInvoiceNumber] = useState("");
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [savingStock, setSavingStock] = useState(false);
+  const requestId = useRef(0);
 
-  const refreshReport = async () => {
-    const requestId = ++requestIdRef.current;
+  const refresh = async () => {
+    const id = ++requestId.current;
     setLoading(true); setError("");
     try {
       const result = await loadPurchasePlanningReport({ products, user: currentUser });
-      if (requestIdRef.current !== requestId) return;
-      setRows(result.rows || []);
-      setFilters((current) => reconcilePurchasePlanningFilters(result.rows || [], current));
-      setPreOrderWarning(result.preOrderWarning || "");
-      setLoadedAt(result.loadedAt || "");
-      setPage(1); setExpanded(new Set());
-    } catch (e) {
-      if (requestIdRef.current === requestId) setError(e?.message || "Purchase Planning could not be loaded.");
-    } finally { if (requestIdRef.current === requestId) setLoading(false); }
+      if (requestId.current !== id) return;
+      setRows(result.rows || []); setLocations(result.locations || []); setWarning(result.preOrderWarning || "");
+      setFilters((f) => reconcilePurchasePlanningFilters(result.rows || [], f));
+      setPlan((current) => {
+        const next = { ...current };
+        for (const row of result.rows || []) if (next[row.rowKey] == null) next[row.rowKey] = "";
+        return next;
+      });
+      setPage(1);
+    } catch (e) { if (requestId.current === id) setError(e?.message || "Purchase Planning could not load."); }
+    finally { if (requestId.current === id) setLoading(false); }
   };
-  useEffect(() => { const timer = window.setTimeout(refreshReport, 0); return () => { window.clearTimeout(timer); requestIdRef.current += 1; }; }, [products, currentUser?.id, currentUser?.staff_id]);
+  useEffect(() => { refresh(); return () => { requestId.current += 1; }; }, [products, currentUser?.id, currentUser?.staff_id]);
 
   const options = useMemo(() => getPurchasePlanningFilterOptions(rows, filters), [rows, filters]);
-  const plannedRows = useMemo(() => sortPurchasePlanningRows(filterPurchasePlanningRows(rows, filters)).map((row) => planningFor(row, leadDays, safetyDays)), [rows, filters, leadDays, safetyDays]);
-  const visibleRows = useMemo(() => plannedRows.filter((r) => (riskFilter === "All" || r.risk === riskFilter) && (qualityFilter === "All" || r.quality === qualityFilter)), [plannedRows, riskFilter, qualityFilter]);
-  const pageCount = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const pagedRows = visibleRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  const summary = useMemo(() => ({
-    reviewed: visibleRows.length,
-    buyNow: visibleRows.filter((r) => r.risk === "Buy Now").length,
-    buySoon: visibleRows.filter((r) => r.risk === "Buy Soon").length,
-    under: visibleRows.filter((r) => r.quality === "Under Ordered").length,
-    over: visibleRows.filter((r) => r.quality === "Over Ordered").length,
-    suggestedUnits: visibleRows.reduce((sum, r) => sum + r.suggestedBuy, 0),
-  }), [visibleRows]);
+  const planned = useMemo(() => filterPurchasePlanningRows(rows, filters).map((r) => suggestion(r, leadDays, safetyDays)), [rows, filters, leadDays, safetyDays]);
+  useEffect(() => {
+    setPlan((current) => {
+      const next = { ...current };
+      for (const row of planned) if (next[row.rowKey] === "") next[row.rowKey] = row.suggested;
+      return next;
+    });
+  }, [planned]);
 
-  const setFilter = (field, value) => { setFilters((current) => ["mainCategory", "subCategory", "brand"].includes(field) ? updatePurchasePlanningHierarchy(current, field, value) : { ...current, [field]: value }); setPage(1); setExpanded(new Set()); };
-  const toggle = (key) => setExpanded((current) => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next; });
-  const exportCsv = () => {
-    if (!window.confirm("Download the current Purchase Planning report?")) return;
-    const headers = ["Product Code","Product","Country","Stock","Incoming","30 Day Sales","Average Per Day","Days Cover","Top-up Qty","Top-up Events","Target Days","Suggested Buy","Risk","Purchase Quality"];
+  const visible = useMemo(() => {
+    let list = planned.filter((r) => !removed[r.rowKey] && (riskFilter === "All" || r.risk === riskFilter));
+    const sales = (r) => Number(r.soldLast14 || 0);
+    const plannedQty = (r) => Number(plan[r.rowKey] ?? r.suggested ?? 0);
+    const series = (r) => String(r.series || "").trim();
+    const productName = (r) => String(r.productName || "");
+
+    list = [...list].sort((a, b) => {
+      const seriesA = series(a);
+      const seriesB = series(b);
+
+      // Keep every Series together. Products without a Series go last.
+      if (seriesA && !seriesB) return -1;
+      if (!seriesA && seriesB) return 1;
+
+      const seriesOrder = seriesA.localeCompare(seriesB, "en-GB", {
+        numeric: true,
+        sensitivity: "base",
+      });
+      if (seriesOrder !== 0) return seriesOrder;
+
+      // Apply the selected view order only inside the same Series.
+      if (sortBy === "sales_asc") return sales(a) - sales(b) || productName(a).localeCompare(productName(b));
+      if (sortBy === "qty_desc") return plannedQty(b) - plannedQty(a) || sales(b) - sales(a) || productName(a).localeCompare(productName(b));
+      if (sortBy === "stock_asc") return Number(a.currentStock || 0) - Number(b.currentStock || 0) || productName(a).localeCompare(productName(b));
+      return sales(b) - sales(a) || plannedQty(b) - plannedQty(a) || productName(a).localeCompare(productName(b));
+    });
+    return list;
+  }, [planned, removed, riskFilter, sortBy, plan]);
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const pageRows = visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const purchaseRows = visible.filter((r) => Number(plan[r.rowKey] || 0) > 0);
+  const totalUnits = purchaseRows.reduce((s, r) => s + Number(plan[r.rowKey] || 0), 0);
+  const getDefaultCostPrice = (row) => {
+    const product = products.find((item) => String(item.id) === String(row.productId));
+    return Number(row.costPrice ?? row.cost_price ?? product?.costPrice ?? product?.cost_price ?? 0);
+  };
+  const getDefaultLocationId = (row) => {
+    const exact = locations.find((location) => String(location.id) === String(row.stockLocationId));
+    const sameCountry = locations.find((location) => normalize(location.country) === normalize(row.country));
+    return exact?.id || sameCountry?.id || "";
+  };
+  const getBulkReceipt = (row) => bulkStockIn[row.rowKey] || {
+    quantity: String(plan[row.rowKey] || row.suggested || ""),
+    costPrice: String(getDefaultCostPrice(row) || ""),
+    supplierName: row.supplierName === "Not assigned" ? "" : row.supplierName || "",
+    locationId: getDefaultLocationId(row),
+  };
+  const bulkReceiveRows = purchaseRows.map((row) => ({ ...row, receipt: getBulkReceipt(row) }));
+  const bulkTotalQty = bulkReceiveRows.reduce((sum, row) => sum + Math.max(0, Number(row.receipt.quantity || 0)), 0);
+  const bulkTotalValue = bulkReceiveRows.reduce((sum, row) => sum + Math.max(0, Number(row.receipt.quantity || 0)) * Math.max(0, Number(row.receipt.costPrice || 0)), 0);
+  const totalPos = visible.reduce((s, r) => s + Number(r.topUpReceived30 || 0) + Number(r.preOrderBoughtQty || 0), 0);
+  const totalSupplier = visible.reduce((s, r) => s + Number(r.supplierPurchased30 || 0), 0);
+
+  const setFilter = (field, value) => { setFilters((f) => ["mainCategory", "subCategory", "brand"].includes(field) ? updatePurchasePlanningHierarchy(f, field, value) : { ...f, [field]: value }); setPage(1); };
+  const changeQty = (rowKey, value) => setPlan((p) => ({ ...p, [rowKey]: Math.max(0, Number(value) || 0) }));
+  const adjust = (rowKey, delta) => changeQty(rowKey, Number(plan[rowKey] || 0) + delta);
+  const restoreAll = () => setRemoved({});
+
+  const downloadWeeklyPlan = () => {
+    if (!window.confirm(`Download this weekly purchase plan with ${purchaseRows.length} products / ${qty(totalUnits)} units?`)) return;
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = [headers, ...visibleRows.map((r) => [r.productCode,r.productName,r.country,r.currentStock,r.incomingQty,r.soldLast30,r.dailyDemand.toFixed(2),r.daysCover == null ? "" : r.daysCover.toFixed(1),r.topUpQty,r.topUpEvents,r.targetDays.toFixed(1),r.suggestedBuy,r.risk,r.quality])].map((line) => line.map(esc).join(",")).join("\n");
+    const lines = [["Product Code", "Product", "Quantity", "Preferred Supplier", "Country"]];
+    for (const row of purchaseRows) lines.push([row.productCode, row.productName, Number(plan[row.rowKey] || 0), row.supplierName || "", row.country || ""]);
+    const csv = lines.map((line) => line.map(esc).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }));
-    const a = document.createElement("a"); a.href = url; a.download = `fairchoice-purchase-planning-${new Date().toISOString().slice(0,10)}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    const a = document.createElement("a"); a.href = url; a.download = `FairChoice_Weekly_Purchase_Plan_${new Date().toISOString().slice(0,10)}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   };
 
-  const tabs = [["plan","Purchase Plan"],["quality","Purchase Quality"],["dependency","POS Dependency"],["risk","Stock Risk"]];
-  return <div className="ppr-shell"><style>{styles}</style>
-    <header className="ppr-heading"><div><h2>Purchase Planning</h2><p>Keep stock moving: buy enough for demand, supplier lead time and a small safety buffer — not simply because a product is marked low stock.</p>{loadedAt && <small>Last refreshed {dateTime(loadedAt)}</small>}</div><div className="ppr-actions"><button onClick={refreshReport} disabled={loading}>{loading ? "Refreshing..." : "Refresh Report"}</button><button onClick={exportCsv} disabled={!visibleRows.length}>Export CSV</button></div></header>
-    {error && <div className="ppr-error">{error}</div>}{preOrderWarning && <div className="ppr-warning">{preOrderWarning}</div>}
-    <section className="ppr-model"><div><strong>Operating model</strong><span>Expected demand × (lead time + safety + small learned top-up buffer) − current stock − incoming stock</span></div><label>Lead time (days)<input type="number" min="1" max="30" value={leadDays} onChange={(e) => { setLeadDays(Math.max(1, Number(e.target.value) || 1)); setPage(1); }}/></label><label>Safety cover (days)<input type="number" min="0" max="30" value={safetyDays} onChange={(e) => { setSafetyDays(Math.max(0, Number(e.target.value) || 0)); setPage(1); }}/></label></section>
-    <section className="ppr-summary"><article><span>Products Reviewed</span><strong>{summary.reviewed}</strong></article><article><span>Buy Now</span><strong>{summary.buyNow}</strong></article><article><span>Buy Soon</span><strong>{summary.buySoon}</strong></article><article><span>Under Ordered</span><strong>{summary.under}</strong></article><article><span>Over Ordered</span><strong>{summary.over}</strong></article><article><span>Suggested Units</span><strong>{quantity(summary.suggestedUnits)}</strong></article></section>
-    <section className="ppr-filter-bar"><label className="ppr-filter ppr-search"><span>Search</span><input type="search" value={filters.search} onChange={(e) => setFilter("search", e.target.value)} placeholder="Code, product, brand or series"/></label><FilterSelect label="Supplier" value={filters.supplier} options={options.suppliers} onChange={(v) => setFilter("supplier", v)}/><FilterSelect label="Brand" value={filters.brand} options={options.brands} onChange={(v) => setFilter("brand", v)}/><FilterSelect label="Series" value={filters.series} options={options.series} onChange={(v) => setFilter("series", v)}/><FilterSelect label="Country" value={filters.country} options={PURCHASE_PLANNING_COUNTRIES} onChange={(v) => setFilter("country", v)}/><FilterSelect label="Stock Risk" value={riskFilter} options={["Buy Now","Buy Soon","Covered","Excess Stock","Learning"]} onChange={(v) => { setRiskFilter(v); setPage(1); }}/><FilterSelect label="Purchase Quality" value={qualityFilter} options={["Under Ordered","Balanced","Over Ordered","Learning"]} onChange={(v) => { setQualityFilter(v); setPage(1); }}/></section>
-    <nav className="ppr-tabs">{tabs.map(([key,label]) => <button key={key} onClick={() => { setTab(key); setPage(1); setExpanded(new Set()); }} className={tab === key ? "active" : ""}>{label}</button>)}</nav>
-    {loading ? <div className="ppr-empty">Loading Purchase Planning…</div> : !visibleRows.length ? <div className="ppr-empty">No products match the current filters.</div> : <><Table rows={pagedRows} tab={tab} expanded={expanded} toggle={toggle} leadDays={leadDays} safetyDays={safetyDays}/><nav className="ppr-pagination"><span>Showing {visibleRows.length ? (currentPage - 1) * PAGE_SIZE + 1 : 0}–{Math.min(currentPage * PAGE_SIZE, visibleRows.length)} of {visibleRows.length} · Max 30 per page</span><button disabled={currentPage <= 1} onClick={() => setPage((v) => Math.max(1, v - 1))}>Previous</button>{pageNumbers(currentPage, pageCount).map((n) => <button key={n} className={n === currentPage ? "active" : ""} onClick={() => setPage(n)}>{n}</button>)}<button disabled={currentPage >= pageCount} onClick={() => setPage((v) => Math.min(pageCount, v + 1))}>Next</button></nav></>}
+  const selectedStockRow = rows.find((r) => r.rowKey === stockIn.rowKey);
+  const stockSearchRows = useMemo(() => {
+    const term = normalize(stockSearch);
+    const list = rows.filter((row) => row.productId);
+    if (!term) return list.slice(0, 40);
+    return list
+      .filter((row) => [row.productCode, row.productName, row.country, row.supplierName].some((value) => normalize(value).includes(term)))
+      .slice(0, 40);
+  }, [rows, stockSearch]);
+  const openStockIn = (row) => {
+    setStockIn({ rowKey: row.rowKey, locationId: getDefaultLocationId(row), quantity: String(plan[row.rowKey] || row.suggested || ""), supplierName: row.supplierName === "Not assigned" ? "" : row.supplierName || "", invoiceNumber: "", costPrice: String(getDefaultCostPrice(row) || "") });
+    setStockSearch(`${row.productCode || ""} ${row.productName || ""}`.trim());
+    setTab("stockin");
+  };
+  const updateBulkReceipt = (rowKey, changes) => setBulkStockIn((current) => ({
+    ...current,
+    [rowKey]: { ...getBulkReceipt(rows.find((row) => row.rowKey === rowKey) || {}), ...(current[rowKey] || {}), ...changes },
+  }));
+  const saveBulkStockIn = async () => {
+    const receipts = bulkReceiveRows.filter((row) => Number(row.receipt.quantity || 0) > 0);
+    if (!receipts.length) return alert("There are no purchase-plan quantities to receive.");
+    const missingLocation = receipts.find((row) => !row.receipt.locationId);
+    if (missingLocation) return alert(`Select a warehouse / location for ${missingLocation.productName}.`);
+    if (!window.confirm(`Receive ${qty(bulkTotalQty)} units across ${receipts.length} products into stock?`)) return;
+    setBulkSaving(true);
+    try {
+      for (const row of receipts) {
+        await bookPurchaseStockIn({
+          productId: row.productId,
+          locationId: row.receipt.locationId,
+          quantity: row.receipt.quantity,
+          supplierName: row.receipt.supplierName,
+          invoiceNumber: bulkInvoiceNumber,
+          costPrice: row.receipt.costPrice,
+          purchaseType: "Supplier Invoice",
+          notes: "Bulk stock in from Weekly Purchase Plan",
+        });
+      }
+      alert(`Stock In complete. ${qty(bulkTotalQty)} units received.`);
+      setBulkStockIn({});
+      setBulkInvoiceNumber("");
+      await fetchProducts?.();
+      await refresh();
+      setTab("history");
+    } catch (e) {
+      alert(e?.message || "Bulk Stock In failed.");
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+  const saveStockIn = async () => {
+    if (!selectedStockRow) return;
+    if (!window.confirm(`Book ${stockIn.quantity || 0} units of ${selectedStockRow.productName} into stock?`)) return;
+    setSavingStock(true);
+    try {
+      await bookPurchaseStockIn({ productId: selectedStockRow.productId, locationId: stockIn.locationId, quantity: stockIn.quantity, supplierName: stockIn.supplierName, invoiceNumber: stockIn.invoiceNumber, costPrice: stockIn.costPrice, purchaseType: "Supplier Invoice", notes: "Booked from Purchase Planning" });
+      alert("Stock booked in and inventory updated.");
+      setStockIn({ rowKey: "", locationId: "", quantity: "", supplierName: "", invoiceNumber: "", costPrice: "" });
+      await fetchProducts?.();
+      await refresh();
+      setTab("plan");
+    } catch (e) { alert(e?.message || "Stock In failed."); }
+    finally { setSavingStock(false); }
+  };
+
+  return <div className="pp-shell"><style>{styles}</style>
+    <header className="pp-head"><div><h2>Purchase Planning</h2><p>Weekly buying plan based on demand, current stock, incoming stock and previous top-up purchasing.</p></div><div className="pp-actions"><button onClick={refresh}>Refresh</button><button className="primary" onClick={downloadWeeklyPlan}>Download This Week</button></div></header>
+    {error && <div className="pp-error">{error}</div>}{warning && <div className="pp-warning">{warning}</div>}
+    <section className="pp-summary"><article><span>Plan Products</span><strong>{purchaseRows.length}</strong></article><article><span>Planned Units</span><strong>{qty(totalUnits)}</strong></article><article><span>Supplier Purchases 30d</span><strong>{qty(totalSupplier)}</strong></article><article><span>POS / Top-up 30d</span><strong>{qty(totalPos)}</strong></article><article><span>Buy Now</span><strong>{visible.filter((r) => r.risk === "Buy Now").length}</strong></article><article><span>Under Ordered</span><strong>{visible.filter((r) => r.quality === "Under Ordered").length}</strong></article></section>
+    <section className="pp-model"><div><strong>Planning target</strong><span>14-day demand × (7-day buying cycle + lead + safety), less current/incoming stock. Fast lines (14+ sold in 14 days) keep an extra +2 buffer.</span></div><label>Lead days<input type="number" min="1" max="30" value={leadDays} onChange={(e) => setLeadDays(Math.max(1, Number(e.target.value) || 1))}/></label><label>Safety days<input type="number" min="0" max="30" value={safetyDays} onChange={(e) => setSafetyDays(Math.max(0, Number(e.target.value) || 0))}/></label></section>
+    <nav className="pp-tabs"><button className={tab === "plan" ? "active" : ""} onClick={() => setTab("plan")}>Weekly Purchase Plan</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Purchase History</button><button className={tab === "stockin" ? "active" : ""} onClick={() => setTab("stockin")}>Stock In</button></nav>
+
+    {tab !== "stockin" && <section className="pp-filters"><label><span>Search</span><input value={filters.search} onChange={(e) => setFilter("search", e.target.value)} placeholder="Product / code"/></label><FilterSelect label="Supplier" value={filters.supplier} options={options.suppliers} onChange={(v) => setFilter("supplier", v)}/><FilterSelect label="Brand" value={filters.brand} options={options.brands} onChange={(v) => setFilter("brand", v)}/><FilterSelect label="Series" value={filters.series} options={options.series} onChange={(v) => setFilter("series", v)}/><FilterSelect label="Country" value={filters.country} options={PURCHASE_PLANNING_COUNTRIES} onChange={(v) => setFilter("country", v)}/><FilterSelect label="Stock Risk" value={riskFilter} options={["Buy Now","Buy Soon","Covered","Excess Stock","Learning"]} onChange={(v) => { setRiskFilter(v); setPage(1); }}/><label><span>View order</span><select value={sortBy} onChange={(e) => setSortBy(e.target.value)}><option value="sales_desc">Highest sales → lowest</option><option value="sales_asc">Lowest sales → highest</option><option value="qty_desc">Highest planned quantity</option><option value="stock_asc">Lowest stock first</option></select></label></section>}
+
+    {loading ? <div className="pp-empty">Loading…</div> : tab === "stockin" ? <section className="pp-stockin-wrap">
+      <div className="pp-bulk-head">
+        <div><h3>Stock In</h3><p>The Weekly Purchase Plan is loaded below as a bulk receipt. Adjust received quantity or cost before booking.</p></div>
+        <div className="pp-bulk-summary"><span>Total products<strong>{bulkReceiveRows.length}</strong></span><span>Total qty received<strong>{qty(bulkTotalQty)}</strong></span><span>Total cost<strong>{money(bulkTotalValue)}</strong></span></div>
+      </div>
+      <div className="pp-bulk-controls"><label><span>Invoice / Reference for bulk receipt</span><input value={bulkInvoiceNumber} onChange={(e) => setBulkInvoiceNumber(e.target.value)} placeholder="Supplier invoice / delivery note"/></label><button className="pp-book" disabled={bulkSaving || bulkReceiveRows.length === 0} onClick={saveBulkStockIn}>{bulkSaving ? "Booking…" : `Confirm Bulk Stock In · ${qty(bulkTotalQty)} units`}</button></div>
+      {bulkReceiveRows.length > 0 ? <div className="pp-table pp-bulk-table"><table><thead><tr><th>Product</th><th>Planned Qty</th><th>Qty Received</th><th>Unit Cost</th><th>Total Cost</th><th>Supplier</th><th>Warehouse</th></tr></thead><tbody>{bulkReceiveRows.map((row) => <tr key={row.rowKey}><td><strong>{row.productName}</strong><small>{row.productCode} · {row.country}</small></td><td>{qty(plan[row.rowKey] || 0)}</td><td><input className="pp-cell-input qty" type="number" min="0" value={row.receipt.quantity} onChange={(e) => updateBulkReceipt(row.rowKey, { quantity: e.target.value })}/></td><td><input className="pp-cell-input" type="number" min="0" step="0.01" value={row.receipt.costPrice} onChange={(e) => updateBulkReceipt(row.rowKey, { costPrice: e.target.value })}/></td><td><strong>{money(Number(row.receipt.quantity || 0) * Number(row.receipt.costPrice || 0))}</strong></td><td><input className="pp-cell-input supplier" value={row.receipt.supplierName} onChange={(e) => updateBulkReceipt(row.rowKey, { supplierName: e.target.value })}/></td><td><select className="pp-cell-input warehouse" value={row.receipt.locationId} onChange={(e) => updateBulkReceipt(row.rowKey, { locationId: e.target.value })}><option value="">Select</option>{locations.map((location) => <option key={location.id} value={location.id}>{location.location_name} · {location.country}</option>)}</select></td></tr>)}</tbody></table></div> : <div className="pp-empty">No products currently have a quantity in the Weekly Purchase Plan.</div>}
+
+      <div className="pp-single-stock">
+        <div className="pp-stock-head"><div><h3>Single Product Stock In</h3><p>Type a product code or name. No long scrolling list.</p></div></div>
+        <label><span>Find product</span><input value={stockSearch} onChange={(e) => { setStockSearch(e.target.value); if (selectedStockRow && !normalize(e.target.value).includes(normalize(selectedStockRow.productCode))) setStockIn((current) => ({ ...current, rowKey: "" })); }} placeholder="Start typing product code or name…"/></label>
+        {stockSearch && !selectedStockRow && <div className="pp-search-results">{stockSearchRows.length ? stockSearchRows.map((row) => <button type="button" key={row.rowKey} onClick={() => openStockIn(row)}><strong>{row.productCode} · {row.productName}</strong><span>{row.country} · {row.supplierName || "Supplier not assigned"}</span></button>) : <div>No matching products.</div>}</div>}
+        {selectedStockRow && <><div className="pp-stock-card"><strong>{selectedStockRow.productName}</strong><span>{selectedStockRow.productCode} · Current {qty(selectedStockRow.currentStock)} · 14d sold {qty(selectedStockRow.soldLast14 ?? (Number(selectedStockRow.soldLast7 || 0) + Number(selectedStockRow.soldPrevious7 || 0)))}</span><button type="button" onClick={() => { setStockIn((current) => ({ ...current, rowKey: "" })); setStockSearch(""); }}>Change product</button></div>
+        <label><span>Warehouse / Location</span><select value={stockIn.locationId} onChange={(e) => setStockIn((s) => ({ ...s, locationId: e.target.value }))}><option value="">Select warehouse</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.location_name} · {l.country}</option>)}</select></label>
+        <div className="pp-stock-grid"><label><span>Qty received</span><input type="number" min="0" value={stockIn.quantity} onChange={(e) => setStockIn((s) => ({ ...s, quantity: e.target.value }))}/></label><label><span>Unit cost</span><input type="number" min="0" step="0.01" value={stockIn.costPrice} onChange={(e) => setStockIn((s) => ({ ...s, costPrice: e.target.value }))}/></label></div>
+        <label><span>Supplier</span><input value={stockIn.supplierName} onChange={(e) => setStockIn((s) => ({ ...s, supplierName: e.target.value }))}/></label><label><span>Invoice / Reference</span><input value={stockIn.invoiceNumber} onChange={(e) => setStockIn((s) => ({ ...s, invoiceNumber: e.target.value }))}/></label>
+        <div className="pp-stock-total">Qty received: <strong>{qty(stockIn.quantity)}</strong> · Receipt value: <strong>{money(Number(stockIn.quantity || 0) * Number(stockIn.costPrice || 0))}</strong></div><button className="pp-book" disabled={savingStock} onClick={saveStockIn}>{savingStock ? "Booking…" : "Confirm Single Product Stock In"}</button></>}
+      </div>
+    </section> : tab === "history" ? <div className="pp-table"><table><thead><tr><th>Product</th><th>14d Sales</th><th>Main Supplier 30d</th><th>POS / Top-up 30d</th><th>Main Supplier 90d</th><th>POS / Top-up 90d</th><th>Current Stock</th><th>Quality</th></tr></thead><tbody>{pageRows.map((r) => <tr key={r.rowKey}><td><strong>{r.productName}</strong><small>{r.productCode} · {r.country}</small></td><td>{qty(r.soldLast14)}</td><td>{qty(r.supplierPurchased30)}</td><td>{qty(Number(r.topUpReceived30 || 0) + Number(r.preOrderBoughtQty || 0))}</td><td>{qty(r.supplierPurchased90)}</td><td>{qty(r.topUpReceived90)}</td><td>{qty(r.currentStock)}</td><td><Pill>{r.quality}</Pill></td></tr>)}</tbody></table></div> : <div className="pp-table"><table><thead><tr><th>Product</th><th>14d Sales</th><th>Stock</th><th>Incoming</th><th>Days Cover</th><th>POS / Top-up</th><th>Suggested</th><th>This Week Qty</th><th>Risk</th><th>Action</th></tr></thead><tbody>{pageRows.map((r, index) => { const seriesName = String(r.series || "").trim() || "Not assigned"; const previousSeries = index > 0 ? (String(pageRows[index - 1].series || "").trim() || "Not assigned") : null; return <Fragment key={r.rowKey}>{seriesName !== previousSeries && <tr className="pp-series-row"><td colSpan="10">Series: {seriesName}</td></tr>}<tr><td><strong>{r.productName}</strong><small>{r.productCode} · {r.country} · {r.supplierName}</small></td><td>{qty(r.soldLast14)}</td><td>{qty(r.currentStock)}</td><td>{qty(r.incomingQty)}</td><td>{r.daysCover == null ? "—" : r.daysCover.toFixed(1)}</td><td>{qty(Number(r.topUpReceived30 || 0) + Number(r.preOrderBoughtQty || 0))}</td><td><div className="pp-suggested"><strong>{qty(r.suggested)}</strong>{r.fastLineBuffer > 0 && <small>Fast +{qty(r.fastLineBuffer)}</small>}</div></td><td><div className="pp-step"><button onClick={() => adjust(r.rowKey,-1)}>−</button><input type="number" min="0" value={plan[r.rowKey] ?? 0} onChange={(e) => changeQty(r.rowKey,e.target.value)}/><button onClick={() => adjust(r.rowKey,1)}>+</button></div></td><td><Pill>{r.risk}</Pill></td><td><div className="pp-row-actions"><button onClick={() => openStockIn(r)}>Stock In</button><button className="remove" onClick={() => setRemoved((x) => ({ ...x, [r.rowKey]: true }))}>Remove</button></div></td></tr></Fragment>; })}</tbody></table></div>}
+
+    {tab !== "stockin" && <footer className="pp-page"><span>Showing {visible.length ? (safePage-1)*PAGE_SIZE+1 : 0}–{Math.min(safePage*PAGE_SIZE,visible.length)} of {visible.length} · max 30</span>{Object.keys(removed).some((k) => removed[k]) && <button onClick={restoreAll}>Restore removed</button>}<button disabled={safePage<=1} onClick={() => setPage((p) => Math.max(1,p-1))}>Previous</button><strong>Page {safePage} / {pageCount}</strong><button disabled={safePage>=pageCount} onClick={() => setPage((p) => Math.min(pageCount,p+1))}>Next</button></footer>}
   </div>;
 }
 
 const styles = `
-.ppr-shell{display:grid;gap:14px;color:#102033}.ppr-heading{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.ppr-heading h2{margin:0;font-size:26px}.ppr-heading p{margin:4px 0;color:#64748b;max-width:850px}.ppr-heading small{color:#64748b}.ppr-actions{display:flex;gap:8px}.ppr-actions button,.ppr-pagination button,.ppr-tabs button{min-height:38px;border:1px solid #b8c7d9;border-radius:8px;background:#fff;color:#073763;padding:0 13px;font-weight:800;cursor:pointer}.ppr-actions button:first-child,.ppr-tabs button.active,.ppr-pagination button.active{background:#073763;color:#fff;border-color:#073763}.ppr-model{display:grid;grid-template-columns:1fr 150px 150px;gap:12px;align-items:end;background:#eaf3ff;border:1px solid #b9d5f4;border-radius:12px;padding:12px}.ppr-model>div{display:grid;gap:3px}.ppr-model span{font-size:12px;color:#48617d}.ppr-model label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#475569;text-transform:uppercase}.ppr-model input{height:38px;border:1px solid #b8c7d9;border-radius:8px;padding:0 9px}.ppr-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px}.ppr-summary article{background:#fff;border:1px solid #dbe5ef;border-radius:11px;padding:12px}.ppr-summary span{display:block;font-size:11px;color:#64748b;font-weight:800;text-transform:uppercase}.ppr-summary strong{font-size:22px;color:#073763}.ppr-filter-bar{display:grid;grid-template-columns:repeat(7,minmax(125px,1fr));gap:9px;background:#fff;border:1px solid #dbe5ef;border-radius:12px;padding:11px}.ppr-filter{display:grid;gap:4px}.ppr-filter span{font-size:10px;font-weight:800;color:#475569;text-transform:uppercase}.ppr-filter input,.ppr-filter select{height:38px;min-width:0;width:100%;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 8px}.ppr-tabs{display:flex;gap:6px;flex-wrap:wrap}.ppr-warning,.ppr-error{border-radius:9px;padding:11px 13px}.ppr-warning{background:#fff7d6;border:1px solid #f0d36b;color:#714f00}.ppr-error{background:#fff0f0;border:1px solid #efaaaa;color:#8b1b1b}.ppr-empty{padding:28px;text-align:center;background:#fff;border:1px solid #dbe5ef;border-radius:12px;color:#64748b}.ppr-table-wrap{overflow:auto;max-height:68vh;background:#fff;border:1px solid #dbe5ef;border-radius:12px}.ppr-table-wrap table{width:100%;border-collapse:separate;border-spacing:0;min-width:1100px}.ppr-table-wrap th{position:sticky;top:0;z-index:2;background:#eef4fa;color:#334155;font-size:10px;text-transform:uppercase;text-align:left}.ppr-table-wrap th,.ppr-table-wrap td{padding:9px;border-bottom:1px solid #e7edf4;vertical-align:top}.ppr-click-row{cursor:pointer}.ppr-click-row:hover{background:#f8fbff}.ppr-number{text-align:right;font-variant-numeric:tabular-nums}.ppr-product-button{display:grid;gap:2px;border:0;background:transparent;padding:0;text-align:left;color:#102033;pointer-events:none}.ppr-product-button span{font-size:10px;color:#64748b;font-weight:500}.ppr-detail-row td{background:#f8fafc;padding:13px}.ppr-details{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.ppr-details section{background:#fff;border:1px solid #dbe5ef;border-radius:10px;padding:11px}.ppr-details h4{margin:0 0 8px;color:#073763;text-transform:uppercase;font-size:11px}.ppr-details dl{margin:0;display:grid;gap:6px}.ppr-details dl div{display:flex;justify-content:space-between;gap:10px}.ppr-details dt{color:#64748b}.ppr-details dd{margin:0;font-weight:800;text-align:right}.ppr-decision .ppr-big{font-size:24px;font-weight:900;color:#075985;margin-bottom:8px}.ppr-decision p,.ppr-purchases p{font-size:12px;line-height:1.5}.ppr-purchases{grid-column:1/-1}.ppr-purchase-list{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.ppr-purchase-list article{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px;font-size:11px;line-height:1.45}.ppr-advisory{color:#64748b}.ppr-warning-text{color:#714f00}.ppr-pill{display:inline-block;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:900;white-space:nowrap;background:#eef2f7;color:#334155}.ppr-buy-now,.ppr-under-ordered,.ppr-high{background:#fee2e2;color:#991b1b}.ppr-buy-soon,.ppr-medium{background:#ffedd5;color:#9a3412}.ppr-covered,.ppr-balanced,.ppr-low{background:#dcfce7;color:#166534}.ppr-excess-stock,.ppr-over-ordered{background:#dbeafe;color:#1e40af}.ppr-learning{background:#f1f5f9;color:#475569}.ppr-pagination{display:flex;gap:5px;align-items:center;justify-content:flex-end;flex-wrap:wrap}.ppr-pagination>span{margin-right:auto;font-size:12px;color:#64748b}.ppr-pagination button:disabled,.ppr-actions button:disabled{opacity:.5;cursor:not-allowed}
-@media(max-width:1100px){.ppr-summary{grid-template-columns:repeat(3,1fr)}.ppr-filter-bar{grid-template-columns:repeat(3,1fr)}.ppr-details{grid-template-columns:repeat(2,1fr)}.ppr-purchase-list{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:700px){.ppr-heading,.ppr-model{grid-template-columns:1fr;display:grid}.ppr-summary{grid-template-columns:repeat(2,1fr)}.ppr-filter-bar{grid-template-columns:1fr}.ppr-details{grid-template-columns:1fr}.ppr-purchase-list{grid-template-columns:1fr}.ppr-purchases{grid-column:auto}.ppr-actions button{flex:1}}
+.pp-shell{display:grid;gap:13px;color:#102033}.pp-head{display:flex;justify-content:space-between;gap:14px}.pp-head h2{margin:0}.pp-head p{margin:4px 0;color:#64748b}.pp-actions{display:flex;gap:8px}.pp-actions button,.pp-tabs button,.pp-page button,.pp-row-actions button{border:1px solid #b9c8d8;background:#fff;color:#073763;border-radius:8px;padding:9px 12px;font-weight:800;cursor:pointer}.pp-actions .primary,.pp-tabs .active{background:#073763;color:#fff}.pp-summary{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.pp-summary article{background:#fff;border:1px solid #dbe5ef;border-radius:11px;padding:11px}.pp-summary span{display:block;font-size:10px;text-transform:uppercase;color:#64748b;font-weight:800}.pp-summary strong{font-size:22px;color:#073763}.pp-model{display:grid;grid-template-columns:1fr 130px 130px;gap:10px;background:#eaf3ff;border:1px solid #bdd6ef;border-radius:11px;padding:11px}.pp-model>div{display:grid}.pp-model span{font-size:11px;color:#55708b}.pp-model label,.pp-stockin label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#475569;text-transform:uppercase}.pp-model input,.pp-stockin input,.pp-stockin select{height:40px;border:1px solid #cbd5e1;border-radius:8px;padding:0 9px;background:#fff}.pp-tabs{display:flex;gap:6px}.pp-filters{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;background:#fff;border:1px solid #dbe5ef;border-radius:11px;padding:10px}.pp-filters label,.pp-filter{display:grid;gap:4px}.pp-filters span,.pp-filter span{font-size:10px;font-weight:800;text-transform:uppercase;color:#475569}.pp-filters input,.pp-filters select,.pp-filter select{height:38px;width:100%;min-width:0;border:1px solid #cbd5e1;border-radius:7px;padding:0 8px;background:#fff}.pp-table{overflow:auto;max-height:65vh;background:#fff;border:1px solid #dbe5ef;border-radius:11px}.pp-table table{width:100%;min-width:1100px;border-collapse:separate;border-spacing:0}.pp-table th{position:sticky;top:0;background:#eef4fa;z-index:2;font-size:10px;text-transform:uppercase}.pp-table th,.pp-table td{padding:9px;border-bottom:1px solid #e7edf4;vertical-align:middle}.pp-table th:first-child,.pp-table td:first-child{text-align:left}.pp-table th:not(:first-child),.pp-table td:not(:first-child){text-align:center}.pp-table td:first-child strong,.pp-table td:first-child small{display:block}.pp-table small{color:#64748b;margin-top:2px}.pp-table .pp-series-row td{text-align:left;background:#e8f0f8;color:#073763;font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding:7px 9px;border-bottom:1px solid #cbd8e5}.pp-suggested{display:grid;justify-items:center;gap:1px}.pp-suggested strong{font-size:14px}.pp-suggested small{margin:0;color:#0f766e;font-size:9px;font-weight:900}.pp-step{display:flex;justify-content:center;gap:3px}.pp-step input{width:64px;height:34px;text-align:center;border:1px solid #aebfd0;border-radius:6px}.pp-step button{width:34px;height:34px;border:1px solid #b9c8d8;background:#fff;border-radius:6px;font-weight:900}.pp-row-actions{display:flex;justify-content:center;gap:5px}.pp-row-actions .remove{color:#a21a1a}.pp-pill{display:inline-block;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:900;background:#eef2f7}.pp-buy-now,.pp-under-ordered{background:#fee2e2;color:#991b1b}.pp-buy-soon{background:#ffedd5;color:#9a3412}.pp-covered,.pp-balanced{background:#dcfce7;color:#166534}.pp-excess-stock,.pp-over-ordered{background:#dbeafe;color:#1e40af}.pp-learning{background:#f1f5f9;color:#475569}.pp-page{display:flex;align-items:center;justify-content:flex-end;gap:7px}.pp-page span{margin-right:auto;color:#64748b;font-size:12px}.pp-page button:disabled{opacity:.45}.pp-warning,.pp-error{padding:10px 12px;border-radius:9px}.pp-warning{background:#fff7d6;border:1px solid #efd36b;color:#704d00}.pp-error{background:#fff0f0;border:1px solid #efaaaa;color:#8b1b1b}.pp-empty{padding:30px;text-align:center;background:#fff;border:1px solid #dbe5ef;border-radius:11px}.pp-stockin-wrap{display:grid;gap:14px}.pp-bulk-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;background:#fff;border:1px solid #dbe5ef;border-radius:14px;padding:14px}.pp-bulk-head h3,.pp-single-stock h3{margin:0}.pp-bulk-head p,.pp-single-stock p{margin:3px 0;color:#64748b}.pp-bulk-summary{display:flex;gap:8px;flex-wrap:wrap}.pp-bulk-summary span{min-width:120px;background:#eef7ff;border-radius:9px;padding:9px;font-size:10px;text-transform:uppercase;color:#64748b;font-weight:800}.pp-bulk-summary strong{display:block;margin-top:3px;font-size:18px;color:#073763}.pp-bulk-controls{display:grid;grid-template-columns:minmax(280px,1fr) auto;gap:10px;align-items:end;background:#fff;border:1px solid #dbe5ef;border-radius:12px;padding:12px}.pp-bulk-controls label,.pp-single-stock label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#475569;text-transform:uppercase}.pp-bulk-controls input,.pp-single-stock input,.pp-single-stock select{height:40px;border:1px solid #cbd5e1;border-radius:8px;padding:0 9px;background:#fff}.pp-bulk-table table{min-width:1250px}.pp-cell-input{height:34px;border:1px solid #b9c8d8;border-radius:6px;padding:0 7px;box-sizing:border-box;width:105px}.pp-cell-input.qty{width:80px;text-align:center}.pp-cell-input.supplier{width:180px}.pp-cell-input.warehouse{width:190px;background:#fff}.pp-single-stock{max-width:760px;width:100%;margin:6px auto 0;background:#fff;border:1px solid #dbe5ef;border-radius:14px;padding:14px;display:grid;gap:12px;box-sizing:border-box}.pp-search-results{display:grid;max-height:320px;overflow:auto;border:1px solid #cbd5e1;border-radius:9px;background:#fff}.pp-search-results>button{display:grid;gap:2px;text-align:left;border:0;border-bottom:1px solid #e7edf4;background:#fff;padding:10px;cursor:pointer}.pp-search-results>button:hover{background:#eef7ff}.pp-search-results span{font-size:11px;color:#64748b}.pp-search-results>div{padding:14px;color:#64748b}.pp-stock-card button{justify-self:start;border:1px solid #b9c8d8;border-radius:7px;background:#fff;color:#073763;font-weight:800;padding:6px 9px;cursor:pointer}.pp-stock-head h3{margin:0}.pp-stock-head p{margin:3px 0;color:#64748b}.pp-stock-card{display:grid;gap:3px;padding:12px;background:#eef7ff;border-radius:10px}.pp-stock-card span{color:#64748b;font-size:12px}.pp-stock-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.pp-stock-total{padding:12px;border-radius:9px;background:#f8fafc}.pp-book{min-height:48px;border:0;border-radius:9px;background:#078645;color:#fff;font-weight:900;font-size:15px;cursor:pointer}.pp-book:disabled{opacity:.5}
+@media(max-width:1100px){.pp-summary{grid-template-columns:repeat(3,1fr)}.pp-filters{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:700px){.pp-head,.pp-model,.pp-bulk-head,.pp-bulk-controls{display:grid;grid-template-columns:1fr}.pp-actions button{flex:1}.pp-summary{grid-template-columns:repeat(2,1fr)}.pp-filters{grid-template-columns:1fr}.pp-tabs{overflow:auto}.pp-table{max-height:none}.pp-table table{min-width:920px}.pp-stockin{box-sizing:border-box}.pp-stock-grid{grid-template-columns:1fr}.pp-page span{width:100%;margin:0}.pp-page{justify-content:center;flex-wrap:wrap}}
 `;

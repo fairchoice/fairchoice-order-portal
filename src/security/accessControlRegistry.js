@@ -7,6 +7,7 @@ export const STAFF_ROLES = Object.freeze([
   "Sales Rep",
   "Driver",
   "Warehouse",
+  "Brand Partner",
   "Super Admin",
 ]);
 
@@ -17,8 +18,8 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
   {
     title: "Order",
     items: [
-      page("page.order.sales_rep", "Sales Rep Order", "order", ["Sales Rep"]),
-      page("page.order.sales_invoice", "Sales Invoice", "orderSalesInvoices", STAFF_ROLES.filter((role) => role !== "Super Admin"), { readOnly: true }),
+      page("page.order.sales_rep", "Order Form", "order", ["Sales Rep", "Brand Partner"], { readOnly: true }),
+      page("page.order.sales_invoice", "Sales Invoice", "orderSalesInvoices", STAFF_ROLES.filter((role) => !["Super Admin", "Brand Partner"].includes(role)), { readOnly: true }),
     ],
   },
   {
@@ -54,6 +55,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
           page("page.product.stock_taking", "Stock Taking", "stockTaking", ["Admin"]),
           page("page.product.import", "Product Import / Upload", "productImportExport"),
           page("page.product.pricing_rules", "Pricing Rules", "pricingRule"),
+          page("page.product.customer_code_prices", "Customer Code Prices", "customerCodePrices", ["Admin"]),
           page("page.product.price_management", "Price Management", "priceManagement"),
           page("page.product.promotion", "Promotion", "promotions"),
         ],
@@ -62,17 +64,21 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
   },
   {
     title: "Supplier",
-    items: [page("page.supplier.setup", "Supplier", "suppliers")],
+    items: [
+      page("page.supplier.setup", "Supplier", "suppliers"),
+      page("page.reports.purchase_planning", "Purchase Plan", "purchasePlanning"),
+    ],
   },
   {
     title: "Accounts",
     items: [
       page("page.accounts.central_payment", "Central Payment", "centralPayment"),
       page("page.accounts.customer_credit", "Customer Credit", "credit", [], { hash: "#credit" }),
+      page("page.accounts.customer_wallet", "Customer Wallet", "customerWallet", ["Accounts", "Accountant", "Admin"]),
       page("page.accounts.invoices", "Invoices", "invoicesPortal"),
       page("page.accounts.weekly", "Weekly Account", "weeklyAccount"),
       page("page.accounts.supplier_accounts", "Supplier Accounts", "supplierAccounts"),
-      page("page.accounts.expenses", "Expenses", "expenses", STAFF_ROLES.filter((role) => role !== "Super Admin")),
+      page("page.accounts.expenses", "Expenses", "expenses", ["Accounts", "Accountant", "Warehouse"]),
       page("page.accounts.branch_separation", "Branch Separation", "branchSeparation"),
     ],
   },
@@ -80,9 +86,11 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
     title: "Reports",
     items: [
       page("page.reports.profit", "Profit Analysis", "profitPortal"),
+      page("page.reports.total_credit_outstanding", "Total Credit Outstanding", "totalCreditOutstanding"),
       page("page.reports.product_line", "Product Line Analysis", "productLineAnalysis"),
+      page("page.reports.brand_performance", "Brand Performance", "brandPerformance", ["Brand Partner"], { readOnly: true }),
       page("page.reports.sales", "Sales Report", "salesReports"),
-      page("page.reports.purchase_planning", "Purchase Planning", "purchasePlanning"),
+      page("page.reports.pos_purchase_history", "POS Purchase History", "posPurchaseHistory"),
       page("page.reports.warehouse_activity", "Warehouse Activity", "warehouseActivity"),
       page("page.reports.sales_route", "Sales Route Analysis", "salesRouteAnalysis", ["Admin"]),
     ],
@@ -170,6 +178,8 @@ export function normalizeRole(role) {
     salesrepresentative: "Sales Rep",
     driver: "Driver",
     warehouse: "Warehouse",
+    brandpartner: "Brand Partner",
+    partner: "Brand Partner",
     superadmin: "Super Admin",
     customer: "Customer",
   };
@@ -196,14 +206,31 @@ export function canPerform(user, permissionKey) {
 }
 
 export function canAccessPage(user, pageOrPermissionKey) {
-  const entry = PAGE_BY_ROUTE[pageOrPermissionKey];
+  const entry = PAGE_BY_ROUTE[pageOrPermissionKey] || PAGE_REGISTRY.find((item) => item.key === pageOrPermissionKey);
   const permissionKey = entry?.key || pageOrPermissionKey;
+  if (!isStaffUser(user) || user?.active === false) return false;
+  if (isMasterAdmin(user) || normalizeRole(user.role || user.access_level) === "Super Admin") return true;
+
+  // Page access has a role baseline. Important/sensitive actions still remain
+  // controlled exclusively by canPerform(), so order amount/discount/cancel/etc.
+  // are not granted by this fallback. This keeps warehouse operational pages
+  // available to current and future Warehouse staff even if their stored page
+  // permission map has not been explicitly populated yet.
+  const normalizedRole = normalizeRole(user.role || user.access_level);
+  if (normalizedRole === "Brand Partner") {
+    return ["page.order.sales_rep", "page.reports.brand_performance"].includes(permissionKey);
+  }
+  if (entry?.defaultRoles?.includes(normalizedRole)) return true;
+
   return canPerform(user, permissionKey);
 }
 
 export function getRoleDefaultPermissionKeys(role) {
   const normalized = normalizeRole(role);
   if (normalized === "Super Admin") return [...ALL_REGISTERED_PERMISSION_KEYS];
+  if (normalized === "Brand Partner") {
+    return ["page.order.sales_rep", "page.reports.brand_performance"];
+  }
   return PAGE_REGISTRY.filter((item) => item.defaultRoles.includes(normalized)).map((item) => item.key);
 }
 

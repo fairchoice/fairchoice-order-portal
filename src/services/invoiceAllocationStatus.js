@@ -204,7 +204,6 @@ const allocationCustomerAccountId = String(
 
 if (
   customerAccountId &&
-  allocationCustomerAccountId &&
   allocationCustomerAccountId !== customerAccountId
 ) {
   return sum;
@@ -216,7 +215,6 @@ const allocationBranchId = String(
 
 if (
   branchId &&
-  allocationBranchId &&
   allocationBranchId !== branchId
 ) {
   return sum;
@@ -250,8 +248,13 @@ if (
     if (!isActiveInvoicePayment(payment) || !hasMatchingScope(row, payment)) return sum;
 
     const paymentOrderId = String(payment.order_id || "").trim();
-    const hasComparableSourceIds = UUID_PATTERN.test(paymentOrderId) && sourceIds.size > 0;
-    const uuidMatch = hasComparableSourceIds && sourceIds.has(paymentOrderId);
+    const paymentInvoiceId = String(payment.invoice_id || "").trim();
+    const hasComparableSourceIds =
+      (UUID_PATTERN.test(paymentOrderId) || UUID_PATTERN.test(paymentInvoiceId)) &&
+      sourceIds.size > 0;
+    const uuidMatch =
+      (UUID_PATTERN.test(paymentOrderId) && sourceIds.has(paymentOrderId)) ||
+      (UUID_PATTERN.test(paymentInvoiceId) && sourceIds.has(paymentInvoiceId));
     const paymentReferences = getPaymentReferenceKeys(payment);
     const referenceMatch = [...paymentReferences].some((reference) =>
       ledgerReferences.has(reference)
@@ -265,6 +268,22 @@ if (
 
   const total = Math.max(0, Number(invoiceTotal || 0));
   const storedLedgerInvoicePaidAmount = getStoredLedgerInvoicePaidAmount(row, total);
+  const freshOrder = row?._freshOrder || row || {};
+  const paymentCollected = normalize(
+    freshOrder.payment_collected ?? freshOrder.paymentCollected
+  );
+  const operationalOrderPaidAmount = ["YES", "TRUE"].includes(paymentCollected)
+    ? Math.max(
+        0,
+        Number(
+          freshOrder.payment_amount ??
+            freshOrder.paymentAmount ??
+            freshOrder.paid_amount ??
+            freshOrder.paidAmount ??
+            0
+        )
+      )
+    : 0;
   // A canonical payment may also have a customer_ledger mirror. Taking the
   // larger resolved effect prevents counting the same payment twice while
   // retaining support for legacy ledger-only payments.
@@ -273,6 +292,7 @@ if (
     canonicalReferencePaidAmount,
     legacyLedgerPaidAmount,
     storedLedgerInvoicePaidAmount,
+    operationalOrderPaidAmount,
   );
   const paidAmount = Math.min(total || resolvedPaidAmount, resolvedPaidAmount);
   const invoiceStatus =
@@ -296,6 +316,7 @@ if (
     _canonicalReferencePaidAmount: canonicalReferencePaidAmount,
     _legacyLedgerPaidAmount: legacyLedgerPaidAmount,
     _storedLedgerInvoicePaidAmount: storedLedgerInvoicePaidAmount,
+    _operationalOrderPaidAmount: operationalOrderPaidAmount,
   };
 }
 

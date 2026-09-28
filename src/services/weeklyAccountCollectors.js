@@ -54,21 +54,22 @@ const identityAliases = (identity = {}) =>
     .filter(Boolean);
 
 export function buildCollectorOptions(identities = [], legacyRows = []) {
-  const byStaffId = new Map();
+  const byStaffAndType = new Map();
 
   identities.forEach((identity) => {
     const staffId = String(identity.staff_id || "").trim();
     const type = normalizeCollectorType(identity.collector_type || identity.role);
     if (!staffId || !type) return;
 
-    const existing = byStaffId.get(staffId);
+    const identityKey = `${staffId}|${type}`;
+    const existing = byStaffAndType.get(identityKey);
     const aliases = new Set([
       ...(existing?.aliases || []),
       ...identityAliases(identity),
     ]);
     const username = String(identity.username || existing?.username || "").trim();
     const staffName = String(identity.staff_name || existing?.staffName || "").trim();
-    byStaffId.set(staffId, {
+    byStaffAndType.set(identityKey, {
       value: staffId,
       staffId,
       type,
@@ -84,7 +85,7 @@ export function buildCollectorOptions(identities = [], legacyRows = []) {
     });
   });
 
-  const identityOptions = [...byStaffId.values()];
+  const identityOptions = [...byStaffAndType.values()];
   const legacyOptions = new Map();
   legacyRows.forEach((row) => {
     if (collectorStaffId(row)) return;

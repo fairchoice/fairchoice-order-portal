@@ -1,7 +1,9 @@
 import { supabase } from "./supabase";
 
+
 const ROUTES_KEY = "fairchoice_sales_route_assignments_v1";
 const VISITS_KEY = "fairchoice_sales_route_visits_v1";
+
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 export const SALES_ROUTE_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -13,6 +15,7 @@ export const EXCEPTION_ORDER_REASONS = [
   "New / unassigned customer",
   "Other",
 ];
+
 
 export const NO_ORDER_REASONS = [
   "Customer has enough stock",
@@ -26,11 +29,42 @@ export const NO_ORDER_REASONS = [
   "Other",
 ];
 
+
 const readLocal = (key) => {
   try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; }
 };
 const writeLocal = (key, rows) => localStorage.setItem(key, JSON.stringify(rows || []));
+const VISIT_CACHE_MAX_ROWS = 500;
+const VISIT_CACHE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const cleanupVisitCache = (serverRows = [], extraRows = null) => {
+  try {
+    const syncedIds = new Set((serverRows || []).map((row) => String(row?.id || "")).filter(Boolean));
+    const syncedOrderNumbers = new Set((serverRows || []).map((row) => String(row?.order_number || "").trim()).filter(Boolean));
+    const cutoff = Date.now() - VISIT_CACHE_RETENTION_MS;
+    const sourceRows = extraRows || readLocal(VISITS_KEY);
+    const rows = sourceRows
+      .filter((row) => {
+        const visitedAt = new Date(row?.visited_at || 0).getTime();
+        if (Number.isFinite(visitedAt) && visitedAt > 0 && visitedAt < cutoff) return false;
+        if (syncedIds.has(String(row?.id || ""))) return false;
+        const orderNumber = String(row?.order_number || "").trim();
+        return !orderNumber || !syncedOrderNumbers.has(orderNumber);
+      })
+      .slice(-VISIT_CACHE_MAX_ROWS);
+
+
+    if (rows.length) writeLocal(VISITS_KEY, rows);
+    else localStorage.removeItem(VISITS_KEY);
+  } catch (error) {
+    try { localStorage.removeItem(VISITS_KEY); } catch {}
+    console.warn("Sales route local cache skipped because browser storage is full.", error?.message || error);
+  }
+};
 const missingRelation = (error) => ["42P01", "PGRST205", "PGRST204", "42703"].includes(error?.code) || /does not exist|schema cache/i.test(String(error?.message || ""));
+const routeVisitWriteUnavailable = (error) =>
+  missingRelation(error) ||
+  ["42501", "PGRST301"].includes(error?.code) ||
+  /row-level security|permission denied|not authorized|not authenticated/i.test(String(error?.message || ""));
 const uuid = () => globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 export const getRouteDay = (value = new Date()) => DAYS[new Date(value).getDay()];
 export const getBusinessDate = (value = new Date()) => {
@@ -39,11 +73,13 @@ export const getBusinessDate = (value = new Date()) => {
   return local.toISOString().slice(0, 10);
 };
 
+
 export async function loadSalesRouteStaff() {
   const { data, error } = await supabase.from("staff_users").select("id, staff_code, staff_name, role, active").eq("active", true).order("staff_name");
   if (error) return [];
   return (data || []).filter((row) => /sales|admin/i.test(String(row.role || "")));
 }
+
 
 export async function loadRouteAssignments() {
   const { data, error } = await supabase.from("sales_route_assignments").select("*").order("day_of_week").order("visit_sequence");
@@ -51,6 +87,7 @@ export async function loadRouteAssignments() {
   if (!missingRelation(error)) throw error;
   return readLocal(ROUTES_KEY);
 }
+
 
 export async function saveRouteAssignment(input = {}) {
   const row = {
@@ -74,6 +111,7 @@ export async function saveRouteAssignment(input = {}) {
   return row;
 }
 
+
 export async function removeRouteAssignment(id) {
   const { error } = await supabase.from("sales_route_assignments").delete().eq("id", id);
   if (!error) return;
@@ -81,15 +119,21 @@ export async function removeRouteAssignment(id) {
   writeLocal(ROUTES_KEY, readLocal(ROUTES_KEY).filter((row) => String(row.id) !== String(id)));
 }
 
+
 export async function loadRouteVisits({ dateFrom = null, dateTo = null } = {}) {
   let query = supabase.from("sales_route_visits").select("*").order("visited_at", { ascending: false });
   if (dateFrom) query = query.gte("business_date", dateFrom);
   if (dateTo) query = query.lte("business_date", dateTo);
   const { data, error } = await query;
-  if (!error) return data || [];
+  if (!error) {
+    const visits = data || [];
+    cleanupVisitCache(visits);
+    return visits;
+  }
   if (!missingRelation(error)) throw error;
   return readLocal(VISITS_KEY).filter((row) => (!dateFrom || row.business_date >= dateFrom) && (!dateTo || row.business_date <= dateTo));
 }
+
 
 export async function recordSalesRouteVisit({
   customerAccountId,
@@ -119,11 +163,18 @@ export async function recordSalesRouteVisit({
     visited_at: new Date().toISOString(),
   };
   const { data, error } = await supabase.from("sales_route_visits").insert(row).select("*").single();
-  if (!error) return data;
-  if (!missingRelation(error)) throw error;
+  if (!error) {
+    cleanupVisitCache([data]);
+    return data;
+  }
+  if (!routeVisitWriteUnavailable(error)) throw error;
+  console.warn("Sales route visit tracking unavailable; continuing without blocking order flow:", error?.message || error);
   const rows = readLocal(VISITS_KEY);
-  rows.push(row); writeLocal(VISITS_KEY, rows); return row;
+  rows.push(row);
+  cleanupVisitCache([], rows);
+  return row;
 }
+
 
 export async function loadTodaysSalesRoute({ customers = [], currentUser = null, date = new Date() } = {}) {
   const day = getRouteDay(date);
@@ -150,6 +201,7 @@ export async function loadTodaysSalesRoute({ customers = [], currentUser = null,
     .filter((row) => row.customer)
     .sort((a, b) => Number(a.visit_sequence || 0) - Number(b.visit_sequence || 0));
 }
+
 
 export async function loadSalesRouteAnalysis({ customers = [] } = {}) {
   const [assignments, visits, ordersResult] = await Promise.all([
@@ -206,6 +258,7 @@ export async function loadSalesRouteAnalysis({ customers = [] } = {}) {
     .map((route) => ({ route, customer: (customers || []).find((customer) => String(customer.id) === String(route.customer_account_id)) }))
     .filter((row) => row.customer)
     .sort((a, b) => Number(a.route.visit_sequence || 0) - Number(b.route.visit_sequence || 0));
+
 
   return {
     assignments,

@@ -16,6 +16,18 @@ function storedUser() {
   }
 }
 
+
+function isAdminExpenseEntryBlocked(user = {}) {
+  const saved = storedUser();
+  const username = String(user.username || saved.username || "")
+    .trim()
+    .toLowerCase();
+
+  // Only the dedicated `admin` login is read-only for expense entry.
+  // Staff users with Admin/Super Admin roles are allowed to record expenses.
+  return username === "admin";
+}
+
 function sessionArguments(user = {}) {
   const saved = storedUser();
   const username = String(user.username || saved.username || "").trim();
@@ -104,6 +116,9 @@ function payoutArguments(input, user = {}) {
 }
 
 export async function createPayout(input, user = {}) {
+  if (isAdminExpenseEntryBlocked(user)) {
+    throw new Error("The shared admin login cannot enter or submit expenses.");
+  }
   return callExpenseRpc("fc_create_business_payout", {
     ...sessionArguments(user),
     ...payoutArguments(input, user),
@@ -112,6 +127,9 @@ export async function createPayout(input, user = {}) {
 }
 
 export async function updatePayout(payoutId, input, user = {}) {
+  if (isAdminExpenseEntryBlocked(user)) {
+    throw new Error("The shared admin login cannot enter or submit expenses.");
+  }
   if (!payoutId) throw new Error("Expense ID is required.");
   return callExpenseRpc("fc_update_business_payout", {
     ...sessionArguments(user),
@@ -130,6 +148,9 @@ async function transitionPayout(rpcName, payoutId, user, reason) {
 }
 
 export function submitPayout(payoutId, user = {}) {
+  if (isAdminExpenseEntryBlocked(user)) {
+    throw new Error("The shared admin login cannot enter or submit expenses.");
+  }
   return transitionPayout("fc_submit_business_payout", payoutId, user);
 }
 

@@ -8,7 +8,7 @@ import {
   getCustomerStatusLabel,
   getStoredCustomerStatus,
 } from "../../utils/customerStatus";
-import { getPriceModeLabel } from "../../utils/pricing";
+import { getCustomerPriceCodes } from "../../services/priceCodes";
 
 const inputClass =
   "h-9 w-full rounded border border-slate-400 px-2 text-sm outline-none focus:border-green-700";
@@ -20,12 +20,7 @@ const primaryButtonClass =
 const secondaryButtonClass =
   "h-9 rounded-full border border-slate-500 bg-white px-4 text-sm font-bold hover:bg-slate-100";
 
-const normalisePriceMode = (mode) => {
-  const normalizedMode = String(mode || "VAT").trim().toLowerCase();
-  if (["server", "inc.vat", "inc vat"].includes(normalizedMode)) return "Server";
-  if (["super", "admin", "admin offer"].includes(normalizedMode)) return "Admin Offer";
-  return "VAT";
-};
+
 
 export default function CustomerForm({
   editingCustomer,
@@ -50,7 +45,8 @@ export default function CustomerForm({
 
     credit_limit: editingCustomer?.credit_limit || 0,
     payment_terms: editingCustomer?.payment_terms || "",
-    default_price_mode: normalisePriceMode(editingCustomer?.default_price_mode),
+    default_price_mode: editingCustomer?.default_price_mode || "VAT",
+    customer_price_code_id: editingCustomer?.customer_price_code_id || "",
 
     allow_vat: editingCustomer?.allow_vat ?? true,
     allow_server: editingCustomer?.allow_server ?? false,
@@ -62,6 +58,7 @@ export default function CustomerForm({
   const [branches, setBranches] = useState([]);
   const [editingBranch, setEditingBranch] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [priceCodes, setPriceCodes] = useState([]);
 
   const [branchForm, setBranchForm] = useState({
     branch_name: "",
@@ -77,6 +74,14 @@ export default function CustomerForm({
       loadBranches();
     }
   }, [editingCustomer]);
+
+  useEffect(() => {
+    let active = true;
+    getCustomerPriceCodes({ includeInactive: true })
+      .then((rows) => { if (active) setPriceCodes(rows || []); })
+      .catch((error) => console.error("Customer price code load error:", error));
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!editingCustomer) return;
@@ -171,9 +176,8 @@ export default function CustomerForm({
         ...form,
         status: getStoredCustomerStatus(form.status),
         active: nextStatus !== "Inactive",
-        default_price_mode: normalisePriceMode(form.default_price_mode),
-        allow_manager: false,
-        allow_super: false,
+        default_price_mode: form.default_price_mode || "VAT",
+        customer_price_code_id: form.customer_price_code_id || null,
       });
       alert("Customer saved successfully.");
       onSaved?.();
@@ -238,7 +242,6 @@ export default function CustomerForm({
               ["address", "Invoice Address"],
               ["branches", "Branches"],
               ["payment", "Payment Details"],
-              ["price", "Price Setup"],
             ].map(([key, label]) => (
               <button
                 key={key}
@@ -547,43 +550,43 @@ export default function CustomerForm({
                   onChange={(e) => updateField("credit_limit", e.target.value)}
                 />
               </div>
-            </div>
-          )}
 
-          {activeTab === "price" && (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <label className={labelClass}>Default Price Mode</label>
+                <label className={labelClass}>Price Mode</label>
                 <select
                   className={inputClass}
-                  value={form.default_price_mode}
+                  value={form.default_price_mode || "VAT"}
                   onChange={(e) => updateField("default_price_mode", e.target.value)}
                 >
-                  <option value="VAT">{getPriceModeLabel("VAT")}</option>
-                  <option value="Server">{getPriceModeLabel("Server")}</option>
+                  <option value="VAT">Ex.VAT</option>
+                  <option value="Server">Inc.VAT</option>
                 </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  Ex.VAT calculates from the net selling price and adds VAT. Inc.VAT calculates from the VAT-inclusive selling price.
+                </p>
               </div>
 
-              <div className="rounded border border-slate-400 px-3 py-2">
-                <div className="mb-2 text-sm font-bold">Customer Price Access</div>
-
-                <label className="mb-1 flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={form.allow_vat}
-                    onChange={(e) => updateField("allow_vat", e.target.checked)}
-                  />
-                  Ex.VAT
-                </label>
-
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={form.allow_server}
-                    onChange={(e) => updateField("allow_server", e.target.checked)}
-                  />
-                  Inc.VAT
-                </label>
+              <div>
+                <label className={labelClass}>Customer Price Code</label>
+                <select
+                  className={inputClass}
+                  value={form.customer_price_code_id || ""}
+                  onChange={(e) => updateField("customer_price_code_id", e.target.value)}
+                >
+                  <option value="">Normal pricing (no customer code)</option>
+                  {priceCodes.map((priceCode) => (
+                    <option
+                      key={priceCode.id}
+                      value={priceCode.id}
+                      disabled={priceCode.active === false && String(form.customer_price_code_id) !== String(priceCode.id)}
+                    >
+                      {priceCode.code} - {Number(priceCode.discount_percent || 0)}%{priceCode.active === false ? " (Inactive)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  If this code has an exact product price, that price is used first. Otherwise the code percentage is calculated automatically.
+                </p>
               </div>
             </div>
           )}

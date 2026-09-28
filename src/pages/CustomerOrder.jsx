@@ -25,6 +25,9 @@ import StaffLogin from "./AdminSetup/StaffLogin";
 import CustomerLogin from "./AdminSetup/CustomerLogin";
 import PriceManagement from "./AdminSetup/PriceManagement";
 
+
+
+
 import { formatCurrency } from "../utils/currency";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import {
@@ -53,10 +56,19 @@ import {
 } from "../security/accessControlRegistry";
 
 
+
+
+
+
+
+
 import BackOfficeLayout, {
   ComingSoonPlaceholder,
 } from "./AdminSetup/BackOfficeLayout";
 import { getComingSoonTitle } from "./AdminSetup/backOfficePageHelpers";
+
+
+
 
 import Categories from "./AdminSetup/Categories";
 import Warehouse from "./Warehouse";
@@ -66,6 +78,7 @@ import StockReceipts from "./AdminSetup/StockReceipts";
 import StockHistory from "./AdminSetup/StockHistory";
 import StockTaking from "./AdminSetup/StockTaking";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
+import CustomerWallet from "./AdminSetup/CustomerWallet";
 import CentralPayment from "./AdminSetup/CentralPayment";
 import BranchSeparation from "./AdminSetup/BranchSeparation";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
@@ -79,9 +92,14 @@ import PurchasePlanningReport from "./reports/PurchasePlanningReport";
 import WarehouseActivityReport from "./reports/WarehouseActivityReport";
 import ProfitAnalysisReport from "./reports/ProfitAnalysisReport";
 import ProductLineAnalysisReport from "./reports/ProductLineAnalysisReport";
+import BrandPerformanceReport from "./reports/BrandPerformanceReport";
+import AllCreditOutstanding from "./AdminSetup/AllCreditOutstanding";
 import SalesRouteAnalysisReport from "./reports/SalesRouteAnalysisReport";
 import SalesRouteSetup from "./AdminSetup/SalesRouteSetup";
 import { EXCEPTION_ORDER_REASONS, loadTodaysSalesRoute, NO_ORDER_REASONS, recordSalesRouteVisit } from "../services/salesRouteService";
+
+
+
 
 import ProductCard, { ProductListRow } from "../components/ProductCard";
 import ProductFilters from "../components/ProductFilters";
@@ -94,7 +112,18 @@ import HomepageTargetMessages from "../components/HomepageTargetMessages";
 import Cart from "../components/Cart.jsx";
 import ReturnRequestModal from "../components/ReturnRequestModal";
 
-import { getProducts } from "../services/products";
+
+
+
+import { getProducts, isActiveProduct } from "../services/products";
+import {
+  buildProductPriceCodeMap,
+  getCustomerPriceCodes,
+  getProductPriceCodeRows,
+  getPriceCodeModeParts,
+  makePriceCodeMode,
+  syncProductPriceCodePrices,
+} from "../services/priceCodes";
 import { getHomepageItems } from "../services/homepageItems";
 import {
   getActiveHomepageMessages,
@@ -104,17 +133,32 @@ import {
   applyLocationStockToProducts,
   saveProductLocationStock,
 } from "../services/locationStock";
+import { getActivePromotionRules } from "../services/promotionRules";
 import {
-  applyPromotionRulesToCart,
-  getActivePromotionRules,
-  PROMOTION_RULE_KINDS,
-} from "../services/promotionRules";
+  applyCustomerOrderPromotions,
+  findActivePromotionPriceRule,
+  getActivePromotionPrice,
+  getPromotionDiscountAmount,
+  productMatchesPromotionPosterSeries,
+  resolvePromotionAudienceType,
+} from "./CustomerOrderModules/customerOrderPromotions";
+import {
+  buildCustomerOrderRequest,
+  createCustomerOrderWithSessionRetry,
+} from "./CustomerOrderModules/customerOrderSubmission";
+import {
+  addReceivedOrderItemWithPromotions,
+  updateReceivedOrderItemWithPromotions,
+} from "./CustomerOrderModules/receivedOrderItemChanges";
 import {
   calculateCartOrderItems,
   calculateCartTotals,
   calculateOrderTotals,
   getOrderItemProductCode,
   roundMoney,
+
+
+
 
   getOrderItemQty,
 } from "../utils/orderTotals";
@@ -126,6 +170,7 @@ import {
   getPriceModeLabel,
   getVatRate,
   isVatPriceMode,
+  normalizePriceMode,
 } from "../utils/pricing";
 import {
   calculateCustomerCredit,
@@ -133,8 +178,12 @@ import {
   getLedgerDebit,
 } from "../utils/customerCredit";
 
+
+
+
 import AdminProducts from "./AdminProducts";
 import ProductImportExport from "./AdminSetup/ProductImportExport";
+import BulkCustomerCodePrices from "./AdminSetup/BulkCustomerCodePrices";
 import ProductPromotions from "./AdminSetup/ProductPromotions";
 import AdminOrders from "./AdminOrders";
 import OrderPicking from "./OrderPicking";
@@ -142,10 +191,20 @@ import { claimOrderForPicking } from "../services/picking";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
 
 
+
+
+
+
+
+
 import { getCustomerAccounts } from "../services/customerManagement";
+
+
+
 
 import {
   createCustomerOrder,
+  getCustomerOrderByNumber,
   updateOrderStatus,
   updateOrderFields,
 } from "../services/orders";
@@ -153,7 +212,6 @@ import {
   clearPendingPreOrderActionsForOrder,
   isActivePreOrderSupplyOrder,
 } from "../services/preOrderSupplyAllocation";
-import { reversePreOrderSupplyForReceivedOrder } from "../services/preOrderSupplyHistory";
 import {
   applyInvoicePaymentAllocations,
   createOrUpdateInvoiceForDeliveredOrder,
@@ -164,7 +222,7 @@ import {
   previewInvoice as previewCentralInvoice,
   withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
-import { mergeAuthenticatedProfile } from "../services/fcSession";
+import { getFcSessionState, mergeAuthenticatedProfile } from "../services/fcSession";
 import {
   CENTRAL_CART_ENABLED,
   beginCentralCartSubmission,
@@ -176,22 +234,58 @@ import {
   setCentralCartItemQuantity,
 } from "../services/customerCart";
 
+
+
+
 const LEGACY_CART_KEY = "fairchoice_cart";
+
+
+
 
 async function refreshSupabaseSessionIfNeeded() {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
 
+
+
+
   const session = data.session;
   if (!session) return null;
 
+
+
+
   const expiresAt = Number(session.expires_at || 0) * 1000;
   if (!expiresAt || expiresAt - Date.now() > 60_000) return session;
+
+
+
 
   const refreshed = await supabase.auth.refreshSession();
   if (refreshed.error) throw refreshed.error;
   return refreshed.data.session;
 }
+
+
+
+
+const readCheckoutBankProofDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    if (!file) return resolve("");
+    if (!String(file.type || "").startsWith("image/")) {
+      return reject(new Error("Bank payment proof must be an image / screenshot."));
+    }
+    if (Number(file.size || 0) > 2.5 * 1024 * 1024) {
+      return reject(new Error("Bank payment screenshot is too large. Please use an image under 2.5 MB."));
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the bank payment screenshot."));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
+
+
+
 
 function normalizeProduct(raw) {
   return {
@@ -205,16 +299,6 @@ function normalizeProduct(raw) {
     flavour: raw.flavour || "",
     cashPrice: Number(raw.cash_price || 0),
     vatPrice: Number(raw.vat_price || 0),
-    productSpecialPrice: Number(
-      raw.product_special_price ?? raw.productSpecialPrice ?? raw.cash_price ?? 0
-    ),
-    product_special_price: Number(
-      raw.product_special_price ?? raw.productSpecialPrice ?? raw.cash_price ?? 0
-    ),
-    walesSpecialPrice: Number(raw.wales_special_price || 0),
-    wales_special_price: Number(raw.wales_special_price || 0),
-    englandSpecialPrice: Number(raw.england_special_price || 0),
-    england_special_price: Number(raw.england_special_price || 0),
     cartonSize: raw.carton_size || "",
     image: getDisplayProductImage(raw),
     stock: Number(raw.stock || 0),
@@ -235,8 +319,13 @@ function normalizeProduct(raw) {
     supplierName: raw.supplier_name || "",
     salesAccount: raw.sales_account || "",
     purchaseAccount: raw.purchase_account || "",
+    priceCodePrices: raw.priceCodePrices || raw.price_code_prices || {},
+    price_code_prices: raw.price_code_prices || raw.priceCodePrices || {},
   };
 }
+
+
+
 
 const PRODUCT_LABEL_PRIORITY = [
   "comingSoon",
@@ -247,11 +336,23 @@ const PRODUCT_LABEL_PRIORITY = [
   "topSeller",
 ];
 
+
+
+
 const PRODUCTS_PER_PAGE = 20;
+
+
+
+
+
+
 
 
 const getProductLabelValue = (product) =>
   PRODUCT_LABEL_PRIORITY.find((key) => product?.[key] === true) || "";
+
+
+
 
 const getProductLabelPayload = (labelValue) => ({
   is_new: labelValue === "isNew",
@@ -262,6 +363,9 @@ const getProductLabelPayload = (labelValue) => ({
   top_seller: labelValue === "topSeller",
 });
 
+
+
+
 const getProductLabelFormFlags = (labelValue) => ({
   isNew: labelValue === "isNew",
   isPromotion: labelValue === "isPromotion",
@@ -271,9 +375,15 @@ const getProductLabelFormFlags = (labelValue) => ({
   topSeller: labelValue === "topSeller",
 });
 
+
+
+
 const getOrderProductAvailabilityRank = (product) => {
   const sourceStatus = String(product?.sourceStatus || "").trim().toLowerCase();
   const productStatus = String(product?.status || "").trim().toLowerCase();
+
+
+
 
   if (
     sourceStatus === "cannot supply" ||
@@ -283,7 +393,13 @@ const getOrderProductAvailabilityRank = (product) => {
     return 3;
   }
 
+
+
+
   if (Number(product?.stock || 0) > 0) return 1;
+
+
+
 
   if (
     sourceStatus === "need supplier" ||
@@ -297,18 +413,33 @@ const getOrderProductAvailabilityRank = (product) => {
     return 2;
   }
 
+
+
+
   return 3;
 };
+
+
+
 
 const sortOrderProductsByAvailability = (items) =>
   [...items].sort((a, b) => {
     const rankDiff =
       getOrderProductAvailabilityRank(a) - getOrderProductAvailabilityRank(b);
 
+
+
+
     if (rankDiff !== 0) return rankDiff;
+
+
+
 
     return String(a.name || "").localeCompare(String(b.name || ""));
   });
+
+
+
 
 const getCustomerAddress = (customer, branch) =>
   branch?.delivery_address ||
@@ -318,8 +449,14 @@ const getCustomerAddress = (customer, branch) =>
   customer?.postcode ||
   "-";
 
+
+
+
 const getCreditBalance = (customer, ledger = [], openingBalance = 0) =>
   calculateCustomerCredit(customer, ledger, openingBalance).outstanding;
+
+
+
 
 const mapDeliveredOrderForCustomerLedger = (order = {}) => ({
   dbId: order.id,
@@ -396,21 +533,34 @@ const mapDeliveredOrderForCustomerLedger = (order = {}) => ({
     vat_total: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
     sourceStatus: item.source_status || item.status || "In Stock",
     source_status: item.source_status || item.status || "In Stock",
-    pickedQty: Number(item.picked_qty || item.qty || item.quantity || 0),
+    // Picking must always be a warehouse-user action; do not infer picked quantity from ordered qty.
+    pickedQty: Number(item.picked_qty ?? 0),
     includeInPicking: item.include_in_picking !== false,
     include_in_picking: item.include_in_picking !== false,
   })),
 });
+
+
+
 
 const isDeliveredInvoiceStatus = (status) =>
   ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
     String(status || "").trim().toLowerCase()
   );
 
+
+
+
 const normalizeCountry = (value) => String(value || "").trim().toLowerCase();
+
+
+
 
 const getCustomerBranches = (customer) =>
   Array.isArray(customer?.customer_branches) ? customer.customer_branches : [];
+
+
+
 
 const getCustomerAccountCountry = (customer) =>
   customer?.country ||
@@ -419,22 +569,37 @@ const getCustomerAccountCountry = (customer) =>
   customer?.default_country ||
   "";
 
+
+
+
 const getCustomerBranchCountry = (customer) => {
   const branches = getCustomerBranches(customer);
   const defaultBranch =
     branches.find((branch) => branch.default_branch || branch.is_default) ||
     branches[0];
 
+
+
+
   return defaultBranch?.country || "";
 };
+
+
+
 
 const isOrderSelectableCustomer = (customer) => {
   return isOperationalCustomer(customer);
 };
 
+
+
+
 const customerMatchesSearch = (customer, searchTerm) => {
   const search = String(searchTerm || "").trim().toLowerCase();
   if (!search) return true;
+
+
+
 
   return [
     customer?.account_name,
@@ -448,48 +613,120 @@ const customerMatchesSearch = (customer, searchTerm) => {
     .some((value) => String(value).toLowerCase().includes(search));
 };
 
+
+
+
+const getCustomerPriceModeValue = (customer, pricingSettings = {}) => {
+  const mode = normalizePriceMode(customer?.default_price_mode || "vat");
+  const basePriceMode =
+    ["server", "inc vat", "inc.vat", "royalty", "owner offer", "manager", "manager offer"].includes(mode)
+      ? "inc vat"
+      : "ex vat";
+
+
+
+
+  if (customer?.customer_price_code_id) {
+    const activeCode = (pricingSettings.price_codes || []).find(
+      (priceCode) =>
+        String(priceCode.id) === String(customer.customer_price_code_id) &&
+        priceCode.active !== false
+    );
+    if (activeCode) {
+      const overlayId = customer?.customer_price_overlay_code_id || "";
+      const activeOverlay = overlayId
+        ? (pricingSettings.price_codes || []).find(
+            (priceCode) =>
+              String(priceCode.id) === String(overlayId) &&
+              priceCode.active !== false &&
+              String(priceCode.code_type || "").toLowerCase() === "sub" &&
+              String(priceCode.parent_price_code_id || "") === String(activeCode.id)
+          )
+        : null;
+      return makePriceCodeMode(activeCode.id, basePriceMode, activeOverlay?.id || "");
+    }
+  }
+
+
+
+
+  return basePriceMode === "inc vat" ? "inc vat" : "vat";
+};
+
+
+
+
 const getAllowedPriceModesForCustomer = (customer, pricingSettings = {}) => {
   if (!customer) return ["vat"];
-
-  const modes = [];
-  if (customer.allow_vat !== false) modes.push("vat");
-  if (customer.allow_server === true) modes.push("server");
-  if (customer.allow_manager === true && pricingSettings?.show_manager_offer) {
-    modes.push("manager");
-  }
-  if (customer.allow_super === true && pricingSettings?.show_super_offer) {
-    modes.push("super");
-  }
-
-  return modes.length ? modes : ["vat"];
+  return [getCustomerPriceModeValue(customer, pricingSettings)];
 };
+
+
+
+
+const getCustomerOrderPriceModeLabel = (priceMode, pricingSettings = {}) => {
+  const value = String(priceMode || "").trim();
+  if (value.toLowerCase().startsWith("code:")) {
+    const { basePriceMode } = getPriceCodeModeParts(value);
+    return basePriceMode === "inc vat" ? "Inc.VAT" : "Ex.VAT";
+  }
+  return getPriceModeLabel(priceMode, pricingSettings);
+};
+
+
+
+
+
+
+
 
 const customerMatchesCountry = (customer, country) => {
   const selectedCountry = normalizeCountry(country);
   if (!selectedCountry) return true;
 
+
+
+
   const accountCountry = normalizeCountry(getCustomerAccountCountry(customer));
   if (accountCountry) return accountCountry === selectedCountry;
+
+
+
 
   return getCustomerBranches(customer).some(
     (branch) => normalizeCountry(branch.country) === selectedCountry
   );
 };
 
+
+
+
 const getCountryFilteredBranches = (customer, country, shouldFilter) => {
   const activeBranches = getCustomerBranches(customer).filter(
     (branch) => branch.active !== false
   );
 
+
+
+
   if (!shouldFilter) return activeBranches;
+
+
+
 
   const selectedCountry = normalizeCountry(country);
   if (!selectedCountry) return activeBranches;
+
+
+
 
   return activeBranches.filter(
     (branch) => normalizeCountry(branch.country) === selectedCountry
   );
 };
+
+
+
 
 const loadSalesRepOutstanding = async ({
   customer,
@@ -501,6 +738,9 @@ const loadSalesRepOutstanding = async ({
       outstandingState: { totalOutstanding: 0, branchOutstanding: {} },
     };
   }
+
+
+
 
   const creditSnapshot = await loadCentralPaymentSnapshot({
     customerAccountId: customer.id,
@@ -516,6 +756,9 @@ const loadSalesRepOutstanding = async ({
     })
   );
 
+
+
+
   return {
     creditSnapshot,
     outstandingState: {
@@ -525,17 +768,30 @@ const loadSalesRepOutstanding = async ({
   };
 };
 
+
+
+
 export default function CustomerOrder({ userProfile, onLogout, onProfileRefresh, activeDuty = "" }) {
+
+
+
 
 const loggedInUser =
   JSON.parse(localStorage.getItem("loggedInUser") || "null") ||
   JSON.parse(localStorage.getItem("fairchoice_user") || "null");
 
 
+
+
+
+
+
+
   const activeUser = userProfile || loggedInUser || {};
   const role = normalizeStaffRole(activeUser?.role || activeUser?.access_level || "Customer");
   const normalizedRole = String(role || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
   const isCustomer = normalizedRole === "customer";
+  const isBrandPartner = normalizedRole === "brandpartner" || normalizedRole === "partner";
   const activeUsername = String(activeUser?.username || activeUser?.staff_username || activeUser?.email || activeUser?.name || "").trim().toLowerCase();
   const isNisstajAdmin = activeUsername === "nisstaj_admin";
   const dutyRestricted = Boolean(activeDuty) && !isNisstajAdmin && !isCustomer;
@@ -544,6 +800,12 @@ const loggedInUser =
   const isWarehouse = dutyRestricted ? activeDuty === "warehouse" : canAccessPage(activeUser, "page.operations.warehouse");
   const isDriver = dutyRestricted ? activeDuty === "driver" : canAccessPage(activeUser, "page.operations.driver");
   const salesRouteMode = activeDuty === "sales_rep" && !isNisstajAdmin;
+  const promotionAudienceType = resolvePromotionAudienceType({
+    activeUser,
+    normalizedRole,
+    isSalesRep,
+    salesRouteMode,
+  });
   const canCollectCash = isSalesRep && hasFcPermission(activeUser, FC_PERMISSIONS.PAYMENTS_COLLECT_CASH);
   const canManualCheckoutDiscount = canPerform(activeUser, "orders.discount.change");
   const basePermissions = activeUser?.effective_permissions || activeUser?.permissions || {};
@@ -556,9 +818,15 @@ const loggedInUser =
       return item.key === "page.operations.driver" || item.key === "page.accounts.expenses";
     }
     if (activeDuty === "warehouse") {
-      return item.key.startsWith("page.operations.") && item.key !== "page.operations.driver";
+      return (
+        (item.key.startsWith("page.operations.") && item.key !== "page.operations.driver") ||
+        item.key === "page.accounts.expenses"
+      );
     }
     if (activeDuty === "admin") {
+      if (isBrandPartner) {
+        return ["page.order.sales_rep", "page.reports.brand_performance"].includes(item.key);
+      }
       return item.key !== "page.order.sales_rep" && item.key !== "page.operations.driver" && canAccessPage(activeUser, item.key);
     }
     return false;
@@ -572,7 +840,13 @@ const loggedInUser =
   const defaultBackOfficePage =
     PAGE_REGISTRY.find((item) => canAccessPage(backOfficeUser, item.key))?.route || "orders";
 
+
+
+
   
+
+
+
 
  const portalRoleState = {
    isAdmin,
@@ -594,9 +868,13 @@ const loggedInUser =
  const [accessControlStaffId, setAccessControlStaffId] = useState("");
  const [pickingOrderId, setPickingOrderId] = useState(null);
 
+
+
+
   const [customerAccounts, setCustomerAccounts] = useState([]);
   const [salesRouteRows, setSalesRouteRows] = useState([]);
   const [salesRouteLoading, setSalesRouteLoading] = useState(false);
+  const [showSalesRouteModal, setShowSalesRouteModal] = useState(false);
   const [activeRouteAssignmentId, setActiveRouteAssignmentId] = useState(null);
   const [salesRouteExceptionMode, setSalesRouteExceptionMode] = useState(false);
   const [showRouteExceptionForm, setShowRouteExceptionForm] = useState(false);
@@ -628,6 +906,9 @@ const loggedInUser =
   const [customerCreditSnapshot, setCustomerCreditSnapshot] = useState(null);
   const [branchOutstandingRows, setBranchOutstandingRows] = useState([]);
 
+
+
+
   const [salesPaymentForm, setSalesPaymentForm] = useState({
   customerId: "",
   branchId: "",
@@ -645,12 +926,27 @@ const [salesOutstandingSnapshot, setSalesOutstandingSnapshot] = useState({
 
 
 
+
+
+
+
+
+
+
+
+
 const [savingSalesPayment, setSavingSalesPayment] = useState(false);
+
+
+
 
 const activeCustomerAccounts = useMemo(
   () => customerAccounts.filter(isOrderSelectableCustomer),
   [customerAccounts]
 );
+
+
+
 
 const selectedSalesPaymentCustomer = activeCustomerAccounts.find(
   (customer) => String(customer.id) === String(salesPaymentForm.customerId)
@@ -679,8 +975,14 @@ const selectedSalesReturnBranch =
     (branch) => String(branch.id) === String(salesReturnForm.branchId)
   ) || null;
 
+
+
+
 useEffect(() => {
   let active = true;
+
+
+
 
   const loadSalesOutstanding = async () => {
     if (!selectedSalesPaymentCustomer) {
@@ -688,11 +990,17 @@ useEffect(() => {
       return;
     }
 
+
+
+
     try {
       const { outstandingState } = await loadSalesRepOutstanding({
         customer: selectedSalesPaymentCustomer,
         selectedBranchId: selectedSalesPaymentBranch?.id || "",
       });
+
+
+
 
       if (active) setSalesOutstandingSnapshot(outstandingState);
     } catch (error) {
@@ -701,29 +1009,47 @@ useEffect(() => {
     }
   };
 
+
+
+
   loadSalesOutstanding();
+
+
+
 
   return () => {
     active = false;
   };
 }, [selectedSalesPaymentCustomer?.id, selectedSalesPaymentBranch?.id]);
 
+
+
+
   const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
  
+
+
+
 
   const [priceMode, setPriceMode] = useState("vat");
   const [companyName, setCompanyName] = useState("");
 
+
+
+
   const [manualCountry, setManualCountry] = useState("Wales");
 
+
+
+
   const [pricingSettings, setPricingSettings] = useState({
-    server_discount_percent: 2,
-    manager_discount_percent: 2.5,
-    admin_offer_discount_percent: 3.5,
-    super_discount_percent: 3.5,
-    show_manager_offer: true,
-    show_super_offer: true,
+    vat_percent: 20,
+    server_discount_percent: 0,
+    price_codes: [],
   });
+
+
+
 
 const refreshSalesRoute = useCallback(async () => {
   if (!salesRouteMode) return;
@@ -738,9 +1064,15 @@ const refreshSalesRoute = useCallback(async () => {
   }
 }, [salesRouteMode, activeCustomerAccounts, activeUser?.staff_id, activeUser?.id]);
 
+
+
+
 useEffect(() => {
   if (salesRouteMode && activeCustomerAccounts.length) void refreshSalesRoute();
 }, [salesRouteMode, activeCustomerAccounts.length, refreshSalesRoute]);
+
+
+
 
 const filteredSalesRouteRows = useMemo(() =>
   salesRouteRows.filter((routeRow) =>
@@ -752,6 +1084,9 @@ const salesRoutePageCount = Math.max(1, Math.ceil(filteredSalesRouteRows.length 
 const currentSalesRoutePage = Math.min(salesRoutePage, salesRoutePageCount);
 const visibleSalesRouteRows = filteredSalesRouteRows.slice((currentSalesRoutePage - 1) * 30, currentSalesRoutePage * 30);
 useEffect(() => { setSalesRoutePage(1); }, [salesRouteCountryFilter, salesRouteRows.length]);
+
+
+
 
 const resetSalesRouteCustomer = useCallback(() => {
   setSelectedCustomerId("");
@@ -771,6 +1106,9 @@ const resetSalesRouteCustomer = useCallback(() => {
   setPage("order");
 }, []);
 
+
+
+
 const openSalesRouteCustomer = useCallback((routeRow) => {
   const customer = routeRow?.customer;
   if (!customer) return;
@@ -785,12 +1123,18 @@ const openSalesRouteCustomer = useCallback((routeRow) => {
   setRouteExceptionReason("");
   setRouteExceptionNote("");
   setCustomerDetailsExpanded(false);
-  setOrderPaymentChoice("no_payment");
+  setOrderPaymentChoice("cash_now");
+  setOrderBankProofFile(null);
+  setOrderPaymentIntentId(createPaymentIntentId());
+  setShowSalesRouteModal(false);
   const modes = getAllowedPriceModesForCustomer(customer, pricingSettings);
-  const defaultMode = String(customer.default_price_mode || "vat").toLowerCase();
+  const defaultMode = getCustomerPriceModeValue(customer, pricingSettings);
   setPriceMode(modes.includes(defaultMode) ? defaultMode : modes[0] || "vat");
   setPage("order");
 }, [pricingSettings]);
+
+
+
 
 const confirmSalesRouteNoOrder = async () => {
   if (!selectedCustomerAccount) return;
@@ -810,6 +1154,9 @@ const confirmSalesRouteNoOrder = async () => {
   await refreshSalesRoute();
 };
 
+
+
+
 const confirmSalesRouteException = () => {
   if (!routeExceptionReason) return alert("Select an exception reason.");
   if (routeExceptionReason === "Other" && !routeExceptionNote.trim()) return alert("Enter a note for Other.");
@@ -826,31 +1173,115 @@ const confirmSalesRouteException = () => {
 };
 
 
+
+
+
+
+
+
   const [products, setProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [productError, setProductError] = useState("");
   const [homepageItems, setHomepageItems] = useState([]);
   const [homepageMessages, setHomepageMessages] = useState([]);
   const [homepageLoading, setHomepageLoading] = useState(false);
+  const [homepageSalesMetrics, setHomepageSalesMetrics] = useState({});
   const [showHomepage, setShowHomepage] = useState(true);
   const [homepageSelectionType, setHomepageSelectionType] = useState("");
   const [homepageBrowseTitle, setHomepageBrowseTitle] = useState("");
   const [homepagePromotionTarget, setHomepagePromotionTarget] = useState("");
+  const [homepageProductSetIds, setHomepageProductSetIds] = useState([]);
   const [promotionRules, setPromotionRules] = useState([]);
   const [productDisplayMessages, setProductDisplayMessages] = useState([]);
   const [customerDetailsExpanded, setCustomerDetailsExpanded] = useState(false);
   const [isCartEditing, setIsCartEditing] = useState(false);
   const [cartNotice, setCartNotice] = useState("");
   const [submissionFeedback, setSubmissionFeedback] = useState("");
-  const [orderPaymentChoice, setOrderPaymentChoice] = useState("no_payment");
+  const [customerWallet, setCustomerWallet] = useState({ balance: 0, loading: false, error: "" });
+  const [customerWalletOpen, setCustomerWalletOpen] = useState(false);
+  const [walletUseRequested, setWalletUseRequested] = useState(false);
+  // Checkpoint 10.3: normal orders are always Pay on Delivery.
+  // Cash collection must happen later in the Delivery/Collection workflow.
+  // The separate Promotion Run workflow keeps its existing paid-sale behaviour.
+  const salesCheckoutPaymentRequired = false;
+  const [orderPaymentChoice, setOrderPaymentChoice] = useState(() =>
+    salesCheckoutPaymentRequired ? "cash_now" : "no_payment"
+  );
+  const [orderBankProofFile, setOrderBankProofFile] = useState(null);
+  const [orderPaymentIntentId, setOrderPaymentIntentId] = useState(() => createPaymentIntentId());
   const lastCartProductIdRef = useRef("");
   const browseScrollPositionRef = useRef(0);
   const productHighlightTimerRef = useRef(null);
   const portalHistoryInitializedRef = useRef(false);
   const activePortalViewRef = useRef("home");
 
+
+
+
 const cartStorageKey = getCustomerCartStorageKey(activeUser);
 const orderSubmissionStorageKey = `${cartStorageKey}:submission`;
+
+
+const loadCustomerWalletBalance = useCallback(async () => {
+  if (!selectedCustomerAccount?.id) {
+    setCustomerWallet({ balance: 0, loading: false, error: "" });
+    setWalletUseRequested(false);
+    return;
+  }
+
+
+  const session = getFcSessionState(activeUser);
+  if (!session.valid) {
+    setCustomerWallet({ balance: 0, loading: false, error: "Wallet session is unavailable." });
+    return;
+  }
+
+
+  setCustomerWallet((current) => ({ ...current, loading: true, error: "" }));
+
+
+  const rpcName = isCustomer
+    ? "fc_customer_wallet_portal_v1"
+    : "fc_order_wallet_balance_v1";
+  const rpcArgs = isCustomer
+    ? {
+        p_username: session.username,
+        p_session_token: session.token,
+      }
+    : {
+        p_username: session.username,
+        p_session_token: session.token,
+        p_customer_account_id: selectedCustomerAccount.id,
+      };
+
+
+  const { data, error } = await supabase.rpc(rpcName, rpcArgs);
+
+
+  if (error) {
+    console.error("Customer Wallet loading error:", error);
+    setCustomerWallet({ balance: 0, loading: false, error: error.message || "Could not load Wallet." });
+    return;
+  }
+
+
+  setCustomerWallet({
+    balance: Number(data?.wallet_balance || 0),
+    loading: false,
+    error: "",
+  });
+}, [isCustomer, selectedCustomerAccount?.id, activeUser?.username, activeUser?.fc_session_token, activeUser?.session_token, activeUser?.sessionToken]);
+
+
+useEffect(() => {
+  // Wallet is opt-in for every customer/order. Changing customer must never
+  // carry a previous Wallet=Yes choice into the next checkout.
+  setWalletUseRequested(false);
+  void loadCustomerWalletBalance();
+}, [selectedCustomerAccount?.id, loadCustomerWalletBalance]);
+
+
+
 
 const [cart, setCart] = useState(() => {
   try {
@@ -862,15 +1293,24 @@ const [cart, setCart] = useState(() => {
   }
 });
 
+
+
+
 const cartRef = useRef(cart);
 const centralCartMutationQueueRef = useRef(Promise.resolve());
 const centralCartMutatingRef = useRef(false);
 const centralCartLoadedScopeRef = useRef("");
 const [centralCartId, setCentralCartId] = useState(null);
 
+
+
+
 useEffect(() => {
   cartRef.current = cart;
 }, [cart]);
+
+
+
 
 useEffect(
   () => () => {
@@ -881,6 +1321,9 @@ useEffect(
   []
 );
 
+
+
+
 useEffect(() => {
   if (!cartNotice) return undefined;
   const noticeTimer = setTimeout(() => setCartNotice(""), 2500);
@@ -888,13 +1331,49 @@ useEffect(() => {
 }, [cartNotice]);
 
 
+
+
+
+
+
+
 useEffect(() => {
-  localStorage.setItem(cartStorageKey, JSON.stringify(cart));
-  localStorage.removeItem(LEGACY_CART_KEY);
+  try {
+    localStorage.setItem(cartStorageKey, JSON.stringify(cart));
+    localStorage.removeItem(LEGACY_CART_KEY);
+  } catch (error) {
+    const storageQuotaExceeded =
+      error?.name === "QuotaExceededError" || error?.code === 22 || error?.code === 1014;
+
+    if (storageQuotaExceeded) {
+      console.warn("Customer cart cache skipped because browser storage is full.");
+      try {
+        localStorage.removeItem(cartStorageKey);
+        localStorage.removeItem(LEGACY_CART_KEY);
+      } catch {
+        // The server-backed cart remains the source of truth.
+      }
+      return;
+    }
+
+    console.warn("Unable to persist customer cart cache:", error);
+  }
 }, [cart, cartStorageKey]);
 
+
+
+
 const applyCartPromotions = (cartLines) =>
-  applyPromotionRulesToCart(cartLines, promotionRules, { products, priceMode });
+  applyCustomerOrderPromotions({
+    cartLines,
+    promotionRules,
+    products,
+    priceMode,
+    audienceType: promotionAudienceType,
+  });
+
+
+
 
 const refreshPromotionRules = async () => {
   try {
@@ -905,6 +1384,9 @@ const refreshPromotionRules = async () => {
   }
 };
 
+
+
+
 const refreshProductDisplayMessages = async () => {
   try {
     const { data, error } = await supabase
@@ -913,6 +1395,9 @@ const refreshProductDisplayMessages = async () => {
       .eq("active", true)
       .order("updated_at", { ascending: false });
 
+
+
+
     if (error) throw error;
     setProductDisplayMessages(data || []);
   } catch {
@@ -920,22 +1405,36 @@ const refreshProductDisplayMessages = async () => {
   }
 };
 
+
+
+
 useEffect(() => {
   setCart((oldCart) => {
-    const recalculatedCart = applyPromotionRulesToCart(
-      oldCart,
+    const recalculatedCart = applyCustomerOrderPromotions({
+      cartLines: oldCart,
       promotionRules,
-      { products, priceMode }
-    );
+      products,
+      priceMode,
+      audienceType: promotionAudienceType,
+    });
+
+
+
 
     return JSON.stringify(recalculatedCart) === JSON.stringify(oldCart)
       ? oldCart
       : recalculatedCart;
   });
-}, [promotionRules, products]);
+}, [promotionRules, products, priceMode, promotionAudienceType]);
+
+
+
 
 const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) => {
   if (!customerName && !customerId) return [];
+
+
+
 
   let query = supabase
     .from("orders")
@@ -943,18 +1442,30 @@ const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) =>
     .order("created_at", { ascending: true })
     .limit(250);
 
+
+
+
   if (customerId) {
     query = query.eq("customer_account_id", customerId);
   } else {
     query = query.eq("company_name", customerName);
   }
 
+
+
+
   const { data, error } = await query;
+
+
+
 
   if (error) {
     console.error("Delivered order invoice fallback loading error:", error);
     return [];
   }
+
+
+
 
   const deliveredOrders = (data || [])
     .filter((order) => isDeliveredInvoiceStatus(order.status))
@@ -964,8 +1475,14 @@ const loadDeliveredOrdersForCustomerLedger = async (customerName, customerId) =>
     customerName,
   });
 
+
+
+
   return mergeOperationalOrders(deliveredOrders, processingQueueOrders);
 };
+
+
+
 
 const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders = []) => {
   const deliveredOrdersByReference = new Map(
@@ -979,12 +1496,18 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
       .toUpperCase();
     const referenceNo = String(row.reference_no || row.order_number || "").trim();
 
+
+
+
     if (type === "INVOICE" && deliveredOrdersByReference.has(referenceNo)) {
       return {
         ...row,
         __order: deliveredOrdersByReference.get(referenceNo),
       };
     }
+
+
+
 
     return row;
   });
@@ -1000,6 +1523,9 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
       .filter(Boolean)
   );
 
+
+
+
   const fallbackInvoiceRows = deliveredOrders
     .filter((order) => {
       const referenceNo = String(order.orderId || "").trim();
@@ -1008,6 +1534,9 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
     .map((order) => {
       const totals = calculateDocumentTotals(order.items || [], order);
       const createdAt = order.deliveredAt || order.createdAt || new Date().toISOString();
+
+
+
 
       return {
         id: `delivered-invoice-${order.orderId}`,
@@ -1036,10 +1565,16 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
       };
     });
 
+
+
+
   return [...ledgerRowsWithOrders, ...fallbackInvoiceRows].sort((a, b) => {
     const aTime = new Date(a.created_at || 0).getTime();
     const bTime = new Date(b.created_at || 0).getTime();
     if (aTime !== bTime) return aTime - bTime;
+
+
+
 
     const aType = String(a.entry_type || a.transaction_type || "").toUpperCase();
     const bType = String(b.entry_type || b.transaction_type || "").toUpperCase();
@@ -1049,11 +1584,17 @@ const mergeDeliveredOrderInvoicesIntoLedger = (ledgerRows = [], deliveredOrders 
   });
 };
 
+
+
+
 const loadCustomerCreditSnapshot = async (
   customer = selectedCustomerAccount,
   branchId = paymentHistoryBranchId
 ) => {
   const customerName = customer?.account_name || companyName;
+
+
+
 
   if (!customerName || !customer?.id) {
     setCustomerLedger([]);
@@ -1063,6 +1604,9 @@ const loadCustomerCreditSnapshot = async (
     return null;
   }
 
+
+
+
   try {
     const selectedSnapshot = await loadReadOnlyCustomerCreditSnapshot({
       customerAccountId: customer.id,
@@ -1071,24 +1615,76 @@ const loadCustomerCreditSnapshot = async (
       selectedBranchId: branchId || "",
     });
 
-    const historyRows = (selectedSnapshot.transactionHistory || []).map((row) => ({
-      ...row,
-      created_at: row.date,
-      payment_date: row.date,
-      entry_type: row.type,
-      transaction_type: row.type,
-      reference_no: row.reference,
-      debit: row.amount > 0 ? row.amount : 0,
-      credit: row.amount < 0 ? Math.abs(row.amount) : 0,
-      running_balance: row.runningBalance,
-      branch_id: row.branchId,
-      customer_branch_id: row.branchId,
-      branch_name: row.branchName,
-      payment_type: row.paymentMethod,
-      paid_by: row.paidBy,
-      invoice_status: row.status,
-      payment_status: row.status,
-    }));
+
+
+
+    const hiddenCustomerPortalPaymentStatuses = new Set([
+      "VOID",
+      "VOIDED",
+      "REVERSED",
+      "ARCHIVED",
+      "INACTIVE",
+      "CANCELLED",
+      "CANCELED",
+      "DELETED",
+    ]);
+    const isHiddenVoidedCustomerPayment = (row = {}) => {
+      const type = String(row.type || row.transaction_type || row.entry_type || "")
+        .trim()
+        .toUpperCase();
+      if (type !== "PAYMENT") return false;
+
+
+
+
+      const source = row.source_record || {};
+      const status = String(
+        row.status ||
+          row.payment_status ||
+          source.status ||
+          source.payment_status ||
+          ""
+      )
+        .trim()
+        .toUpperCase();
+
+
+
+
+      return (
+        row.voided === true ||
+        Boolean(row.voided_at || row.reversed_at) ||
+        Boolean(source.voided_at || source.reversed_at) ||
+        hiddenCustomerPortalPaymentStatuses.has(status)
+      );
+    };
+
+
+
+
+    const historyRows = (selectedSnapshot.transactionHistory || [])
+      .filter((row) => !isHiddenVoidedCustomerPayment(row))
+      .map((row) => ({
+        ...row,
+        created_at: row.date,
+        payment_date: row.date,
+        entry_type: row.type,
+        transaction_type: row.type,
+        reference_no: row.reference,
+        debit: row.amount > 0 ? row.amount : 0,
+        credit: row.amount < 0 ? Math.abs(row.amount) : 0,
+        running_balance: row.runningBalance,
+        branch_id: row.branchId,
+        customer_branch_id: row.branchId,
+        branch_name: row.branchName,
+        payment_type: row.paymentMethod,
+        paid_by: row.paidBy,
+        invoice_status: row.status,
+        payment_status: row.status,
+      }));
+
+
+
 
     setCustomerLedger(historyRows);
     setCustomerOpeningBalance(
@@ -1100,6 +1696,9 @@ const loadCustomerCreditSnapshot = async (
     );
     setCustomerCreditSnapshot(selectedSnapshot);
 
+
+
+
     setBranchOutstandingRows(
       (selectedSnapshot.branchSummaries || []).map((branch) => ({
         id: branch.branchId || "main-unassigned",
@@ -1107,6 +1706,9 @@ const loadCustomerCreditSnapshot = async (
         outstanding: Number(branch.outstanding || 0),
       }))
     );
+
+
+
 
     return {
       ...selectedSnapshot,
@@ -1129,22 +1731,37 @@ const loadCustomerCreditSnapshot = async (
 };
 const fetchCustomerLedger = () => loadCustomerCreditSnapshot(selectedCustomerAccount, paymentHistoryBranchId);
 
+
+
+
 useEffect(() => {
   if (selectedCustomerAccount && (page === "paymentHistory" || page === "order")) {
     fetchCustomerLedger();
   }
 }, [page, selectedCustomerAccount?.id, userProfile?.customer_account_id, paymentHistoryBranchId]);
 
+
+
+
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const orderSubmissionLockRef = useRef(false);
 
+
+
+
   useEffect(() => {
     if (!isSubmittingOrder) return undefined;
+
+
+
 
     const warnBeforeLeaving = (event) => {
       event.preventDefault();
       event.returnValue = "";
     };
+
+
+
 
     window.addEventListener("beforeunload", warnBeforeLeaving);
     return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
@@ -1152,6 +1769,9 @@ useEffect(() => {
   const [orders, setOrders] = useState([]);
   const [expandedOrders, setExpandedOrders] = useState({});
   const [returnOrder, setReturnOrder] = useState(null);
+
+
+
 
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All Products");
@@ -1164,9 +1784,18 @@ useEffect(() => {
   );
   const [productPage, setProductPage] = useState(1);
 
+
+
+
   const [selectedImage, setSelectedImage] = useState(null);
 
+
+
+
   const [editingId, setEditingId] = useState(null);
+
+
+
 
   const [productForm, setProductForm] = useState({
     productCode: "",
@@ -1176,10 +1805,7 @@ useEffect(() => {
     brand: "",
     series: "",
     flavour: "",
-    cashPrice: "",
     vatPrice: "",
-    walesSpecialPrice: "",
-    englandSpecialPrice: "",
     cartonSize: "",
     image: "",
     stock: "",
@@ -1192,6 +1818,7 @@ useEffect(() => {
     supplierName: "",
     salesAccount: "",
     purchaseAccount: "",
+    priceCodePrices: {},
     locationStocks: {},
     isNew: false,
     isPromotion: false,
@@ -1202,8 +1829,14 @@ useEffect(() => {
     active: true,
   });
 
+
+
+
   const getDefaultProductAccounts = async (category) => {
     const selectedCategory = String(category || "").trim();
+
+
+
 
     if (!selectedCategory) {
       return {
@@ -1212,12 +1845,18 @@ useEffect(() => {
       };
     }
 
+
+
+
     const { data, error } = await supabase
       .from("account_codes")
       .select("account_code, account_type, main_category")
       .eq("active", true)
       .eq("main_category", selectedCategory)
       .in("account_type", ["Sales", "Purchase"]);
+
+
+
 
     if (error) {
       console.error("Default account code loading error:", error);
@@ -1227,6 +1866,9 @@ useEffect(() => {
       };
     }
 
+
+
+
     const salesAccount = (data || []).find(
       (account) => account.account_type === "Sales"
     );
@@ -1234,11 +1876,17 @@ useEffect(() => {
       (account) => account.account_type === "Purchase"
     );
 
+
+
+
     return {
       salesAccount: salesAccount?.account_code || "",
       purchaseAccount: purchaseAccount?.account_code || "",
     };
   };
+
+
+
 
   const orderCountry =
   (isAdmin || isSalesRep)
@@ -1247,17 +1895,29 @@ useEffect(() => {
       selectedCustomerAccount?.country ||
       "Wales";
 
+
+
+
   const filteredCustomersForSalesRep = useMemo(() => {
     const searchFilteredCustomers = activeCustomerAccounts.filter((customer) =>
       customerMatchesSearch(customer, customerSearchTerm)
     );
 
+
+
+
     if (!isSalesRep) return searchFilteredCustomers;
+
+
+
 
     return searchFilteredCustomers.filter((customer) =>
       customerMatchesCountry(customer, orderCountry)
     );
   }, [activeCustomerAccounts, customerSearchTerm, isSalesRep, orderCountry]);
+
+
+
 
   const filteredBranchesForSelectedCustomer = useMemo(
     () =>
@@ -1269,13 +1929,32 @@ useEffect(() => {
     [selectedCustomerAccount, orderCountry, isSalesRep]
   );
 
-  const allowedPriceModes = useMemo(
-    () =>
-      isAdmin || isSalesRep
-        ? ["vat", "server", "manager", "super"]
-        : getAllowedPriceModesForCustomer(selectedCustomerAccount, pricingSettings),
-    [isAdmin, isSalesRep, pricingSettings, selectedCustomerAccount]
-  );
+
+
+
+  const allowedPriceModes = useMemo(() => {
+    if (isAdmin || isSalesRep) {
+      const customerMode = selectedCustomerAccount
+        ? getCustomerPriceModeValue(selectedCustomerAccount, pricingSettings)
+        : "";
+
+
+
+
+      if (String(customerMode).toLowerCase().startsWith("code:")) {
+        const { basePriceMode } = getPriceCodeModeParts(customerMode);
+        return basePriceMode === "inc vat"
+          ? ["vat", customerMode]
+          : [customerMode, "inc vat"];
+      }
+
+
+
+
+      return ["vat", "inc vat"];
+    }
+    return getAllowedPriceModesForCustomer(selectedCustomerAccount, pricingSettings);
+  }, [isAdmin, isSalesRep, pricingSettings, selectedCustomerAccount]);
   const showPriceModeSelector =
     isAdmin || isSalesRep || allowedPriceModes.length > 1;
   const salesReturnOrder = selectedSalesReturnCustomer
@@ -1295,177 +1974,143 @@ useEffect(() => {
       }
     : null;
 
-const normalizePromotionType = (value) =>
-  String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-
-const getPromotionRuleProductId = (rule) =>
-  rule?.product_id ??
-  rule?.productId ??
-  rule?.trigger_product_id ??
-  rule?.triggerProductId ??
-  rule?.selected_product_id ??
-  rule?.selectedProductId ??
-  rule?.product?.id ??
-  rule?.selected_product?.id ??
-  rule?.selectedProduct?.id ??
-  rule?.promotion_product?.product_id ??
-  rule?.promotionProduct?.productId ??
-  rule?.rule_product?.product_id ??
-  rule?.ruleProduct?.productId;
-
-const getPromotionRulePrice = (rule) =>
-  rule?.promotion_price ??
-  rule?.promotionPrice ??
-  rule?.offer_price ??
-  rule?.offerPrice;
-
-const getPromotionRuleProductIds = (rule) => {
-  const directProductId = getPromotionRuleProductId(rule);
-  const ids = directProductId != null ? [directProductId] : [];
-  const relatedProducts =
-    rule?.selected_products ??
-    rule?.selectedProducts ??
-    rule?.products ??
-    rule?.rule_products ??
-    rule?.ruleProducts ??
-    rule?.promotion_products ??
-    rule?.promotionProducts ??
-    [];
-
-  if (Array.isArray(relatedProducts)) {
-    relatedProducts.forEach((item) => {
-      const productId =
-        item?.product_id ??
-        item?.productId ??
-        item?.id ??
-        item?.product?.id;
-      if (productId != null) ids.push(productId);
-    });
-  }
-
-  return ids;
-};
-
-const isPromotionPriceRule = (rule) => {
-  const type = normalizePromotionType(
-    rule?.promotion_type ??
-      rule?.promotionType ??
-      rule?.promotion_type_name ??
-      rule?.promotionTypeName
-  );
-
-  return (
-    type === "promotion_price" ||
-    type === "promotionprice" ||
-    rule?.rule_kind === PROMOTION_RULE_KINDS.PROMOTION_PRICE
-  );
-};
-
-const getActivePromotionPriceRule = (product) => {
-  if (!isVatPriceMode(priceMode)) return null;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  return promotionRules.find((rule) => {
-    const startDate = rule?.start_date ? new Date(rule.start_date) : null;
-    const endDate = rule?.end_date ? new Date(rule.end_date) : null;
-
-    if (startDate) startDate.setHours(0, 0, 0, 0);
-    if (endDate) endDate.setHours(23, 59, 59, 999);
-
-    const startsOk = !startDate || startDate <= today;
-    const endsOk = !endDate || endDate >= today;
-    const productIds = getPromotionRuleProductIds(rule);
-    const promotionPrice = getPromotionRulePrice(rule);
-
-  const activeOk =
-  rule?.active === true ||
-  String(rule?.active).toLowerCase() === "true";
-
-const productMatch = productIds.some(
-  (productId) => String(productId) === String(product?.id)
-);
-
-return (
-  activeOk &&
-  startsOk &&
-  endsOk &&
-  isPromotionPriceRule(rule) &&
-  productMatch &&
-  promotionPrice != null &&
-  promotionPrice !== ""
-);
 
 
-  }) || null;
-};
 
-const getPromotionPrice = (product) => {
-  const rule = getActivePromotionPriceRule(product);
-  if (!rule) return null;
+const getActivePromotionPriceRule = (product) =>
+  findActivePromotionPriceRule({
+    product,
+    promotionRules,
+    priceMode,
+    audienceType: promotionAudienceType,
+  });
 
-  const promotionPrice = Number(getPromotionRulePrice(rule));
-  return Number.isFinite(promotionPrice) ? promotionPrice : null;
-};
+
+
+
+const getPromotionPrice = (product) =>
+  getActivePromotionPrice({
+    product,
+    promotionRules,
+    priceMode,
+    audienceType: promotionAudienceType,
+  });
+
+
+
 
 const getPriceDetails = (product) =>
   getProductPriceDetailsForMode(product, priceMode, orderCountry, pricingSettings);
 
+
+
+
 const getPrice = (product) =>
   getProductPriceForMode(product, priceMode, orderCountry, pricingSettings);
+
+
+
 
 const normalizeHomepageCategoryType = (value) =>
   String(value || "main_category").trim().toLowerCase();
 
+
+
+
+
+
+
+
+const HOMEPAGE_PROMOTION_TARGET_SEPARATOR = "::";
+const parseHomepagePromotionDestination = (rawValue) => {
+  const value = String(rawValue || "").trim();
+  const [type, ...rest] = value.split(HOMEPAGE_PROMOTION_TARGET_SEPARATOR);
+  if (["main_category", "sub_category", "brand", "series", "product"].includes(type) && rest.length) {
+    return { type, value: rest.join(HOMEPAGE_PROMOTION_TARGET_SEPARATOR) };
+  }
+  return { type: "promotion_flag", value };
+};
+
+
+
+
 const normalizeHomepagePromotionTarget = (value) =>
   String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 
+
+
+
 const productMatchesHomepagePromotion = (product, targetValue) => {
-  const target = normalizeHomepagePromotionTarget(targetValue);
+  const destination = parseHomepagePromotionDestination(targetValue);
+  if (destination.type === "main_category") return String(product.category || "") === destination.value;
+  if (destination.type === "sub_category") return String(product.subCategory || "") === destination.value;
+  if (destination.type === "brand") return String(product.brand || "") === destination.value;
+  if (destination.type === "series") return String(product.series || "") === destination.value;
+  if (destination.type === "product") return String(product.id || "") === String(destination.value);
 
-  if (target === "promotion" || target === "is_promotion") {
-    return product.isPromotion === true;
-  }
 
+
+
+  const target = normalizeHomepagePromotionTarget(destination.value);
+  if (target === "promotion" || target === "is_promotion") return product.isPromotion === true;
   if (target === "new" || target === "is_new") return product.isNew === true;
-  if (target === "reduced" || target === "is_reduced") {
-    return product.isReduced === true;
-  }
+  if (target === "reduced" || target === "is_reduced") return product.isReduced === true;
   if (target === "recommended") return product.recommended === true;
-  if (target === "top_seller" || target === "top seller") {
-    return product.topSeller === true;
-  }
-
+  if (target === "top_seller" || target === "top seller") return product.topSeller === true;
   return false;
 };
+
+
+
 
 const findHomepagePriceProduct = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
 
+
+
+
   return products.find((product) => {
-    if (!product.active) return false;
+    if (!isActiveProduct(product)) return false;
     if (orderCountry === "England" && !product.availableInEngland) return false;
     if (orderCountry === "Wales" && !product.availableInWales) return false;
+
+
+
 
     if (categoryType === "sub_category") {
       return product.subCategory === item.targetValue;
     }
 
+
+
+
     if (categoryType === "brand") {
       return product.brand === item.targetValue;
     }
+
+
+
+
+    if (categoryType === "series") {
+      return product.series === item.targetValue;
+    }
+
+
+
 
     if (categoryType === "promotion") {
       return productMatchesHomepagePromotion(product, item.targetValue);
     }
 
+
+
+
     return product.category === item.targetValue;
   });
 };
+
+
+
 
 const getProductDisplayMessage = (product = {}) => {
   const candidates = [
@@ -1476,6 +2121,9 @@ const getProductDisplayMessage = (product = {}) => {
     ["sub_category", product.subCategory || product.sub_category],
     ["main_category", product.category || product.main_category],
   ];
+
+
+
 
   const match = candidates.reduce((found, [targetType, targetValue]) => {
     if (found || !targetValue) return found;
@@ -1488,6 +2136,9 @@ const getProductDisplayMessage = (product = {}) => {
     );
   }, null);
 
+
+
+
   return match
     ? {
         text: match.message,
@@ -1496,23 +2147,33 @@ const getProductDisplayMessage = (product = {}) => {
     : null;
 };
 
+
+
+
 const getHomepageDisplayPrice = (item) => {
   return getHomepagePriceForMode(item.price, priceMode, pricingSettings);
 };
+
+
+
 
 const getHomepageCardProducts = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
   if (categoryType === "custom_link") return [];
   return products.filter((product) => {
-    if (!product.active) return false;
+    if (!isActiveProduct(product)) return false;
     if (orderCountry === "England" && !product.availableInEngland) return false;
     if (orderCountry === "Wales" && !product.availableInWales) return false;
     if (categoryType === "sub_category") return product.subCategory === item.targetValue;
     if (categoryType === "brand") return product.brand === item.targetValue;
+    if (categoryType === "series") return product.series === item.targetValue;
     if (categoryType === "promotion") return productMatchesHomepagePromotion(product, item.targetValue);
     return product.category === item.targetValue;
   });
 };
+
+
+
 
 const homepageCategoryCards = homepageItems.map((item) => {
   const matchingProducts = getHomepageCardProducts(item);
@@ -1526,14 +2187,36 @@ const homepageCategoryCards = homepageItems.map((item) => {
   };
 });
 
+
+
+
+const messageContextProduct = products.find((product) => {
+  if (!isActiveProduct(product)) return false;
+  if (selectedSubCategory !== "All Sub Categories" && product.subCategory === selectedSubCategory) return true;
+  if (selectedSeries !== "All Series" && product.series === selectedSeries) return true;
+  if (selectedBrand !== "All Brands" && product.brand === selectedBrand) return true;
+  return false;
+});
+const messageSelectedCategory =
+  selectedCategory !== "All Products"
+    ? selectedCategory
+    : messageContextProduct?.category || selectedCategory;
+
+
+
+
 const matchingHomepageMessages = getMatchingHomepageMessages(homepageMessages, {
-  selectedCategory,
+  selectedCategory: messageSelectedCategory,
   selectedSubCategory,
   selectedBrand,
+  selectedSeries,
 });
 const selectedProductNotices = getMatchingHomepageMessages(homepageMessages, {
   selectedProductId: selectedImage?.id,
 }).filter((message) => message.targetType === "product");
+
+
+
 
 const recordCustomerPortalView = useCallback(
   (view, portalPage = "order") => {
@@ -1556,12 +2239,16 @@ const recordCustomerPortalView = useCallback(
   [isCustomer]
 );
 
+
+
+
 const restoreCustomerHome = useCallback(() => {
   activePortalViewRef.current = "home";
   setShowHomepage(true);
   setHomepageSelectionType("");
   setHomepageBrowseTitle("");
   setHomepagePromotionTarget("");
+  setHomepageProductSetIds([]);
   setPage("order");
   setSelectedCategory("All Products");
   setSelectedSubCategory("All Sub Categories");
@@ -1571,6 +2258,9 @@ const restoreCustomerHome = useCallback(() => {
   setProductPage(1);
   setSelectedImage(null);
   setIsCartEditing(false);
+
+
+
 
   if (isCustomer || isSalesRep) {
     const homeHash = getCustomerPortalHash("order", {
@@ -1586,6 +2276,9 @@ const restoreCustomerHome = useCallback(() => {
       homeHash || window.location.href
     );
   }
+
+
+
 
   requestAnimationFrame(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1608,6 +2301,9 @@ const restoreCustomerHome = useCallback(() => {
   setShowHomepage,
 ]);
 
+
+
+
 const goToCustomerHome = useCallback(() => {
   if (
     isCustomer &&
@@ -1620,6 +2316,9 @@ const goToCustomerHome = useCallback(() => {
   restoreCustomerHome();
 }, [isCustomer, restoreCustomerHome]);
 
+
+
+
 useEffect(() => {
   if (!isCustomer || portalHistoryInitializedRef.current) return;
   portalHistoryInitializedRef.current = true;
@@ -1630,6 +2329,9 @@ useEffect(() => {
     hasSelectedProduct: Boolean(selectedImage),
   });
 
+
+
+
   window.history.replaceState(
     buildCustomerPortalHistoryState(window.history.state, {
       page: "order",
@@ -1638,6 +2340,9 @@ useEffect(() => {
     "",
     initialUrl
   );
+
+
+
 
   if (!startsAtHome) {
     activePortalViewRef.current = selectedImage ? "product" : page;
@@ -1652,6 +2357,9 @@ useEffect(() => {
   }
 }, [isCustomer, page, selectedImage, showHomepage]);
 
+
+
+
 useEffect(() => {
   if (!isCustomer) return undefined;
   const handlePortalPopState = () => {
@@ -1665,9 +2373,15 @@ useEffect(() => {
     }
   };
 
+
+
+
   window.addEventListener("popstate", handlePortalPopState);
   return () => window.removeEventListener("popstate", handlePortalPopState);
 }, [isCustomer, page, restoreCustomerHome, selectedImage, showHomepage]);
+
+
+
 
 const updateHomepageSearch = (value) => {
   if (!String(search || "").trim() && String(value || "").trim()) {
@@ -1676,29 +2390,38 @@ const updateHomepageSearch = (value) => {
   setSearch(value);
 };
 
+
+
+
 const openProductDetails = (product) => {
   recordCustomerPortalView("product");
   setSelectedImage(product);
 };
 
+
+
+
 const openCustomerCart = () => {
   recordCustomerPortalView("cart");
-  document.querySelector(".cart-panel")?.scrollIntoView({
-    behavior: "smooth",
-    block: "start",
-  });
+  changeCartEditing(true);
 };
+
+
+
 
 const openCustomerCheckout = () => {
   recordCustomerPortalView("checkout");
-  document.querySelector(".checkout-section")?.scrollIntoView({
-    behavior: "smooth",
-    block: "start",
-  });
+  changeCartEditing(true);
 };
+
+
+
 
 const openHomepageItem = (item) => {
   const categoryType = normalizeHomepageCategoryType(item.categoryType);
+
+
+
 
   if (categoryType === "custom_link") {
     const target = String(item.targetValue || "").trim();
@@ -1710,6 +2433,9 @@ const openHomepageItem = (item) => {
     return;
   }
 
+
+
+
   recordCustomerPortalView(categoryType);
   setShowHomepage(false);
   setHomepageSelectionType(categoryType);
@@ -1717,26 +2443,105 @@ const openHomepageItem = (item) => {
     item.title || item.description || item.targetValue || "Products"
   );
   setHomepagePromotionTarget("");
+  setHomepageProductSetIds([]);
   setSearch("");
   setSelectedBrand("All Brands");
   setSelectedSeries("All Series");
 
+
+
+
+  if (categoryType === "product_set") {
+    setSelectedCategory("All Products");
+    setSelectedSubCategory("All Sub Categories");
+    setHomepageProductSetIds((item.productIds || []).map(String));
+    return;
+  }
+
+
+
+
   if (categoryType === "sub_category") {
     const targetSubCategory = item.targetValue || "All Sub Categories";
     const parentCategory =
-      products.find((product) => product.subCategory === targetSubCategory)?.category ||
+      products.find((product) => isActiveProduct(product) && product.subCategory === targetSubCategory)?.category ||
       "All Products";
     setSelectedCategory(parentCategory);
     setSelectedSubCategory(targetSubCategory);
     return;
   }
 
-  if (categoryType === "promotion") {
+
+
+
+  if (categoryType === "flavour") {
     setSelectedCategory("All Products");
     setSelectedSubCategory("All Sub Categories");
-    setHomepagePromotionTarget(item.targetValue || "");
+    setSelectedBrand("All Brands");
+    setSelectedSeries("All Series");
+    setSearch(item.targetValue || "");
     return;
   }
+
+
+
+
+  if (categoryType === "series") {
+    setSelectedCategory("All Products");
+    setSelectedSubCategory("All Sub Categories");
+    setSelectedBrand("All Brands");
+    setSelectedSeries(item.targetValue || "All Series");
+    return;
+  }
+
+
+
+
+  if (categoryType === "promotion") {
+    const destination = parseHomepagePromotionDestination(item.targetValue);
+    setHomepagePromotionTarget("");
+    setSearch("");
+    setSelectedCategory("All Products");
+    setSelectedSubCategory("All Sub Categories");
+    setSelectedBrand("All Brands");
+    setSelectedSeries("All Series");
+
+
+
+
+    if (destination.type === "main_category") {
+      setSelectedCategory(destination.value || "All Products");
+      return;
+    }
+    if (destination.type === "sub_category") {
+      const parentCategory = products.find((product) => isActiveProduct(product) && product.subCategory === destination.value)?.category || "All Products";
+      setSelectedCategory(parentCategory);
+      setSelectedSubCategory(destination.value || "All Sub Categories");
+      return;
+    }
+    if (destination.type === "brand") {
+      setSelectedBrand(destination.value || "All Brands");
+      return;
+    }
+    if (destination.type === "series") {
+      setSelectedSeries(destination.value || "All Series");
+      return;
+    }
+    if (destination.type === "product") {
+      const product = products.find((candidate) => isActiveProduct(candidate) && String(candidate.id) === String(destination.value));
+      if (product) openProductDetails(product);
+      return;
+    }
+
+
+
+
+    setHomepagePromotionTarget(destination.value || "");
+    return;
+  }
+
+
+
 
   if (categoryType === "brand") {
     setSelectedCategory("All Products");
@@ -1745,9 +2550,15 @@ const openHomepageItem = (item) => {
     return;
   }
 
+
+
+
   setSelectedCategory(item.targetValue || "All Products");
   setSelectedSubCategory("All Sub Categories");
 };
+
+
+
 
 const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   const quantity = Math.max(1, Number(nextQty || 1));
@@ -1758,6 +2569,9 @@ const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   const vatAmount = Number(priceDetails.vatAmount || 0);
   const incVatPrice = Number(priceDetails.grossPrice ?? selectedPrice);
   const lineTotal = quantity * selectedPrice;
+
+
+
 
   return {
     ...item,
@@ -1786,6 +2600,9 @@ const recalculateCartItemForPriceMode = (item, nextQty = item.qty) => {
   };
 };
 
+
+
+
 useEffect(() => {
   setCart((oldCart) => {
     const normalCart = oldCart.filter((item) => !item.isPromotionFree);
@@ -1794,11 +2611,17 @@ useEffect(() => {
     );
     const nextCart = applyCartPromotions(recalculatedCart);
 
+
+
+
     return JSON.stringify(nextCart) === JSON.stringify(oldCart)
       ? oldCart
       : nextCart;
   });
 }, [priceMode, orderCountry, pricingSettings, promotionRules, products]);
+
+
+
 
 const getCentralCartScope = () => {
   const customerAccountId = selectedCustomerAccount?.id || null;
@@ -1807,11 +2630,20 @@ const getCentralCartScope = () => {
     ? getCustomerBranches(selectedCustomerAccount).filter((branch) => branch.active !== false).length
     : 0;
 
+
+
+
   if (!customerAccountId) return null;
   if (branchCount > 0 && !customerBranchId) return null;
 
+
+
+
   return { customerAccountId, customerBranchId };
 };
+
+
+
 
 const buildCartFromCentralItems = (items = []) => {
   const normalCart = items
@@ -1828,30 +2660,43 @@ const buildCartFromCentralItems = (items = []) => {
               ? "Need Supplier"
               : "In Stock",
           includeInPicking: true,
-          pickedQty: Math.min(
-            Number(product.stock || 0),
-            Number(serverItem.quantity || 0)
-          ),
+          // In-stock means available to pick, not already picked.
+          pickedQty: 0,
         },
         Number(serverItem.quantity || 0)
       );
     })
     .filter(Boolean);
 
+
+
+
   return applyCartPromotions(normalCart);
 };
+
+
+
 
 const loadCentralCartForCurrentScope = async ({ seedLocal = false } = {}) => {
   if (!CENTRAL_CART_ENABLED) return null;
   const scope = getCentralCartScope();
   if (!scope) return null;
 
+
+
+
   const remote = await loadCentralCart({
     profile: activeUser,
     ...scope,
   });
 
+
+
+
   setCentralCartId(remote.cartId);
+
+
+
 
   const localNormalCart = cartRef.current.filter((item) => !item.isPromotionFree);
   if (seedLocal && remote.items.length === 0 && localNormalCart.length > 0) {
@@ -1866,9 +2711,15 @@ const loadCentralCartForCurrentScope = async ({ seedLocal = false } = {}) => {
     return loadCentralCartForCurrentScope({ seedLocal: false });
   }
 
+
+
+
   setCart(buildCartFromCentralItems(remote.items));
   return remote;
 };
+
+
+
 
 const ensureCentralCartForCurrentScope = async () => {
   if (!CENTRAL_CART_ENABLED) return null;
@@ -1877,8 +2728,14 @@ const ensureCentralCartForCurrentScope = async () => {
   return remote?.cartId || null;
 };
 
+
+
+
 const queueCentralCartMutation = (mutation) => {
   if (!CENTRAL_CART_ENABLED) return;
+
+
+
 
   centralCartMutationQueueRef.current = centralCartMutationQueueRef.current
     .catch(() => undefined)
@@ -1898,6 +2755,9 @@ const queueCentralCartMutation = (mutation) => {
     });
 };
 
+
+
+
 useEffect(() => {
   if (!CENTRAL_CART_ENABLED || products.length === 0) return;
   const scope = getCentralCartScope();
@@ -1906,10 +2766,16 @@ useEffect(() => {
     return;
   }
 
+
+
+
   const scopeKey = `${scope.customerAccountId}:${scope.customerBranchId || "ACCOUNT"}`;
   if (centralCartLoadedScopeRef.current === scopeKey) return;
   centralCartLoadedScopeRef.current = scopeKey;
   setCentralCartId(null);
+
+
+
 
   loadCentralCartForCurrentScope({ seedLocal: true }).catch((error) => {
     centralCartLoadedScopeRef.current = "";
@@ -1918,8 +2784,14 @@ useEffect(() => {
   });
 }, [selectedCustomerAccount?.id, selectedBranch?.id, products.length]);
 
+
+
+
 useEffect(() => {
   if (!CENTRAL_CART_ENABLED || !centralCartId) return undefined;
+
+
+
 
   const refresh = () => {
     if (document.visibilityState !== "visible" || centralCartMutatingRef.current) return;
@@ -1928,6 +2800,9 @@ useEffect(() => {
     );
   };
 
+
+
+
   const timer = window.setInterval(refresh, 15000);
   window.addEventListener("focus", refresh);
   return () => {
@@ -1935,6 +2810,12 @@ useEffect(() => {
     window.removeEventListener("focus", refresh);
   };
 }, [centralCartId, selectedCustomerAccount?.id, selectedBranch?.id, products.length]);
+
+
+
+
+
+
 
 
 useEffect(() => {
@@ -1957,6 +2838,9 @@ useEffect(() => {
     );
   };
 
+
+
+
   window.addEventListener("hashchange", syncPageFromHash);
   const syncTimer = window.setTimeout(syncPageFromHash, 0);
   return () => {
@@ -1965,10 +2849,19 @@ useEffect(() => {
   };
 }, [isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash, defaultBackOfficePage]);
 
+
+
+
 useEffect(() => {
   const roleState = { isAdmin, isSalesRep, isWarehouse, isDriver, isCustomer, canCollectCash };
 
+
+
+
   if (!isCustomerPortalPageAllowed(page, roleState)) return;
+
+
+
 
   const nextHash = getCustomerPortalHash(page, roleState);
   if (nextHash && window.location.hash !== nextHash) {
@@ -1978,17 +2871,31 @@ useEffect(() => {
 
 
 
+
+
+
+
+
+
+
+
+
   useEffect(() => {
     if (!supabase) {
       setProductError("Supabase is not configured.");
       return;
     }
 
+
+
+
   
-    fetchProducts();
     fetchPricingSettings();
     refreshPromotionRules();
     refreshProductDisplayMessages();
+
+
+
 
  if (
   isAdmin ||
@@ -2008,6 +2915,9 @@ useEffect(() => {
 }
   }, []);
 
+
+
+
   useEffect(() => {
     async function loadCustomerAccounts() {
       try {
@@ -2018,32 +2928,53 @@ useEffect(() => {
       }
     }
 
+
+
+
     loadCustomerAccounts();
   }, [isCustomer]);
+
+
+
 
   useEffect(() => {
     if (!isCustomer) return;
     if (!userProfile?.customer_account_id) return;
     if (!customerAccounts.length) return;
 
+
+
+
     const customer = customerAccounts.find(
       (c) => String(c.id) === String(userProfile.customer_account_id)
     );
+
+
+
 
     if (!customer) {
       console.error("Linked customer account not found");
       return;
     }
 
+
+
+
     setSelectedCustomerId(customer.id);
     setSelectedCustomerAccount(customer);
     setCustomerDetailsExpanded(getCustomerBranches(customer).length > 0);
     setCompanyName(customer.account_name);
-    setPriceMode(String(customer.default_price_mode || "vat").toLowerCase());
-  }, [isCustomer, userProfile?.customer_account_id, customerAccounts]);
+    setPriceMode(getCustomerPriceModeValue(customer, pricingSettings));
+  }, [isCustomer, userProfile?.customer_account_id, customerAccounts, pricingSettings.price_codes]);
+
+
+
 
   useEffect(() => {
     if (!selectedCustomerAccount) return;
+
+
+
 
     if (filteredBranchesForSelectedCustomer.length === 1) {
       setSelectedBranchId(filteredBranchesForSelectedCustomer[0].id);
@@ -2052,8 +2983,14 @@ useEffect(() => {
     }
   }, [selectedCustomerAccount, filteredBranchesForSelectedCustomer]);
 
+
+
+
   useEffect(() => {
     if (!isSalesRep) return;
+
+
+
 
     if (
       selectedCustomerAccount &&
@@ -2072,6 +3009,9 @@ useEffect(() => {
       return;
     }
 
+
+
+
     if (
       selectedBranch &&
       normalizeCountry(selectedBranch.country) !== normalizeCountry(orderCountry)
@@ -2088,16 +3028,48 @@ useEffect(() => {
     orderSubmissionStorageKey,
   ]);
 
+
+
+
   const fetchProducts = async () => {
     setProductError("");
     setProductsLoading(true);
 
+
+
+
     try {
       const data = await getProducts();
+      const productIds = (data || []).map((product) => product.id).filter(Boolean);
+      let exactCodePricesByProduct = {};
+
+
+
+
+      if (productIds.length) {
+        const exactCodeRows = await getProductPriceCodeRows(productIds);
+        exactCodePricesByProduct = buildProductPriceCodeMap(exactCodeRows);
+      }
+
+
+
+
+      const productsWithExactCodePrices = (data || []).map((product) => ({
+        ...product,
+        priceCodePrices: exactCodePricesByProduct[product.id] || product.priceCodePrices || {},
+        price_code_prices: exactCodePricesByProduct[product.id] || product.price_code_prices || {},
+      }));
+
+
+
+
       const productsForCountry = applyLocationStockToProducts(
-        data || [],
+        productsWithExactCodePrices,
         orderCountry
       );
+
+
+
 
       setProducts((productsForCountry || []).filter((p) => p.name));
     } catch (error) {
@@ -2105,11 +3077,20 @@ useEffect(() => {
       setProductError(error.message);
     }
 
+
+
+
     setProductsLoading(false);
   };
 
+
+
+
   const fetchHomepageContent = async () => {
     setHomepageLoading(true);
+
+
+
 
     const [itemsResult, messagesResult] = await Promise.allSettled([
       getHomepageItems(),
@@ -2128,13 +3109,176 @@ useEffect(() => {
       setHomepageMessages([]);
     }
 
+
+
+
     setHomepageLoading(false);
   };
 
+
+
+
+  const fetchHomepageSalesAnalytics = async () => {
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
+
+
+
+    try {
+      const { data, error } = await supabase
+        .from("orders")
+        .select(`
+          id,
+          created_at,
+          status,
+          customer_country,
+          order_items(
+            product_id,
+            product_code,
+            product_name,
+            flavour,
+            qty,
+            line_total
+          )
+        `)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(2000);
+
+
+
+
+      if (error) throw error;
+
+
+
+
+      const metrics = {};
+      const now = Date.now();
+      const currentCountry = normalizeCountry(orderCountry);
+
+
+
+
+      for (const order of data || []) {
+        if (!isDeliveredInvoiceStatus(order.status)) continue;
+
+
+
+
+        const soldCountry = normalizeCountry(order.customer_country || "");
+        if (currentCountry && soldCountry && soldCountry !== currentCountry) continue;
+
+
+
+
+        const createdAt = new Date(order.created_at || 0).getTime();
+        const ageDays = Number.isFinite(createdAt)
+          ? Math.max(0, (now - createdAt) / (24 * 60 * 60 * 1000))
+          : 90;
+
+
+
+
+        for (const item of order.order_items || []) {
+          const aliases = [
+            item.product_id ? `id:${String(item.product_id)}` : "",
+            item.product_code ? `code:${String(item.product_code).trim().toLowerCase()}` : "",
+            item.product_name ? `name:${String(item.product_name).trim().toLowerCase()}` : "",
+          ].filter(Boolean);
+          if (!aliases.length) continue;
+
+
+
+
+          let metric = aliases.map((key) => metrics[key]).find(Boolean);
+          if (!metric) {
+            metric = {
+              units90: 0,
+              units30: 0,
+              units7: 0,
+              revenue90: 0,
+              orders90: 0,
+            };
+          }
+          aliases.forEach((key) => { metrics[key] = metric; });
+
+
+
+
+          const qty = Math.max(0, Number(item.qty || 0));
+          if (!qty) continue;
+          metric.units90 += qty;
+          metric.orders90 += 1;
+          metric.revenue90 += Math.max(0, Number(item.line_total || 0));
+          if (ageDays <= 30) metric.units30 += qty;
+          if (ageDays <= 7) metric.units7 += qty;
+        }
+      }
+
+
+
+
+      Object.values(metrics).forEach((metric) => {
+        metric.velocityScore =
+          Number(metric.units90 || 0) +
+          Number(metric.units30 || 0) * 1.5 +
+          Number(metric.units7 || 0) * 3;
+      });
+
+
+
+
+      setHomepageSalesMetrics(metrics);
+    } catch (error) {
+      console.error("Homepage sales analytics loading error:", error);
+      setHomepageSalesMetrics({});
+    }
+  };
+
+
+
+
   useEffect(() => {
     if (!supabase) return;
+    // Load the visible ordering experience first. Products were previously
+    // requested once here and again by the mount effect, which delayed entry.
     void Promise.all([fetchProducts(), fetchHomepageContent()]);
   }, [orderCountry]);
+
+
+
+
+  useEffect(() => {
+    if (!supabase || (!isCustomer && !isSalesRep)) return undefined;
+
+
+
+
+    // Sales analytics power the homepage ranking carousels, but they are not
+    // required for the first paint. Defer the 90-day order scan until the
+    // browser is idle so header, products and homepage content appear first.
+    const loadAnalytics = () => {
+      void fetchHomepageSalesAnalytics();
+    };
+
+
+
+
+    if (typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(loadAnalytics, { timeout: 1500 });
+      return () => window.cancelIdleCallback?.(idleId);
+    }
+
+
+
+
+    const timerId = window.setTimeout(loadAnalytics, 250);
+    return () => window.clearTimeout(timerId);
+  }, [orderCountry, isCustomer, isSalesRep]);
+
+
+
 
   const fetchPricingSettings = async () => {
     const { data, error } = await supabase
@@ -2143,20 +3287,57 @@ useEffect(() => {
       .eq("id", 1)
       .single();
 
-    if (!error && data) {
-      setPricingSettings(data);
+
+
+
+    let priceCodes = [];
+    try {
+      priceCodes = await getCustomerPriceCodes();
+    } catch (priceCodeError) {
+      console.warn("Customer price codes unavailable:", priceCodeError?.message || priceCodeError);
     }
+
+
+
+
+    setPricingSettings({
+      ...(error || !data ? {} : data),
+      vat_percent: Number(data?.vat_percent ?? 20),
+      server_discount_percent: Number(data?.server_discount_percent ?? 0),
+      price_codes: priceCodes || [],
+    });
   };
+
+
+
 
 const fetchOrders = async ({ throwOnError = false } = {}) => {
   try {
-    const { data, error } = await supabase
+    // Orders and the processing queue are independent reads. Start both together
+    // so Received Orders does not wait for one network request before starting
+    // the other. This changes loading time only; merge/order behaviour is unchanged.
+    const processingQueuePromise = loadProcessingQueueOrders();
+    const ordersPromise = supabase
       .from("orders")
       .select("*, order_items(*)")
       .order("created_at", { ascending: false })
       .limit(50);
 
+
+
+
+    const [{ data, error }, processingQueueRaw] = await Promise.all([
+      ordersPromise,
+      processingQueuePromise,
+    ]);
+
+
+
+
     if (error) throw error;
+
+
+
 
     const mappedOrders = (data || []).map((order) => ({
       dbId: order.id,
@@ -2205,6 +3386,9 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       picking_locked_by_name: order.picking_locked_by_name || null,
       picking_locked_at: order.picking_locked_at || null,
 
+
+
+
       driverName: order.driver_name || "",
       deliveredAt: order.delivered_at || "",
       paymentType: order.payment_type || "",
@@ -2224,6 +3408,9 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       paidBy: order.paid_by || "",
       receivedBy: order.received_by || "",
 
+
+
+
       items: (order.order_items || []).map((item) => ({
         dbId: item.id,
         id: item.product_id,
@@ -2231,10 +3418,16 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
         product_code: item.product_code || item.code || "",
         name: item.product_name,
         brand: item.brand || "",
+        category: item.main_category || item.category || "",
+        mainCategory: item.main_category || item.category || "",
+        main_category: item.main_category || item.category || "",
+        subCategory: item.sub_category || item.subcategory || "",
+        sub_category: item.sub_category || item.subcategory || "",
         series: item.series || "",
         flavour: item.flavour || "",
         cartonSize: item.carton_size || "",
-        qty: Number(item.qty || 0),
+        qty: Number(item.qty ?? item.quantity ?? 0),
+        quantity: Number(item.quantity ?? item.qty ?? 0),
         selectedPrice: Number(item.price || 0),
         price: Number(item.price || 0),
         lineTotal: Number(item.line_total || item.lineTotal || 0),
@@ -2243,7 +3436,8 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
         vatTotal: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
         stock: Number(item.stock_before || 0),
         sourceStatus: item.source_status || "In Stock",
-        pickedQty: Number(item.picked_qty || item.qty || 0),
+        // Preserve a real saved pick only. A zero/null picked_qty must not fall back to ordered qty.
+        pickedQty: Number(item.picked_qty ?? 0),
         includeInPicking: item.include_in_picking !== false,
         pickingAction: item.picking_action || null,
         picking_action: item.picking_action || null,
@@ -2264,12 +3458,18 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       })),
     }));
 
-    const processingQueueOrders = (await loadProcessingQueueOrders()).map((order) => ({
+
+
+
+    const processingQueueOrders = (processingQueueRaw || []).map((order) => ({
       ...order,
       createdAt: order.createdAt
         ? new Date(order.createdAt).toLocaleString()
         : order.created_at,
     }));
+
+
+
 
     setOrders(mergeOperationalOrders(mappedOrders, processingQueueOrders));
   } catch (error) {
@@ -2277,6 +3477,9 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
     if (throwOnError) throw error;
   }
 };
+
+
+
 
 const openBackOffice = async () => {
   console.info("[BackOfficeNavigation] click", {
@@ -2286,7 +3489,15 @@ const openBackOffice = async () => {
     active: activeUser?.active !== false,
   });
 
-  if (!isAdminStaffRole(activeUser?.role || activeUser?.access_level)) {
+
+
+
+  const brandPartnerAdminDuty = isBrandPartner && activeDuty === "admin";
+
+
+
+
+  if (!brandPartnerAdminDuty && !isAdminStaffRole(activeUser?.role || activeUser?.access_level)) {
     console.warn("[BackOfficeNavigation] access denied", {
       reason: "non_admin_role",
       role: activeUser?.role || activeUser?.access_level || null,
@@ -2295,9 +3506,15 @@ const openBackOffice = async () => {
     return;
   }
 
+
+
+
   try {
     const loginUserId = activeUser?.login_user_id || activeUser?.id;
     if (!loginUserId) throw new Error("The authenticated staff login ID is missing.");
+
+
+
 
     const loginResult = await supabase
       .from("login_users")
@@ -2306,11 +3523,17 @@ const openBackOffice = async () => {
       .eq("active", true)
       .maybeSingle();
 
+
+
+
     if (loginResult.error) throw loginResult.error;
     if (!loginResult.data) throw new Error("The staff login is inactive or unavailable.");
     if (!loginResult.data.staff_id) {
       throw new Error("This staff login is not linked to an individual staff record.");
     }
+
+
+
 
     const staffResult = await supabase
       .from("staff_users")
@@ -2319,11 +3542,17 @@ const openBackOffice = async () => {
       .eq("active", true)
       .maybeSingle();
 
+
+
+
     if (staffResult.error) throw staffResult.error;
     const staffProfile = buildLegacyStaffProfile(loginResult.data, staffResult.data);
     const access = resolveBackOfficeAccess(staffProfile);
 
-    if (!access.allowed) {
+
+
+
+    if (!access.allowed && !brandPartnerAdminDuty) {
       console.warn("[BackOfficeNavigation] access denied", {
         staffId: staffProfile?.staff_id || null,
         loginUserId,
@@ -2334,11 +3563,17 @@ const openBackOffice = async () => {
       return;
     }
 
+
+
+
     onProfileRefresh?.(
       mergeAuthenticatedProfile(activeUser, staffProfile)
     );
     window.history.replaceState(null, "", "#admin");
     setPage("orders");
+
+
+
 
     try {
       await fetchOrders({ throwOnError: true });
@@ -2363,32 +3598,60 @@ const openBackOffice = async () => {
   }
 };
 
+
+
+
   const changeOrderStatus = async (
     orderNumber,
     status,
-    { preserveSupplyState = false } = {}
+    _options = {}
   ) => {
     try {
       const existingOrder = orders.find(
         (order) => String(order.orderId) === String(orderNumber)
       );
-      if (
-        status === "Received" &&
-        existingOrder?.status !== "Received" &&
-        !preserveSupplyState
-      ) {
-        await reversePreOrderSupplyForReceivedOrder({
-          order: existingOrder,
-          user: loggedInUser,
-          updateOrderItem,
-          restorePreOrderSplit,
-        });
-      }
+
+
+
+
+      // Warehouse/Driver keeps the completed quantity final. The explicit
+      // Back to Received action re-opens only this current order for correction.
       const updatedOrder = await updateOrderStatus(orderNumber, status);
+
+
+
+
+      if (
+        String(status || "").trim().toLowerCase() === "received" &&
+        String(existingOrder?.picking_status || "").trim().toLowerCase() === "completed"
+      ) {
+        const orderDbId = existingOrder?.dbId || existingOrder?.id || updatedOrder?.id;
+        if (orderDbId) {
+          const { error: reopenError } = await supabase
+            .from("orders")
+            .update({
+              picking_status: "Not Started",
+              picking_completed_at: null,
+              picking_completed_by: null,
+              picking_completed_by_name: null,
+              picking_locked_by: null,
+              picking_locked_by_name: null,
+              picking_locked_at: null,
+            })
+            .eq("id", orderDbId);
+          if (reopenError) throw reopenError;
+        }
+      }
+
+
+
 
       if (!isActivePreOrderSupplyOrder({ status })) {
         clearPendingPreOrderActionsForOrder(orderNumber);
       }
+
+
+
 
       if (shouldCreateInvoiceForStatus(status)) {
         await createOrUpdateInvoiceForDeliveredOrder({
@@ -2410,6 +3673,9 @@ const openBackOffice = async () => {
         });
       }
 
+
+
+
       setOrders((oldOrders) =>
         oldOrders.map((order) =>
           order.orderId === orderNumber
@@ -2422,6 +3688,9 @@ const openBackOffice = async () => {
         )
       );
 
+
+
+
       if (shouldCreateInvoiceForStatus(status) && page === "paymentHistory") {
         await fetchCustomerLedger();
       }
@@ -2430,6 +3699,9 @@ const openBackOffice = async () => {
       alert("Could not update order status.");
     }
   };
+
+
+
 
   const updateOrderExtraFields = async (orderNumber, updates) => {
     try {
@@ -2442,13 +3714,19 @@ const openBackOffice = async () => {
     }
   };
 
+
+
+
   const effectiveSelectedCategory =
     selectedCategory !== "All Products"
       ? selectedCategory
       : selectedSubCategory !== "All Sub Categories"
-        ? products.find((product) => product.subCategory === selectedSubCategory)?.category ||
+        ? products.find((product) => isActiveProduct(product) && product.subCategory === selectedSubCategory)?.category ||
           "All Products"
         : "All Products";
+
+
+
 
   const subCategories = [
   "All Sub Categories",
@@ -2456,13 +3734,17 @@ const openBackOffice = async () => {
     products
       .filter(
         (p) =>
-          effectiveSelectedCategory === "All Products" ||
-          p.category === effectiveSelectedCategory
+          isActiveProduct(p) &&
+          (effectiveSelectedCategory === "All Products" ||
+          p.category === effectiveSelectedCategory)
       )
       .map((p) => String(p.subCategory || "").trim())
       .filter(Boolean)
   ),
 ];
+
+
+
 
 const brands = [
   "All Brands",
@@ -2470,6 +3752,7 @@ const brands = [
     products
       .filter(
         (p) =>
+          isActiveProduct(p) &&
           (effectiveSelectedCategory === "All Products" ||
             p.category === effectiveSelectedCategory) &&
           (selectedSubCategory === "All Sub Categories" ||
@@ -2480,12 +3763,16 @@ const brands = [
   ),
 ];
 
+
+
+
 const seriesList = [
   "All Series",
   ...new Set(
     products
       .filter(
         (p) =>
+          isActiveProduct(p) &&
           (effectiveSelectedCategory === "All Products" ||
             p.category === effectiveSelectedCategory) &&
           (selectedSubCategory === "All Sub Categories" ||
@@ -2498,8 +3785,14 @@ const seriesList = [
   ),
 ];
 
+
+
+
 const filteredProducts = useMemo(() => {
   const keyword = search.trim().toLowerCase();
+
+
+
 
   return sortOrderProductsByAvailability(
     products.filter((product) => {
@@ -2510,13 +3803,21 @@ const filteredProducts = useMemo(() => {
         return false;
       }
 
+
+
+
       const productCategory = String(product.category || "").trim();
       const productSubCategory = String(product.subCategory || "").trim();
       const productBrand = String(product.brand || "").trim();
       const productSeries = String(product.series || "").trim();
 
+
+
+
       return (
-        product.active &&
+        isActiveProduct(product) &&
+        (!homepageProductSetIds.length ||
+          homepageProductSetIds.includes(String(product.id))) &&
         (!homepagePromotionTarget ||
           productMatchesHomepagePromotion(product, homepagePromotionTarget)) &&
         (effectiveSelectedCategory === "All Products" ||
@@ -2527,6 +3828,14 @@ const filteredProducts = useMemo(() => {
           productBrand === selectedBrand) &&
         (selectedSeries === "All Series" ||
           productSeries === selectedSeries) &&
+        (homepageSelectionType !== "promotion" ||
+          selectedSeries === "All Series" ||
+          productMatchesPromotionPosterSeries({
+            product,
+            promotionRules,
+            series: selectedSeries,
+            priceMode,
+          })) &&
         (keyword === "" ||
           String(product.name || "").toLowerCase().includes(keyword) ||
           String(product.productCode || "").toLowerCase().includes(keyword) ||
@@ -2546,27 +3855,46 @@ const filteredProducts = useMemo(() => {
   selectedBrand,
   selectedSeries,
   homepagePromotionTarget,
+  homepageProductSetIds,
+  homepageSelectionType,
+  promotionRules,
+  priceMode,
 ]);
+
+
+
 
 const totalProductPages = Math.max(
   1,
   Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE)
 );
 
+
+
+
 const visibleProducts = filteredProducts.slice(
   (productPage - 1) * PRODUCTS_PER_PAGE,
   productPage * PRODUCTS_PER_PAGE
 );
 
+
+
+
 const homepageSearchKeyword = search.trim().toLowerCase();
 const homepageSearchProducts = useMemo(() => {
   if (!homepageSearchKeyword) return [];
 
+
+
+
   return sortOrderProductsByAvailability(
     products.filter((product) => {
-      if (!product.active) return false;
+      if (!isActiveProduct(product)) return false;
       if (orderCountry === "England" && !product.availableInEngland) return false;
       if (orderCountry === "Wales" && !product.availableInWales) return false;
+
+
+
 
       return [
         product.name,
@@ -2587,6 +3915,9 @@ const homepageVisibleSearchProducts = homepageSearchProducts.slice(
   productPage * PRODUCTS_PER_PAGE
 );
 
+
+
+
 useEffect(() => {
   setProductPage(1);
 }, [
@@ -2598,31 +3929,55 @@ useEffect(() => {
   selectedSeries,
 ]);
 
+
+
+
 const getHomepageSubtitle = (item) => {
   switch (String(item.description || "").trim().toLowerCase()) {
     case "big puff pre-filled kits-vape":
       return "Premium Disposable Vape Kits";
 
+
+
+
     case "pre-filled pod kits - refill":
       return "Replacement Pod Systems";
+
+
+
 
     case "smoking accessories":
       return "Smoking & Rolling Accessories";
 
+
+
+
     case "candy with fun toys assorted":
       return "Kids Candy & Novelty Toys";
 
+
+
+
     case "household items - cleaning, shoe accessories, house essentials":
       return "Cleaning & Home Essentials";
+
+
+
 
     default:
       return "Browse our latest products";
   }
 };
 
+
+
+
   const rememberCartProduct = (productId) => {
     lastCartProductIdRef.current = String(productId || "");
   };
+
+
+
 
   const returnToProductBrowsing = () => {
     const productId = lastCartProductIdRef.current;
@@ -2630,11 +3985,17 @@ const getHomepageSubtitle = (item) => {
       (element) => String(element.dataset.productId || "") === productId
     );
 
+
+
+
     if (!productCard) {
       window.scrollTo({ top: browseScrollPositionRef.current, behavior: "smooth" });
       setCartNotice("Cart updated");
       return;
     }
+
+
+
 
     productCard.scrollIntoView({ behavior: "smooth", block: "start" });
     productCard.classList.add("ring-4", "ring-orange-400", "ring-offset-2");
@@ -2645,6 +4006,9 @@ const getHomepageSubtitle = (item) => {
       productCard.classList.remove("ring-4", "ring-orange-400", "ring-offset-2");
     }, 1800);
   };
+
+
+
 
   const changeCartEditing = (nextEditing) => {
     if (nextEditing) {
@@ -2660,9 +4024,15 @@ const getHomepageSubtitle = (item) => {
       return;
     }
 
+
+
+
     setIsCartEditing(false);
     requestAnimationFrame(returnToProductBrowsing);
   };
+
+
+
 
   const addToCart = (product, qty = 1) => {
   const quantity = Math.max(1, Number(qty || 1));
@@ -2670,12 +4040,21 @@ const getHomepageSubtitle = (item) => {
   browseScrollPositionRef.current = window.scrollY;
   setCartNotice("");
 
+
+
+
   setCart((oldCart) => {
     const normalCart = oldCart.filter((item) => !item.isPromotionFree);
     const found = normalCart.find((item) => item.id === product.id);
 
+
+
+
     if (found) {
       const newQty = found.qty + quantity;
+
+
+
 
       const nextCart = normalCart.map((item) =>
         item.id === product.id
@@ -2685,15 +4064,21 @@ const getHomepageSubtitle = (item) => {
                 ...product,
                 sourceStatus:
                   product.stock < newQty ? "Need Supplier" : "In Stock",
-                pickedQty: Math.min(product.stock, newQty),
+                pickedQty: 0,
               },
               newQty
             )
           : item
       );
 
+
+
+
       return applyCartPromotions(nextCart);
     }
+
+
+
 
     return applyCartPromotions([
       ...normalCart,
@@ -2703,12 +4088,15 @@ const getHomepageSubtitle = (item) => {
         sourceStatus:
           product.stock < quantity ? "Need Supplier" : "In Stock",
         includeInPicking: true,
-        pickedQty: Math.min(product.stock, quantity),
+        pickedQty: 0,
         },
         quantity
       ),
     ]);
   });
+
+
+
 
   queueCentralCartMutation((cartId) =>
     incrementCentralCartItem({
@@ -2719,6 +4107,9 @@ const getHomepageSubtitle = (item) => {
     })
   );
 };
+
+
+
 
   const increaseQty = (id) => {
     setCart((oldCart) =>
@@ -2732,7 +4123,7 @@ const getHomepageSubtitle = (item) => {
                     ...item,
                     sourceStatus:
                       item.stock < item.qty + 1 ? "Need Supplier" : "In Stock",
-                    pickedQty: Math.min(item.stock, item.qty + 1),
+                    pickedQty: 0,
                   },
                   item.qty + 1
                 )
@@ -2750,6 +4141,9 @@ const getHomepageSubtitle = (item) => {
     );
   };
 
+
+
+
   const decreaseQty = (id) => {
     setCart((oldCart) =>
       applyCartPromotions(
@@ -2762,7 +4156,7 @@ const getHomepageSubtitle = (item) => {
                 : recalculateCartItemForPriceMode(
                     {
                       ...item,
-                      pickedQty: Math.min(item.stock, item.qty - 1),
+                      pickedQty: 0,
                     },
                     item.qty - 1
                   )
@@ -2781,8 +4175,14 @@ const getHomepageSubtitle = (item) => {
     );
   };
 
+
+
+
   const changeQty = (id, value) => {
     const quantity = Math.max(1, Number(value || 1));
+
+
+
 
     setCart((oldCart) =>
       applyCartPromotions(
@@ -2795,7 +4195,7 @@ const getHomepageSubtitle = (item) => {
                     ...item,
                     sourceStatus:
                       item.stock < quantity ? "Need Supplier" : "In Stock",
-                    pickedQty: Math.min(item.stock, quantity),
+                    pickedQty: 0,
                   },
                   quantity
                 )
@@ -2813,6 +4213,9 @@ const getHomepageSubtitle = (item) => {
     );
   };
 
+
+
+
   const removeItem = (id) => {
     setCart((oldCart) =>
       applyCartPromotions(
@@ -2828,13 +4231,16 @@ const getHomepageSubtitle = (item) => {
     );
   };
 
-  const promotionDiscountAmount = cart.reduce(
-    (sum, item) => sum + Number(item.promotionDiscountAmount || 0),
-    0
-  );
+
+
+
+  const promotionDiscountAmount = getPromotionDiscountAmount(cart);
   const effectiveOrderDiscountPercent = canManualCheckoutDiscount
     ? Number(orderDiscountPercent || 0)
     : 0;
+
+
+
 
   const cartTotals = calculateCartTotals(cart, {
     priceMode,
@@ -2843,7 +4249,13 @@ const getHomepageSubtitle = (item) => {
   });
   const discountAmount = cartTotals.discountAmount;
   const finalTotal = cartTotals.totalAmount;
-  const orderPaymentChoiceValid = orderPaymentChoice === "no_payment";
+  const orderPaymentChoiceValid = salesCheckoutPaymentRequired
+    ? orderPaymentChoice === "cash_now" ||
+      (orderPaymentChoice === "bank_transfer_now" && Boolean(orderBankProofFile))
+    : orderPaymentChoice === "no_payment";
+
+
+
 
 const selectedCustomerBranches = (selectedCustomerAccount?.customer_branches || []).filter(
   (branch) => branch.active !== false
@@ -2861,11 +4273,17 @@ const getPaymentMetadata = (row = {}) => {
   return {};
 };
 
+
+
+
 const normalizeCustomerCollectionType = (value) => {
   const normalized = String(value || "")
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "_");
+
+
+
 
   if (["OUTSTANDING_PAYMENT", "PREVIOUS_BALANCE", "PREVIOUS_CREDIT_BALANCE"].includes(normalized)) {
     return "OUTSTANDING_PAYMENT";
@@ -2879,6 +4297,9 @@ const normalizeCustomerCollectionType = (value) => {
   return normalized || "TODAY_INVOICE";
 };
 
+
+
+
 const getEffectiveCustomerCollectionType = (row = {}) => {
   const metadata = getPaymentMetadata(row);
   const collectionType = normalizeCustomerCollectionType(
@@ -2891,7 +4312,13 @@ const getEffectiveCustomerCollectionType = (row = {}) => {
       metadata.payment_applies_to
   );
 
+
+
+
   if (collectionType !== "UNALLOCATED_PAYMENT") return collectionType;
+
+
+
 
   return normalizeCustomerCollectionType(
     row.resolved_collection_type ||
@@ -2899,6 +4326,9 @@ const getEffectiveCustomerCollectionType = (row = {}) => {
       metadata.resolved_collection_type
   );
 };
+
+
+
 
 const getCustomerCollectionLabel = (row = {}) => {
   switch (getEffectiveCustomerCollectionType(row)) {
@@ -2913,10 +4343,16 @@ const getCustomerCollectionLabel = (row = {}) => {
   }
 };
 
+
+
+
 const sortCustomerPaymentHistory = (rows = []) => {
   const originalPosition = new Map(
     rows.map((row, index) => [row, index])
   );
+
+
+
 
   return [...rows].sort((a, b) => {
     const aDate = new Date(
@@ -2938,11 +4374,20 @@ const sortCustomerPaymentHistory = (rows = []) => {
         0
     ).getTime();
 
+
+
+
     if (aDate !== bDate) return bDate - aDate;
+
+
+
 
     return originalPosition.get(a) - originalPosition.get(b);
   });
 };
+
+
+
 
 const displayedCustomerLedgerRowsWithBalance = sortCustomerPaymentHistory(
   customerLedger
@@ -2952,6 +4397,9 @@ const displayedCustomerLedgerRowsWithBalance = sortCustomerPaymentHistory(
   credit: Number(row.credit || 0),
   balance: Number(row.running_balance || 0),
 }));
+
+
+
 
 const customerCreditSummary = paymentHistoryBranchId
   ? customerCreditSnapshot?.branchSummary || {}
@@ -2964,33 +4412,57 @@ const isFinalOrderStatus = (status) =>
     String(status || "").trim().toLowerCase()
   );
 
+
+
+
 const shouldCreateInvoiceForStatus = (status) =>
   ["delivered", "confirmed", "delivery confirmed"].includes(
     String(status || "").trim().toLowerCase()
   );
+
+
+
 
 const selectedCustomerAccountId = String(selectedCustomerAccount?.id || "");
 const selectedCustomerName = String(
   selectedCustomerAccount?.account_name || companyName || ""
 ).trim().toLowerCase();
 
+
+
+
 const completedCustomerOrdersFromOrders = orders.filter((order) => {
   if (!isFinalOrderStatus(order.status)) return false;
+
+
+
 
   const orderCustomerAccountId = String(
     order.customerAccountId || order.customer_account_id || ""
   );
 
+
+
+
   if (selectedCustomerAccountId && orderCustomerAccountId) {
     return orderCustomerAccountId === selectedCustomerAccountId;
   }
+
+
+
 
   const orderCustomerName = String(
     order.companyName || order.customerName || ""
   ).trim().toLowerCase();
 
+
+
+
   return Boolean(selectedCustomerName && orderCustomerName === selectedCustomerName);
 });
+
+
+
 
 const completedCustomerOrders = [
   ...completedCustomerOrdersFromOrders,
@@ -3010,20 +4482,35 @@ const completedCustomerOrders = [
     new Date(a.deliveredAt || a.createdAt || 0).getTime()
 );
 
+
+
+
 const getInvoiceOrderForLedgerRow = (row = {}) => {
   if (row.__order) return row.__order;
 
+
+
+
   const referenceNo = String(row.reference_no || row.order_number || "").trim();
   if (!referenceNo) return null;
+
+
+
 
   return completedCustomerOrders.find(
     (order) => String(order.orderId || "").trim() === referenceNo
   );
 };
 
+
+
+
 const getInvoiceLedgerRowForOrder = (order = {}) => {
   const orderReference = String(order.orderId || order.order_number || "").trim();
   if (!orderReference) return null;
+
+
+
 
   return allocatedCustomerLedger.find((row) => {
     const type = String(row.entry_type || row.transaction_type || "")
@@ -3033,6 +4520,9 @@ const getInvoiceLedgerRowForOrder = (order = {}) => {
     return type === "INVOICE" && reference === orderReference;
   });
 };
+
+
+
 
 const getCustomerInvoiceStatus = (row = {}) => {
   const status = normalizeInvoicePaymentStatus(
@@ -3044,12 +4534,18 @@ const getCustomerInvoiceStatus = (row = {}) => {
       ""
   );
 
+
+
+
   if (status === "PAID" || status === "UNPAID") {
     return status;
   }
   if (status === "PART PAID" || status === "PARTIALLY PAID") {
     return "PART PAID";
   }
+
+
+
 
   const invoiceTotal = Number(
     row.invoice_total ||
@@ -3061,12 +4557,21 @@ const getCustomerInvoiceStatus = (row = {}) => {
   );
   const paidAmount = Number(row.paid_amount || row.paidAmount || 0);
 
+
+
+
   if (paidAmount > 0 && invoiceTotal > 0 && paidAmount < invoiceTotal) {
     return "PART PAID";
   }
 
+
+
+
   return paidAmount >= invoiceTotal && invoiceTotal > 0 ? "PAID" : "UNPAID";
 };
+
+
+
 
   const toggleOrderExpanded = (orderId) => {
     setExpandedOrders((old) => ({
@@ -3075,8 +4580,14 @@ const getCustomerInvoiceStatus = (row = {}) => {
     }));
   };
 
+
+
+
   const saveSalesRepCollection = async () => {
   if (savingSalesPayment) return;
+
+
+
 
   const customer = selectedSalesPaymentCustomer;
   const salesCustomerBranches = selectedSalesPaymentBranches;
@@ -3090,35 +4601,40 @@ const getCustomerInvoiceStatus = (row = {}) => {
       )
     : Number(salesOutstandingSnapshot.totalOutstanding || 0);
 
+
+
+
   if (!customer) {
     alert("Please select customer.");
     return;
   }
+
+
+
 
   if (salesCustomerBranches.length > 0 && !selectedSalesBranch) {
     alert("Please select branch / shop.");
     return;
   }
 
-  if (!paymentAmount) {
+
+
+
+  if (!(paymentAmount > 0)) {
     alert("Please enter amount.");
     return;
   }
+
+
+
 
   if (!salesPaymentForm.whoPaid.trim()) {
     alert("Please enter who paid.");
     return;
   }
 
-  if (
-    selectedBranchOutstanding > 0 &&
-    paymentAmount > selectedBranchOutstanding &&
-    !window.confirm(
-      "Payment is higher than selected branch outstanding. Continue?"
-    )
-  ) {
-    return;
-  }
+
+
 
   if (
     !window.confirm(
@@ -3128,24 +4644,47 @@ const getCustomerInvoiceStatus = (row = {}) => {
     return;
   }
 
+
+
+
   setSavingSalesPayment(true);
 
+
+
+
   try {
-    const paymentDate = salesPaymentForm.collectionDate
-      ? `${salesPaymentForm.collectionDate}T12:00:00`
-      : new Date().toISOString();
-    const snapshot = await loadCentralPaymentSnapshot({
-      customerAccountId: customer.id,
-      customerName: customer.account_name,
-      customer,
-      selectedBranchId: selectedSalesBranch?.id || "",
-    });
-    const allocationPreview = buildPaymentPreview({
-      invoices: snapshot.invoices,
-      allocations: snapshot.allocations,
-      amount: paymentAmount,
-      branchId: selectedSalesBranch?.id || "",
-    });
+    const now = new Date();
+    const localToday = new Date(
+      now.getTime() - now.getTimezoneOffset() * 60000
+    )
+      .toISOString()
+      .split("T")[0];
+
+
+
+
+    const selectedCollectionDate = String(
+      salesPaymentForm.collectionDate || ""
+    ).trim();
+
+
+
+
+    const paymentDate =
+      !selectedCollectionDate || selectedCollectionDate === localToday
+        ? now.toISOString()
+        : `${selectedCollectionDate}T12:00:00`;
+
+
+
+
+    const unallocatedOutstanding = Math.max(
+      0,
+      selectedBranchOutstanding - paymentAmount
+    );
+
+
+
 
     await postCanonicalCustomerPayment({
       customerAccountId: customer.id,
@@ -3161,37 +4700,68 @@ const getCustomerInvoiceStatus = (row = {}) => {
         activeUser.name ||
         activeUser.username ||
         "",
-      collectorStaffId:
-        activeUser.staff_id || activeUser.id || null,
+      collectorStaffId: activeUser.staff_id || activeUser.id || null,
       collectorRole:
         activeUser.role || activeUser.access_level || "Sales Rep",
       paymentIntentId: salesPaymentForm.paymentIntentId,
       notes: [
-        selectedSalesBranch ? `Branch: ${selectedSalesBranch.branch_name}` : "",
+        selectedSalesBranch
+          ? `Branch: ${selectedSalesBranch.branch_name}`
+          : "",
         salesPaymentForm.collectionDate
           ? `Collection date: ${salesPaymentForm.collectionDate}`
+          : "",
+        unallocatedOutstanding > 0
+          ? `Partial collection - unallocated outstanding remaining: ${formatCurrency(
+              unallocatedOutstanding
+            )}`
           : "",
         salesPaymentForm.notes || "",
       ]
         .filter(Boolean)
-        .join("\n"),
+        .join("`n"),
       metadata: {
         payment_applies_to: "SALES_REP_COLLECTION",
+        allocation_mode: "CANONICAL_FIFO",
+        collection_status:
+          unallocatedOutstanding > 0
+            ? "PARTIAL_COLLECTION"
+            : "COLLECTION",
+        unallocated_outstanding_amount: unallocatedOutstanding,
       },
-      allocations: allocationPreview.allocations,
+      allocations: [],
     });
+
+
+
 
     const { outstandingState } = await loadSalesRepOutstanding({
       customer,
       selectedBranchId: selectedSalesBranch?.id || "",
     });
+
+
+
+
     setSalesOutstandingSnapshot(outstandingState);
 
-    if (String(selectedCustomerAccount?.id || "") === String(customer.id || "")) {
+
+
+
+    if (
+      String(selectedCustomerAccount?.id || "") ===
+      String(customer.id || "")
+    ) {
       await loadCustomerCreditSnapshot(selectedCustomerAccount);
     }
 
+
+
+
     alert("Collection saved successfully.");
+
+
+
 
     setSalesPaymentForm({
       customerId: customer.id,
@@ -3199,9 +4769,7 @@ const getCustomerInvoiceStatus = (row = {}) => {
       amount: "",
       paymentType: "Cash",
       whoPaid: "",
-      collectionDate: new Date()
-        .toISOString()
-        .split("T")[0],
+      collectionDate: new Date().toISOString().split("T")[0],
       notes: "",
       paymentIntentId: createPaymentIntentId(),
     });
@@ -3213,15 +4781,26 @@ const getCustomerInvoiceStatus = (row = {}) => {
 };
 
 
+
+
 const submitOrder = async () => {
   if (isSubmittingOrder || orderSubmissionLockRef.current) return;
+
+
+
 
   if (!selectedCustomerAccount) {
     alert("Please select customer account.");
     return;
   }
 
+
+
+
   const branches = selectedCustomerAccount.customer_branches || [];
+
+
+
 
   if (branches.length > 0 && !selectedBranch) {
     alert("Please select delivery branch / shop.");
@@ -3229,15 +4808,28 @@ const submitOrder = async () => {
   }
   const paidCartForOrder = cart.filter((item) => !item.isPromotionFree);
 
+
+
+
   if (paidCartForOrder.length === 0) {
     alert("Please add at least one product.");
     return;
   }
 
+
+
+
   if (!orderPaymentChoiceValid) {
-    alert("Please continue with No Payment Now. Card payment is not available in this checkout.");
+    alert(
+      salesCheckoutPaymentRequired
+        ? "Customer payment is required. Select Cash Paid, or Bank Transfer Paid and attach the payment screenshot."
+        : "Please continue with No Payment Now. Card payment is not available in this checkout."
+    );
     return;
   }
+
+
+
 
   const belowCostSpecialLines = paidCartForOrder.filter((item) => {
     if (!item.specialPriceApplied && !item.special_price_applied) return false;
@@ -3247,6 +4839,9 @@ const submitOrder = async () => {
     const costPrice = Number(item.costPrice ?? item.cost_price ?? 0);
     return costPrice > 0 && unitPrice > 0 && unitPrice < costPrice;
   });
+
+
+
 
   if (belowCostSpecialLines.length > 0) {
     const message =
@@ -3261,15 +4856,37 @@ const submitOrder = async () => {
         })
         .join("\n");
 
+
+
+
     if (!isNisstajAdmin) {
       alert(`${message}\n\nOnly nisstaj_admin can approve below-cost special pricing.`);
       return;
     }
 
+
+
+
     if (!window.confirm(`${message}\n\nApprove below-cost special pricing?`)) {
       return;
     }
   }
+
+
+
+
+  let checkoutBankProofDataUrl = "";
+  if (salesCheckoutPaymentRequired && orderPaymentChoice === "bank_transfer_now") {
+    try {
+      checkoutBankProofDataUrl = await readCheckoutBankProofDataUrl(orderBankProofFile);
+    } catch (proofError) {
+      alert(proofError?.message || "Could not read the bank payment screenshot.");
+      return;
+    }
+  }
+
+
+
 
   orderSubmissionLockRef.current = true;
   setIsSubmittingOrder(true);
@@ -3277,14 +4894,23 @@ const submitOrder = async () => {
   let requiresReauthentication = false;
   let submissionOrderNumber = "";
 
+
+
+
   try {
     await refreshSupabaseSessionIfNeeded();
+
+
+
 
   const accountStatus = getCustomerStatusLabel(
     selectedCustomerAccount?.account_status ||
       selectedCustomerAccount?.status ||
       "Active"
   );
+
+
+
 
   const creditSnapshot = await loadCustomerCreditSnapshot(selectedCustomerAccount);
   if (!creditSnapshot) {
@@ -3299,8 +4925,14 @@ const submitOrder = async () => {
   const creditLimit = creditSummary.creditLimit;
   const outstandingBalance = creditSummary.outstanding;
 
+
+
+
   const orderTotal = roundMoney(finalTotal || 0);
   const projectedBalance = outstandingBalance + orderTotal;
+
+
+
 
   if (accountStatus === "On Hold") {
     setSubmissionFeedback("");
@@ -3308,13 +4940,19 @@ const submitOrder = async () => {
     return;
   }
 
+
+
+
   if (accountStatus === "Inactive") {
     setSubmissionFeedback("");
     alert("Customer account is Inactive. Please contact Accounts.");
     return;
   }
 
-  if (creditLimit > 0 && projectedBalance > creditLimit) {
+
+
+
+  if (!salesCheckoutPaymentRequired && creditLimit > 0 && projectedBalance > creditLimit) {
     setSubmissionFeedback("");
     alert(
       `Credit limit exceeded.\n\n` +
@@ -3326,11 +4964,15 @@ const submitOrder = async () => {
     return;
   }
 
+
+
+
     const submissionFingerprint = JSON.stringify({
       customerAccountId: selectedCustomerAccount.id,
       customerBranchId: selectedBranch?.id || null,
       priceMode,
       paymentChoice: orderPaymentChoice,
+      walletUseRequested: Boolean(walletUseRequested),
       total: orderTotal,
       discountPercent: Number(effectiveOrderDiscountPercent || 0),
       cart: paidCartForOrder.map((item) => ({
@@ -3341,48 +4983,65 @@ const submitOrder = async () => {
     });
     let savedSubmission = null;
 
+
+
+
     try {
       savedSubmission = JSON.parse(localStorage.getItem(orderSubmissionStorageKey) || "null");
     } catch {
       savedSubmission = null;
     }
 
+
+
+
     submissionOrderNumber =
       savedSubmission?.fingerprint === submissionFingerprint && savedSubmission?.orderNumber
         ? savedSubmission.orderNumber
         : `ORD-${Date.now()}-${globalThis.crypto?.randomUUID?.().slice(0, 8) || Math.random().toString(36).slice(2, 10)}`;
 
-    localStorage.setItem(
-      orderSubmissionStorageKey,
-      JSON.stringify({ orderNumber: submissionOrderNumber, fingerprint: submissionFingerprint })
-    );
 
-    const orderRequest = {
+
+
+    try {
+      localStorage.setItem(
+        orderSubmissionStorageKey,
+        JSON.stringify({ orderNumber: submissionOrderNumber, fingerprint: submissionFingerprint })
+      );
+    } catch (error) {
+      console.warn("Unable to persist order submission cache; continuing with order placement:", error);
+    }
+
+
+
+
+    const orderRequest = buildCustomerOrderRequest({
       orderNumber: submissionOrderNumber,
-      companyName: selectedCustomerAccount.account_name,
+      customer: selectedCustomerAccount,
+      branch: selectedBranch,
       priceMode,
-      cart: paidCartForOrder,
-      total: finalTotal,
-      discount_percent: effectiveOrderDiscountPercent,
-      discount_amount: canManualCheckoutDiscount ? Number(discountAmount || 0) : 0,
-      discount_applied_by: canManualCheckoutDiscount ? userProfile?.id || "" : "",
-      discount_applied_by_name: canManualCheckoutDiscount
-        ? userProfile?.full_name || userProfile?.name || ""
-        : "",
-      customer_account_id: selectedCustomerAccount.id,
-      customer_branch_id: selectedBranch?.id || null,
-      delivery_branch_name: selectedBranch?.branch_name || "",
-      delivery_address: selectedBranch?.delivery_address || "",
-      delivery_postcode: selectedBranch?.postcode || "",
-      customer_country: orderCountry,
-      credit_limit: creditLimit,
-      notes: "Payment status: UNPAID. No Payment Now selected.",
-    };
+      cart,
+      finalTotal,
+      effectiveOrderDiscountPercent,
+      discountAmount,
+      canManualCheckoutDiscount,
+      userProfile,
+      orderCountry,
+      creditLimit,
+      walletUseRequested: Boolean(walletUseRequested),
+      walletBalance: Number(customerWallet.balance || 0),
+    });
+
+
+
 
     let createdOrder;
     const submittingCentralCartId = CENTRAL_CART_ENABLED && !salesRouteMode
       ? await ensureCentralCartForCurrentScope()
       : null;
+
+
+
 
     if (submittingCentralCartId) {
       await centralCartMutationQueueRef.current.catch(() => undefined);
@@ -3393,16 +5052,26 @@ const submitOrder = async () => {
       });
     }
 
-    try {
-      try {
-        createdOrder = await createCustomerOrder(orderRequest);
-      } catch (error) {
-        if (!isOrderAuthError(error)) throw error;
 
-        const refreshed = await supabase.auth.refreshSession();
-        if (refreshed.error || !refreshed.data.session) throw error;
-        createdOrder = await createCustomerOrder(orderRequest);
-      }
+
+
+    try {
+      createdOrder = await createCustomerOrderWithSessionRetry({
+        orderRequest,
+        createOrder: createCustomerOrder,
+        isAuthError: isOrderAuthError,
+        refreshSession: () => supabase.auth.refreshSession(),
+        findOrderByNumber: getCustomerOrderByNumber,
+        promotionRunContext: {
+          cart,
+          customer: selectedCustomerAccount,
+          branch: selectedBranch,
+          actor: activeUser,
+          audienceType: promotionAudienceType,
+          country: orderCountry,
+          profile: activeUser,
+        },
+      });
     } catch (error) {
       if (submittingCentralCartId) {
         await cancelCentralCartSubmission({
@@ -3416,7 +5085,59 @@ const submitOrder = async () => {
       throw error;
     }
 
+
+
+
     const { orderNumber } = createdOrder;
+
+
+
+
+    if (salesCheckoutPaymentRequired) {
+      const checkoutPaymentMethod =
+        orderPaymentChoice === "bank_transfer_now" ? "Bank Transfer" : "Cash";
+      try {
+        await postCanonicalCustomerPayment({
+          customerAccountId: selectedCustomerAccount.id,
+          customerBranchId: selectedBranch?.id || null,
+          amount: orderTotal,
+          paymentDate: new Date().toISOString(),
+          paymentMethod: checkoutPaymentMethod,
+          paymentSource: CANONICAL_PAYMENT_SOURCES.ORDER_PAYMENT,
+          paymentReference: orderNumber,
+          paidBy: selectedCustomerAccount.account_name || selectedCustomerAccount.company_name || "Customer",
+          paymentIntentId: orderPaymentIntentId,
+          notes: `Paid sales checkout for ${orderNumber}`,
+          metadata: {
+            payment_applies_to: "ORDER_CHECKOUT",
+            order_number: orderNumber,
+            bank_proof_data_url: checkoutBankProofDataUrl || null,
+            bank_proof_name: orderBankProofFile?.name || null,
+            bank_proof_mime_type: orderBankProofFile?.type || null,
+          },
+          allocations: [],
+        });
+      } catch (paymentError) {
+        await updateOrderStatus(orderNumber, "Cancelled").catch((cancelError) =>
+          console.error("Paid checkout rollback failed:", cancelError)
+        );
+        if (submittingCentralCartId) {
+          await cancelCentralCartSubmission({
+            profile: activeUser,
+            cartId: submittingCentralCartId,
+            orderNumber,
+          }).catch((cancelError) =>
+            console.error("Central cart payment rollback error:", cancelError)
+          );
+        }
+        localStorage.removeItem(orderSubmissionStorageKey);
+        setOrderPaymentIntentId(createPaymentIntentId());
+        throw new Error(`Payment was not accepted, so the order was cancelled: ${paymentError?.message || "Unknown payment error"}`);
+      }
+    }
+
+
+
 
     if (submittingCentralCartId) {
       await finalizeCentralCartSubmission({
@@ -3432,12 +5153,21 @@ const submitOrder = async () => {
       centralCartLoadedScopeRef.current = "";
     }
 
+
+
+
 const newOrder = {
     orderId: orderNumber,
     customerName: selectedCustomerAccount.account_name,
     companyName: selectedCustomerAccount.account_name,
 
+
+
+
     branchName: selectedBranch?.branch_name || "",
+
+
+
 
    deliveryAddress: selectedBranch?.delivery_address || "",
    priceMode,
@@ -3448,12 +5178,24 @@ const newOrder = {
     canManualCheckoutDiscount ? userProfile?.full_name || userProfile?.name || "" : "",
    createdAt: new Date().toLocaleString(),
    status: "Received",
-   paymentStatus: "UNPAID",
+   paymentStatus: salesCheckoutPaymentRequired
+     ? orderPaymentChoice === "bank_transfer_now" ? "PENDING_VERIFICATION" : "PAID"
+     : "UNPAID",
    paymentChoice: orderPaymentChoice,
+   walletUseRequested: Boolean(orderRequest.wallet_use_requested),
+   wallet_use_requested: Boolean(orderRequest.wallet_use_requested),
+   walletRequestedAmount: Number(orderRequest.wallet_requested_amount || 0),
+   wallet_requested_amount: Number(orderRequest.wallet_requested_amount || 0),
    items: paidCartForOrder,
     };
 
+
+
+
     setOrders((oldOrders) => [newOrder, ...oldOrders]);
+
+
+
 
     if (salesRouteMode) {
       await recordSalesRouteVisit({
@@ -3463,19 +5205,44 @@ const newOrder = {
         staffName: activeUser?.staff_name || activeUser?.name || activeUser?.username || "",
         outcome: "ORDER_PLACED",
         orderNumber,
-        reason: salesRouteExceptionMode ? `Exception order — ${routeExceptionReason}` : "",
+        reason: salesRouteExceptionMode ? `Exception order â€” ${routeExceptionReason}` : "",
         note: salesRouteExceptionMode ? routeExceptionNote : "",
         routeAssignmentId: activeRouteAssignmentId,
       });
     }
 
+
+
+
     localStorage.removeItem(cartStorageKey);
     localStorage.removeItem(orderSubmissionStorageKey);
 
+
+
+
+    const submittedWalletReservation = Number(orderRequest.wallet_requested_amount || 0);
+
+
+    if (submittedWalletReservation > 0) {
+      setCustomerWallet((current) => ({
+        ...current,
+        balance: Math.max(0, Number(current.balance || 0) - submittedWalletReservation),
+        loading: false,
+        error: "",
+      }));
+    }
+
+
     setCart([]);
     setIsCartEditing(false);
-    setOrderPaymentChoice("no_payment");
+    setOrderPaymentChoice(salesCheckoutPaymentRequired ? "cash_now" : "no_payment");
+    setWalletUseRequested(false);
+    setOrderBankProofFile(null);
+    setOrderPaymentIntentId(createPaymentIntentId());
     setOrderDiscountPercent(0);
+
+
+
 
     if (!isCustomer) {
       if (salesRouteMode) {
@@ -3490,20 +5257,47 @@ const newOrder = {
       }
     }
 
+
+
+
     await fetchProducts();
+    if (isCustomer) {
+      await loadCustomerWalletBalance();
+    }
+
+
+
 
     setSubmissionFeedback("success");
 
+
+
+
     alert(
-  `âœ… Order Submitted Successfully
+  `Ã¢Å“â€¦ Order Submitted Successfully
+
+
+
 
 Order Number: ${formatDisplayOrderId(orderNumber)}
 
+
+
+
 Thank you for your order.
+
+
+
 
 Your order has been received and is being processed by FairChoice.
 
+
+
+
 Please quote your Order Number if you need assistance.`
+
+
+
 
 );
   } catch (error) {
@@ -3520,22 +5314,38 @@ Please quote your Order Number if you need assistance.`
       message: error?.message || String(error),
       online: navigator.onLine,
     });
-    alert("We could not submit the order.\nPlease check your connection and try again.");
+    const submissionErrorMessage = String(error?.message || "").trim();
+    alert(
+      submissionErrorMessage.startsWith("Payment was not accepted")
+        ? submissionErrorMessage
+        : `Order was not confirmed. Your basket has been kept and nothing has been cleared.\n\n` +
+          `Please press Place Order again when ready. The same order reference will be reused so a successful first attempt is not duplicated.` +
+          (submissionErrorMessage ? `\n\nDetails: ${submissionErrorMessage}` : "")
+    );
   } finally {
     orderSubmissionLockRef.current = false;
     setIsSubmittingOrder(false);
   }
+
+
+
 
   if (requiresReauthentication && onLogout) {
     await onLogout();
   }
 };
 
+
+
+
 const recalculateOrder = (order, updatedItems) => {
   const totals = calculateOrderTotals(updatedItems, {
     priceMode: order.priceMode || order.price_mode,
     discountPercent: order.discount_percent,
   });
+
+
+
 
   return {
     ...order,
@@ -3548,11 +5358,20 @@ const recalculateOrder = (order, updatedItems) => {
 };
 
 
+
+
+
+
+
+
 const saveOrderTotalsToDatabase = async (orderId, items, order = {}) => {
   const totals = calculateOrderTotals(items || [], {
     priceMode: order.priceMode || order.price_mode,
     discountPercent: order.discount_percent,
   });
+
+
+
 
   const { error } = await supabase
     .from("orders")
@@ -3568,145 +5387,183 @@ const saveOrderTotalsToDatabase = async (orderId, items, order = {}) => {
 })
     .eq("order_number", orderId);
 
+
+
+
   if (error) {
     console.error("Order total update error:", error);
   }
 };
+
+
+
 
 const getCalculatedOrderItemForSave = (item, order = {}) =>
   calculateCartOrderItems([item], {
     priceMode: order.priceMode || order.price_mode,
   })[0] || item;
 
+
+
+
 const updateOrderItem = async (orderId, itemId, updates) => {
-  setOrders((oldOrders) =>
-    oldOrders.map((order) => {
-      if (order.orderId !== orderId) return order;
-
-      const updatedItems = order.items.map((item) => {
-        const itemKey = item.dbId || item.id || item.productId || item.product_id;
-
-        if (String(itemKey) !== String(itemId)) return item;
-
-        return {
-          ...item,
-          ...updates,
-        };
-      });
-
-      return recalculateOrder(order, updatedItems);
-    })
+  const order = orders.find((entry) => entry.orderId === orderId);
+  const isFreeUpdate = ["free", "promotion free"].includes(
+    String(updates?.sourceStatus || updates?.source_status || "").trim().toLowerCase()
   );
 
-const order = orders.find((o) => o.orderId === orderId);
 
-const item = order?.items?.find((i) => {
-  const itemKey = i.dbId || i.id || i.productId || i.product_id;
-  return String(itemKey) === String(itemId);
-});
+  if (isFreeUpdate) {
+    setOrders((oldOrders) =>
+      oldOrders.map((entry) =>
+        entry.orderId === orderId
+          ? {
+              ...entry,
+              items: (entry.items || []).map((item) =>
+                String(item.dbId || item.id) === String(itemId)
+                  ? {
+                      ...item,
+                      ...updates,
+                      sourceStatus: "Free",
+                      source_status: "Free",
+                      includeInPicking: true,
+                      include_in_picking: true,
+                      price: 0,
+                      selectedPrice: 0,
+                      selected_price: 0,
+                      unit_price: 0,
+                      unitPrice: 0,
+                      lineTotal: 0,
+                      line_total: 0,
+                      netTotal: 0,
+                      net_total: 0,
+                      grossTotal: 0,
+                      gross_total: 0,
+                      vatTotal: 0,
+                      vat_total: 0,
+                    }
+                  : item
+              ),
+            }
+          : entry
+      )
+    );
+  }
 
-const dbUpdates = {};
-const itemForCalculation = {
-  ...(item || {}),
-  ...updates,
-  qty: updates.qty ?? updates.pickedQty ?? updates.picked_qty ?? item?.qty,
-  pickedQty: updates.pickedQty ?? updates.picked_qty ?? updates.qty ?? item?.pickedQty,
+
+  try {
+    const result = await updateReceivedOrderItemWithPromotions({
+      order,
+      itemId,
+      updates,
+      user: loggedInUser,
+    });
+    if (result?.updatedItem) {
+      setOrders((oldOrders) =>
+        oldOrders.map((entry) =>
+          entry.orderId === orderId
+            ? {
+                ...entry,
+                items: (entry.items || []).map((item) =>
+                  String(item.dbId || item.id) === String(itemId)
+                    ? { ...item, ...result.updatedItem }
+                    : item
+                ),
+              }
+            : entry
+        )
+      );
+    }
+    await fetchOrders();
+    return result;
+  } catch (error) {
+    console.error("Update received-order item error:", error);
+    alert("Could not update order item: " + (error?.message || "Promotion recalculation failed."));
+    return false;
+  }
 };
-const calculatedItem = getCalculatedOrderItemForSave(itemForCalculation, order);
 
-if (updates.qty !== undefined) {
-  const qty = Number(updates.qty || 0);
 
-  dbUpdates.qty = qty;
-  dbUpdates.picked_qty = qty;
-}
 
-if (updates.pickedQty !== undefined) {
-  dbUpdates.picked_qty = Number(updates.pickedQty || 0);
-}
 
-if (updates.sourceStatus !== undefined) {
-  dbUpdates.source_status = updates.sourceStatus;
-}
+const updatePreOrderSupplyItem = async (orderId, itemId, updates = {}) => {
+  const order = orders.find((entry) => String(entry.orderId) === String(orderId));
+  const item = order?.items?.find((entry) => String(entry.dbId || entry.id) === String(itemId));
+  if (!order || !item) return false;
 
-if (updates.includeInPicking !== undefined) {
-  dbUpdates.include_in_picking = updates.includeInPicking;
-}
 
-if (
-  updates.price !== undefined ||
-  updates.selectedPrice !== undefined ||
-  updates.unit_price !== undefined ||
-  updates.unitPrice !== undefined
-) {
-  const nextPrice = roundMoney(
-    updates.price ??
-      updates.selectedPrice ??
-      updates.unit_price ??
-      updates.unitPrice ??
-      item?.price ??
-      0
-  );
 
-  dbUpdates.price = nextPrice.toFixed(2);
-}
 
-dbUpdates.line_total = calculatedItem.line_total.toFixed(2);
-dbUpdates.net_total = calculatedItem.net_total.toFixed(2);
-dbUpdates.gross_total = calculatedItem.gross_total.toFixed(2);
-dbUpdates.vat_amount = calculatedItem.vat_total.toFixed(2);
+  const updateKeys = Object.keys(updates || {});
+  const statusOnly =
+    updateKeys.length > 0 &&
+    updateKeys.every((key) => ["sourceStatus", "source_status"].includes(key));
 
-const { error } = await supabase
-  .from("order_items")
-  .update(dbUpdates)
-  .eq("id", item?.dbId || itemId);
 
-if (error) {
-  console.error("Order item update error:", error);
-  alert("Could not update order item: " + error.message);
-  return false;
-}
 
-const updatedOrderItems = (order?.items || []).map((currentItem) => {
-  const currentKey = currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
-  if (String(currentKey) !== String(itemId)) return currentItem;
 
-  const mergedItem = { ...currentItem, ...updates };
-  const mergedPrice = roundMoney(
-    mergedItem.price ?? mergedItem.selectedPrice ?? mergedItem.unit_price ?? mergedItem.unitPrice ?? 0
-  );
-  const calculatedMergedItem = getCalculatedOrderItemForSave(
-    {
-      ...mergedItem,
-      price: mergedPrice,
-      selectedPrice: mergedPrice,
-      unit_price: mergedPrice,
-      unitPrice: mergedPrice,
-    },
-    order
-  );
+  if (statusOnly) {
+    const sourceStatus = updates.sourceStatus ?? updates.source_status;
+    const { error } = await supabase
+      .from("order_items")
+      .update({ source_status: sourceStatus })
+      .eq("id", item.dbId || itemId);
 
-  return {
-    ...mergedItem,
-    price: mergedPrice,
-    selectedPrice: mergedPrice,
-    unit_price: mergedPrice,
-    unitPrice: mergedPrice,
-    lineTotal: calculatedMergedItem.line_total,
-    line_total: calculatedMergedItem.line_total,
-    netTotal: calculatedMergedItem.net_total,
-    net_total: calculatedMergedItem.net_total,
-    grossTotal: calculatedMergedItem.gross_total,
-    gross_total: calculatedMergedItem.gross_total,
-    vatTotal: calculatedMergedItem.vat_total,
-    vat_total: calculatedMergedItem.vat_total,
+
+
+
+    if (error) {
+      console.error("Pre-order supply status update error:", error);
+      return false;
+    }
+
+
+
+
+    // Status-only means status-only: do not touch qty, picked_qty, packed state,
+    // inclusion flags, line totals, VAT, or order totals.
+    return true;
+  }
+
+
+
+
+  const merged = { ...item, ...updates };
+  const calculated = getCalculatedOrderItemForSave(merged, order);
+  const payload = {
+    qty: Number(merged.qty ?? item.qty ?? 0),
+    picked_qty: Number(merged.pickedQty ?? merged.picked_qty ?? item.pickedQty ?? item.picked_qty ?? 0),
+    source_status: merged.sourceStatus ?? merged.source_status ?? item.sourceStatus ?? item.source_status ?? null,
+    include_in_picking: Boolean(merged.includeInPicking ?? merged.include_in_picking ?? item.includeInPicking ?? item.include_in_picking),
+    line_total: Number(calculated.line_total || 0).toFixed(2),
+    net_total: Number(calculated.net_total || 0).toFixed(2),
+    gross_total: Number(calculated.gross_total || 0).toFixed(2),
+    vat_amount: Number(calculated.vat_total || 0).toFixed(2),
   };
-});
 
-await saveOrderTotalsToDatabase(orderId, updatedOrderItems, order);
-await fetchOrders();
-return true;
+
+
+
+  const { error } = await supabase.from("order_items").update(payload).eq("id", item.dbId || itemId);
+  if (error) {
+    console.error("Pre-order supply item update error:", error);
+    return false;
+  }
+
+
+
+
+  const updatedItems = (order.items || []).map((entry) =>
+    String(entry.dbId || entry.id) === String(itemId) ? { ...entry, ...merged, ...calculated } : entry
+  );
+  await saveOrderTotalsToDatabase(orderId, updatedItems, order);
+  // Pre-order batch sync refreshes orders once after the batch.
+  // Avoid a full orders + processing_queue reload for every individual item.
+  return true;
 };
+
+
+
 
 const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restoreQty) => {
   const order = orders.find((entry) => String(entry.orderId) === String(orderId));
@@ -3746,120 +5603,28 @@ const restorePreOrderSplit = async (orderId, originalItemId, addedItemId, restor
     if (error) return false;
   }
   await saveOrderTotalsToDatabase(orderId, finalItems, order);
-  await fetchOrders();
+  // The parent Pre-order sync performs the single post-batch refresh.
   return true;
 };
 const addOrderItem = async (orderId, newItem) => {
-  const order = orders.find((o) => o.orderId === orderId);
+  const order = orders.find((entry) => entry.orderId === orderId);
 
-  if (!order?.dbId) {
-    alert("Order database ID not found.");
-    return;
+
+
+
+  try {
+    const result = await addReceivedOrderItemWithPromotions({ order, newItem });
+    await fetchOrders();
+    return result;
+  } catch (error) {
+    console.error("Add received-order item error:", error);
+    alert("Could not add order item: " + (error?.message || "Promotion recalculation failed."));
+    return null;
   }
-
-  const qty = Number(newItem.qty || 1);
-  const price = roundMoney(newItem.price || newItem.selectedPrice || 0);
-  const calculatedItem = getCalculatedOrderItemForSave(
-    {
-      ...newItem,
-      qty,
-      pickedQty: qty,
-      price,
-      selectedPrice: price,
-      unit_price: price,
-      unitPrice: price,
-    },
-    order
-  );
-  const productCode = getOrderItemProductCode(calculatedItem);
-
-  let { data, error } = await supabase
-    .from("order_items")
-    .insert({
-      order_id: order.dbId,
-      product_id: newItem.productId,
-      product_code: productCode,
-      product_name: newItem.name,
-      brand: newItem.brand || "",
-      series: newItem.series || "",
-      flavour: newItem.flavour || "",
-      carton_size: newItem.cartonSize || "",
-      qty,
-      picked_qty: qty,
-      price: calculatedItem.price.toFixed(2),
-      line_total: calculatedItem.line_total.toFixed(2),
-      net_total: calculatedItem.net_total.toFixed(2),
-      gross_total: calculatedItem.gross_total.toFixed(2),
-     vat_amount: calculatedItem.vat_total.toFixed(2),
-      source_status: "In Stock",
-      include_in_picking: true,
-    })
-    .select("id")
-    .single();
-
-  if (
-    error &&
-    String(error.message || error.details || "").toLowerCase().includes("product_code")
-  ) {
-    const retry = await supabase
-      .from("order_items")
-      .insert({
-        order_id: order.dbId,
-        product_id: newItem.productId,
-        product_name: newItem.name,
-        brand: newItem.brand || "",
-        series: newItem.series || "",
-        flavour: newItem.flavour || "",
-        carton_size: newItem.cartonSize || "",
-        qty,
-        picked_qty: qty,
-        price: calculatedItem.price.toFixed(2),
-        line_total: calculatedItem.line_total.toFixed(2),
-        net_total: calculatedItem.net_total.toFixed(2),
-        gross_total: calculatedItem.gross_total.toFixed(2),
-        vat_amount: calculatedItem.vat_total.toFixed(2),
-        source_status: "In Stock",
-        include_in_picking: true,
-      })
-      .select("id")
-      .single();
-
-    data = retry.data;
-    error = retry.error;
-  }
-
-  if (error) {
-    console.error("Add item error:", error);
-    alert(error.message);
-    return;
-  }
-
-  await saveOrderTotalsToDatabase(
-    orderId,
-    [
-      ...(order.items || []),
-      {
-        ...newItem,
-        qty,
-        pickedQty: qty,
-        price,
-        selectedPrice: price,
-        lineTotal: calculatedItem.line_total,
-        line_total: calculatedItem.line_total,
-        netTotal: calculatedItem.net_total,
-        net_total: calculatedItem.net_total,
-        grossTotal: calculatedItem.gross_total,
-        gross_total: calculatedItem.gross_total,
-        vatTotal: calculatedItem.vat_total,
-        vat_total: calculatedItem.vat_total,
-        },
-    ],
-    order
-  );
-
-  await fetchOrders();
-  return data;
 };
+
+
+
 
 const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) => {
   const order = orders.find((o) => o.orderId === orderId);
@@ -3869,17 +5634,23 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     return String(currentKey) === String(itemId);
   });
 
+
+
+
   if (!order?.dbId || !item) {
     alert("Order item not found for pre-order split.");
     return null;
   }
+
+
+
 
   const price = roundMoney(item.price || item.selectedPrice || item.unit_price || item.unitPrice || 0);
   const availableItem = getCalculatedOrderItemForSave(
     {
       ...item,
       qty: allocatedQty,
-      pickedQty: allocatedQty,
+      pickedQty: 0,
       price,
       selectedPrice: price,
       unit_price: price,
@@ -3889,6 +5660,9 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     },
     order
   );
+
+
+
 
   const remainingItem = getCalculatedOrderItemForSave(
     {
@@ -3905,6 +5679,9 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     order
   );
 
+
+
+
   const { error: updateError } = await supabase
     .from("order_items")
     .update({
@@ -3919,11 +5696,17 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     })
     .eq("id", item.dbId || itemId);
 
+
+
+
   if (updateError) {
     console.error("Pre-order split update error:", updateError);
     alert(updateError.message);
     return null;
   }
+
+
+
 
   const { data, error: insertError } = await supabase
     .from("order_items")
@@ -3936,7 +5719,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       flavour: item.flavour || "",
       carton_size: item.cartonSize || item.carton_size || "",
       qty: allocatedQty,
-      picked_qty: allocatedQty,
+      picked_qty: 0,
       price: availableItem.price.toFixed(2),
       line_total: availableItem.line_total.toFixed(2),
       net_total: availableItem.net_total.toFixed(2),
@@ -3948,16 +5731,25 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     .select("id")
     .single();
 
+
+
+
   if (insertError) {
     console.error("Pre-order split insert error:", insertError);
     alert(insertError.message);
     return null;
   }
 
+
+
+
   const updatedItems = (order.items || []).map((currentItem) => {
     const currentKey =
       currentItem.dbId || currentItem.id || currentItem.productId || currentItem.product_id;
     if (String(currentKey) !== String(itemId)) return currentItem;
+
+
+
 
     return {
       ...currentItem,
@@ -3976,12 +5768,15 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     };
   });
 
+
+
+
   updatedItems.push({
     ...item,
     dbId: data?.id,
     id: data?.id,
     qty: allocatedQty,
-    pickedQty: allocatedQty,
+    pickedQty: 0,
     sourceStatus: "In Stock",
     includeInPicking: true,
     lineTotal: availableItem.line_total,
@@ -3994,10 +5789,16 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     vat_total: availableItem.vat_total,
   });
 
+
+
+
   await saveOrderTotalsToDatabase(orderId, updatedItems, order);
-  await fetchOrders();
+  // Do not reload all orders/processing_queue for each split in a 30-item batch.
   return data;
 };
+
+
+
 
   const saveProduct = async () => {
     if (!supabase) {
@@ -4005,16 +5806,25 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       return;
     }
 
+
+
+
     if (!productForm.name || !productForm.category || !productForm.vatPrice) {
       alert("Please fill product name, category, and VAT price.");
       return;
     }
+
+
+
 
     const defaultAccounts = await getDefaultProductAccounts(productForm.category);
     const productFormForSave = {
       ...productForm,
       ...getProductLabelFormFlags(getProductLabelValue(productForm)),
     };
+
+
+
 
     const payload = {
       product_code: productFormForSave.productCode,
@@ -4024,10 +5834,8 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       brand: productFormForSave.brand,
       series: productFormForSave.series,
       flavour: productFormForSave.flavour,
-      cash_price: Number(productFormForSave.cashPrice || 0),
+      cash_price: 0,
       vat_price: Number(productFormForSave.vatPrice || 0),
-      wales_special_price: Number(productFormForSave.walesSpecialPrice || 0),
-      england_special_price: Number(productFormForSave.englandSpecialPrice || 0),
       cost_price: Number(productFormForSave.costPrice || 0),
       supplier_name: productFormForSave.supplierName || "",
       sales_account: productFormForSave.salesAccount || defaultAccounts.salesAccount || "",
@@ -4053,6 +5861,9 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
            
     };
 
+
+
+
     const response = editingId
       ? await supabase
           .from("products")
@@ -4062,11 +5873,17 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
           .single()
       : await supabase.from("products").insert(payload).select().single();
 
+
+
+
     if (response.error) {
       console.error("Product save error:", response.error);
       alert("Product save failed.");
       return;
     }
+
+
+
 
     try {
       await saveProductLocationStock(
@@ -4081,6 +5898,23 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       return;
     }
 
+
+
+
+    try {
+      const priceCodeEntries = Object.entries(productFormForSave.priceCodePrices || {}).map(
+        ([priceCodeId, price]) => ({ priceCodeId, price })
+      );
+      await syncProductPriceCodePrices(response.data?.id || editingId, priceCodeEntries);
+    } catch (priceCodeError) {
+      console.error("Product customer-code price save error:", priceCodeError);
+      alert(`Product was saved, but customer-code prices could not be saved.\n\n${priceCodeError.message || priceCodeError}`);
+      return;
+    }
+
+
+
+
     setEditingId(null);
     setProductForm({
       productCode: "",
@@ -4090,11 +5924,8 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       brand: "",
       series: "",
       flavour: "",
-      cashPrice: "",
-      vatPrice: "",
-      walesSpecialPrice: "",
-      englandSpecialPrice: "",
-      cartonSize: "",
+        vatPrice: "",
+          cartonSize: "",
       image: "",
       stock: "",
       lowStockAlert: "10",
@@ -4106,6 +5937,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       supplierName: "",
       salesAccount: "",
       purchaseAccount: "",
+      priceCodePrices: {},
       locationStocks: {},
       isNew: false,
       isPromotion: false,
@@ -4116,15 +5948,35 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       active: true,
     });
 
+
+
+
     await fetchProducts();
     alert("Product saved.");
   };
 
-  const editProduct = (product) => {
+
+
+
+  const editProduct = async (product) => {
     setEditingId(product.id);
     const productLabelFormFlags = getProductLabelFormFlags(
       getProductLabelValue(product)
     );
+
+
+
+
+    let freshPriceCodePrices = product.priceCodePrices || product.price_code_prices || {};
+    try {
+      const rows = await getProductPriceCodeRows([product.id]);
+      freshPriceCodePrices = buildProductPriceCodeMap(rows)[product.id] || {};
+    } catch (priceCodeError) {
+      console.error("Product customer-code prices reload error:", priceCodeError);
+    }
+
+
+
 
     setProductForm({
       productCode: product.productCode || "",
@@ -4134,10 +5986,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       brand: product.brand || "",
       series: product.series || "",
       flavour: product.flavour || "",
-      cashPrice: product.cashPrice || "",
       vatPrice: product.vatPrice || "",
-      walesSpecialPrice: product.walesSpecialPrice || "",
-      englandSpecialPrice: product.englandSpecialPrice || "",
       cartonSize: product.cartonSize || "",
       image: product.image || "",
       stock: product.stock || "",
@@ -4150,6 +5999,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       supplierName: product.supplierName || "",
       salesAccount: product.salesAccount || "",
       purchaseAccount: product.purchaseAccount || "",
+      priceCodePrices: freshPriceCodePrices,
       locationStocks: product.locationStocks || {},
       isNew: productLabelFormFlags.isNew === true,
       isPromotion: productLabelFormFlags.isPromotion === true,
@@ -4160,12 +6010,21 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       active: product.active !== false,
     });
 
+
+
+
     setPage("products");
   };
+
+
+
 
   const printPickingList = (order) => {
     const totals = calculateDocumentTotals(order.items || [], order);
     const printableItems = sortPrintItems(totals.invoiceItems);
+
+
+
 
     const rows = printableItems
       .map(
@@ -4183,6 +6042,9 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
         `
       )
       .join("");
+
+
+
 
     const html = `
       <html>
@@ -4203,7 +6065,7 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
           <div><b>Order:</b> ${order.orderId}</div>
           <div><b>Date:</b> ${order.createdAt}</div>
           <div><b>Company:</b> ${order.companyName || "-"}</div>
-          <div><b>Price:</b> ${getPriceModeLabel(order.priceMode)}</div>
+          <div><b>Price:</b> ${getCustomerOrderPriceModeLabel(order.priceMode, pricingSettings)}</div>
           <div class="line"></div>
           <table>${rows}</table>
           <div class="line"></div>
@@ -4217,16 +6079,28 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
       </html>
     `;
 
+
+
+
     const win = window.open("", "_blank", "width=360,height=700");
+
+
+
 
     if (!win) {
       alert("Popup blocked. Please allow popups to print the picking list.");
       return;
     }
 
+
+
+
     win.document.write(html);
     win.document.close();
   };
+
+
+
 
   const openCustomerInvoiceDocument = async (
     order,
@@ -4241,6 +6115,9 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
         throw new Error("This invoice is not linked to an order document.");
       }
 
+
+
+
       const watermark = getCustomerInvoiceWatermark(invoiceStatus);
       const resolvedOrder = await withResolvedInvoicePaymentStatus({
         ...(freshOrder || order),
@@ -4249,10 +6126,16 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
         invoicePaymentStatus: invoiceStatus,
       });
 
+
+
+
       if (download) {
         await downloadCentralInvoice(resolvedOrder);
         return;
       }
+
+
+
 
       await previewCentralInvoice(resolvedOrder);
     } catch (error) {
@@ -4265,6 +6148,9 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     }
   };
 
+
+
+
   const openPickingOrder = async (order) => {
     try {
       await claimOrderForPicking(order.orderId, loggedInUser);
@@ -4276,16 +6162,28 @@ const splitPreOrderItem = async (orderId, itemId, allocatedQty, remainingQty) =>
     }
   };
 
+
+
+
   const closePickingOrder = () => {
     setPickingOrderId(null);
     setPage("orders");
   };
 
+
+
+
   const activePickingOrder = orders.find(
     (order) => String(order.orderId) === String(pickingOrderId)
   );
 
+
+
+
   const comingSoonTitle = getComingSoonTitle(page);
+
+
+
 
 const backOfficeContent = comingSoonTitle ? (
   <ComingSoonPlaceholder title={comingSoonTitle} />
@@ -4298,7 +6196,7 @@ const backOfficeContent = comingSoonTitle ? (
         expandedOrders={expandedOrders}
         toggleOrderExpanded={toggleOrderExpanded}
         printPickingList={printPickingList}
-        updateOrderItem={updateOrderItem}
+        updateOrderItem={updatePreOrderSupplyItem}
         addOrderItem={addOrderItem}
         changeOrderStatus={changeOrderStatus}
         fetchOrders={fetchOrders}
@@ -4306,6 +6204,9 @@ const backOfficeContent = comingSoonTitle ? (
         openPickingOrder={openPickingOrder}
       />
     )}
+
+
+
 
     {page === "picking" && activePickingOrder && (
       <OrderPicking
@@ -4317,6 +6218,9 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
+
+
     {page === "warehouse" && (
       <Warehouse
         orders={orders}
@@ -4327,17 +6231,34 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
+
+
     {page === "preOrderSupply" && (
       <PreOrderSupply
         orders={orders}
         products={products}
-        updateOrderItem={updateOrderItem}
+        updateOrderItem={updatePreOrderSupplyItem}
         addOrderItem={addOrderItem}
         splitPreOrderItem={splitPreOrderItem}
         restorePreOrderSplit={restorePreOrderSplit}
         refreshOrders={fetchOrders}
       />
     )}
+
+
+
+
+    {page === "posPurchaseHistory" && (
+      <PreOrderSupply
+        orders={[]}
+        products={products}
+        historyOnly
+      />
+    )}
+
+
+
 
     {page === "driver" && (
       <Driver
@@ -4348,9 +6269,15 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
+
+
     {page === "customers" && <Customers />}
     {page === "salesRouteSetup" && <SalesRouteSetup currentUser={activeUser} />}
     {page === "homePageImages" && <HomePageImages currentUser={activeUser} />}
+
+
+
 
     {page === "products" && (
       <AdminProducts
@@ -4365,7 +6292,11 @@ const backOfficeContent = comingSoonTitle ? (
       />
     )}
 
+
+
+
     {page === "credit" && <CustomerCredit />}
+    {page === "customerWallet" && <CustomerWallet currentUser={activeUser} />}
     {page === "centralPayment" && (
       <CentralPayment
         currentUser={activeUser}
@@ -4382,9 +6313,11 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "profitPortal" && (
       <ProfitAnalysisReport currentUser={activeUser} />
     )}
+    {page === "totalCreditOutstanding" && <AllCreditOutstanding customers={customerAccounts} />}
     {page === "productLineAnalysis" && (
       <ProductLineAnalysisReport currentUser={activeUser} />
     )}
+    {page === "brandPerformance" && <BrandPerformanceReport currentUser={activeUser} />}
     {page === "purchasePlanning" && (
       <PurchasePlanningReport products={products} currentUser={activeUser} />
     )}
@@ -4397,9 +6330,15 @@ const backOfficeContent = comingSoonTitle ? (
       <StockTaking products={products} fetchProducts={fetchProducts} />
     )}
 
+
+
+
     {page === "stockreceipts" && (
       <StockReceipts products={products} fetchProducts={fetchProducts} />
     )}
+
+
+
 
     {page === "staff" && <Staff currentUser={activeUser} onOpenAccessControl={(staffId) => { setAccessControlStaffId(staffId); setPage("accessControl"); }} />}
     {page === "staffLogin" && <StaffLogin initialStaffId={accessControlStaffId} onOpenAccessControl={(staffId) => { setAccessControlStaffId(staffId); setPage("accessControl"); }} />}
@@ -4420,10 +6359,20 @@ const backOfficeContent = comingSoonTitle ? (
   />
 )}
 
+
+
+
     {page === "categories" && <Categories />}
     {page === "productImportExport" && (
       <ProductImportExport
         products={products}
+        fetchProducts={fetchProducts}
+      />
+    )}
+    {page === "customerCodePrices" && (
+      <BulkCustomerCodePrices
+        products={products}
+        pricingSettings={pricingSettings}
         fetchProducts={fetchProducts}
       />
     )}
@@ -4436,11 +6385,25 @@ const backOfficeContent = comingSoonTitle ? (
   </>
 );
 
+
+
+
+const brandPartnerReadOnlyOrder = isBrandPartner && activeDuty === "admin";
+
+
+
+
 const portalPageIsAllowed = page === "order" && !isCustomer
-  ? isSalesRep
+  ? (isSalesRep || brandPartnerReadOnlyOrder)
   : isCustomerPortalPageAllowed(page, portalRoleState);
 
+
+
+
   const isBackOfficePage = Boolean(PAGE_BY_ROUTE[page]) || ["picking", "stockhistory", "stockreceipts", "loginSetup"].includes(page);
+
+
+
 
   if (!isCustomer && isBackOfficePage && page !== "order") {
     return (
@@ -4461,10 +6424,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     );
   }
 
+
+
+
   return (
     <div className="customer-portal-shell min-h-screen bg-slate-100 p-4 pb-40">
       <div className="customer-portal-container max-w-7xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
         
+        {!((isSalesRep || isCustomer) && page === "order") && (
         <div className="portal-header customer-header bg-gradient-to-r from-blue-950 to-blue-700 text-white px-6 py-5">
   <div className="portal-header-inner flex items-start justify-between w-full gap-4">
     <div className="portal-brand-block flex items-start gap-3">
@@ -4478,6 +6445,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         FairChoice Order Portal
       </h1>
 
+
+
+
       <p className="portal-subtitle text-blue-100 text-sm">
         {isAdmin
           ? "Backoffice product and order management"
@@ -4487,6 +6457,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
       </p>
       </div>
     </div>
+
+
+
 
     <div className="portal-actions flex flex-col items-end gap-2">
       <button
@@ -4500,6 +6473,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         Logout
       </button>
 
+
+
+
       {isCustomer && (
         <div className="customer-nav-buttons flex gap-2">
           <button
@@ -4508,6 +6484,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           >
             Order
           </button>
+
+
+
 
           <button
             onClick={async () => {
@@ -4522,6 +6501,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </div>
       )}
 
+
+
+
       {isAdmin && page === "order" && (
         <button
           type="button"
@@ -4532,17 +6514,21 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </button>
       )}
 
+
+
+
       {isSalesRep && (
         <div className="customer-nav-buttons flex gap-1 sm:gap-2">
           {salesRouteMode && (
             <button onClick={resetSalesRouteCustomer} className="payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">Route</button>
           )}
           <button onClick={() => setPage("order")} className={`order-tab-btn btn-secondary bg-white text-blue-800 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}>Order</button>
+          <button type="button" onClick={() => { window.location.hash = "promotion-run"; }} className="payment-history-tab-btn border border-emerald-200 bg-emerald-500 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">Promotion Run</button>
           {salesRouteMode && <button onClick={() => setPage("expenses")} className={`payment-history-tab-btn bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "expenses" ? "active" : ""}`}>Expenses</button>}
-          {canCollectCash && (!salesRouteMode || selectedCustomerAccount) && (
+          {canCollectCash && (
             <button onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesPaymentForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesCashCollection"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}>Collection</button>
           )}
-          <button disabled={salesRouteMode && !selectedCustomerAccount} onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesReturnForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesReturn"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesReturn" ? "active" : ""}`}>Return</button>
+          <button onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesReturnForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesReturn"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesReturn" ? "active" : ""}`}>Return</button>
           {salesRouteMode && selectedCustomerAccount && !salesRouteExceptionMode && (
             <button onClick={() => setShowNoOrderForm(true)} className="payment-history-tab-btn border border-amber-200 bg-amber-400 text-slate-950 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">No Order</button>
           )}
@@ -4551,13 +6537,113 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   </div>
 
+
+
+
 </div>
+        )}
+
+
+
+
+        {showSalesRouteModal && salesRouteMode && (
+          <div
+            className="fixed inset-0 z-[90] flex items-end bg-slate-950/60 p-0 sm:items-center sm:justify-center sm:p-4"
+            onMouseDown={(event) => event.target === event.currentTarget && setShowSalesRouteModal(false)}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="sales-route-modal-title"
+              className="flex max-h-[88vh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-3xl sm:rounded-3xl"
+            >
+              <div className="flex items-start justify-between gap-3 border-b px-4 py-4">
+                <div>
+                  <h2 id="sales-route-modal-title" className="text-xl font-black text-slate-900 sm:text-2xl">Todayâ€™s Route</h2>
+                  <p className="mt-1 text-sm text-slate-500">Tap a customer to start their order. Completed visits remain marked.</p>
+                </div>
+                <button type="button" onClick={() => setShowSalesRouteModal(false)} className="min-h-11 rounded-xl border border-slate-300 px-4 text-sm font-bold text-slate-700">Close</button>
+              </div>
+
+
+
+
+              <div className="flex flex-wrap items-center gap-2 border-b bg-slate-50 px-4 py-3">
+                <select
+                  className="min-h-11 rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold"
+                  value={salesRouteCountryFilter}
+                  onChange={(event) => setSalesRouteCountryFilter(event.target.value)}
+                >
+                  <option value="All">All countries</option>
+                  {[...new Set(salesRouteRows.map((row) => row.branch?.country || row.customer?.country || row.customer?.account_country).filter(Boolean))].sort().map((country) => (
+                    <option key={country} value={country}>{country}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => { setShowSalesRouteModal(false); setShowRouteExceptionForm(true); }}
+                  className="min-h-11 rounded-xl bg-red-600 px-4 text-sm font-black text-white"
+                >
+                  Exception Order
+                </button>
+                <button type="button" onClick={refreshSalesRoute} className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold">Refresh</button>
+              </div>
+
+
+
+
+              <div className="overflow-y-auto p-3 sm:p-4">
+                {salesRouteLoading ? (
+                  <div className="p-8 text-center text-slate-500">Loading routeâ€¦</div>
+                ) : salesRouteRows.length ? (
+                  <>
+                    <div className="grid gap-2">
+                      {visibleSalesRouteRows.map((routeRow) => {
+                        const completed = routeRow.status !== "NOT_VISITED";
+                        return (
+                          <button
+                            key={routeRow.id}
+                            type="button"
+                            disabled={completed}
+                            onClick={() => openSalesRouteCustomer(routeRow)}
+                            className={`grid min-h-[72px] grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl border p-3 text-left sm:grid-cols-[44px_minmax(0,1fr)_auto] ${completed ? "bg-slate-100 opacity-70" : "bg-white hover:border-blue-600 hover:bg-blue-50"}`}
+                          >
+                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-950 text-base font-black text-white">{routeRow.visit_sequence || "â€¢"}</span>
+                            <span className="min-w-0">
+                              <strong className="block truncate text-base text-slate-900">{routeRow.customer.account_name}</strong>
+                              <span className="mt-0.5 block truncate text-sm text-slate-500">{routeRow.branch?.branch_name || "Main account"} Â· {routeRow.branch?.postcode || routeRow.customer.postcode || routeRow.customer.town_city || "Location not set"}</span>
+                            </span>
+                            <span className={`col-start-2 w-fit rounded-full px-2.5 py-1 text-xs font-bold sm:col-start-auto ${completed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{completed ? (routeRow.status === "ORDER_PLACED" ? "Order placed" : "No order") : "Tap to order"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3 text-xs">
+                      <span className="mr-auto text-slate-500">Showing {filteredSalesRouteRows.length ? (currentSalesRoutePage - 1) * 30 + 1 : 0}â€“{Math.min(currentSalesRoutePage * 30, filteredSalesRouteRows.length)} of {filteredSalesRouteRows.length}</span>
+                      <button className="min-h-10 rounded-lg border px-3 disabled:opacity-40" disabled={currentSalesRoutePage <= 1} onClick={() => setSalesRoutePage((pageNumber) => Math.max(1, pageNumber - 1))}>Previous</button>
+                      <span className="font-bold">{currentSalesRoutePage} / {salesRoutePageCount}</span>
+                      <button className="min-h-10 rounded-lg border px-3 disabled:opacity-40" disabled={currentSalesRoutePage >= salesRoutePageCount} onClick={() => setSalesRoutePage((pageNumber) => Math.min(salesRoutePageCount, pageNumber + 1))}>Next</button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-2xl bg-amber-50 p-6 text-center text-amber-900">
+                    <strong className="text-base">No customers assigned to todayâ€™s route.</strong>
+                    <div className="mt-1 text-sm">Admin can add customers in Sales Route Setup.</div>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+
+
+
 
         {showRouteExceptionForm && salesRouteMode && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
-              <h3 className="text-xl font-bold">Exception Order — Outside Today’s Route</h3>
-              <p className="mt-1 text-sm text-slate-500">Use this only when an order must be taken from a customer who is not on today’s assigned route. The reason is recorded.</p>
+              <h3 className="text-xl font-bold">Exception Order â€” Outside Todayâ€™s Route</h3>
+              <p className="mt-1 text-sm text-slate-500">Use this only when an order must be taken from a customer who is not on todayâ€™s assigned route. The reason is recorded.</p>
               <label className="mt-4 block text-sm font-bold">Reason<select className="mt-1 w-full rounded-xl border p-3" value={routeExceptionReason} onChange={(e) => setRouteExceptionReason(e.target.value)}><option value="">Select reason</option>{EXCEPTION_ORDER_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}</select></label>
               <label className="mt-3 block text-sm font-bold">Note<textarea className="mt-1 w-full rounded-xl border p-3" rows="3" value={routeExceptionNote} onChange={(e) => setRouteExceptionNote(e.target.value)} placeholder="Optional note; required for Other" /></label>
               <div className="mt-4 flex justify-end gap-2"><button onClick={() => setShowRouteExceptionForm(false)} className="rounded-xl border px-4 py-2 font-bold">Cancel</button><button onClick={confirmSalesRouteException} className="rounded-xl bg-red-600 px-4 py-2 font-bold text-white">Continue to Normal Order</button></div>
@@ -4565,17 +6651,23 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         )}
 
+
+
+
         {showNoOrderForm && salesRouteMode && selectedCustomerAccount && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
-              <h3 className="text-xl font-bold">Confirm Visit — No Order</h3>
-              <p className="mt-1 text-sm text-slate-500">{selectedCustomerAccount.account_name}{selectedBranch?.branch_name ? ` · ${selectedBranch.branch_name}` : ""}</p>
+              <h3 className="text-xl font-bold">Confirm Visit â€” No Order</h3>
+              <p className="mt-1 text-sm text-slate-500">{selectedCustomerAccount.account_name}{selectedBranch?.branch_name ? ` Â· ${selectedBranch.branch_name}` : ""}</p>
               <label className="mt-4 block text-sm font-bold">Reason<select className="mt-1 w-full rounded-xl border p-3" value={noOrderReason} onChange={(e)=>setNoOrderReason(e.target.value)}><option value="">Select reason</option>{NO_ORDER_REASONS.map(reason=><option key={reason} value={reason}>{reason}</option>)}</select></label>
               <label className="mt-3 block text-sm font-bold">Note<textarea className="mt-1 w-full rounded-xl border p-3" rows="3" value={noOrderNote} onChange={(e)=>setNoOrderNote(e.target.value)} placeholder="Optional note; required for Other" /></label>
               <div className="mt-4 flex justify-end gap-2"><button onClick={()=>setShowNoOrderForm(false)} className="rounded-xl border px-4 py-2 font-bold">Cancel</button><button onClick={confirmSalesRouteNoOrder} className="rounded-xl bg-amber-500 px-4 py-2 font-bold text-slate-950">Confirm No Order</button></div>
             </div>
           </div>
         )}
+
+
+
 
         {!portalPageIsAllowed && (
           <div className="m-4 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-slate-800">
@@ -4584,73 +6676,213 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         )}
 
-        {(isSalesRep || isCustomer) && page === "order" && (
-          <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
-            
- <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
-  {selectedCustomerAccount && (
-    <div className="mb-3 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="grid min-w-0 flex-1 grid-cols-1 gap-1 text-sm sm:grid-cols-3 sm:gap-3">
-        <p className="truncate"><span className="font-bold">Customer:</span> {selectedCustomerAccount.account_name}</p>
-        <p className="truncate"><span className="font-bold">Branch:</span> {selectedBranch?.branch_name || "Main account"}</p>
-        <p className="truncate"><span className="font-bold">Country:</span> {orderCountry}</p>
-      </div>
-      <div className="flex shrink-0 flex-wrap gap-2">
-        <button
-          type="button"
-          aria-expanded={customerDetailsExpanded}
-          aria-controls="order-customer-details"
-          onClick={() => setCustomerDetailsExpanded((expanded) => !expanded)}
-          className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700"
-        >
-          {customerDetailsExpanded ? "Hide details" : "View details"}
-        </button>
-        {!isCustomer && (
-          <button
-            type="button"
-            onClick={() => salesRouteMode && !salesRouteExceptionMode ? resetSalesRouteCustomer() : setCustomerDetailsExpanded(true)}
-            className="min-h-11 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
-          >
-            {salesRouteMode && !salesRouteExceptionMode ? "Back to Route" : "Change customer"}
-          </button>
-        )}
-      </div>
-    </div>
-  )}
 
-  {salesRouteMode && !selectedCustomerAccount && !salesRouteExceptionMode && (
-    <div className="mb-4 rounded-2xl border border-blue-200 bg-white p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div><h2 className="text-lg font-bold">Today’s Route</h2><p className="text-xs text-slate-500">Select the next customer. Completed visits remain marked.</p></div>
-        <div className="flex flex-wrap gap-2">
-          <select className="rounded-xl border px-3 py-2 text-xs font-bold" value={salesRouteCountryFilter} onChange={(e) => setSalesRouteCountryFilter(e.target.value)}><option value="All">All countries</option>{[...new Set(salesRouteRows.map((row) => row.branch?.country || row.customer?.country || row.customer?.account_country).filter(Boolean))].sort().map((c) => <option key={c} value={c}>{c}</option>)}</select>
-          <button onClick={() => setShowRouteExceptionForm(true)} className="rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white">Exception Order</button>
-          <button onClick={refreshSalesRoute} className="rounded-xl border px-3 py-2 text-xs font-bold">Refresh</button>
-        </div>
-      </div>
-      {salesRouteLoading ? <div className="p-5 text-center text-slate-500">Loading route…</div> : salesRouteRows.length ? (
-        <><div className="grid gap-2">{visibleSalesRouteRows.map((routeRow) => {
-          const completed = routeRow.status !== "NOT_VISITED";
-          return <button key={routeRow.id} disabled={completed} onClick={() => openSalesRouteCustomer(routeRow)} className={`grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-xl border p-3 text-left ${completed ? "bg-slate-100 opacity-70" : "bg-white hover:border-blue-600 hover:bg-blue-50"}`}>
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-950 text-white font-bold">{routeRow.visit_sequence || "•"}</span>
-            <span><strong className="block">{routeRow.customer.account_name}</strong><small className="text-slate-500">{routeRow.branch?.branch_name || "Main account"} · {routeRow.branch?.postcode || routeRow.customer.postcode || routeRow.customer.town_city || "Location not set"}</small></span>
-            <span className={`rounded-full px-2 py-1 text-xs font-bold ${completed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{completed ? (routeRow.status === "ORDER_PLACED" ? "Order placed" : "No order") : "Not visited"}</span>
-          </button>;
-        })}</div><div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3 text-xs"><span className="mr-auto text-slate-500">Showing {filteredSalesRouteRows.length ? (currentSalesRoutePage - 1) * 30 + 1 : 0}–{Math.min(currentSalesRoutePage * 30, filteredSalesRouteRows.length)} of {filteredSalesRouteRows.length} · max 30</span><button className="rounded-lg border px-3 py-1 disabled:opacity-40" disabled={currentSalesRoutePage <= 1} onClick={() => setSalesRoutePage((p) => Math.max(1, p - 1))}>Previous</button><span className="font-bold">Page {currentSalesRoutePage} / {salesRoutePageCount}</span><button className="rounded-lg border px-3 py-1 disabled:opacity-40" disabled={currentSalesRoutePage >= salesRoutePageCount} onClick={() => setSalesRoutePage((p) => Math.min(salesRoutePageCount, p + 1))}>Next</button></div></>
-      ) : <div className="rounded-xl bg-amber-50 p-5 text-center text-amber-900"><strong>No customers assigned to today’s route.</strong><div className="text-xs mt-1">Admin can add customers in Sales Route Setup.</div></div>}
-    </div>
-  )}
+
+
+        {(isSalesRep || isCustomer || brandPartnerReadOnlyOrder) && page === "order" && (
+          <div className="customer-order-page p-3 md:p-4 pb-32 md:pb-40 grid grid-cols-1 lg:grid-cols-4 gap-3 md:gap-4">
+
+
+
+
+            <div className="lg:col-span-4">
+                <HomeCategoryGrid
+                  headerOnly
+                  items={homepageCategoryCards}
+                  loading={false}
+                  search={search}
+                  productResultCount={0}
+                  onSearchChange={updateHomepageSearch}
+                  onBrowse={openHomepageItem}
+                  onHome={goToCustomerHome}
+                  cartItemCount={cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + Number(item.qty || 0), 0)}
+                  onCartClick={openCustomerCart}
+                  walletBalance={selectedCustomerAccount?.id ? customerWallet.balance : null}
+                  walletLoading={selectedCustomerAccount?.id ? customerWallet.loading : false}
+                  walletUseRequested={Boolean(selectedCustomerAccount?.id && walletUseRequested)}
+                  onWalletClick={() => {
+                    if (!selectedCustomerAccount?.id) {
+                      alert("Select a customer first to view Wallet money.");
+                      return;
+                    }
+                    setCustomerWalletOpen(true);
+                  }}
+                  menuItems={
+                    isSalesRep
+                      ? [
+                          { label: "Route", hidden: !salesRouteMode, onClick: () => setShowSalesRouteModal(true) },
+                          { label: "Order", onClick: () => setPage("order") },
+                          { label: "Promotion Run", onClick: () => { window.location.hash = "promotion-run"; } },
+                          { label: "Expenses", hidden: !salesRouteMode, onClick: () => setPage("expenses") },
+                          { label: "Cash Collection", hidden: !canCollectCash, onClick: () => { if (salesRouteMode && selectedCustomerAccount) { setSalesPaymentForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); } setPage("salesCashCollection"); } },
+                          { label: "Return", onClick: () => { if (salesRouteMode && selectedCustomerAccount) { setSalesReturnForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); } setPage("salesReturn"); } },
+                          { label: "No Order", hidden: !salesRouteMode || !selectedCustomerAccount || salesRouteExceptionMode, onClick: () => setShowNoOrderForm(true) },
+                          { label: "Back Office", hidden: !(isAdminStaffRole(activeUser?.role || activeUser?.access_level) || (isBrandPartner && activeDuty === "admin")), divider: true, onClick: openBackOffice },
+                          { label: "Logout", divider: true, danger: true, onClick: async () => { if (window.confirm("Log out now?")) await onLogout?.(); } },
+                        ]
+                      : isCustomer
+                      ? [
+                          { label: "Order", onClick: goToCustomerHome },
+                          { label: "Payment History", onClick: async () => { await fetchCustomerLedger(); recordCustomerPortalView("paymentHistory", "paymentHistory"); setPage("paymentHistory"); } },
+                          { label: "Logout", divider: true, danger: true, onClick: async () => { if (window.confirm("Log out now?")) await onLogout?.(); } },
+                        ]
+                      : []
+                  }
+                />
+              </div>
+
+
+            {customerWalletOpen && selectedCustomerAccount && (
+              <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 p-4">
+                <div className="w-full max-w-md rounded-2xl bg-white p-5 text-slate-900 shadow-2xl">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-xl font-black">Customer Wallet</h3>
+                      <p className="mt-1 text-sm text-slate-500">Available Wallet money</p>
+                    </div>
+                    <button type="button" onClick={() => setCustomerWalletOpen(false)} className="rounded-lg px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-100">Close</button>
+                  </div>
+
+
+                  <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-center">
+                    <div className="text-xs font-extrabold uppercase tracking-wide text-emerald-700">Wallet Balance</div>
+                    <div className="mt-1 text-3xl font-black text-emerald-900">{customerWallet.loading ? "..." : formatCurrency(customerWallet.balance)}</div>
+                  </div>
+
+
+                  {customerWallet.error && (
+                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{customerWallet.error}</div>
+                  )}
+
+
+                  <div className="mt-4 rounded-xl border border-slate-200 p-4">
+                    <div className="font-black">Do you want to use Wallet money on this order?</div>
+                    <p className="mt-2 text-sm leading-5 text-slate-600">
+                      If you choose <strong>Yes</strong>, available Wallet money will be deducted at delivery before payment is collected. If you choose <strong>No</strong>, the full invoice will be collected and the Wallet money stays for another order.
+                    </p>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        disabled={customerWallet.loading || Number(customerWallet.balance || 0) <= 0}
+                        onClick={() => { setWalletUseRequested(true); setCustomerWalletOpen(false); }}
+                        className={`rounded-xl border px-4 py-3 font-black ${walletUseRequested ? "border-emerald-700 bg-emerald-700 text-white" : "border-emerald-300 bg-emerald-50 text-emerald-800"} disabled:cursor-not-allowed disabled:opacity-40`}
+                      >
+                        Yes · Use Wallet
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setWalletUseRequested(false); setCustomerWalletOpen(false); }}
+                        className={`rounded-xl border px-4 py-3 font-black ${!walletUseRequested ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                      >
+                        No · Keep Wallet
+                      </button>
+                    </div>
+                  </div>
+
+
+                  <div className="mt-3 text-center text-xs font-bold text-slate-500">
+                    Choice for this order: <span className={walletUseRequested ? "text-emerald-700" : "text-slate-700"}>{walletUseRequested ? "USE WALLET" : "KEEP WALLET"}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+
+
+
+            {selectedCustomerAccount && (
+              <div className="lg:col-span-4 overflow-x-auto border-y border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 [scrollbar-width:none] sm:px-4">
+                <div className="flex min-w-max items-center gap-5 font-semibold">
+                  <span><strong>Credit Limit:</strong> {formatCurrency(selectedCustomerAccount?.credit_limit)}</span>
+                  <span><strong>Credit Balance:</strong> {formatCurrency(getCreditBalance(selectedCustomerAccount, customerLedger, customerOpeningBalance))}</span>
+                  <span className="inline-flex items-center gap-1.5"><strong>Customer:</strong> {selectedCustomerAccount.account_name}{!isCustomer && (<button type="button" title="Change customer" aria-label="Change customer" onClick={() => { if (salesRouteMode && !salesRouteExceptionMode) { resetSalesRouteCustomer(); setShowSalesRouteModal(true); } else { setCustomerDetailsExpanded(true); setTimeout(() => document.getElementById("order-customer-details")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0); } }} className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900">?</button>)}</span>
+                  <span><strong>Branch:</strong> {selectedBranch?.branch_name || "Main account"}</span>
+                  <span><strong>Address:</strong> {getCustomerAddress(selectedCustomerAccount, selectedBranch)}</span>
+                </div>
+              </div>
+            )}
+
+
+
+
+            {!showHomepage && (
+            <div className="lg:col-span-4">
+<ProductFilters
+  search={search}
+  setSearch={(value) => {
+    setSearch(value);
+    if (String(value || "").trim()) setShowHomepage(false);
+  }}
+  selectedCategory={selectedCategory}
+  browseTitle={homepageBrowseTitle}
+  brands={brands}
+  selectedBrand={selectedBrand}
+  seriesList={seriesList}
+  selectedSeries={selectedSeries}
+  subCategories={subCategories}
+  selectedSubCategory={selectedSubCategory}
+
+
+
+
+  setSelectedSubCategory={(value) => {
+    setShowHomepage(false);
+    setSelectedSubCategory(value);
+    setSelectedBrand("All Brands");
+    setSelectedSeries("All Series");
+  }}
+
+
+
+
+  setSelectedBrand={(value) => {
+    setShowHomepage(false);
+    setSelectedBrand(value);
+    setSelectedSeries("All Series");
+  }}
+
+
+
+
+  setSelectedSeries={(value) => {
+    setShowHomepage(false);
+    setSelectedSeries(value);
+  }}
+  resultCount={filteredProducts.length}
+  onBackToCategories={goToCustomerHome}
+  onClearAll={() => setProductPage(1)}
+/>
+
+
+
+
+            </div>
+            )}
+
+
+
+
+ <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3 md:p-4">
+
+
+
 
   {salesRouteMode && salesRouteExceptionMode && (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm">
-      <div><strong>Exception Order</strong><div className="text-xs text-red-800">{routeExceptionReason}{routeExceptionNote ? ` · ${routeExceptionNote}` : ""}</div></div>
-      <button onClick={resetSalesRouteCustomer} className="rounded-xl border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700">Cancel & Return to Route</button>
+      <div><strong>Exception Order</strong><div className="text-xs text-red-800">{routeExceptionReason}{routeExceptionNote ? ` Â· ${routeExceptionNote}` : ""}</div></div>
+      <button onClick={() => { resetSalesRouteCustomer(); setShowSalesRouteModal(true); }} className="rounded-xl border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700">Cancel & Return to Route</button>
     </div>
   )}
+
+
+
 
   {(!salesRouteMode || salesRouteExceptionMode || selectedCustomerAccount) && (!selectedCustomerAccount || customerDetailsExpanded) && (
   <div id="order-customer-details" className="transition-all duration-200">
   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3 text-sm font-bold">
+
+
+
 
     <div className="grid w-full grid-cols-1 items-center gap-2 text-slate-700 md:grid-cols-[minmax(220px,1fr)_auto_auto_auto]">
       <div className="font-semibold truncate">
@@ -4665,12 +6897,18 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   </div>
 
+
+
+
   <div className="grid grid-cols-1 md:grid-cols-[minmax(150px,0.8fr)_minmax(230px,1.2fr)_minmax(230px,1fr)_minmax(120px,0.45fr)] gap-3 mb-3 items-end">
    {!isCustomer && (!salesRouteMode || salesRouteExceptionMode) && (
   <div>
     <label className="font-bold text-sm block mb-1">
       Search
     </label>
+
+
+
 
     <input
       className="border rounded-xl p-3 w-full"
@@ -4681,11 +6919,17 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
     )}
 
+
+
+
    {!isCustomer && (!salesRouteMode || salesRouteExceptionMode) && (
   <div>
     <label className="font-bold text-sm block mb-1">
       Customer Details
     </label>
+
+
+
 
     <select
       className="border rounded-xl p-3 w-full"
@@ -4693,29 +6937,51 @@ const portalPageIsAllowed = page === "order" && !isCustomer
       onChange={(e) => {
         const customerId = e.target.value;
 
+
+
+
         const customer = activeCustomerAccounts.find(
           (c) => String(c.id) === String(customerId)
         );
+
+
+
 
         setSelectedCustomerId(customerId);
         setSelectedCustomerAccount(customer || null);
         setSelectedBranchId("");
         setSelectedBranch(null);
-        setOrderPaymentChoice("no_payment");
+        setOrderPaymentChoice(salesCheckoutPaymentRequired ? "cash_now" : "no_payment");
+        setOrderBankProofFile(null);
+        setOrderPaymentIntentId(createPaymentIntentId());
         setCustomerDetailsExpanded(
           !customer || getCustomerBranches(customer).length > 0
         );
 
+
+
+
         if (customer) {
           setCompanyName(customer.account_name);
 
+
+
+
           const allowedModes = isAdmin
-            ? ["vat", "server", "manager", "super"]
+            ? [
+                "vat",
+                "inc vat",
+                ...(pricingSettings.price_codes || []).map((priceCode) => makePriceCodeMode(priceCode.id)),
+              ]
             : getAllowedPriceModesForCustomer(customer, pricingSettings);
 
-          const defaultMode = String(
-            customer.default_price_mode || "vat"
-          ).toLowerCase();
+
+
+
+          const defaultMode = getCustomerPriceModeValue(customer, pricingSettings);
+
+
+
 
           setPriceMode(
             allowedModes.includes(defaultMode)
@@ -4734,6 +7000,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           : "Select Customer"}
       </option>
 
+
+
+
       {filteredCustomersForSalesRep.map((customer) => (
         <option key={customer.id} value={customer.id}>
           {customer.account_name}
@@ -4743,11 +7012,20 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
     )}
 
+
+
+
     {(() => {
    const activeBranches = filteredBranchesForSelectedCustomer;
-   const showBranchSelector = !salesRouteMode && (!isCustomer || activeBranches.length > 1);
+   const showBranchSelector = (!salesRouteMode || salesRouteExceptionMode) && (!isCustomer || activeBranches.length > 1);
+
+
+
 
    if (!showBranchSelector && !showPriceModeSelector) return null;
+
+
+
 
    return (
    <div
@@ -4766,9 +7044,15 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             onChange={(e) => {
               const branchId = e.target.value;
 
+
+
+
               const branch = activeBranches.find(
                 (b) => String(b.id) === String(branchId)
               );
+
+
+
 
               setSelectedBranchId(branchId);
               setSelectedBranch(branch || null);
@@ -4776,6 +7060,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             }}
           >
             <option value="">Select Branch / Shop</option>
+
+
+
 
             {activeBranches.map((branch) => (
               <option key={branch.id} value={branch.id}>
@@ -4785,6 +7072,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </select>
         </div>
       )}
+
+
+
 
       {showPriceModeSelector && (
   <div
@@ -4801,6 +7091,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
       Price Mode
     </label>
 
+
+
+
     <select
       value={priceMode}
       onChange={(e) => setPriceMode(e.target.value)}
@@ -4810,21 +7103,11 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         minWidth: "150px",
       }}
     >
-      {allowedPriceModes.includes("vat") && (
-        <option value="vat">Ex.VAT</option>
-      )}
-
-      {allowedPriceModes.includes("server") && (
-        <option value="server">Inc.VAT</option>
-      )}
-
-      {allowedPriceModes.includes("manager") && (
-        <option value="manager">Manager Offer</option>
-      )}
-
-      {allowedPriceModes.includes("super") && (
-        <option value="super">Admin Offer</option>
-      )}
+      {allowedPriceModes.map((mode) => (
+        <option key={mode} value={mode}>
+          {getCustomerOrderPriceModeLabel(mode, pricingSettings)}
+        </option>
+      ))}
     </select>
   </div>
 )}
@@ -4832,11 +7115,17 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   );
 })()}
 
+
+
+
 {(isAdmin || isSalesRep) && (
   <div className="md:max-w-[150px]">
     <label className="font-bold text-sm block mb-1">
       Country
     </label>
+
+
+
 
     <select
       value={manualCountry}
@@ -4853,37 +7142,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
   )}
 
+
+
+
+
+
+
+
 {!showHomepage && (
-<>
-<ProductFilters
-  search={search}
-  setSearch={setSearch}
-  selectedCategory={selectedCategory}
-  browseTitle={homepageBrowseTitle}
-  brands={brands}
-  selectedBrand={selectedBrand}
-  seriesList={seriesList}
-  selectedSeries={selectedSeries}
-  subCategories={subCategories}
-  selectedSubCategory={selectedSubCategory}
-
-  setSelectedSubCategory={(value) => {
-    setSelectedSubCategory(value);
-    setSelectedBrand("All Brands");
-    setSelectedSeries("All Series");
-  }}
-
-  setSelectedBrand={(value) => {
-    setSelectedBrand(value);
-    setSelectedSeries("All Series");
-  }}
-
-  setSelectedSeries={setSelectedSeries}
-  resultCount={filteredProducts.length}
-  onBackToCategories={goToCustomerHome}
-  onClearAll={() => setProductPage(1)}
-/>
-
 <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
     {["grid", "list"].map((view) => (
       <button
@@ -4900,14 +7166,20 @@ const portalPageIsAllowed = page === "order" && !isCustomer
       </button>
     ))}
   </div>
-</>
 )}
+
+
+
 
 </div>
 
-            <div className="lg:col-span-3">
+
+
+
+            <div className="lg:col-span-4">
               {showHomepage ? (
                 <HomeCategoryGrid
+                  hideHeader
                   items={homepageCategoryCards}
                   loading={homepageLoading || productsLoading}
                   search={search}
@@ -4917,6 +7189,48 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                   onHome={goToCustomerHome}
                   cartItemCount={cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + Number(item.qty || 0), 0)}
                   onCartClick={openCustomerCart}
+                  products={products}
+                  salesMetrics={homepageSalesMetrics}
+                  getProductPrice={getPrice}
+                  onProductClick={openProductDetails}
+                  menuItems={
+                    isSalesRep
+                      ? [
+                          { label: "Route", hidden: !salesRouteMode, onClick: () => setShowSalesRouteModal(true) },
+                          { label: "Order", onClick: () => setPage("order") },
+                          { label: "Promotion Run", onClick: () => { window.location.hash = "promotion-run"; } },
+                          { label: "Expenses", hidden: !salesRouteMode, onClick: () => setPage("expenses") },
+                          {
+                            label: "Cash Collection",
+                            hidden: !canCollectCash,
+                            onClick: () => {
+                              if (salesRouteMode && selectedCustomerAccount) {
+                                setSalesPaymentForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" }));
+                              }
+                              setPage("salesCashCollection");
+                            },
+                          },
+                          {
+                            label: "Return",
+                            onClick: () => {
+                              if (salesRouteMode && selectedCustomerAccount) {
+                                setSalesReturnForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" }));
+                              }
+                              setPage("salesReturn");
+                            },
+                          },
+                          { label: "No Order", hidden: !salesRouteMode || !selectedCustomerAccount || salesRouteExceptionMode, onClick: () => setShowNoOrderForm(true) },
+                          {
+                            label: "Logout",
+                            divider: true,
+                            danger: true,
+                            onClick: async () => {
+                              if (window.confirm("Log out now?")) await onLogout?.();
+                            },
+                          },
+                        ]
+                      : []
+                  }
                 >
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 md:gap-3">
                     {homepageVisibleSearchProducts.map((product) => {
@@ -4956,11 +7270,17 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 </div>
               )}
 
+
+
+
               {productError && (
                 <div className="bg-slate-50 border rounded-3xl p-5 mb-4 text-red-600 font-bold">
                   {productError}
                 </div>
               )}
+
+
+
 
               {!productsLoading &&
                 !productError &&
@@ -4970,12 +7290,18 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                   </div>
                 )}
 
+
+
+
               {productView === "grid" ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2 md:gap-3">
                   {visibleProducts.map((product) => (
                     (() => {
                       const activePromotionPriceRule =
                         getActivePromotionPriceRule(product);
+
+
+
 
                       return (
                     <ProductCard
@@ -5009,6 +7335,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                       const activePromotionPriceRule =
                         getActivePromotionPriceRule(product);
 
+
+
+
                       return (
                     <ProductListRow
                       key={product.id}
@@ -5036,6 +7365,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 </div>
               )}
 
+
+
+
               {filteredProducts.length > 0 && (
                 <div className="mt-4 flex items-center justify-center gap-3">
                   <button
@@ -5049,9 +7381,15 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                     Previous
                   </button>
 
+
+
+
                   <span className="text-sm font-bold text-slate-600">
                     Page {productPage} of {totalProductPages}
                   </span>
+
+
+
 
                   <button
                     type="button"
@@ -5071,44 +7409,69 @@ const portalPageIsAllowed = page === "order" && !isCustomer
               )}
             </div>
 
-           <Cart
-            cart={cart}
-            total={finalTotal}
-            originalTotal={cartTotals.subtotal}
-            orderDiscountPercent={effectiveOrderDiscountPercent}
-            setOrderDiscountPercent={setOrderDiscountPercent}
-            discountAmount={discountAmount}
-            promotionDiscountAmount={promotionDiscountAmount}
-            canDiscount={canManualCheckoutDiscount}
-            priceMode={priceMode}
-            onSubmit={submitOrder}
-            isSubmitting={isSubmittingOrder}
-            onIncrease={increaseQty}
-            onDecrease={decreaseQty}
-            onRemove={removeItem}
-            onChangeQty={changeQty}
-            editing={isCartEditing}
-            onEditingChange={changeCartEditing}
-            onItemEdited={rememberCartProduct}
-            paymentChoice={orderPaymentChoice}
-            onPaymentChoiceChange={(choice) => {
-              setOrderPaymentChoice(choice);
-            }}
-            paymentChoiceValid={orderPaymentChoiceValid}
-            submitOrder={submitOrder}
-          />
+
+
+
+           {isCartEditing && (
+             <div className="lg:col-span-4">
+               <Cart
+                cart={cart}
+                total={finalTotal}
+                originalTotal={cartTotals.subtotal}
+                orderDiscountPercent={effectiveOrderDiscountPercent}
+                setOrderDiscountPercent={setOrderDiscountPercent}
+                discountAmount={discountAmount}
+                promotionDiscountAmount={promotionDiscountAmount}
+                canDiscount={canManualCheckoutDiscount}
+                priceMode={priceMode}
+                onSubmit={submitOrder}
+                isSubmitting={isSubmittingOrder}
+                onIncrease={increaseQty}
+                onDecrease={decreaseQty}
+                onRemove={removeItem}
+                onChangeQty={changeQty}
+                editing
+                onEditingChange={changeCartEditing}
+                onItemEdited={rememberCartProduct}
+                paymentChoice={orderPaymentChoice}
+                walletBalance={selectedCustomerAccount?.id ? customerWallet.balance : 0}
+                walletLoading={selectedCustomerAccount?.id ? customerWallet.loading : false}
+                walletUseRequested={Boolean(selectedCustomerAccount?.id && walletUseRequested)}
+                onWalletUseChange={(useWallet) => setWalletUseRequested(Boolean(useWallet))}
+                onPaymentChoiceChange={(choice) => {
+                  setOrderPaymentChoice(choice);
+                  if (choice !== "bank_transfer_now") setOrderBankProofFile(null);
+                }}
+                paymentChoiceValid={orderPaymentChoiceValid}
+                requireImmediatePayment={salesCheckoutPaymentRequired}
+                bankProofFile={orderBankProofFile}
+                onBankProofChange={setOrderBankProofFile}
+                reviewMode
+                hideSubmit
+              />
+             </div>
+           )}
           </div>
         )}
+
+
+
 
        
           {isCustomer && page === "paymentHistory" && (
   <div className="customer-payment-history p-4">
     <div className="payment-history-card bg-white rounded-2xl shadow-sm border p-4">
 
+
+
+
       <div className="payment-history-summary flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">
           Customer Credit Account
         </h2>
+
+
+
 
         <div className="payment-history-outstanding border rounded-xl px-4 py-2 text-right">
           <div className="text-xs text-slate-500 font-bold">Total Outstanding</div>
@@ -5117,6 +7480,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         </div>
       </div>
+
+
+
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
         <div className="border rounded-xl p-3 bg-slate-50">
@@ -5147,9 +7513,15 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         )}
       </div>
 
+
+
+
       <h3 className="font-bold text-lg mb-3">
         Statement: {selectedCustomerAccount?.account_name || companyName}
       </h3>
+
+
+
 
       {selectedCustomerBranches.length > 0 && (
         <div className="mb-4 space-y-3">
@@ -5167,6 +7539,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             ))}
           </select>
 
+
+
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {branchOutstandingRows.map((branch) => (
               <div key={branch.id} className="border rounded-xl p-3 bg-slate-50">
@@ -5182,6 +7557,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </div>
       )}
 
+
+
+
       <div className="customer-ledger-table-wrap overflow-x-auto border rounded-2xl">
         <table className="customer-ledger-table w-full text-sm">
           <thead className="bg-slate-100">
@@ -5195,19 +7573,31 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             </tr>
           </thead>
 
+
+
+
           <tbody>
             {displayedCustomerLedgerRowsWithBalance.map(({ row, debit, credit, balance }) => {
               const type = String(
                 row.entry_type || row.transaction_type || ""
               ).toUpperCase();
 
+
+
+
               const isInvoice = type === "INVOICE";
               const isPayment = type === "PAYMENT";
+
+
+
 
               const status = isInvoice ? getCustomerInvoiceStatus(row) : "";
               const invoiceOrder = isInvoice ? getInvoiceOrderForLedgerRow(row) : null;
               const invoiceActionTarget = invoiceOrder || row;
               const displayBalance = balance;
+
+
+
 
               return (
                 <tr key={row.id} className="border-b">
@@ -5215,14 +7605,23 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                     {row.type === "OPENING" ? "-" : new Date(row.created_at).toLocaleDateString("en-GB")}
                   </td>
 
+
+
+
                   <td className="p-3 font-bold">
                     {type === "OPENING" ? "Opening Balance" : isInvoice ? "Invoice" : "Payment"}
+
+
+
 
                     {row.branch_name && (
                       <div className="text-xs text-slate-500 font-normal mt-1">
                         Branch: {row.branch_name}
                       </div>
                     )}
+
+
+
 
                     {isPayment && (
                       <div className="text-xs text-slate-500 font-normal mt-1">
@@ -5232,6 +7631,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                       </div>
                     )}
                   </td>
+
+
+
 
                   <td className="p-3">
                     {type === "OPENING" ? (
@@ -5245,6 +7647,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                     )}
                   </td>
 
+
+
+
                   <td
                     className={`p-3 text-right font-bold ${
                       isPayment ? "text-green-600" : "text-red-600"
@@ -5254,8 +7659,14 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                     {formatCurrency(isPayment ? credit : debit)}
                   </td>
 
+
+
+
                   <td className="p-3 text-right font-bold">{formatCurrency(displayBalance)}
                   </td>
+
+
+
 
                   <td className="p-3 text-center">
                     {isInvoice ? (
@@ -5299,9 +7710,15 @@ const portalPageIsAllowed = page === "order" && !isCustomer
               );
             })}
 
+
+
+
           </tbody>
         </table>
       </div>
+
+
+
 
     </div>
   </div>
@@ -5313,13 +7730,19 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         Sales Rep Cash Collection
       </h2>
 
-      {salesRouteMode ? (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount?.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
+
+
+
+      {salesRouteMode && selectedCustomerAccount ? (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
       ) : <>
         <input value={salesPaymentCustomerSearch} onChange={(e) => setSalesPaymentCustomerSearch(e.target.value)} placeholder="Search customer" className="w-full border rounded-xl p-3" />
         <select value={salesPaymentForm.customerId} onChange={(e) => setSalesPaymentForm({ ...salesPaymentForm, customerId: e.target.value, branchId: "" })} className="w-full border rounded-xl p-3"><option value="">Select Customer</option>{filteredSalesPaymentCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.account_name}</option>)}</select>
         {selectedSalesPaymentBranches.length > 0 && <select value={salesPaymentForm.branchId} onChange={(e) => setSalesPaymentForm({ ...salesPaymentForm, branchId: e.target.value })} className="w-full border rounded-xl p-3"><option value="">Select Branch / Shop</option>{selectedSalesPaymentBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.branch_name}{branch.postcode ? ` - ${branch.postcode}` : ""}</option>)}</select>}
       </>}
+
+
+
 
       {selectedSalesPaymentCustomer && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -5331,6 +7754,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
               {formatCurrency(salesOutstandingSnapshot.totalOutstanding || 0)}
             </div>
           </div>
+
+
+
 
           {selectedSalesPaymentBranch && (
             <div className="border rounded-xl p-3 bg-slate-50">
@@ -5353,6 +7779,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </div>
       )}
 
+
+
+
       <input
         type="number"
         placeholder="Amount Collected"
@@ -5365,6 +7794,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         }
         className="w-full border rounded-xl p-3"
       />
+
+
+
 
       <select
         value={salesPaymentForm.paymentType}
@@ -5383,6 +7815,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         <option value="Cheque">Cheque</option>
       </select>
 
+
+
+
       <input
         placeholder="Who Paid / Shop Staff Name"
         value={salesPaymentForm.whoPaid}
@@ -5394,6 +7829,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         }
         className="w-full border rounded-xl p-3"
       />
+
+
+
 
       <input
         type="date"
@@ -5407,6 +7845,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         className="w-full border rounded-xl p-3"
       />
 
+
+
+
       <textarea
         placeholder="Notes"
         value={salesPaymentForm.notes}
@@ -5418,6 +7859,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         }
         className="w-full border rounded-xl p-3"
       />
+
+
+
 
       <button
         onClick={saveSalesRepCollection}
@@ -5432,22 +7876,34 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 )}      
 
+
+
+
        {isSalesRep && page === "salesCreditHistory" && (
         <CustomerCredit readOnly />
        )}
+
+
+
 
        {isSalesRep && page === "salesReturn" && (
   <div className="p-4">
     <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-3">
       <h2 className="text-xl font-bold">Sales Rep Return</h2>
 
-      {salesRouteMode ? (
+
+
+
+      {salesRouteMode && selectedCustomerAccount ? (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-3"><strong>{selectedCustomerAccount?.account_name}</strong><div className="text-xs text-slate-500">{selectedBranch?.branch_name || "Main account"}</div></div>
       ) : <>
         <input disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnCustomerSearch} onChange={(e) => setSalesReturnCustomerSearch(e.target.value)} placeholder="Search customer" className="w-full border rounded-xl p-3" />
         <select disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnForm.customerId} onChange={(e) => setSalesReturnForm({ ...salesReturnForm, customerId: e.target.value, branchId: "" })} className="w-full border rounded-xl p-3"><option value="">Select Customer</option>{filteredSalesReturnCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.account_name}</option>)}</select>
         {selectedSalesReturnBranches.length > 0 && <select disabled={salesReturnSubmitting || salesReturnCreated} value={salesReturnForm.branchId} onChange={(e) => setSalesReturnForm({ ...salesReturnForm, branchId: e.target.value })} className="w-full border rounded-xl p-3"><option value="">Select Branch / Shop</option>{selectedSalesReturnBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.branch_name}{branch.postcode ? ` - ${branch.postcode}` : ""}</option>)}</select>}
       </>}
+
+
+
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         <label className="space-y-1">
@@ -5482,13 +7938,16 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         </label>
       </div>
 
+
+
+
       {salesReturnOrder ? (
         <div className="rounded-2xl border bg-slate-50">
           <ReturnRequestModal
             order={salesReturnOrder}
             source="SALES_REP_PORTAL"
             currentUser={activeUser}
-            catalogProducts={products.filter((product) => product.active)}
+            catalogProducts={products.filter(isActiveProduct)}
             pricingSettings={pricingSettings}
             country={orderCountry}
             allowCatalogProducts
@@ -5545,11 +8004,20 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                 className="w-full max-h-[500px] object-contain"
               />
 
+
+
+
               <h3 className="font-bold text-lg mt-3">
                 {selectedImage.name}
               </h3>
 
+
+
+
               <HomepageTargetMessages messages={selectedProductNotices} />
+
+
+
 
               <button
                 onClick={() => setSelectedImage(null)}
@@ -5562,109 +8030,117 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           </div>
         )}
 
-      {page === "order" && (isSalesRep || isCustomer) && (
-  <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-xl">
-    <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
-      <div className="min-w-0 shrink">
-        <div className="text-xs text-slate-500">
-          {cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + item.qty, 0)} Items
-        </div>
 
-        <div className="font-bold text-xl">
+
+
+      {page === "order" && (isSalesRep || isCustomer) && (
+  <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-xl sm:p-3">
+    <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-[88px] shrink-0">
+          <div className="text-xs text-slate-500">
+            {cart.filter((item) => !item.isPromotionFree).reduce((sum, item) => sum + item.qty, 0)} Items
+          </div>
+          <div className="whitespace-nowrap text-lg font-bold sm:text-xl">
             {formatCurrency(finalTotal)}
           </div>
-
           {cart.length > 0 && (
             <button
-            onClick={async () => {
-  if (!window.confirm("Clear all cart items?")) return;
-
-  const itemsToClear = cartRef.current.filter(
-    (item) => !item.isPromotionFree
-  );
-
-  if (CENTRAL_CART_ENABLED) {
-    const cartId = await ensureCentralCartForCurrentScope();
-
-    if (cartId) {
-      await centralCartMutationQueueRef.current.catch(() => undefined);
-
-      centralCartMutatingRef.current = true;
-
-      try {
-        for (const item of itemsToClear) {
-          await removeCentralCartItem({
-            profile: activeUser,
-            cartId,
-            productId: item.id,
-          });
-        }
-      } catch (error) {
-        console.error("Central cart clear error:", error);
-        alert("Could not clear the server cart. Please try again.");
-        return;
-      } finally {
-        centralCartMutatingRef.current = false;
-      }
-    }
-  }
-
-  localStorage.removeItem(cartStorageKey);
-  localStorage.removeItem(orderSubmissionStorageKey);
-
-  setCart([]);
-  setIsCartEditing(false);
-  setOrderPaymentChoice("no_payment");
-}}
-              className="text-xs text-red-600 underline mt-1"
+              onClick={async () => {
+                if (!window.confirm("Clear all cart items?")) return;
+                const itemsToClear = cartRef.current.filter((item) => !item.isPromotionFree);
+                if (CENTRAL_CART_ENABLED) {
+                  const cartId = await ensureCentralCartForCurrentScope();
+                  if (cartId) {
+                    await centralCartMutationQueueRef.current.catch(() => undefined);
+                    centralCartMutatingRef.current = true;
+                    try {
+                      for (const item of itemsToClear) {
+                        await removeCentralCartItem({ profile: activeUser, cartId, productId: item.id });
+                      }
+                    } catch (error) {
+                      console.error("Central cart clear error:", error);
+                      alert("Could not clear the server cart. Please try again.");
+                      return;
+                    } finally {
+                      centralCartMutatingRef.current = false;
+                    }
+                  }
+                }
+                localStorage.removeItem(cartStorageKey);
+                localStorage.removeItem(orderSubmissionStorageKey);
+                setCart([]);
+                setIsCartEditing(false);
+                setOrderPaymentChoice(salesCheckoutPaymentRequired ? "cash_now" : "no_payment");
+                setOrderBankProofFile(null);
+                setOrderPaymentIntentId(createPaymentIntentId());
+              }}
+              className="mt-0.5 text-[11px] text-red-600 underline"
             >
               Clear Cart
             </button>
           )}
-           </div>
+        </div>
 
-      <div className="flex shrink-0 items-center gap-2">
-        {cart.length > 0 && (
-          <button
-            type="button"
-            onClick={() => changeCartEditing(!isCartEditing)}
-            className="min-h-12 rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 sm:px-5"
-          >
-            {isCartEditing ? "Done" : "Edit Cart"}
-          </button>
-        )}
-      <button
-        type="button"
-        onClick={openCustomerCheckout}
-        className="min-h-12 rounded-xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700 sm:px-6"
-      >
-        Checkout
-      </button>
+
+
+
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm("Submit this order?")) submitOrder();
+          }}
+          disabled={cart.filter((item) => !item.isPromotionFree).length === 0 || isSubmittingOrder || !orderPaymentChoiceValid}
+          className="min-h-10 shrink-0 rounded-xl border-2 border-orange-400 bg-slate-700 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
+        >
+          {isSubmittingOrder ? "Submitting..." : "Submit Order"}
+        </button>
+      </div>
+
+
+
+
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <button
+          type="button"
+          onClick={goToCustomerHome}
+          className="min-h-10 rounded-xl border-2 border-blue-950 bg-blue-950 px-2.5 py-2 text-xs font-bold text-white hover:bg-blue-800 sm:px-4 sm:text-sm"
+        >
+          <span aria-hidden="true">âŒ‚</span> Home
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (isCartEditing) changeCartEditing(false);
+            else openCustomerCheckout();
+          }}
+          className="min-h-10 rounded-xl bg-green-600 px-2.5 py-2 text-xs font-bold text-white hover:bg-green-700 sm:px-4 sm:text-sm"
+        >
+          {isCartEditing ? "Close Cart" : "Checkout"}
+        </button>
       </div>
     </div>
   </div>
 )}
 
+
+
+
 {(isCustomer || isSalesRep || (isAdmin && page === "order")) && (
   <div className="fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] right-3 z-50 flex gap-2 sm:right-4">
-    <button
-      type="button"
-      aria-label="Go to home"
-      onClick={goToCustomerHome}
-      className="inline-flex min-h-11 items-center gap-2 rounded-xl border-2 border-blue-950 bg-blue-950 px-4 py-2 text-sm font-extrabold text-white shadow-sm hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
-    >
-      <span aria-hidden="true">⌂</span> Home
-    </button>
     <button
       type="button"
       aria-label="Scroll to top"
       onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
       className="min-h-12 rounded-full bg-orange-500 px-4 py-3 text-sm font-bold text-white shadow-lg hover:bg-orange-600 sm:px-5"
     >
-      <span aria-hidden="true">↑</span> Top
+      <span aria-hidden="true">â†‘</span> Top
     </button>
   </div>
 )}
+
+
+
 
 <div className="sr-only" aria-live="polite">{cartNotice}</div>
 {cartNotice && (
@@ -5672,6 +8148,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     {cartNotice}
   </div>
 )}
+
+
+
 
 {isSubmittingOrder && (
   <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4" role="status" aria-live="assertive">
@@ -5683,6 +8162,9 @@ const portalPageIsAllowed = page === "order" && !isCustomer
     </div>
   </div>
 )}
+
+
+
 
 {submissionFeedback === "success" && (
   <div className="fixed left-1/2 top-4 z-[85] flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-emerald-700 px-4 py-3 font-bold text-white shadow-xl" role="status" aria-live="polite">
@@ -5697,14 +8179,20 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 )}
 
+
+
+
       </div>
+
+
+
 
       {returnOrder && (
         <ReturnRequestModal
           order={returnOrder}
           source={isSalesRep ? "SALES_REP_PORTAL" : "CUSTOMER_PAYMENT_HISTORY"}
           currentUser={activeUser}
-          catalogProducts={products.filter((product) => product.active)}
+          catalogProducts={products.filter(isActiveProduct)}
           pricingSettings={pricingSettings}
           country={orderCountry}
           allowCatalogProducts={isSalesRep && page === "salesReturn"}

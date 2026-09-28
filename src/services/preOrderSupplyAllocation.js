@@ -31,13 +31,12 @@ export function warehouseSupplyStage(value) {
       "preorder",
       "need supplier",
       "supply needed",
-      // Legacy values written by the old workflow are still unresolved demand.
-      "next supplier",
-      "next supply",
-      "supplier pending",
     ].includes(status)
   ) {
     return "Pre-order";
+  }
+  if (["next supplier", "next supply", "supplier pending"].includes(status)) {
+    return "Next Supplier";
   }
   if (["cannot supply", "removed"].includes(status)) return "Cannot Supply";
   return null;
@@ -59,39 +58,15 @@ export function preOrderSupplyItemChanges(
   actionType,
   { quantity = 0, remainingQuantity = 0, restoreQuantity = 0 } = {},
 ) {
-  if (actionType === "Buy") {
-    return {
-      sourceStatus: "In Stock",
-      includeInPicking: true,
-      pickedQty: Number(quantity || 0),
-    };
-  }
-  if (actionType === "PartialBuy") {
-    return {
-      sourceStatus: "Need Supplier",
-      includeInPicking: false,
-      pickedQty: 0,
-      qty: Number(remainingQuantity || 0),
-    };
-  }
-  if (actionType === "NextSup") return null;
-  if (actionType === "Available") {
-    return { sourceStatus: "In Stock", includeInPicking: true, pickedQty: Number(quantity || 0) };
-  }
-  if (actionType === "Recall Available") {
-    return { sourceStatus: "Cannot Supply", includeInPicking: false, pickedQty: 0 };
-  }
-  if (actionType === "Remove") {
-    return { sourceStatus: "Cannot Supply", includeInPicking: false, pickedQty: 0 };
-  }
-  if (actionType === "Recall") {
-    return {
-      sourceStatus: "Need Supplier",
-      includeInPicking: false,
-      pickedQty: 0,
-      qty: Number(restoreQuantity || 0),
-    };
-  }
+  // Supply actions are status-only. Ordered qty and picking/packed quantities
+  // are owned by Received Order picking / explicit Qty Update only.
+  if (actionType === "Buy") return { sourceStatus: "In Stock" };
+  if (actionType === "PartialBuy") return { sourceStatus: "Pre-Order" };
+  if (actionType === "NextSup") return { sourceStatus: "Next Supplier" };
+  if (actionType === "Available") return { sourceStatus: "In Stock" };
+  if (actionType === "Recall Available") return { sourceStatus: "Cannot Supply" };
+  if (actionType === "Remove") return { sourceStatus: "Cannot Supply" };
+  if (actionType === "Recall") return { sourceStatus: "Need Supplier" };
   return null;
 }
 

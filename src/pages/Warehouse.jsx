@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../services/supabase";
 import { hasPermission, requirePermission } from "../utils/permissions";
@@ -9,6 +9,10 @@ import { sortPrintItems } from "../utils/printItemSorting";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import WarehousePreOrderPanel from "../components/WarehousePreOrderPanel";
 import { compareWarehouseProducts } from "../utils/warehouseProductSorting";
+import { loadPreOrderSupplyHistory } from "../services/preOrderSupplyHistory";
+
+
+
 
 import {
   calculateDocumentTotals,
@@ -19,8 +23,95 @@ import {
   printInvoice as printCentralInvoice,
   printOrderForm as printCentralOrderForm,
   printThermalReceipt,
+  fetchInvoiceOrderFromDb,
   withResolvedInvoicePaymentStatus,
 } from "../services/centralInvoiceEngine";
+
+
+
+
+const PREORDER_SUPPLIER_HIGHLIGHT_KEY = "fc_preorder_supplier_highlights_v1";
+
+
+
+
+const SUPPLIER_LIGHT_COLORS = [
+  { backgroundColor: "#eff6ff", borderColor: "#93c5fd", color: "#1e40af" },
+  { backgroundColor: "#f0fdf4", borderColor: "#86efac", color: "#166534" },
+  { backgroundColor: "#fff7ed", borderColor: "#fdba74", color: "#9a3412" },
+  { backgroundColor: "#faf5ff", borderColor: "#d8b4fe", color: "#6b21a8" },
+  { backgroundColor: "#fdf2f8", borderColor: "#f9a8d4", color: "#9d174d" },
+  { backgroundColor: "#ecfeff", borderColor: "#67e8f9", color: "#155e75" },
+  { backgroundColor: "#fefce8", borderColor: "#fde047", color: "#854d0e" },
+  { backgroundColor: "#f1f5f9", borderColor: "#94a3b8", color: "#334155" },
+];
+
+
+
+
+const supplierColorFor = (supplierId, supplierName) => {
+  const seed = String(supplierId || supplierName || "Supplier");
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(index)) | 0;
+  }
+  return SUPPLIER_LIGHT_COLORS[Math.abs(hash) % SUPPLIER_LIGHT_COLORS.length];
+};
+
+
+
+
+const readSupplierHighlights = () => {
+  try {
+    return JSON.parse(localStorage.getItem(PREORDER_SUPPLIER_HIGHLIGHT_KEY) || "{}");
+  } catch {
+    return {};
+  }
+};
+
+
+
+
+const buildSharedSupplierHighlights = (events = []) => {
+  const recalledIds = new Set(
+    (events || [])
+      .filter((event) => event?.actionType === "Recall")
+      .flatMap((event) => [event?.recalledClientActionId, event?.recalledEventId])
+      .filter(Boolean)
+      .map(String)
+  );
+
+
+
+
+  const highlights = {};
+  [...(events || [])]
+    .filter((event) => ["Buy", "PartialBuy"].includes(event?.actionType))
+    .filter((event) =>
+      !recalledIds.has(String(event?.clientActionId || "")) &&
+      !recalledIds.has(String(event?.id || ""))
+    )
+    .sort((left, right) => new Date(left?.timestamp || 0) - new Date(right?.timestamp || 0))
+    .forEach((event) => {
+      const targetItemId = event.actionType === "PartialBuy"
+        ? (event.addedItemId || event.itemId)
+        : event.itemId;
+      if (!event.orderId || !targetItemId) return;
+      highlights[`${event.orderId}:${targetItemId}`] = {
+        supplierId: event.supplierId || null,
+        supplierName: event.supplierName || "Supplier",
+        syncedAt: event.timestamp || null,
+      };
+    });
+
+
+
+
+  return highlights;
+};
+
+
+
 
 /*
   Warehouse Page
@@ -33,6 +124,9 @@ import {
   - Assign driver
   - Confirm order ready for driver
 */
+
+
+
 
 export default function Warehouse({
   orders = [],
@@ -51,31 +145,124 @@ export default function Warehouse({
   const [countryFilter, setCountryFilter] = useState("All");
   const [stableItemOrders, setStableItemOrders] = useState({});
   const [preOrderPanelOrderId, setPreOrderPanelOrderId] = useState(null);
+  const [supplierHighlights, setSupplierHighlights] = useState(() => readSupplierHighlights());
+
+
+
+
+  // Visual supplier highlights are read from the compact cache written by POS sync.
+  // This deliberately performs no database request, so Warehouse navigation stays fast.
+  useEffect(() => {
+    setSupplierHighlights(readSupplierHighlights());
+  }, [orders]);
+
+
+
+
+  useEffect(() => {
+    const refreshSupplierHighlights = () => setSupplierHighlights(readSupplierHighlights());
+    window.addEventListener("focus", refreshSupplierHighlights);
+    window.addEventListener("storage", refreshSupplierHighlights);
+    return () => {
+      window.removeEventListener("focus", refreshSupplierHighlights);
+      window.removeEventListener("storage", refreshSupplierHighlights);
+    };
+  }, []);
+
+
+
+
+
+
+
+
+  // Supplier colours must survive navigation, refreshes, and different devices.
+  // Local storage is only a fast same-browser cache; the persisted POS purchase
+  // history is the shared source. This is read-only and never changes order data.
+  useEffect(() => {
+    let active = true;
+
+
+
+
+    const refreshSharedSupplierHighlights = async () => {
+      try {
+        const { events } = await loadPreOrderSupplyHistory(loggedInUser, {
+          pageSize: 500,
+          maxPages: 4,
+        });
+        if (!active) return;
+        setSupplierHighlights({
+          ...readSupplierHighlights(),
+          ...buildSharedSupplierHighlights(events),
+        });
+      } catch (error) {
+        console.warn("Warehouse supplier highlight history load skipped:", error?.message || error);
+      }
+    };
+
+
+
+
+    refreshSharedSupplierHighlights();
+    window.addEventListener("focus", refreshSharedSupplierHighlights);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshSharedSupplierHighlights);
+    };
+  }, [loggedInUser?.id, loggedInUser?.staff_id, loggedInUser?.username]);
+
+
+
 
   // Reusable button style
   const btn = "px-3 py-1.5 rounded-lg text-xs font-semibold";
 
+
+
+
   const [assignedDrivers, setAssignedDrivers] = useState({});
+
+
+
 
   const getOrderId = (order) => order.orderId || order.order_number;
   const getDriverName = (order) => order.driverName || order.driver_name;
   const getOrderDateValue = (order) =>
     order.created_at || order.createdAt || order.received_at || order.receivedAt || "";
 
+
+
+
   const getOrderTimestamp = (order) => {
     const rawDate = getOrderDateValue(order);
     if (!rawDate) return 0;
 
+
+
+
     if (rawDate instanceof Date) return rawDate.getTime();
+
+
+
 
     const parsed = new Date(rawDate).getTime();
     if (!Number.isNaN(parsed)) return parsed;
+
+
+
 
     const match = String(rawDate).match(
       /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,\s*(\d{1,2}):(\d{2})(?::(\d{2}))?)?/
     );
 
+
+
+
     if (!match) return 0;
+
+
+
 
     const [, day, month, year, hour = "0", minute = "0", second = "0"] = match;
     return new Date(
@@ -88,6 +275,9 @@ export default function Warehouse({
     ).getTime();
   };
 
+
+
+
   /*
     Company information for invoice print.
     Future change:
@@ -96,6 +286,9 @@ export default function Warehouse({
   */
   const LOGO_URL =
     "https://naobitwzrkovmwvzvgvf.supabase.co/storage/v1/object/public/product-images/Logo.png";
+
+
+
 
   const COMPANY = {
     name: "Fair Choice Cash and Carry Ltd",
@@ -110,6 +303,9 @@ export default function Warehouse({
     logo: LOGO_URL,
   };
 
+
+
+
   /*
     Load active drivers from Supabase.
   */
@@ -120,10 +316,16 @@ const fetchDrivers = async () => {
     .eq("active", true)
     .order("username");
 
+
+
+
   if (error) {
     console.error("Driver load error:", error);
     return;
   }
+
+
+
 
   setDrivers(
     (data || []).filter((user) => {
@@ -133,9 +335,15 @@ const fetchDrivers = async () => {
   );
 };
 
+
+
+
   useEffect(() => {
     fetchDrivers();
   }, []);
+
+
+
 
   /*
     Show active warehouse and driver-ready orders.
@@ -143,12 +351,21 @@ const fetchDrivers = async () => {
   const warehouseOrders = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
 
+
+
+
     return orders
   .filter((order) => ["Warehouse Packing", "Ready For Driver"].includes(order.status))
   .filter((order) => {
     const keyword = String(searchTerm || "").toLowerCase().trim();
 
+
+
+
     if (!keyword) return true;
+
+
+
 
     return (
       String(order.orderId || order.order_number || "")
@@ -175,19 +392,34 @@ const fetchDrivers = async () => {
   .filter((order) => {
     if (!fromDate && !toDate) return true;
 
+
+
+
     const orderTime = getOrderTimestamp(order);
     if (!orderTime) return false;
+
+
+
 
     const fromTime = fromDate
       ? new Date(`${fromDate}T00:00:00`).getTime()
       : null;
 
+
+
+
     const toTime = toDate
       ? new Date(`${toDate}T23:59:59`).getTime()
       : null;
 
+
+
+
     if (fromTime && orderTime < fromTime) return false;
     if (toTime && orderTime > toTime) return false;
+
+
+
 
     return true;
   })
@@ -198,6 +430,9 @@ const fetchDrivers = async () => {
   });
 }, [orders, searchTerm, fromDate, toDate, countryFilter]);
 
+
+
+
   const warehousePackingCount = orders.filter(
     (order) => order.status === "Warehouse Packing"
   ).length;
@@ -205,6 +440,9 @@ const fetchDrivers = async () => {
     (order) => order.status === "Ready For Driver"
   ).length;
   const allWarehouseCount = warehousePackingCount + readyForDriverCount;
+
+
+
 
   /*
     Expand/collapse warehouse order card.
@@ -216,6 +454,9 @@ const fetchDrivers = async () => {
     }));
   };
 
+
+
+
   /*
     Printable items:
     includeInPicking === false means the item was removed/cannot supply.
@@ -224,10 +465,16 @@ const fetchDrivers = async () => {
  const getPrintableItems = (order) =>
   sortPrintItems(calculateDocumentTotals(order.items || [], order).invoiceItems);
 
+
+
+
   /*
     Money format helper.
   */
   const money = formatCurrency;
+
+
+
 
   /*
     Product quantity helper.
@@ -235,27 +482,190 @@ const fetchDrivers = async () => {
   */
   const getLineQty = getOrderItemQty;
 
+
+
+
+  // Warehouse Packing must show the quantity that was actually packed/picked.
+  // Legacy completed warehouse rows can have picked_qty saved as 0 even though
+  // the order line quantity is valid. For display/printing only, fall back to
+  // the ordered quantity when picking is already completed. Nothing is written
+  // back to the database.
+  const getWarehousePackedQty = (item = {}) => {
+    // Warehouse/Driver display the customer's saved ordered quantity. Supply
+    // status changes must never manufacture a zero or rewrite this quantity.
+    const ordered = Number(item.qty ?? item.quantity ?? 0);
+    return Number.isFinite(ordered) ? ordered : 0;
+  };
+
+
+
+
+  const withWarehousePackedQuantities = (order = {}) => ({
+    ...order,
+    items: (order.items || []).map((item) => ({
+      ...item,
+      qty: getWarehousePackedQty(item),
+      quantity: getWarehousePackedQty(item),
+    })),
+  });
+
+
+
+
+
+
+
+
+  const PRINT_EXCLUDED_SUPPLY_STATUSES = new Set([
+    "cannot supply",
+    "need supplier",
+    "pre-order",
+    "pre order",
+    "pre-order supply",
+    "pre order supply",
+    "supply needed",
+    "next supplier",
+  ]);
+
+
+
+
+  const isPrintExcludedSupplyItem = (item = {}) =>
+    PRINT_EXCLUDED_SUPPLY_STATUSES.has(
+      String(item.sourceStatus || item.source_status || item.status || "")
+        .trim()
+        .toLowerCase()
+    );
+
+
+
+
+  // Customer documents must never contain unresolved supplier lines or Cannot Supply.
+  // This is a print-only copy and never writes anything back to the order/database.
+  const withWarehousePrintableItems = (order = {}) => ({
+    ...order,
+    items: (order.items || []).filter((item) => !isPrintExcludedSupplyItem(item)),
+  });
+
+
+
+
+  const getWarehousePrintOrder = (order = {}) =>
+    withWarehousePrintableItems(withWarehousePackedQuantities(order));
+
+
+
+
+  // Preserve the current Warehouse/Received status when a fresh database copy
+  // is loaded for printing. This affects only the print copy; it writes nothing.
+  const withCurrentWarehouseItemStatuses = (freshOrder = {}, currentOrder = {}) => {
+    const currentItems = currentOrder.items || currentOrder.order_items || [];
+    const currentByKey = new Map(
+      currentItems.map((item) => [
+        String(item.dbId || item.order_item_id || item.id || item.productId || item.product_id || ""),
+        item,
+      ])
+    );
+
+
+    const mergedItems = (freshOrder.items || freshOrder.order_items || []).map((item) => {
+      const key = String(
+        item.dbId || item.order_item_id || item.id || item.productId || item.product_id || ""
+      );
+      const current = currentByKey.get(key);
+      if (!current) return item;
+
+
+      const currentStatus =
+        current.sourceStatus || current.source_status || current.status || null;
+      if (!currentStatus) return item;
+
+
+      const isFree = ["free", "promotion free"].includes(
+        String(currentStatus).trim().toLowerCase()
+      );
+
+
+      return {
+        ...item,
+        sourceStatus: currentStatus,
+        source_status: currentStatus,
+        ...(isFree
+          ? {
+              price: 0,
+              unit_price: 0,
+              unitPrice: 0,
+              line_total: 0,
+              lineTotal: 0,
+              net_total: 0,
+              netTotal: 0,
+              gross_total: 0,
+              grossTotal: 0,
+              vat_amount: 0,
+              vat_total: 0,
+            }
+          : {}),
+      };
+    });
+
+
+    return { ...freshOrder, items: mergedItems, order_items: mergedItems };
+  };
+
+
+
+
+ const isWarehouseFreeItem = (item = {}) =>
+  ["free", "promotion free"].includes(
+    String(item.sourceStatus || item.source_status || item.status || "").trim().toLowerCase()
+  );
+
+
+
+
  const getSavedLinePrice = (item = {}) =>
-  Number(item.price ?? item.unit_price ?? 0);
+  isWarehouseFreeItem(item) ? 0 : Number(item.price ?? item.unit_price ?? 0);
+
+
+
 
  const getSavedLineNetTotal = (item = {}) =>
-  Number(item.net_total ?? item.netTotal ?? 0);
+  isWarehouseFreeItem(item) ? 0 : Number(item.net_total ?? item.netTotal ?? 0);
+
+
+
 
   const getInvoiceTotals = (order = {}) =>
   calculateDocumentTotals(order.items || [], order);
 
+
+
+
   const getWarehouseStatus = (item = {}) =>
     String(item.sourceStatus || item.source_status || item.status || "In Stock");
+
+
+
 
   const getWarehouseStatusRank = (item = {}) => {
     const status = getWarehouseStatus(item).trim().toLowerCase();
 
+
+
+
     if (status === "in stock" || status === "available") return 1;
     if (status === "need supplier" || status === "pre-order" || status === "pre order") return 2;
     if (status === "cannot supply" || status === "supply needed") return 3;
+    if (status === "free" || status === "promotion free") return 4;
 
-    return 4;
+
+
+
+    return 5;
   };
+
+
+
 
 const getInitialWarehouseItemOrder = (items = []) => {
   const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
@@ -263,11 +673,17 @@ const getInitialWarehouseItemOrder = (items = []) => {
     const rankDifference = getWarehouseStatusRank(left) - getWarehouseStatusRank(right);
     if (rankDifference !== 0) return rankDifference;
 
+
+
+
     const productDifference = compareWarehouseProducts(left, right);
     if (productDifference !== 0) return productDifference;
     return itemKey(left).localeCompare(itemKey(right));
   });
 };
+
+
+
 
 const captureStableWarehouseItems = (order = {}) => {
   const key = String(getOrderId(order) || "");
@@ -277,6 +693,9 @@ const captureStableWarehouseItems = (order = {}) => {
     : { ...previous, [key]: getInitialWarehouseItemOrder(order.items || []).map(itemKey) });
 };
 
+
+
+
 // Group once when an order is first opened in Warehouse, then preserve that
 // visual snapshot while staff change statuses. Re-entering Warehouse creates a
 // new component instance and therefore a fresh grouping snapshot.
@@ -284,6 +703,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   const key = String(orderId || "");
   const itemKey = (item) => String(item.dbId || item.id || item.productId || item.product_id || "");
   const snapshot = stableItemOrders[key] || getInitialWarehouseItemOrder(items).map(itemKey);
+
+
+
 
   const byId = new Map(items.map((item) => [itemKey(item), item]));
   const result = snapshot.map((id) => byId.get(id)).filter(Boolean);
@@ -294,6 +716,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   }
   return result;
 };
+
+
+
 
   /*
     Invoice/order totals.
@@ -309,7 +734,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     Server / Manager Offer => Order Form - Not Invoice
   */
   const printCustomerDocument = async (order) => {
-  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
+
+
+
 
   printOrderFormDocument(order);
   await logAction({
@@ -321,6 +748,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     new_value: "Customer Document",
   });
 };
+
+
+
 
   /*
     ORDER FORM - NOT AN INVOICE
@@ -334,18 +764,36 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     - No NOT PAID stamp
   */
 
+
+
+
     const printOrderFormDocument = (order) => {
-    printCentralOrderForm(order);
+    printCentralOrderForm(getWarehousePrintOrder(order));
     return;
+
+
+
 
     const printableItems = getPrintableItems(order);
 
 
+
+
+
+
+
+
   const totals = getInvoiceTotals(order);
+
+
+
 
   const orderDate = order.createdAt
     ? new Date(order.createdAt).toLocaleDateString()
     : new Date().toLocaleDateString();
+
+
+
 
   const rows = printableItems
     .map((item) => {
@@ -353,23 +801,38 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
       const price = getSavedLinePrice(item);
       const net = getSavedLineNetTotal(item);
 
+
+
+
      return `
           <tr>
             <td class="product-code">
               ${item.productCode || item.product_code || ""}
             </td>
 
+
+
+
             <td class="desc-col">
               ${item.name || item.productName || ""}
             </td>
+
+
+
 
             <td class="qty-col">
               ${qty.toFixed(2)}
             </td>
 
+
+
+
             <td class="price-col">
               ${price.toFixed(2)}
             </td>
+
+
+
 
             <td class="net-col">
               ${net.toFixed(2)}
@@ -379,13 +842,22 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     })
     .join("");
 
+
+
+
   const html = `
     <html>
       <head>
         <title>Order Form - ${order.orderId}</title>
 
+
+
+
         <style>
           @page { size: A4; margin: 10mm; }
+
+
+
 
           body {
             font-family: Arial, sans-serif;
@@ -394,9 +866,15 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             margin: 0;
           }
 
+
+
+
           .page {
             min-height: 277mm;
           }
+
+
+
 
           .main-title {
             text-align: center;
@@ -405,12 +883,18 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             margin-bottom: 2px;
           }
 
+
+
+
           .sub-title {
             text-align: center;
             font-size: 18px;
             font-weight: 900;
             margin-bottom: 20px;
           }
+
+
+
 
           .invoice-grid {
             display: grid;
@@ -419,16 +903,25 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             align-items: start;
           }
 
+
+
+
           .box-title {
             font-weight: 700;
             margin-bottom: 5px;
           }
+
+
+
 
           .details-row {
             display: grid;
             grid-template-columns: 95px 1fr;
             margin-bottom: 4px;
           }
+
+
+
 
                 @media print {
                   * {
@@ -437,6 +930,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
                   }
                 }
 
+
+
+
                 table {
                   width: 100%;
                   border-collapse: collapse;
@@ -444,6 +940,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
                   table-layout: fixed;
                   font-size: 11px;
                 }
+
+
+
 
                 th {
                   background-color: #d9e2f3 !important;
@@ -455,10 +954,16 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
                   print-color-adjust: exact !important;
                 }
 
+
+
+
                 thead,
                 thead tr {
                   background-color: #d9e2f3 !important;
                 }
+
+
+
 
                 td {
                   border: none;
@@ -466,15 +971,24 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
                   font-size: 11px;
                 }
 
+
+
+
               .th-code {
                 width: 90px;
                 
               }
 
+
+
+
               .th-desc {
                 width: auto;
                 
               }
+
+
+
 
              .th-qty,
             .qty-col {
@@ -482,11 +996,17 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
               text-align: center;
              }
 
+
+
+
               .th-price,
                 .price-col {
                   width: 70px;
                   text-align: center;
                 }
+
+
+
 
                 .th-vat,
                 .vat-col {
@@ -494,16 +1014,25 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
                   text-align: center;
                 }
 
+
+
+
                             .th-net,
                 .net-col {
                   width: 75px;
                   text-align: center;
                 }
 
+
+
+
               .desc-col {
                 font-size: 11px;
                 font-weight: 400;
               }
+
+
+
 
               .product-code {
                  font-size: 11px;
@@ -513,9 +1042,15 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             text-align: center;
           }
 
+
+
+
           .right {
             text-align: right;
           }
+
+
+
 
           .summary-area {
             margin-top: 16px;
@@ -525,6 +1060,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             align-items: start;
           }
 
+
+
+
           .qty-box {
             margin-top: 28px;
             font-size: 13px;
@@ -532,9 +1070,15 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             line-height: 1.8;
           }
 
+
+
+
           .summary-box {
             border: 1px solid #000;
           }
+
+
+
 
           .summary-row {
             display: grid;
@@ -542,27 +1086,45 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             border-bottom: 1px solid #000;
           }
 
+
+
+
           .summary-row:last-child {
             border-bottom: none;
           }
+
+
+
 
           .summary-label,
           .summary-value {
             padding: 6px;
           }
 
+
+
+
           .summary-label {
             font-weight: 700;
           }
+
+
+
 
           .summary-value {
             text-align: right;
           }
 
+
+
+
           .grand {
             font-size: 14px;
             font-weight: 900;
           }
+
+
+
 
           .deliver {
             margin-top: 28px;
@@ -571,10 +1133,16 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
         </style>
       </head>
 
+
+
+
       <body>
         <div class="page">
           <div class="main-title">ORDER FORM</div>
           <div class="sub-title">NOT AN INVOICE</div>
+
+
+
 
           <div class="invoice-grid">
             <div>
@@ -585,16 +1153,25 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
               <div>${order.postcode || order.post_code || order.branchPostcode || order.branch_postcode || ""}</div>
             </div>
 
+
+
+
             <div>
               <div class="details-row">
                 <strong>Order Date</strong>
                 <span>${orderDate}</span>
               </div>
 
+
+
+
               <div class="details-row">
                 <strong>Customer Code</strong>
                 <span>${order.customerCode || order.companyName || "-"}</span>
               </div>
+
+
+
 
               <div class="details-row">
                 <strong>Order Number</strong>
@@ -602,6 +1179,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
               </div>
             </div>
           </div>
+
+
+
 
           <table>
           <thead>
@@ -614,16 +1194,25 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             </tr>
           </thead>
 
+
+
+
             <tbody>
               ${rows}
             </tbody>
           </table>
+
+
+
 
           <div class="summary-area">
             <div class="qty-box">
               <div>Total Quantity&nbsp;&nbsp;&nbsp; ${totals.totalQuantity}</div>
               <div>Total Lines&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${totals.totalLines}</div>
             </div>
+
+
+
 
             <div class="summary-box">
               <div class="summary-row grand">
@@ -632,6 +1221,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
               </div>
             </div>
           </div>
+
+
+
 
           <div class="deliver">
             <div class="box-title">Deliver To:</div>
@@ -642,6 +1234,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
           </div>
         </div>
 
+
+
+
         <script>
           window.print();
         </script>
@@ -649,16 +1244,28 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     </html>
   `;
 
+
+
+
   const w = window.open("", "_blank");
+
+
+
 
   if (!w) {
     alert("Popup blocked. Please allow popups to print order form.");
     return;
   }
 
+
+
+
   w.document.write(html);
   w.document.close();
 };
+
+
+
 
   /*
     Delivery Note
@@ -670,6 +1277,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
   const items = getPrintableItems(order);
   const totals = getInvoiceTotals(order);
 
+
+
+
   const rows = items
     .map(
       (item) => `
@@ -680,6 +1290,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
       `
     )
     .join("");
+
+
+
 
   const html = `
     <html>
@@ -693,16 +1306,25 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             color: #000;
           }
 
+
+
+
           h1 {
             text-align: center;
             font-size: 22px;
             margin-bottom: 20px;
           }
 
+
+
+
           .info {
             margin-bottom: 16px;
             line-height: 1.7;
           }
+
+
+
 
           table {
             width: 100%;
@@ -711,10 +1333,16 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             table-layout: fixed;
           }
 
+
+
+
           th {
             background: #e5e7eb;
             font-weight: 700;
           }
+
+
+
 
           th,
           td {
@@ -722,11 +1350,17 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             padding: 4px 5px;
           }
 
+
+
+
           .totals {
             margin-top: 16px;
             font-weight: bold;
             line-height: 1.7;
           }
+
+
+
 
           .signatures {
             margin-top: 60px;
@@ -734,6 +1368,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
             justify-content: space-between;
             gap: 40px;
           }
+
+
+
 
           .signature {
             flex: 1;
@@ -744,8 +1381,14 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
         </style>
       </head>
 
+
+
+
       <body>
         <h1>Delivery Note</h1>
+
+
+
 
         <div class="info">
           <div><strong>Company:</strong> ${order.companyName || "-"}</div>
@@ -753,6 +1396,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
           <div><strong>Driver:</strong> ${order.driverName || "-"}</div>
           <div><strong>Date:</strong> ${new Date().toLocaleDateString()}</div>
         </div>
+
+
+
 
         <table>
           <thead>
@@ -766,15 +1412,24 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
           </tbody>
         </table>
 
+
+
+
         <div class="totals">
           <div>Total Lines: ${totals.totalLines}</div>
           <div>Total Quantity: ${totals.totalQty}</div>
         </div>
 
+
+
+
         <div class="signatures">
           <div class="signature">Driver Signature</div>
           <div class="signature">Customer Signature</div>
         </div>
+
+
+
 
         <script>
           window.print();
@@ -783,12 +1438,21 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     </html>
   `;
 
+
+
+
   const printWindow = window.open("", "_blank");
+
+
+
 
   if (!printWindow) {
     alert("Popup blocked. Please allow popups to print delivery note.");
     return;
   }
+
+
+
 
   printWindow.document.write(html);
   printWindow.document.close();
@@ -811,15 +1475,27 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
         }))
     );
 
+
+
+
     if (supplierIssueItems.length === 0) {
       alert("No supplier issue items to export.");
       return;
     }
 
+
+
+
     const grouped = {};
+
+
+
 
     supplierIssueItems.forEach((item) => {
       const key = item.product;
+
+
+
 
       if (!grouped[key]) {
         grouped[key] = {
@@ -829,16 +1505,28 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
         };
       }
 
+
+
+
       grouped[key].Qty += item.qty;
     });
+
+
+
 
     const exportData = Object.values(grouped);
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
 
+
+
+
     XLSX.utils.book_append_sheet(workbook, worksheet, "Supplier Summary");
     XLSX.writeFile(workbook, "supplier-issues-summary.xlsx");
   };
+
+
+
 
   const exportWarehouseItems = (allowedStatuses, fileName, sheetName) => {
     const normalizedStatuses = new Set(
@@ -846,17 +1534,32 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     );
     const groupedItems = {};
 
+
+
+
     warehouseOrders.forEach((order) => {
       (order.items || []).forEach((item) => {
         const sourceStatus = getWarehouseStatus(item).trim();
         const normalizedStatus = sourceStatus.toLowerCase();
 
+
+
+
         if (!normalizedStatuses.has(normalizedStatus)) return;
+
+
+
 
         const product = item.productName || item.name || "";
         const key = product.trim().toLowerCase();
 
+
+
+
         if (!key) return;
+
+
+
 
         if (!groupedItems[key]) {
           groupedItems[key] = {
@@ -865,25 +1568,43 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
           };
         }
 
+
+
+
         groupedItems[key].Qty += getLineQty(item);
       });
     });
 
+
+
+
     const exportRows = Object.values(groupedItems).sort((a, b) =>
       String(a.Product).localeCompare(String(b.Product))
     );
+
+
+
 
     if (exportRows.length === 0) {
       alert("No pre-order items to export.");
       return;
     }
 
+
+
+
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
     const workbook = XLSX.utils.book_new();
+
+
+
 
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
     XLSX.writeFile(workbook, fileName);
   };
+
+
+
 
   const exportSupplyNeeded = () => {
     exportWarehouseItems(
@@ -893,6 +1614,9 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     );
   };
 
+
+
+
   const exportPreOrderList = () => {
     exportWarehouseItems(
       ["Pre-Order"],
@@ -901,26 +1625,65 @@ const getGroupedWarehouseItems = (orderId, items = []) => {
     );
   };
 
+
+
+
+  const getUnresolvedSupplyItems = (order = {}) => {
+    const blockingStatuses = new Set([
+      "need supplier",
+      "pre-order",
+      "pre order",
+      "supply needed",
+      "next supplier",
+    ]);
+    return (order.items || []).filter((item) =>
+      blockingStatuses.has(String(getWarehouseStatus(item) || "").trim().toLowerCase())
+    );
+  };
+
+
+
+
   /*
     Assign driver to order.
   */
  const assignDriver = async (order, driverName) => {
   const orderId = getOrderId(order);
+  const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
+
+
+
+
+  if (driverName && unresolvedSupplyItems.length > 0) {
+    alert(`Resolve ${unresolvedSupplyItems.length} Pre-Order / Next Supplier item(s) before assigning a driver.`);
+    return;
+  }
+
+
+
 
   setAssignedDrivers((prev) => ({
     ...prev,
     [orderId]: driverName,
   }));
 
+
+
+
  await updateOrderExtraFields(orderId, {
     driver_name: driverName,
   });
 };
 
-const printProtectedOrderForm = async (order) => {
-  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  printCentralOrderForm(order);
+
+
+const printProtectedOrderForm = async (order) => {
+
+
+
+
+  printCentralOrderForm(getWarehousePrintOrder(order));
   await logAction({
     user: loggedInUser,
     action_type: "Printed picking list",
@@ -931,10 +1694,21 @@ const printProtectedOrderForm = async (order) => {
   });
 };
 
-const printProtectedInvoice = async (order) => {
-  if (!requirePermission(loggedInUser, "can_print", "You cannot print orders.")) return;
 
-  const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+
+
+const printProtectedInvoice = async (order) => {
+
+
+
+
+  const freshOrder = await fetchInvoiceOrderFromDb(order).catch(() => null);
+  const invoiceOrder = freshOrder
+    ? withCurrentWarehouseItemStatuses(freshOrder, order)
+    : order;
+  const resolvedOrder = await withResolvedInvoicePaymentStatus(
+    getWarehousePrintOrder(invoiceOrder)
+  );
   printCentralInvoice(resolvedOrder);
   await logAction({
     user: loggedInUser,
@@ -946,10 +1720,21 @@ const printProtectedInvoice = async (order) => {
   });
 };
 
-const printProtectedDeliveryNote = async (order) => {
-  if (!requirePermission(loggedInUser, "can_print", "You cannot print delivery notes.")) return;
 
-  const resolvedOrder = await withResolvedInvoicePaymentStatus(order);
+
+
+const printProtectedDeliveryNote = async (order) => {
+
+
+
+
+  const freshOrder = await fetchInvoiceOrderFromDb(order).catch(() => null);
+  const deliveryOrder = freshOrder
+    ? withCurrentWarehouseItemStatuses(freshOrder, order)
+    : order;
+  const resolvedOrder = await withResolvedInvoicePaymentStatus(
+    getWarehousePrintOrder(deliveryOrder)
+  );
   printCentralDeliveryNote(resolvedOrder);
   await logAction({
     user: loggedInUser,
@@ -960,6 +1745,9 @@ const printProtectedDeliveryNote = async (order) => {
     new_value: "Delivery Note",
   });
 };
+
+
+
 
 const backToReceived = async (order) => {
   if (
@@ -972,9 +1760,10 @@ const backToReceived = async (order) => {
     return;
   }
 
-  await changeOrderStatus(order.orderId, "Received", {
-    preserveSupplyState: true,
-  });
+
+
+
+  await changeOrderStatus(order.orderId, "Received");
   await logAction({
     user: loggedInUser,
     action_type: "Back to received",
@@ -984,6 +1773,9 @@ const backToReceived = async (order) => {
     new_value: "Received",
   });
 };
+
+
+
 
 const confirmForDriver = async (order) => {
   if (
@@ -996,21 +1788,45 @@ const confirmForDriver = async (order) => {
     return;
   }
 
+
+
+
   const orderId = order.orderId || order.order_number;
+  const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
+
+
+
+
+  if (unresolvedSupplyItems.length > 0) {
+    alert(`Resolve ${unresolvedSupplyItems.length} Pre-Order / Next Supplier item(s) before sending this order to the driver.`);
+    return;
+  }
+
+
+
 
   const driverName =
     assignedDrivers[orderId] ||
     order.driverName ||
     order.driver_name;
 
+
+
+
   if (!driverName) {
     alert("Please assign a driver first.");
     return;
   }
 
+
+
+
   await updateOrderExtraFields(orderId, {
     driver_name: driverName,
   });
+
+
+
 
   await changeOrderStatus(orderId, "Ready For Driver");
   await logAction({
@@ -1023,12 +1839,18 @@ const confirmForDriver = async (order) => {
   });
 };
 
+
+
+
   const renderWarehouseCard = (order) => {
     const orderId = getOrderId(order);
-   const cardTotals = getInvoiceTotals(order);
+   const suppliedOrder = getWarehousePrintOrder(order);
+   const cardTotals = getInvoiceTotals(suppliedOrder);
 const pickingQty = cardTotals.totalQty;
 const orderValue = cardTotals.grandTotal;
     const isReadyForDriver = order.status === "Ready For Driver";
+    const unresolvedSupplyItems = getUnresolvedSupplyItems(order);
+    const hasUnresolvedSupply = unresolvedSupplyItems.length > 0;
     const priceMode = order.price_mode || order.priceMode || "";
     const orderDate =
       order.created_at ||
@@ -1038,8 +1860,14 @@ const orderValue = cardTotals.grandTotal;
       "-";
    const documentType = getCustomerDocumentType(priceMode);
 
+
+
+
 const customerPrintLabel =
   documentType === "order_form" ? "Print Order Form" : "Print Invoice";
+
+
+
 
 const printCustomerDocumentForMode =
   documentType === "order_form"
@@ -1054,6 +1882,9 @@ const printCustomerDocumentForMode =
       order.shopName ||
       "";
 
+
+
+
     return (
       <div key={orderId} className="bg-white border rounded-2xl p-3">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
@@ -1063,6 +1894,9 @@ const printCustomerDocumentForMode =
               {branchName ? ` | ${branchName}` : ""}
             </h3>
           </div>
+
+
+
 
           <div className="flex flex-wrap gap-2 items-center lg:justify-end">
             <button
@@ -1084,6 +1918,9 @@ const printCustomerDocumentForMode =
               </button>
             )}
 
+
+
+
           </div>
         </div>
         <div
@@ -1102,6 +1939,9 @@ const printCustomerDocumentForMode =
           {money(orderValue)}
         </div>
 
+
+
+
         {expandedOrders[orderId] && (
           <div className="mt-3 space-y-3">
             <div className="hidden md:grid grid-cols-[1fr_70px_140px] border-b font-bold text-xs text-slate-600 px-3 py-2">
@@ -1110,23 +1950,48 @@ const printCustomerDocumentForMode =
               <div className="text-center">Status</div>
             </div>
 
+
+
+
             {getGroupedWarehouseItems(orderId, order.items).map((item) => {
               const sourceStatus = getWarehouseStatus(item);
               const isInStock = sourceStatus === "In Stock";
               const isCannotSupply = sourceStatus === "Cannot Supply";
               const needsSupplier = !isInStock && !isCannotSupply;
+              const itemId = String(item.dbId || item.id || "");
+              const supplierHighlight = supplierHighlights[`${orderId}:${itemId}`] || null;
+              const supplierColor = supplierHighlight
+                ? supplierColorFor(supplierHighlight.supplierId, supplierHighlight.supplierName)
+                : null;
               return (
                 <div
                   key={item.id}
                   className={`grid grid-cols-1 md:grid-cols-[1fr_70px_140px] gap-2 md:gap-0 items-center border rounded-lg px-3 py-2 text-sm ${
                     item.includeInPicking === false ? "opacity-50 bg-slate-50" : ""
                   }`}
+                  style={supplierColor ? {
+                    backgroundColor: supplierColor.backgroundColor,
+                    borderColor: supplierColor.borderColor,
+                  } : undefined}
                 >
-                  <div className="font-medium truncate pr-3">{item.name}</div>
+                  <div className="min-w-0 pr-3">
+                    <div className="font-medium truncate">{item.name}</div>
+                    {supplierHighlight && (
+                      <div className="mt-0.5 truncate text-[10px] font-extrabold" style={{ color: supplierColor.color }}>
+                        Bought · {supplierHighlight.supplierName || "Supplier"}
+                      </div>
+                    )}
+                  </div>
+
+
+
 
                   <div className="text-center font-semibold">
-                    {getLineQty(item)}
+                    {getWarehousePackedQty(item, order)}
                   </div>
+
+
+
 
                   <div
                     className={`text-center font-semibold ${
@@ -1140,12 +2005,18 @@ const printCustomerDocumentForMode =
                     {sourceStatus === "Need Supplier" ? "Pre-Order" : sourceStatus}
                   </div>
 
+
+
+
                 </div>
               );
             })}
 
+
+
+
             <div className="border-t pt-3 flex flex-wrap justify-end gap-2">
-              {hasPermission(loggedInUser, "can_print") && (
+              {(
                 <button
                   onClick={() => printCustomerDocumentForMode(order)}
                   className={`bg-black text-white ${btn}`}
@@ -1154,7 +2025,10 @@ const printCustomerDocumentForMode =
                 </button>
               )}
 
-              {hasPermission(loggedInUser, "can_print") && (
+
+
+
+              {(
                 <button
                   onClick={() => printProtectedDeliveryNote(order)}
                   className={`bg-slate-800 text-white ${btn}`}
@@ -1163,10 +2037,15 @@ const printCustomerDocumentForMode =
                 </button>
               )}
 
-              {hasPermission(loggedInUser, "can_print") && (
+
+
+
+              {(
                 <button
                   onClick={async () =>
-                    printThermalReceipt(await withResolvedInvoicePaymentStatus(order))
+                    printThermalReceipt(
+                      await withResolvedInvoicePaymentStatus(getWarehousePrintOrder(order))
+                    )
                   }
                   className={`bg-zinc-700 text-white ${btn}`}
                 >
@@ -1174,19 +2053,27 @@ const printCustomerDocumentForMode =
                 </button>
               )}
 
+
+
+
               <select
                 value={assignedDrivers[orderId] ?? getDriverName(order) ?? ""}
                 onChange={(e) => assignDriver(order, e.target.value)}
                 className="border rounded-lg px-3 py-1.5 text-xs font-semibold"
-                disabled={isReadyForDriver}
+                disabled={isReadyForDriver || hasUnresolvedSupply}
               >
-                <option value="">Assign Driver</option>
+                <option value="">
+                  {hasUnresolvedSupply ? "Resolve Pre-Order First" : "Assign Driver"}
+                </option>
                 {drivers.map((driver) => (
                   <option key={driver.id} value={driver.username}>
                     {driver.username}
                   </option>
                 ))}
               </select>
+
+
+
 
               {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
                 <button
@@ -1196,6 +2083,9 @@ const printCustomerDocumentForMode =
                   Ready For Driver
                 </button>
               )}
+
+
+
 
               {!isReadyForDriver && hasPermission(loggedInUser, "can_move_to_warehouse") && (
                 <button
@@ -1212,12 +2102,18 @@ const printCustomerDocumentForMode =
     );
   };
 
+
+
+
   const warehousePackingOrders = warehouseOrders.filter(
     (order) => order.status === "Warehouse Packing"
   );
   const readyForDriverOrders = warehouseOrders.filter(
     (order) => order.status === "Ready For Driver"
   );
+
+
+
 
   return (
     <div className="p-4 space-y-4">
@@ -1234,6 +2130,9 @@ const printCustomerDocumentForMode =
       })()}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <h2 className="text-xl font-bold">Warehouse</h2>
+
+
+
 
         <div className="flex flex-wrap gap-2">
           {[
@@ -1257,6 +2156,9 @@ const printCustomerDocumentForMode =
         </div>
       </div>
 
+
+
+
       <div className="bg-white border rounded-2xl p-3">
         <label className="block text-xs font-bold text-slate-500 mb-1">
           Search
@@ -1268,6 +2170,9 @@ const printCustomerDocumentForMode =
           className="w-full border rounded-xl px-3 py-2 text-sm"
         />
       </div>
+
+
+
 
       <div className="bg-white border rounded-2xl p-3 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_150px_auto] gap-3 items-end">
@@ -1282,6 +2187,9 @@ const printCustomerDocumentForMode =
               className="w-full border rounded-xl px-3 py-2 text-sm"
             />
           </label>
+
+
+
 
           <label className="block">
             <span className="block text-xs font-bold text-slate-500 mb-1">
@@ -1298,6 +2206,9 @@ const printCustomerDocumentForMode =
             </select>
           </label>
 
+
+
+
           <label className="block">
             <span className="block text-xs font-bold text-slate-500 mb-1">
               To date
@@ -1309,6 +2220,9 @@ const printCustomerDocumentForMode =
               className="w-full border rounded-xl px-3 py-2 text-sm"
             />
           </label>
+
+
+
 
           <button
             type="button"
@@ -1323,6 +2237,9 @@ const printCustomerDocumentForMode =
           </button>
         </div>
 
+
+
+
         <div className="flex flex-wrap gap-2 justify-end">
           <button
             type="button"
@@ -1334,11 +2251,17 @@ const printCustomerDocumentForMode =
         </div>
       </div>
 
+
+
+
       {warehouseOrders.length === 0 && (
         <div className="bg-slate-50 border rounded-2xl p-4 text-sm">
           No warehouse orders.
         </div>
       )}
+
+
+
 
       {(statusFilter === "All" || statusFilter === "Warehouse Packing") &&
         warehousePackingOrders.length > 0 && (
@@ -1349,6 +2272,9 @@ const printCustomerDocumentForMode =
             {warehousePackingOrders.map(renderWarehouseCard)}
           </section>
         )}
+
+
+
 
       {(statusFilter === "All" || statusFilter === "Ready For Driver") &&
         readyForDriverOrders.length > 0 && (

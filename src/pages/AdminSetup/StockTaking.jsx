@@ -3,7 +3,7 @@ import {
   getActiveStockLocations,
   saveStockTakeCounts,
 } from "../../services/locationStock";
-import { canPerform } from "../../security/accessControlRegistry";
+import { canAccessPage, canPerform } from "../../security/accessControlRegistry";
 
 const clean = (value) => String(value || "").trim();
 const lower = (value) => clean(value).toLowerCase();
@@ -223,29 +223,15 @@ export default function StockTaking({ products = [], fetchProducts }) {
   };
 
   const saveAll = async () => {
-    if (!canPerform(currentUser, "stock.take_difference_approve")) {
+    if (
+      !canPerform(currentUser, "stock.take_difference_approve") &&
+      !canAccessPage(currentUser, "page.product.stock_taking")
+    ) {
       setMessage("Save failed: you do not have permission to approve stock-taking differences.");
       return;
     }
     if (!locationId) {
       setMessage("Select a stock location first.");
-      return;
-    }
-
-    if (!subCategory && !brand) {
-      setMessage("Select a Subcategory or Brand before saving.");
-      return;
-    }
-
-    if (seriesOptions.length > 0 && !series) {
-      setMessage("Select a Series and save one series at a time.");
-      return;
-    }
-
-    if (visibleProducts.length > groupLimit) {
-      setMessage(
-        `This shelf group has ${visibleProducts.length} products. Narrow the filters to ${groupLimit} or fewer before saving.`
-      );
       return;
     }
 
@@ -508,5 +494,4 @@ const styles = `
 @media(min-width:700px){.stock-take-page{padding:16px 16px 84px}.stock-take-toolbar{grid-template-columns:repeat(4,minmax(110px,1fr)) minmax(220px,2fr)}.stock-take-search{grid-column:auto}.stock-take-row{grid-template-columns:minmax(0,1fr) 60px 76px 36px;min-height:38px;font-size:13px;padding:3px 8px}}
 @media(max-width:380px){.stock-take-page{padding-left:4px;padding-right:4px}.stock-take-row{grid-template-columns:minmax(0,1fr) 34px 48px 28px;gap:2px;padding-left:3px;padding-right:3px;font-size:11px}.stock-take-toolbar{gap:3px;padding:4px}.stock-take-toolbar select,.stock-take-toolbar input{font-size:10px;padding:0 3px}.stock-take-summary{gap:7px;padding-left:5px;padding-right:5px}.stock-take-product-name{font-weight:700}}
 `;
-
 

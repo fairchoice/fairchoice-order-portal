@@ -1,9 +1,12 @@
-import { getFcSessionState } from "./fcSession.js";
+﻿import { getFcSessionState } from "./fcSession.js";
 import { supabase } from "./supabase.js";
+
 
 export const WAREHOUSE_STATUSES = Object.freeze(["In Stock", "Pre-Order", "Cannot Supply", "Free"]);
 
+
 export const PICKING_MISMATCH_ACTION = "Picking Mismatch";
+
 
 export const emptyWarehouseActivityFilters = Object.freeze({
   dateFrom: "",
@@ -19,6 +22,7 @@ export const emptyWarehouseActivityFilters = Object.freeze({
   supplier: "All",
 });
 
+
 export const emptyReceivedOrderActivityFilters = Object.freeze({
   dateFrom: "",
   dateTo: "",
@@ -30,6 +34,7 @@ export const emptyReceivedOrderActivityFilters = Object.freeze({
   mismatchType: "All",
 });
 
+
 const safeUuid = () => {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
@@ -39,8 +44,10 @@ const safeUuid = () => {
   });
 };
 
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const uuidOrNull = (value) => UUID_PATTERN.test(String(value || "").trim()) ? String(value).trim() : null;
+
 
 export const normalizeWarehouseStatus = (value) => {
   const status = String(value || "")
@@ -57,11 +64,13 @@ export const normalizeWarehouseStatus = (value) => {
   return String(value || "").trim();
 };
 
+
 const sessionArgs = (user) => {
   const session = getFcSessionState(user);
   if (!session.valid) throw new Error("A valid Fair Choice staff session is required.");
   return session;
 };
+
 
 export const normalizeWarehouseActivity = (row = {}) => ({
   id: row.id,
@@ -94,9 +103,58 @@ export const normalizeWarehouseActivity = (row = {}) => ({
   metadata: row.metadata || {},
 });
 
-export function getPickingMismatchActivity({ itemStatus, action } = {}) {
+
+export function getPickingMismatchActivity({
+  itemStatus,
+  action,
+  inventoryLocationMissing = false,
+  stock = null,
+  quantity = null,
+} = {}) {
   const oldStatus = normalizeWarehouseStatus(itemStatus);
   const normalizedAction = String(action || "").trim().toLowerCase();
+  const trackedStock = Number(stock);
+  const pickedQuantity = Number(quantity);
+
+
+  if (["in_stock", "replace"].includes(normalizedAction) && inventoryLocationMissing) {
+    return {
+      actionType: PICKING_MISMATCH_ACTION,
+      oldStatus: oldStatus || "In Stock",
+      newStatus: "In Stock",
+      reason:
+        normalizedAction === "replace"
+          ? "Picker used a physical replacement but no active country inventory row was configured"
+          : "Picker physically found stock but no active country inventory row was configured",
+      mismatchType:
+        normalizedAction === "replace"
+          ? "REPLACEMENT_MISSING_LOCATION_STOCK"
+          : "MISSING_LOCATION_STOCK",
+    };
+  }
+
+
+  if (
+    ["in_stock", "replace"].includes(normalizedAction) &&
+    Number.isFinite(trackedStock) &&
+    Number.isFinite(pickedQuantity) &&
+    trackedStock < pickedQuantity
+  ) {
+    return {
+      actionType: PICKING_MISMATCH_ACTION,
+      oldStatus: oldStatus || "In Stock",
+      newStatus: "In Stock",
+      reason:
+        normalizedAction === "replace"
+          ? "Picker used a physical replacement above the tracked country inventory quantity"
+          : "Picker physically found more stock than the tracked country inventory quantity",
+      mismatchType:
+        normalizedAction === "replace"
+          ? "REPLACEMENT_INSUFFICIENT_TRACKED_STOCK"
+          : "INSUFFICIENT_TRACKED_STOCK",
+    };
+  }
+
 
   if (oldStatus === "In Stock" && normalizedAction === "pre_order") {
     return {
@@ -108,6 +166,7 @@ export function getPickingMismatchActivity({ itemStatus, action } = {}) {
     };
   }
 
+
   if (oldStatus === "Pre-Order" && normalizedAction === "in_stock") {
     return {
       actionType: PICKING_MISMATCH_ACTION,
@@ -118,8 +177,10 @@ export function getPickingMismatchActivity({ itemStatus, action } = {}) {
     };
   }
 
+
   return null;
 }
+
 
 export function buildWarehouseActivityEvent({ order = {}, item = {}, ...activity } = {}) {
   return {
@@ -149,6 +210,7 @@ export function buildWarehouseActivityEvent({ order = {}, item = {}, ...activity
   };
 }
 
+
 export async function recordWarehouseOperationalActivity(activity, user) {
   const session = sessionArgs(user);
   const event = buildWarehouseActivityEvent(activity);
@@ -160,6 +222,20 @@ export async function recordWarehouseOperationalActivity(activity, user) {
   if (error) throw error;
   return normalizeWarehouseActivity(Array.isArray(data) ? data[0] : data);
 }
+
+
+export async function recordReceivedOrderFreeActivity(activity, user) {
+  const session = sessionArgs(user);
+  const event = buildWarehouseActivityEvent(activity);
+  const { data, error } = await supabase.rpc("fc_record_received_order_free_event_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
+    p_event: event,
+  });
+  if (error) throw error;
+  return normalizeWarehouseActivity(Array.isArray(data) ? data[0] : data);
+}
+
 
 export async function loadWarehouseOperationalEvents(user, pageSize = 1000) {
   const session = sessionArgs(user);
@@ -176,6 +252,7 @@ export async function loadWarehouseOperationalEvents(user, pageSize = 1000) {
   }
   return { events: (data || []).map(normalizeWarehouseActivity), available: true, warning: "" };
 }
+
 
 export async function loadWarehouseActivityReport(user, { dateFrom = "", dateTo = "" } = {}) {
   const session = sessionArgs(user);
@@ -204,9 +281,11 @@ export async function loadReceivedOrderActivityReport(user, { dateFrom = "", dat
   return (data || []).map(normalizeWarehouseActivity);
 }
 
+
 const optionValues = (rows, field) =>
   [...new Set(rows.map((row) => String(row[field] || "").trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));
+
 
 export function getWarehouseActivityFilterOptions(rows = []) {
   return {
@@ -220,6 +299,7 @@ export function getWarehouseActivityFilterOptions(rows = []) {
     suppliers: optionValues(rows, "supplierName"),
   };
 }
+
 
 export function filterWarehouseActivity(rows = [], filters = emptyWarehouseActivityFilters) {
   const matches = (field, expected) => expected === "All" || String(field || "") === expected;
@@ -237,6 +317,7 @@ export function filterWarehouseActivity(rows = [], filters = emptyWarehouseActiv
   });
 }
 
+
 export function getReceivedOrderActivityFilterOptions(rows = []) {
   return {
     countries: optionValues(rows, "country"),
@@ -246,11 +327,13 @@ export function getReceivedOrderActivityFilterOptions(rows = []) {
   };
 }
 
+
 export function getReceivedOrderMismatchType(row = {}) {
   if (row.oldStatus === "In Stock" && row.newStatus === "Pre-Order") return "In Stock → Pre-Order";
   if (row.oldStatus === "Pre-Order" && row.newStatus === "In Stock") return "Pre-Order → In Stock";
   return "Other";
 }
+
 
 export function filterReceivedOrderActivity(rows = [], filters = emptyReceivedOrderActivityFilters) {
   const matches = (field, expected) => expected === "All" || String(field || "") === expected;
@@ -267,6 +350,7 @@ export function filterReceivedOrderActivity(rows = [], filters = emptyReceivedOr
   });
 }
 
+
 export function summarizeReceivedOrderActivity(rows = []) {
   return {
     total: rows.length,
@@ -275,8 +359,10 @@ export function summarizeReceivedOrderActivity(rows = []) {
   };
 }
 
+
 export const sumWarehouseActivityQuantity = (rows = []) =>
   rows.reduce((total, row) => total + Number(row.quantity || 0), 0);
+
 
 export function summarizeWarehouseActivity(rows = []) {
   const count = (oldStatus, newStatus) => rows.filter(
