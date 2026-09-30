@@ -503,7 +503,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   if (productIds.length) {
     const { data: products, error: productsError } = await supabase
       .from("products")
-      .select("id, product_code, code, sku")
+      .select("id, product_code")
       .in("id", productIds);
 
 
