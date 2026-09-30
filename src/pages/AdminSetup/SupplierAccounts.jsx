@@ -9,6 +9,7 @@ import {
   SUPPLIER_LEDGER_TYPE_LABELS,
   SUPPLIER_LEDGER_TYPES,
   SUPPLIER_MANUAL_LEDGER_TYPES,
+  supplierLedgerTypeLabel,
   validateManualSupplierLedgerEntry,
   voidSupplierLedgerTransaction,
 } from "../../services/suppliers";
@@ -351,8 +352,7 @@ export default function SupplierAccounts({ user }) {
                   <Cell>
                     {row.is_opening_balance
                       ? "Opening balance"
-                      : SUPPLIER_LEDGER_TYPE_LABELS[row.transaction_type] ||
-                        row.transaction_type}
+                      : supplierLedgerTypeLabel(row)}
                   </Cell>
                   <Cell>{row.reference || row.invoice_number || "—"}</Cell>
                   <Cell>
@@ -379,6 +379,7 @@ export default function SupplierAccounts({ user }) {
                     {canPost &&
                     row.transaction_id &&
                     row.source === "supplier_credit" &&
+                    supplierLedgerTypeLabel(row) !== "Supplier Payment" &&
                     row.status === "posted" ? (
                       <button
                         type="button"

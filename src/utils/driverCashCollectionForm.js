@@ -35,11 +35,35 @@ export function resolveDriverDeliveryAllocations({
     throw new Error("TODAY_INVOICE allocation amount must be greater than zero.");
   }
 
+  const todayAllocation = previewAllocations.find((allocation) =>
+    verifiedUuidOrNull(
+      allocation?.invoiceSourceId || allocation?.invoice_source_id
+    )
+  );
+
+  if (!todayAllocation) {
+    throw new Error(
+      "TODAY_INVOICE could not find the canonical customer invoice."
+    );
+  }
+
+  const canonicalInvoiceUuid = verifiedUuidOrNull(
+    todayAllocation.invoiceSourceId || todayAllocation.invoice_source_id
+  );
+
   return [
     {
-      invoiceReference: readableReference,
-      invoiceSourceId: canonicalOrderUuid,
-      customerBranchId: verifiedUuidOrNull(customerBranchId),
+      ...todayAllocation,
+      invoiceReference:
+        todayAllocation.invoiceReference ||
+        todayAllocation.invoice_reference ||
+        readableReference,
+      invoiceSourceId: canonicalInvoiceUuid,
+      customerBranchId:
+        verifiedUuidOrNull(
+          todayAllocation.customerBranchId ||
+          todayAllocation.customer_branch_id
+        ) || verifiedUuidOrNull(customerBranchId),
       allocatedAmount: amount,
     },
   ];

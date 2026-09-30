@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+﻿import { supabase } from "./supabase";
 import { calculateDocumentTotals } from "../utils/documentTotals";
 import {
   calculateCartOrderItems,
@@ -14,6 +14,13 @@ import {
 import { sortPrintItems } from "../utils/printItemSorting";
 import { formatDisplayOrderId } from "../utils/orderDisplay";
 import fairchoiceLogo from "../assets/fairchoice-logo.png";
+
+
+
+
+
+
+
 
 const getOrderReference = (order = {}) =>
   order.canonical_order_number ||
@@ -38,6 +45,13 @@ const getInvoiceReference = (row = {}) =>
 const getInvoiceReferenceCandidates = (rowOrReference = {}) => {
   if (typeof rowOrReference === "string") return [rowOrReference];
 
+
+
+
+
+
+
+
   const values = [
     rowOrReference.canonical_order_number,
     rowOrReference.full_order_number,
@@ -55,11 +69,25 @@ const getInvoiceReferenceCandidates = (rowOrReference = {}) => {
     .map((value) => String(value || "").trim())
     .filter(Boolean);
 
+
+
+
+
+
+
+
   const expanded = values.flatMap((value) => {
     const compact = value.toUpperCase().replace(/\s+/g, "");
     const bare = compact.replace(/^ORD-?/, "");
     return /^\d{6,}$/.test(bare) ? [value, `ORD-${bare}`] : [value];
   });
+
+
+
+
+
+
+
 
   return [...new Set(expanded)].sort((a, b) => {
     const aIsOrder = /^ORD-?\d{6,}$/i.test(a);
@@ -75,28 +103,114 @@ const getDeliveredDate = (order = {}) =>
   order.confirmed_at ||
   order.updated_at ||
   new Date().toISOString();
-const inactiveInvoiceStatuses = new Set(["removed", "cancelled", "deleted"]);
+const inactiveInvoiceStatuses = new Set([
+  "removed",
+  "cancelled",
+  "deleted",
+  "cannot supply",
+  "need supplier",
+  "pre-order",
+  "pre order",
+  "pre-order supply",
+  "pre order supply",
+  "supply needed",
+  "next supplier",
+]);
 const activeProcessingQueueStatuses = ["queued", "pending", "processing"];
+
+
+
+
+
+
+
 
 export const getInvoiceLineQuantity = (item = {}) =>
   Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
 
+
+
+
+
+
+
+
 export const isActiveInvoiceLine = (item = {}) => {
   if (getInvoiceLineQuantity(item) <= 0) return false;
-  if (item.includeInPicking === false || item.include_in_picking === false) return false;
+
+
+
+
+
+
+
 
   const status = String(item.sourceStatus || item.source_status || item.status || "")
     .trim()
     .toLowerCase();
 
-  return !inactiveInvoiceStatuses.has(status);
+
+  if (inactiveInvoiceStatuses.has(status)) return false;
+
+
+
+
+
+
+
+
+  if (inactiveInvoiceStatuses.has(status)) return false;
+
+
+
+
+
+
+
+
+  // Pre-order supply intentionally changes status only. A line moved from
+  // Need Supplier to In Stock can still carry a stale include_in_picking=false.
+  // Explicit supplied status is authoritative for customer totals/printing.
+  if (status === "in stock" || status === "available" || status === "supplied") {
+    return true;
+  }
+
+
+
+
+
+
+
+
+  return item.includeInPicking !== false && item.include_in_picking !== false;
 };
+
+
+
+
+
+
+
 
 export const filterActiveInvoiceLines = (items = []) =>
   (items || []).filter(isActiveInvoiceLine);
 
+
+
+
+
+
+
+
 const normalizeInvoiceOrder = (order = {}) => {
   const activeItems = filterActiveInvoiceLines(order.items || order.order_items || []);
+
+
+
+
+
+
+
 
   return {
     ...order,
@@ -123,20 +237,55 @@ const normalizeInvoiceOrder = (order = {}) => {
   };
 };
 
+
+
+
+
+
+
+
 const ORDER_ITEMS_PAGE_SIZE = 1000;
 const ORDER_ITEMS_ORDER_ID_CHUNK_SIZE = 100;
+
+
+
+
+
+
+
 
 async function fetchAllOrderItemsForOrderIds(orderIds = []) {
   const uniqueOrderIds = [...new Set(orderIds.map(String).filter(Boolean))];
   if (!uniqueOrderIds.length) return [];
 
+
+
+
+
+
+
+
   const allItems = [];
+
+
+
+
+
+
+
 
   for (let chunkStart = 0; chunkStart < uniqueOrderIds.length; chunkStart += ORDER_ITEMS_ORDER_ID_CHUNK_SIZE) {
     const orderIdChunk = uniqueOrderIds.slice(
       chunkStart,
       chunkStart + ORDER_ITEMS_ORDER_ID_CHUNK_SIZE
     );
+
+
+
+
+
+
+
 
     for (let from = 0; ; from += ORDER_ITEMS_PAGE_SIZE) {
       const to = from + ORDER_ITEMS_PAGE_SIZE - 1;
@@ -149,23 +298,72 @@ async function fetchAllOrderItemsForOrderIds(orderIds = []) {
         .order("id", { ascending: true })
         .range(from, to);
 
+
+
+
+
+
+
+
       if (error) throw error;
+
+
+
+
+
+
+
 
       const rows = data || [];
       allItems.push(...rows);
+
+
+
+
+
+
+
 
       if (rows.length < ORDER_ITEMS_PAGE_SIZE) break;
     }
   }
 
+
+
+
+
+
+
+
   return allItems;
 }
+
+
+
+
+
+
+
 
 export async function hydrateOrdersWithFullOrderItems(orders = []) {
   if (!Array.isArray(orders) || !orders.length) return orders || [];
 
+
+
+
+
+
+
+
   const orderIds = orders.map((order) => order?.id).filter(Boolean);
   if (!orderIds.length) return orders;
+
+
+
+
+
+
+
 
   const orderItems = await fetchAllOrderItemsForOrderIds(orderIds);
   const itemsByOrderId = orderItems.reduce((groups, item) => {
@@ -175,16 +373,44 @@ export async function hydrateOrdersWithFullOrderItems(orders = []) {
     return groups;
   }, {});
 
+
+
+
+
+
+
+
   return orders.map((order) => ({
     ...order,
     order_items: itemsByOrderId[String(order.id)] || [],
   }));
 }
 
+
+
+
+
+
+
+
 export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   const references = getInvoiceReferenceCandidates(rowOrReference);
 
+
+
+
+
+
+
+
   if (!references.length) throw new Error("Invoice reference is required.");
+
+
+
+
+
+
+
 
   const { data, error } = await supabase
     .from("orders")
@@ -193,10 +419,31 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     .order("created_at", { ascending: false })
     .limit(1);
 
+
+
+
+
+
+
+
   if (error) throw error;
+
+
+
+
+
+
+
 
   const order = Array.isArray(data) ? data[0] : data;
   if (!order) return null;
+
+
+
+
+
+
+
 
   const orderItems = await fetchAllOrderItemsForOrderIds([order.id]);
   const customerAccountId = order.customer_account_id || rowOrReference.customer_account_id;
@@ -205,7 +452,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     order.branch_id ||
     rowOrReference.customer_branch_id ||
     rowOrReference.branch_id;
-  const [customerAccountResult, customerBranchResult] = await Promise.all([
+  const [customerAccountResult, customerBranchResult, invoiceRecordResult] = await Promise.all([
     customerAccountId
       ? supabase
           .from("customer_accounts")
@@ -220,9 +467,25 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
           .eq("id", customerBranchId)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    supabase
+      .from("customer_invoices")
+      .select("id, invoice_number, invoice_total, wallet_applied_amount, amount_to_collect, wallet_application_mode, wallet_preserve_paid_watermark")
+      .eq("order_id", order.id)
+      .neq("status", "CANCELLED")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
   const customerAccount = customerAccountResult.data || null;
   const customerBranch = customerBranchResult.data || null;
+  const invoiceRecord = invoiceRecordResult.error ? null : invoiceRecordResult.data || null;
+
+
+
+
+
+
+
 
   const productIds = [
     ...new Set((orderItems || []).map((item) => item.product_id).filter(Boolean)),
@@ -230,11 +493,25 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   let productsById = {};
   let productsByName = {};
 
+
+
+
+
+
+
+
   if (productIds.length) {
     const { data: products, error: productsError } = await supabase
       .from("products")
-      .select("id, product_code, code, sku")
+      .select("id, product_code")
       .in("id", productIds);
+
+
+
+
+
+
+
 
     if (!productsError) {
       productsById = Object.fromEntries(
@@ -242,6 +519,13 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
       );
     }
   }
+
+
+
+
+
+
+
 
   const missingCodeNames = [
     ...new Set(
@@ -252,11 +536,25 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     ),
   ];
 
+
+
+
+
+
+
+
   if (missingCodeNames.length) {
     const { data: namedProducts, error: namedProductsError } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("product_name", missingCodeNames);
+
+
+
+
+
+
+
 
     if (!namedProductsError) {
       const groupedByName = (namedProducts || []).reduce((groups, product) => {
@@ -266,6 +564,13 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
         return groups;
       }, {});
 
+
+
+
+
+
+
+
       productsByName = Object.fromEntries(
         Object.entries(groupedByName)
           .filter(([, matches]) => matches.length === 1)
@@ -274,8 +579,32 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     }
   }
 
+
+
+
+
+
+
+
   return normalizeInvoiceOrder({
     ...order,
+    invoice_id: invoiceRecord?.id || order.invoice_id || null,
+    invoice_number: invoiceRecord?.invoice_number || order.invoice_number || order.order_number,
+    invoice_total: Number(invoiceRecord?.invoice_total ?? order.invoice_total ?? order.order_total ?? 0),
+    wallet_applied_amount: Number(
+      invoiceRecord?.wallet_applied_amount ?? order.wallet_applied_amount ?? order.wallet_requested_amount ?? 0
+    ),
+    amount_to_collect:
+      invoiceRecord?.amount_to_collect !== null && invoiceRecord?.amount_to_collect !== undefined
+        ? Number(invoiceRecord.amount_to_collect)
+        : Number(order.order_total ?? order.invoice_total ?? 0) -
+          Number(order.wallet_applied_amount ?? order.wallet_requested_amount ?? 0),
+    wallet_application_mode:
+      invoiceRecord?.wallet_application_mode ||
+      (Number(order.wallet_applied_amount ?? order.wallet_requested_amount ?? 0) > 0
+        ? "ORDER_SELECTED"
+        : null),
+    wallet_preserve_paid_watermark: Boolean(invoiceRecord?.wallet_preserve_paid_watermark),
     customer_accounts: customerAccount || order.customer_accounts || null,
     customer: customerAccount || order.customer || null,
     customer_branches: customerBranch || order.customer_branches || null,
@@ -293,6 +622,13 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
           product: item.product || fallbackProduct,
         });
 
+
+
+
+
+
+
+
         return {
           product_code: item.product_code || productCode,
           productCode: item.productCode || productCode,
@@ -304,6 +640,13 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   });
 }
 
+
+
+
+
+
+
+
 const escapeHtml = (value) =>
   String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -312,6 +655,13 @@ const escapeHtml = (value) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 
+
+
+
+
+
+
+
 const escapePdfText = (value) =>
   String(value ?? "")
     .replace(/\\/g, "\\\\")
@@ -319,19 +669,47 @@ const escapePdfText = (value) =>
     .replace(/\)/g, "\\)")
     .replace(/£/g, "\\243");
 
+
+
+
+
+
+
+
 const formatReceiptDateTime = (value) => {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return new Date().toLocaleString("en-GB");
   return date.toLocaleString("en-GB");
 };
 
+
+
+
+
+
+
+
 const isInvoiceGeneratedForOrder = (order = {}) => {
   if (order.invoice_number || order.invoiceNo || order.invoice_id || order.invoiceId) {
     return true;
   }
 
+
+
+
+
+
+
+
   return isDeliveredInvoiceStatus(order.status);
 };
+
+
+
+
+
+
+
 
 const pushAddressValue = (lines, value) => {
   if (!value) return;
@@ -340,12 +718,26 @@ const pushAddressValue = (lines, value) => {
     return;
   }
 
+
+
+
+
+
+
+
   String(value)
     .split(/\r?\n|,\s*/)
     .map((line) => line.trim())
     .filter(Boolean)
     .forEach((line) => lines.push(line));
 };
+
+
+
+
+
+
+
 
 const uniqueAddressLines = (lines = []) => {
   const seen = new Set();
@@ -357,6 +749,13 @@ const uniqueAddressLines = (lines = []) => {
   });
 };
 
+
+
+
+
+
+
+
 const getCustomerAccountAddressLines = (account = {}) => {
   const lines = [];
   pushAddressValue(lines, account.address_line_1 || account.addressLine1 || account.address);
@@ -366,6 +765,13 @@ const getCustomerAccountAddressLines = (account = {}) => {
   pushAddressValue(lines, account.postcode || account.post_code);
   return uniqueAddressLines(lines);
 };
+
+
+
+
+
+
+
 
 const getOrderBillingAddressLines = (order = {}) => {
   const lines = [];
@@ -384,6 +790,13 @@ const getOrderBillingAddressLines = (order = {}) => {
   pushAddressValue(lines, order.billing_postcode || order.billingPostcode);
   return uniqueAddressLines(lines);
 };
+
+
+
+
+
+
+
 
 export const getDeliveryAddressLines = (order = {}) => {
   const branchLines = [];
@@ -409,7 +822,21 @@ export const getDeliveryAddressLines = (order = {}) => {
       order.branch?.postcode
   );
 
+
+
+
+
+
+
+
   if (branchLines.length) return uniqueAddressLines(branchLines);
+
+
+
+
+
+
+
 
   const orderLines = [];
   pushAddressValue(orderLines, order.deliveryAddress || order.delivery_address);
@@ -418,7 +845,21 @@ export const getDeliveryAddressLines = (order = {}) => {
   pushAddressValue(orderLines, order.delivery_town || order.delivery_city);
   pushAddressValue(orderLines, order.deliveryPostcode || order.delivery_postcode);
 
+
+
+
+
+
+
+
   if (orderLines.length) return uniqueAddressLines(orderLines);
+
+
+
+
+
+
+
 
   const customerLines = [];
   pushAddressValue(
@@ -435,33 +876,103 @@ export const getDeliveryAddressLines = (order = {}) => {
   pushAddressValue(customerLines, order.town || order.city);
   pushAddressValue(customerLines, order.postcode || order.billing_postcode);
 
+
+
+
+
+
+
+
   if (customerLines.length) return uniqueAddressLines(customerLines);
+
+
+
+
+
+
+
 
   return ["Address not available"];
 };
 
+
+
+
+
+
+
+
 export const getDeliveryAddress = (order = {}) =>
   getDeliveryAddressLines(order).join(", ");
 
+
+
+
+
+
+
+
 const getBillingAddress = (order = {}) => {
   const customerAccount = order.customer_accounts || order.customer || {};
+
+
+
+
+
+
+
 
   const accountInvoiceLines = [];
   pushAddressValue(accountInvoiceLines, customerAccount.invoice_address);
   if (accountInvoiceLines.length) return uniqueAddressLines(accountInvoiceLines).join(", ");
 
+
+
+
+
+
+
+
   const accountBillingLines = [];
   pushAddressValue(accountBillingLines, customerAccount.billing_address);
   if (accountBillingLines.length) return uniqueAddressLines(accountBillingLines).join(", ");
 
+
+
+
+
+
+
+
   const accountMainLines = getCustomerAccountAddressLines(customerAccount);
   if (accountMainLines.length) return accountMainLines.join(", ");
+
+
+
+
+
+
+
 
   const orderBillingLines = getOrderBillingAddressLines(order);
   if (orderBillingLines.length) return orderBillingLines.join(", ");
 
+
+
+
+
+
+
+
   return getDeliveryAddress(order);
 };
+
+
+
+
+
+
+
 
 const getDriverName = (order = {}) =>
   order.driverName ||
@@ -471,11 +982,25 @@ const getDriverName = (order = {}) =>
   order.confirmed_by ||
   "";
 
+
+
+
+
+
+
+
 const parseMoneyValue = (value) => {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(String(value).replace(/[^0-9.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+
+
+
+
+
+
 
 const firstMoneyValue = (...values) => {
   for (const value of values) {
@@ -483,17 +1008,53 @@ const firstMoneyValue = (...values) => {
     if (parsed !== null) return parsed;
   }
 
+
+
+
+
+
+
+
   return null;
 };
 
+
+
+
+
+
+
+
 export const isInvoicePaid = (order = {}, totals = {}) => {
+  if (order.wallet_preserve_paid_watermark === true || order.walletPreservePaidWatermark === true) return true;
   if (order._ledgerPaid === true || order.ledgerPaid === true) return true;
+
+
+
+
+
+
+
 
   const paymentStatus = String(order.payment_status || order.paymentStatus || "")
     .trim()
     .toLowerCase();
 
+
+
+
+
+
+
+
   if (paymentStatus === "paid") return true;
+
+
+
+
+
+
+
 
   const invoiceTotal = firstMoneyValue(
     totals.grandTotal,
@@ -508,6 +1069,13 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
     order.total
   );
 
+
+
+
+
+
+
+
   const amountDue = firstMoneyValue(
     order.amount_due,
     order.amountDue,
@@ -519,9 +1087,23 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
     order.outstandingAmount
   );
 
+
+
+
+
+
+
+
   if (amountDue !== null && amountDue <= 0) {
     return true;
   }
+
+
+
+
+
+
+
 
   const paidAmount = firstMoneyValue(
     order.payment_amount,
@@ -534,12 +1116,33 @@ export const isInvoicePaid = (order = {}, totals = {}) => {
     order.totalPaid
   );
 
+
+
+
+
+
+
+
   if (invoiceTotal !== null && invoiceTotal > 0 && paidAmount !== null && paidAmount >= invoiceTotal) {
     return true;
   }
 
+
+
+
+
+
+
+
   return false;
 };
+
+
+
+
+
+
+
 
 const getInvoiceLedgerReferences = (order = {}) => [
   order.canonical_order_number,
@@ -553,6 +1156,13 @@ const getInvoiceLedgerReferences = (order = {}) => [
   .map((value) => String(value || "").trim())
   .filter(Boolean);
 
+
+
+
+
+
+
+
 const getLedgerRowDebit = (row = {}) => {
   const type = String(row.entry_type || row.transaction_type || "").toUpperCase();
   const invoiceLikeAmount = type.includes("INVOICE") ? Number(row.amount || 0) : 0;
@@ -564,6 +1174,13 @@ const getLedgerRowDebit = (row = {}) => {
     invoiceLikeAmount,
   );
 };
+
+
+
+
+
+
+
 
 const getLedgerRowCredit = (row = {}) => {
   const type = String(row.entry_type || row.transaction_type || "").toUpperCase();
@@ -580,6 +1197,13 @@ const getLedgerRowCredit = (row = {}) => {
   );
 };
 
+
+
+
+
+
+
+
 const getProductCodeFromInvoiceItem = (item = {}) =>
   item.product_code ||
   item.code ||
@@ -595,6 +1219,13 @@ const getProductCodeFromInvoiceItem = (item = {}) =>
   item.product?.productCode ||
   "";
 
+
+
+
+
+
+
+
 const withProductCodeFallbacks = async (order = {}) => {
   const items = order.items || order.order_items || [];
   const missingProductIds = [
@@ -607,6 +1238,13 @@ const withProductCodeFallbacks = async (order = {}) => {
     ),
   ];
 
+
+
+
+
+
+
+
   const missingProductNames = [
     ...new Set(
       (items || [])
@@ -616,16 +1254,44 @@ const withProductCodeFallbacks = async (order = {}) => {
     ),
   ];
 
+
+
+
+
+
+
+
   if (!missingProductIds.length && !missingProductNames.length) return order;
+
+
+
+
+
+
+
 
   let productsById = {};
   let productsByName = {};
 
+
+
+
+
+
+
+
   if (missingProductIds.length) {
     const { data, error } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("id", missingProductIds);
+
+
+
+
+
+
+
 
     if (error) {
       console.warn("Invoice product code fallback lookup failed", error);
@@ -636,11 +1302,25 @@ const withProductCodeFallbacks = async (order = {}) => {
     }
   }
 
+
+
+
+
+
+
+
   if (missingProductNames.length) {
     const { data, error } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("product_name", missingProductNames);
+
+
+
+
+
+
+
 
     if (error) {
       console.warn("Invoice product name fallback lookup failed", error);
@@ -652,6 +1332,13 @@ const withProductCodeFallbacks = async (order = {}) => {
         return groups;
       }, {});
 
+
+
+
+
+
+
+
       productsByName = Object.fromEntries(
         Object.entries(groupedByName)
           .filter(([, matches]) => matches.length === 1)
@@ -660,8 +1347,22 @@ const withProductCodeFallbacks = async (order = {}) => {
     }
   }
 
+
+
+
+
+
+
+
   const nextItems = (items || []).map((item) => {
     if (getProductCodeFromInvoiceItem(item)) return item;
+
+
+
+
+
+
+
 
     const product =
       productsById[String(item.product_id || item.productId || item.id)] ||
@@ -672,6 +1373,13 @@ const withProductCodeFallbacks = async (order = {}) => {
       ];
     const productCode = getProductCodeFromInvoiceItem({ product, products: product });
 
+
+
+
+
+
+
+
     return {
       ...item,
       product_code: productCode || item.product_code || "",
@@ -681,6 +1389,13 @@ const withProductCodeFallbacks = async (order = {}) => {
     };
   });
 
+
+
+
+
+
+
+
   return {
     ...order,
     items: nextItems,
@@ -688,9 +1403,23 @@ const withProductCodeFallbacks = async (order = {}) => {
   };
 };
 
+
+
+
+
+
+
+
 export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
   const references = [...new Set(getInvoiceLedgerReferences(order))];
   if (!references.length) return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
+
+
+
+
+
+
+
 
   const { data, error } = await supabase
     .from("customer_ledger")
@@ -705,10 +1434,24 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
         .join(",")
     );
 
+
+
+
+
+
+
+
   if (error) {
     console.warn("Invoice ledger payment status lookup failed", error);
     return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
   }
+
+
+
+
+
+
+
 
   const customerAccountId = String(getCustomerAccountId(order) || "");
   const branchId = String(getBranchId(order) || "");
@@ -718,8 +1461,22 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
       return false;
     }
 
+
+
+
+
+
+
+
     const rowBranchId = String(row.customer_branch_id || row.branch_id || "");
     if (branchId && rowBranchId && rowBranchId !== branchId) return false;
+
+
+
+
+
+
+
 
     const type = String(row.entry_type || row.transaction_type || "").trim().toUpperCase();
     const status = String(row.payment_status || row.status || "").trim().toUpperCase();
@@ -732,6 +1489,13 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
     return true;
   });
   if (!rows.length) return { ledgerPaid: false, ledgerBalance: null, ledgerRows: [] };
+
+
+
+
+
+
+
 
   const netBalance = rows.reduce((sum, row) => {
     const type = String(row.entry_type || row.transaction_type || "").toLowerCase();
@@ -747,14 +1511,35 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
           ? rawAmount
           : 0);
 
+
+
+
+
+
+
+
     return sum + debit - credit;
   }, 0);
+
+
+
+
+
+
+
 
   const hasInvoiceDebit = rows.some((row) => {
     const type = String(row.entry_type || row.transaction_type || "").toLowerCase();
     return getLedgerRowDebit(row) > 0 || (type.includes("invoice") && Number(row.amount || 0) > 0);
   });
   const hasCredit = rows.some((row) => getLedgerRowCredit(row) > 0 || Number(row.amount || 0) < 0);
+
+
+
+
+
+
+
 
   return {
     ledgerPaid: hasInvoiceDebit && hasCredit && netBalance <= 0.01,
@@ -763,14 +1548,35 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
   };
 }
 
+
+
+
+
+
+
+
 export async function withResolvedInvoicePaymentStatus(order = {}) {
   const productCodeOrder = await withProductCodeFallbacks(order);
   const invoiceOrder = normalizeInvoiceOrder(productCodeOrder);
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
 
+
+
+
+
+
+
+
   if (isInvoicePaid(invoiceOrder, totals)) {
     return { ...invoiceOrder, _ledgerPaid: true };
   }
+
+
+
+
+
+
+
 
   const ledgerStatus = await resolveInvoiceLedgerPaymentStatus(invoiceOrder);
   return {
@@ -779,6 +1585,13 @@ export async function withResolvedInvoicePaymentStatus(order = {}) {
     _ledgerBalance: ledgerStatus.ledgerBalance,
   };
 }
+
+
+
+
+
+
+
 
 const getInvoicePaymentStatus = (order = {}, totals = {}) => {
   const status = normalizeInvoicePaymentStatus(
@@ -789,9 +1602,23 @@ const getInvoicePaymentStatus = (order = {}, totals = {}) => {
       (isInvoicePaid(order, totals) ? "PAID" : "UNPAID")
   );
 
+
+
+
+
+
+
+
   if (status === "PARTIALLY PAID") return "PART PAID";
   return status || "UNPAID";
 };
+
+
+
+
+
+
+
 
 const getInvoiceDocumentWatermark = (order = {}, totals = {}) =>
   getCustomerInvoiceWatermark(
@@ -802,16 +1629,37 @@ const getInvoiceDocumentWatermark = (order = {}, totals = {}) =>
       getInvoicePaymentStatus(order, totals)
   );
 
+
+
+
+
+
+
+
 export const getPrintTemplate = (priceMode) =>
   isServerManagerPriceMode(priceMode)
     ? "orderForm"
     : "salesInvoice";
+
+
+
+
+
+
+
 
 const getThermalReceiptRows = (order = {}) => {
   const invoiceOrder = normalizeInvoiceOrder(order);
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
   const hasVat = Number(totals.vatTotal || 0) > 0;
   const isServerManager = isServerManagerPriceMode(invoiceOrder.priceMode || invoiceOrder.price_mode);
+
+
+
+
+
+
+
 
   return {
     totals,
@@ -842,18 +1690,53 @@ const getThermalReceiptRows = (order = {}) => {
   };
 };
 
+
+
+
+
+
+
+
 const getThermalLineAmount = (item = {}) =>
   item.gross_total ?? item.grossTotal ?? item.line_total ?? item.lineTotal ?? item.net_total ?? 0;
 
+
+
+
+
+
+
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+
+
+
+
+
+
 
 const getThermalOrderNumber = (order = {}) => {
   const orderNumber = [order.order_number, order.orderNumber, order.orderId]
     .map((value) => String(value || "").trim())
     .find((value) => value && !UUID_PATTERN.test(value));
 
+
+
+
+
+
+
+
   return orderNumber ? formatDisplayOrderId(orderNumber) : "Not available";
 };
+
+
+
+
+
+
+
 
 const getThermalUnitAmount = (item = {}) => {
   const savedUnitAmount = item.price ?? item.unit_price ?? item.unitPrice;
@@ -861,14 +1744,35 @@ const getThermalUnitAmount = (item = {}) => {
     return Number(savedUnitAmount || 0);
   }
 
+
+
+
+
+
+
+
   const quantity = Number(getInvoiceLineQuantity(item) || 0);
   return quantity > 0 ? Number(getThermalLineAmount(item) || 0) / quantity : 0;
 };
+
+
+
+
+
+
+
 
 const wrapText = (text, maxLength = 28) => {
   const words = String(text || "").split(/\s+/).filter(Boolean);
   const lines = [];
   let current = "";
+
+
+
+
+
+
+
 
   words.forEach((word) => {
     if (!current) {
@@ -876,18 +1780,46 @@ const wrapText = (text, maxLength = 28) => {
       return;
     }
 
+
+
+
+
+
+
+
     if (`${current} ${word}`.length <= maxLength) {
       current = `${current} ${word}`;
       return;
     }
 
+
+
+
+
+
+
+
     lines.push(current);
     current = word;
   });
 
+
+
+
+
+
+
+
   if (current) lines.push(current);
   return lines.length ? lines : [""];
 };
+
+
+
+
+
+
+
 
 export function buildThermalReceiptHtml(order = {}) {
   const receipt = getThermalReceiptRows(order);
@@ -897,6 +1829,13 @@ export function buildThermalReceiptHtml(order = {}) {
     ? "SALES RECEIPT"
     : "ORDER RECEIPT";
   const orderNumber = getThermalOrderNumber(order);
+
+
+
+
+
+
+
 
   return `
     <html lang="en">
@@ -1035,6 +1974,13 @@ export function buildThermalReceiptHtml(order = {}) {
   `;
 }
 
+
+
+
+
+
+
+
 const buildThermalReceiptPdf = (order = {}) => {
   const receipt = getThermalReceiptRows(order);
   const title = receipt.isServerManager
@@ -1051,6 +1997,13 @@ const buildThermalReceiptPdf = (order = {}) => {
     { text: `Branch: ${receipt.branchName || "Main account"}` },
   ];
 
+
+
+
+
+
+
+
   lines.push({ text: "Delivery Address:", bold: true });
   if (receipt.deliveryAddressLines.length) {
     receipt.deliveryAddressLines.forEach((line) => {
@@ -1066,6 +2019,13 @@ const buildThermalReceiptPdf = (order = {}) => {
   lines.push({ text: "Product / Qty       Unit     Line", bold: true });
   lines.push({ text: "--------------------------------" });
 
+
+
+
+
+
+
+
   receipt.items.forEach((item) => {
     const quantity = String(getInvoiceLineQuantity(item));
     const unitAmount = formatCurrency(getThermalUnitAmount(item));
@@ -1075,6 +2035,13 @@ const buildThermalReceiptPdf = (order = {}) => {
     lines.push({ text: `Qty ${quantity.padEnd(6, " ")} ${unitAmount.padStart(8, " ")} ${lineAmount.padStart(8, " ")}` });
   });
 
+
+
+
+
+
+
+
   lines.push({ text: "--------------------------------" });
   lines.push({ text: `Item Count ${receipt.totalQuantity}`, bold: true });
   lines.push({ text: `Subtotal ${formatCurrency(receipt.totals.netTotal)}`, bold: true });
@@ -1083,6 +2050,13 @@ const buildThermalReceiptPdf = (order = {}) => {
   }
   lines.push({ text: `TOTAL ${formatCurrency(receipt.totals.grandTotal)}`, size: 11, bold: true });
   lines.push({ text: "Thank you for your order" });
+
+
+
+
+
+
+
 
   const width = 226.77;
   const height = Math.max(280, 28 + lines.length * 13);
@@ -1097,6 +2071,13 @@ const buildThermalReceiptPdf = (order = {}) => {
     })
     .join("\n");
 
+
+
+
+
+
+
+
   const objects = [
     "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
     "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
@@ -1109,6 +2090,13 @@ const buildThermalReceiptPdf = (order = {}) => {
     "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> endobj",
     `6 0 obj << /Length ${content.length} >> stream\n${content}\nendstream endobj`,
   ];
+
+
+
+
+
+
+
 
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
@@ -1125,6 +2113,13 @@ const buildThermalReceiptPdf = (order = {}) => {
   return pdf;
 };
 
+
+
+
+
+
+
+
 export function printThermalReceipt(order = {}) {
   const win = window.open("", "_blank", "width=380,height=720");
   if (!win) {
@@ -1132,11 +2127,25 @@ export function printThermalReceipt(order = {}) {
     return;
   }
 
+
+
+
+
+
+
+
   win.document.write(buildThermalReceiptHtml(order));
   win.document.close();
   win.focus();
   win.print();
 }
+
+
+
+
+
+
+
 
 export function downloadThermalReceipt(order = {}) {
   const orderNumber = getThermalOrderNumber(order).replace(/[^a-z0-9-]+/gi, "-") || "receipt";
@@ -1150,6 +2159,13 @@ export function downloadThermalReceipt(order = {}) {
   link.remove();
   URL.revokeObjectURL(url);
 }
+
+
+
+
+
+
+
 
 export const DEFAULT_INVOICE_SETTINGS = {
   companyLogo: fairchoiceLogo,
@@ -1167,8 +2183,22 @@ export const DEFAULT_INVOICE_SETTINGS = {
   thermalReceiptWidth: "80mm",
 };
 
+
+
+
+
+
+
+
 export function getInvoiceSettings(overrides = {}) {
   let storedSettings = {};
+
+
+
+
+
+
+
 
   try {
     storedSettings = JSON.parse(
@@ -1178,12 +2208,26 @@ export function getInvoiceSettings(overrides = {}) {
     storedSettings = {};
   }
 
+
+
+
+
+
+
+
   return {
     ...DEFAULT_INVOICE_SETTINGS,
     ...storedSettings,
     ...overrides,
   };
 }
+
+
+
+
+
+
+
 
 export function saveInvoiceSettings(settings = {}) {
   const nextSettings = {
@@ -1194,6 +2238,13 @@ export function saveInvoiceSettings(settings = {}) {
   return nextSettings;
 }
 
+
+
+
+
+
+
+
 const getOrderDate = (order = {}) =>
   order.invoiceDate ||
   order.invoice_date ||
@@ -1203,13 +2254,34 @@ const getOrderDate = (order = {}) =>
   order.order_date ||
   new Date();
 
+
+
+
+
+
+
+
 const formatInvoiceDate = (value) => {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return String(value || "-");
   return date.toLocaleDateString("en-GB");
 };
 
+
+
+
+
+
+
+
 const isSettingFalse = (...values) => values.some((value) => value === false || value === "false");
+
+
+
+
+
+
+
 
 const shouldShowInvoiceHeaderFooter = (settings = {}, order = {}) => {
   if (
@@ -1223,6 +2295,13 @@ const shouldShowInvoiceHeaderFooter = (settings = {}, order = {}) => {
     return false;
   }
 
+
+
+
+
+
+
+
   if (
     isServerManagerPriceMode(order.priceMode || order.price_mode) &&
     (isSettingFalse(
@@ -1235,29 +2314,108 @@ const shouldShowInvoiceHeaderFooter = (settings = {}, order = {}) => {
     return false;
   }
 
+
+
+
+
+
+
+
   return true;
 };
+
+
+
+
+
+
+
 
 const getOrderItemsForInvoice = (order = {}) =>
   calculateDocumentTotals(filterActiveInvoiceLines(order.items || order.order_items || []), order)
     .invoiceItems || [];
 
+
+
+
+
+
+
+
 const getLineQuantity = (item = {}) =>
   getInvoiceLineQuantity(item);
 
+
+
+
+
+
+
+
+const isFreeInvoiceLine = (item = {}) => {
+  const status = String(item.sourceStatus || item.source_status || item.status || "")
+    .trim()
+    .toLowerCase();
+
+
+  return (
+    status === "free" ||
+    status === "promotion free" ||
+    item.isPromotionFree === true ||
+    item.promotionFreeItem === true
+  );
+};
+
+
+
+
+
+
+
+
 const getLinePrice = (item = {}) =>
-  Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
+  isFreeInvoiceLine(item)
+    ? 0
+    : Number(item.price ?? item.unit_price ?? item.unitPrice ?? 0);
+
+
+
+
+
+
+
 
 const getLineVatRate = (item = {}) =>
   Number(item.vatRate ?? item.vat_rate ?? item.vatPercent ?? item.vat_percent ?? 0);
 
+
+
+
+
+
+
+
 const getInvoiceProductCode = (item = {}) => getProductCodeFromInvoiceItem(item);
+
+
+
+
+
+
+
 
 const getPrintableCompanyAddress = (address = "") =>
   String(address || "")
     .split(/\r?\n/)
     .filter((line) => !/registered in england and wales no/i.test(line))
     .join("\n");
+
+
+
+
+
+
+
 
 function buildLegacyStandardInvoiceHtml(
   order = {},
@@ -1269,6 +2427,7 @@ function buildLegacyStandardInvoiceHtml(
   const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
   const isDeliveryNote = documentType === "deliveryNote";
   const isOrderForm = documentType === "orderForm";
+  const isReturnInvoice = documentType === "returnInvoice";
   const isServerManagerDocument = isServerManagerPriceMode(
     invoiceOrder.priceMode || invoiceOrder.price_mode
   );
@@ -1298,10 +2457,18 @@ function buildLegacyStandardInvoiceHtml(
   const rows = items
     .map((item) => {
       const quantity = getLineQuantity(item);
-      const unitPrice = getLinePrice(item);
-      const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
-      const vatRate = getLineVatRate(item);
+      const freeLine = isFreeInvoiceLine(item);
+      const unitPrice = freeLine ? 0 : getLinePrice(item);
+      const netTotal = freeLine ? 0 : Number(item.net_total ?? item.netTotal ?? 0);
+      const vatRate = freeLine ? 0 : getLineVatRate(item);
       const productCode = getInvoiceProductCode(item);
+
+
+
+
+
+
+
 
       return `
         <tr>
@@ -1321,6 +2488,13 @@ function buildLegacyStandardInvoiceHtml(
       `;
     })
     .join("");
+
+
+
+
+
+
+
 
   return `
     <html>
@@ -1514,6 +2688,13 @@ function buildLegacyStandardInvoiceHtml(
                 : ""
             }
 
+
+
+
+
+
+
+
             <section class="invoice-grid">
               <div class="invoice-to">
                 <div class="box-title">${isDeliveryNote ? "Deliver To:" : "Invoice To:"}</div>
@@ -1529,6 +2710,13 @@ function buildLegacyStandardInvoiceHtml(
                 <div class="details-row"><strong>${escapeHtml(referenceLabel)}</strong><span>${escapeHtml(reference)}</span></div>
               </div>
             </section>
+
+
+
+
+
+
+
 
             <table>
               <thead>
@@ -1552,6 +2740,13 @@ function buildLegacyStandardInvoiceHtml(
               </tbody>
             </table>
 
+
+
+
+
+
+
+
             <section class="summary-area">
               <div class="qty-box">
                 <div>Total Quantity&nbsp;&nbsp;&nbsp; ${escapeHtml(totals.totalQuantity)}</div>
@@ -1570,12 +2765,26 @@ function buildLegacyStandardInvoiceHtml(
               }
             </section>
 
+
+
+
+
+
+
+
             <section class="deliver">
               <div class="box-title">Deliver To:</div>
               <div>${escapeHtml(customerName)}</div>
               ${branchName ? `<div>${escapeHtml(branchName)}</div>` : ""}
               ${deliveryAddress ? `<div>${escapeHtml(deliveryAddress)}</div>` : ""}
             </section>
+
+
+
+
+
+
+
 
             ${(settings.defaultNotes || invoiceOrder.notes) ? `<section class="notes">${escapeHtml(invoiceOrder.notes || settings.defaultNotes)}</section>` : ""}
           </main>
@@ -1596,9 +2805,21 @@ function buildLegacyStandardInvoiceHtml(
   `;
 }
 
+
+
+
+
+
+
+
 export function buildStandardInvoiceHtml(
   order = {},
-  { documentType = "invoice", autoPrint = false, settings: settingsOverride = {} } = {}
+  {
+    documentType = "invoice",
+    autoPrint = false,
+    settings: settingsOverride = {},
+    returnAdjustments = [],
+  } = {}
 ) {
   const invoiceOrder = normalizeInvoiceOrder(order);
   const printTemplate = getPrintTemplate(invoiceOrder.priceMode || invoiceOrder.price_mode);
@@ -1628,6 +2849,51 @@ export function buildStandardInvoiceHtml(
     ? !isServerManagerDocument && shouldShowInvoiceHeaderFooter(settings, invoiceOrder)
     : !isOrderForm;
   const showInvoiceTotals = showPrices && !isOrderForm;
+  const selectedReturnAdjustments = Array.isArray(returnAdjustments)
+    ? returnAdjustments.filter((row) => Number(row?.return_total || row?.amount || 0) > 0)
+    : [];
+  const manuallySelectedReturnTotal = selectedReturnAdjustments.reduce(
+    (sum, row) => sum + Number(row?.return_total || row?.amount || 0),
+    0
+  );
+  // Wallet may be stored on the canonical invoice OR reserved on the order.
+  // Always show the effective deduction on Warehouse/Driver sales invoices.
+  const walletAppliedAmount = Math.max(
+    0,
+    Number(
+      invoiceOrder.wallet_applied_amount ??
+        invoiceOrder.walletAppliedAmount ??
+        invoiceOrder.wallet_requested_amount ??
+        invoiceOrder.walletRequestedAmount ??
+        0
+    )
+  );
+  const returnAdjustmentTotal = manuallySelectedReturnTotal > 0
+    ? manuallySelectedReturnTotal
+    : walletAppliedAmount;
+  const showReturnAdjustment =
+    !isOrderForm &&
+    !isDeliveryNote &&
+    !isReturnInvoice &&
+    returnAdjustmentTotal > 0;
+  const adjustedInvoiceTotal = manuallySelectedReturnTotal > 0
+    ? Number(totals.grandTotal || 0) - returnAdjustmentTotal
+    : returnAdjustmentTotal > 0
+    ? Math.max(0, Number(totals.grandTotal || 0) - returnAdjustmentTotal)
+    : invoiceOrder.amount_to_collect !== null &&
+      invoiceOrder.amount_to_collect !== undefined
+    ? Number(invoiceOrder.amount_to_collect)
+    : Number(totals.grandTotal || 0);
+  const returnAdjustmentReferences = selectedReturnAdjustments
+    .map((row) => String(row?.return_number || row?.reference_no || row?.id || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  const returnAdjustmentLabel = manuallySelectedReturnTotal > 0
+    ? "Return Total"
+    : "Wallet Deduction";
+  const adjustedInvoiceTotalLabel = manuallySelectedReturnTotal > 0
+    ? "Total After Return"
+    : "Amount to Collect";
   const referenceLabel = isOrderForm || isDeliveryNote ? "Order Number" : "Invoice Number";
   const rawReference = getOrderReference(invoiceOrder) || "-";
   const reference =
@@ -1688,10 +2954,18 @@ export function buildStandardInvoiceHtml(
   const rows = items
     .map((item) => {
       const quantity = getLineQuantity(item);
-      const unitPrice = getLinePrice(item);
-      const netTotal = Number(item.net_total ?? item.netTotal ?? 0);
-      const vatRate = getLineVatRate(item);
+      const freeLine = isFreeInvoiceLine(item);
+      const unitPrice = freeLine ? 0 : getLinePrice(item);
+      const netTotal = freeLine ? 0 : Number(item.net_total ?? item.netTotal ?? 0);
+      const vatRate = freeLine ? 0 : getLineVatRate(item);
       const productCode = getInvoiceProductCode(item);
+
+
+
+
+
+
+
 
       return `
         <tr>
@@ -1700,7 +2974,7 @@ export function buildStandardInvoiceHtml(
               ? ""
               : `<td class="code">${escapeHtml(productCode)}</td>`
           }
-          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}</td>
+          <td class="description">${escapeHtml(item.name || item.productName || item.product_name || "")}${freeLine ? ' <strong style="color:#b91c1c;font-weight:900;">FREE</strong>' : ""}</td>
           <td class="right">${escapeHtml(quantity)}</td>
           ${
             showPrices
@@ -1719,6 +2993,13 @@ export function buildStandardInvoiceHtml(
       `;
     })
     .join("");
+
+
+
+
+
+
+
 
   return `
     <html>
@@ -1774,10 +3055,24 @@ export function buildStandardInvoiceHtml(
   border-color: rgba(22, 163, 74, 0.18);
 }
 
+
+
+
+
+
+
+
 .watermark.part-paid {
   color: rgba(124, 58, 237, 0.14);
   border-color: rgba(124, 58, 237, 0.18);
 }
+
+
+
+
+
+
+
 
 .watermark.in-progress {
   color: rgba(217, 119, 6, 0.16);
@@ -2087,6 +3382,13 @@ export function buildStandardInvoiceHtml(
                 : `<div class="document-title standalone-title">${escapeHtml(title)}</div>`
             }
 
+
+
+
+
+
+
+
             <section class="panel-grid">
               <div class="panel">
                 <div class="panel-title">Customer</div>
@@ -2107,6 +3409,13 @@ export function buildStandardInvoiceHtml(
                 </div>
               </div>
             </section>
+
+
+
+
+
+
+
 
             <table>
               <thead>
@@ -2129,6 +3438,13 @@ export function buildStandardInvoiceHtml(
                 ${rows || `<tr><td colspan="${isOrderForm ? 4 : showPrices ? 6 : 3}">No supplied items.</td></tr>`}
               </tbody>
             </table>
+
+
+
+
+
+
+
 
             <section class="summary-area">
               <div>
@@ -2187,15 +3503,40 @@ export function buildStandardInvoiceHtml(
                           <div class="total-value">${escapeHtml(formatCurrency(totals.vatTotal))}</div>
                         </div>
                       `}
-                      <div class="total-row grand-total">
-                        <div class="total-label">Grand Total</div>
-                        <div class="total-value">${escapeHtml(formatCurrency(totals.grandTotal))}</div>
-                      </div>
+                      ${showReturnAdjustment
+                        ? `
+                            <div class="total-row">
+                              <div class="total-label">Invoice Total</div>
+                              <div class="total-value">${escapeHtml(formatCurrency(totals.grandTotal))}</div>
+                            </div>
+                            <div class="total-row" style="color:#047857;">
+                              <div class="total-label">${escapeHtml(returnAdjustmentLabel)}${returnAdjustmentReferences ? ` (${escapeHtml(returnAdjustmentReferences)})` : ""}</div>
+                              <div class="total-value">-${escapeHtml(formatCurrency(returnAdjustmentTotal))}</div>
+                            </div>
+                            <div class="total-row grand-total">
+                              <div class="total-label">${escapeHtml(adjustedInvoiceTotalLabel)}</div>
+                              <div class="total-value">${escapeHtml(formatCurrency(adjustedInvoiceTotal))}</div>
+                            </div>
+                          `
+                        : `
+                            <div class="total-row grand-total">
+                              <div class="total-label">Grand Total</div>
+                              <div class="total-value">${escapeHtml(formatCurrency(totals.grandTotal))}</div>
+                            </div>
+                          `
+                      }
                     </div>
                   `
                   : ""
               }
             </section>
+
+
+
+
+
+
+
 
             ${
               `
@@ -2207,6 +3548,13 @@ export function buildStandardInvoiceHtml(
                   </section>
                 `
             }
+
+
+
+
+
+
+
 
             ${(settings.defaultNotes || invoiceOrder.notes) ? `<section class="notes">${escapeHtml(invoiceOrder.notes || settings.defaultNotes)}</section>` : ""}
           </main>
@@ -2231,6 +3579,13 @@ export function buildStandardInvoiceHtml(
   `;
 }
 
+
+
+
+
+
+
+
 const openInvoiceHtml = (html, popupMessage = "Popup blocked. Please allow popups for invoices.") => {
   const win = window.open("", "_blank", "width=900,height=700");
   if (!win) {
@@ -2242,23 +3597,58 @@ const openInvoiceHtml = (html, popupMessage = "Popup blocked. Please allow popup
   return win;
 };
 
+
+
+
+
+
+
+
 export function previewInvoice(order = {}, options = {}) {
   return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: false }));
 }
+
+
+
+
+
+
+
 
 export function printInvoice(order = {}, options = {}) {
   return openInvoiceHtml(buildStandardInvoiceHtml(order, { ...options, autoPrint: true }));
 }
 
+
+
+
+
+
+
+
 export function printOrderForm(order = {}, options = {}) {
   return printInvoice(order, { ...options, documentType: "orderForm" });
 }
+
+
+
+
+
+
+
 
 export function printDeliveryNote(order = {}, options = {}) {
   return openInvoiceHtml(
     buildLegacyStandardInvoiceHtml(order, { ...options, documentType: "deliveryNote", autoPrint: true })
   );
 }
+
+
+
+
+
+
+
 
 export function downloadInvoice(order = {}, options = {}) {
   return openInvoiceHtml(
@@ -2267,9 +3657,23 @@ export function downloadInvoice(order = {}, options = {}) {
   );
 }
 
+
+
+
+
+
+
+
 export async function createInvoice({ order, confirmedBy, currentUser } = {}) {
   return createOrUpdateInvoiceForDeliveredOrder({ order, confirmedBy, currentUser });
 }
+
+
+
+
+
+
+
 
 export async function createManualInvoice({
   order,
@@ -2290,9 +3694,23 @@ export async function createManualInvoice({
   if (!companyName) throw new Error("Customer is required");
   if (!cart.length) throw new Error("Add at least one product");
 
+
+
+
+
+
+
+
   const orderNumber = `ORD-${Date.now()}`;
   const calculatedTotals = calculateCartTotals(cart, { priceMode });
   const calculatedItems = calculateCartOrderItems(cart, { priceMode });
+
+
+
+
+
+
+
 
   const orderPayload = {
     order_number: orderNumber,
@@ -2323,11 +3741,25 @@ export async function createManualInvoice({
     created_by_name: currentUser?.name || currentUser?.staff_name || currentUser?.username || null,
   };
 
+
+
+
+
+
+
+
   let { data: savedOrder, error: orderError } = await supabase
     .from("orders")
     .insert(orderPayload)
     .select()
     .single();
+
+
+
+
+
+
+
 
   if (orderError) {
     const fallback = { ...orderPayload };
@@ -2337,7 +3769,21 @@ export async function createManualInvoice({
     orderError = retry.error;
   }
 
+
+
+
+
+
+
+
   if (orderError) throw orderError;
+
+
+
+
+
+
+
 
   const orderItems = calculatedItems.map((item) => ({
     order_id: savedOrder.id,
@@ -2362,6 +3808,13 @@ export async function createManualInvoice({
     include_in_picking: true,
   }));
 
+
+
+
+
+
+
+
   let { error: itemsError } = await supabase.from("order_items").insert(orderItems);
   if (itemsError) {
     const fallbackItems = orderItems.map((item) => {
@@ -2375,7 +3828,21 @@ export async function createManualInvoice({
     itemsError = retry.error;
   }
 
+
+
+
+
+
+
+
   if (itemsError) throw itemsError;
+
+
+
+
+
+
+
 
   const invoiceOrder = {
     ...savedOrder,
@@ -2387,19 +3854,47 @@ export async function createManualInvoice({
     items: calculatedItems,
   };
 
+
+
+
+
+
+
+
   const invoice = await createInvoice({
     order: invoiceOrder,
     confirmedBy: confirmedBy || currentUser?.name || currentUser?.username || "Manual Invoice",
     currentUser,
   });
 
+
+
+
+
+
+
+
   await allocateCustomerPaymentToInvoices({
     customerAccountId,
     customerName: companyName,
   });
 
+
+
+
+
+
+
+
   return { order: invoiceOrder, invoice };
 }
+
+
+
+
+
+
+
 
 export async function amendInvoice({
   order,
@@ -2413,6 +3908,13 @@ export async function amendInvoice({
   const invoice = await createInvoice({ order, confirmedBy: currentUser?.name || currentUser?.username, currentUser });
   const latestTotal = newTotal ?? getInvoiceTotal(order);
 
+
+
+
+
+
+
+
   await recordInvoiceVersion({
     order,
     reason,
@@ -2422,8 +3924,22 @@ export async function amendInvoice({
     currentUser,
   });
 
+
+
+
+
+
+
+
   return invoice;
 }
+
+
+
+
+
+
+
 
 export async function createReturnInvoice({ order, confirmedBy, currentUser } = {}) {
   const invoice = await createInvoice({ order, confirmedBy, currentUser });
@@ -2433,6 +3949,13 @@ export async function createReturnInvoice({ order, confirmedBy, currentUser } = 
     invoiceType: "RETURN",
   };
 }
+
+
+
+
+
+
+
 
 export async function recordInvoiceVersion({
   order,
@@ -2456,11 +3979,25 @@ export async function recordInvoiceVersion({
     changed_items: changedItems,
   };
 
+
+
+
+
+
+
+
   let { data, error } = await supabase
     .from("invoice_version_history")
     .insert(payload)
     .select()
     .single();
+
+
+
+
+
+
+
 
   if (error && String(error.message || "").toLowerCase().includes("changed_items")) {
     const fallback = { ...payload };
@@ -2474,23 +4011,58 @@ export async function recordInvoiceVersion({
     error = retry.error;
   }
 
+
+
+
+
+
+
+
   if (error) {
     console.warn("Invoice version history unavailable:", error.message);
     return payload;
   }
 
+
+
+
+
+
+
+
   return data;
 }
+
+
+
+
+
+
+
 
 export function getInvoiceTotal(order = {}) {
   const invoiceOrder = normalizeInvoiceOrder(order);
   return calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder).grandTotal;
 }
 
+
+
+
+
+
+
+
 const getLedgerType = (row = {}) =>
   String(row.entry_type || row.transaction_type || "")
     .trim()
     .toUpperCase();
+
+
+
+
+
+
+
 
 const getInvoiceLedgerTotal = (row = {}) =>
   roundMoney(
@@ -2504,30 +4076,86 @@ const getInvoiceLedgerTotal = (row = {}) =>
     )
   );
 
+
+
+
+
+
+
+
 const getPaymentLedgerTotal = (row = {}) =>
   roundMoney(Number(row.credit || row.amount || row.payment_amount || 0));
+
+
+
+
+
+
+
 
 export const getInvoiceStatusFromAmounts = (invoiceTotal, paidAmount) => {
   const total = roundMoney(invoiceTotal);
   const paid = roundMoney(paidAmount);
+
+
+
+
+
+
+
 
   if (paid <= 0) return "UNPAID";
   if (paid >= total) return "PAID";
   return "PART PAID";
 };
 
+
+
+
+
+
+
+
 export function applyInvoicePaymentAllocations(ledgerRows = []) {
   const invoiceRows = [];
   let unappliedCredit = 0;
 
+
+
+
+
+
+
+
   const allocateCreditToOldestInvoices = (amount) => {
     let remaining = roundMoney(amount);
+
+
+
+
+
+
+
 
     for (const invoice of invoiceRows) {
       if (remaining <= 0) break;
 
+
+
+
+
+
+
+
       const currentRemaining = roundMoney(invoice.remaining_amount);
       if (currentRemaining <= 0) continue;
+
+
+
+
+
+
+
 
       const appliedAmount = roundMoney(Math.min(currentRemaining, remaining));
       invoice.paid_amount = roundMoney(invoice.paid_amount + appliedAmount);
@@ -2541,11 +4169,32 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
       remaining = roundMoney(remaining - appliedAmount);
     }
 
+
+
+
+
+
+
+
     return remaining;
   };
 
+
+
+
+
+
+
+
   return (ledgerRows || []).map((row) => {
     const type = getLedgerType(row);
+
+
+
+
+
+
+
 
     if (type === "INVOICE") {
       const invoiceTotal = getInvoiceLedgerTotal(row);
@@ -2560,20 +4209,62 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
         invoice_status: getInvoiceStatusFromAmounts(invoiceTotal, 0),
       };
 
+
+
+
+
+
+
+
       invoiceRows.push(invoiceRow);
+
+
+
+
+
+
+
 
       if (unappliedCredit > 0) {
         unappliedCredit = allocateCreditToOldestInvoices(unappliedCredit);
       }
 
+
+
+
+
+
+
+
       return invoiceRow;
     }
 
+
+
+
+
+
+
+
     if (type !== "PAYMENT") return row;
+
+
+
+
+
+
+
 
     unappliedCredit = allocateCreditToOldestInvoices(
       roundMoney(unappliedCredit + getPaymentLedgerTotal(row))
     );
+
+
+
+
+
+
+
 
     return {
       ...row,
@@ -2583,9 +4274,23 @@ export function applyInvoicePaymentAllocations(ledgerRows = []) {
   });
 }
 
+
+
+
+
+
+
+
 export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = {}) {
   const orderTotal = getInvoiceTotal(order);
   const invoiceDate = getDeliveredDate(order);
+
+
+
+
+
+
+
 
   return {
     customer_account_id: getCustomerAccountId(order),
@@ -2594,6 +4299,13 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
     branch_name: getBranchName(order) || null,
     customer_name: getCustomerName(order),
 
+
+
+
+
+
+
+
     entry_type: "INVOICE",
     transaction_type: "INVOICE",
     reference_no: getOrderReference(order),
@@ -2601,6 +4313,13 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
     created_at: invoiceDate,
     delivered_date: invoiceDate,
     invoice_date: invoiceDate,
+
+
+
+
+
+
+
 
     debit: orderTotal,
     credit: 0,
@@ -2611,9 +4330,23 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
     remaining_amount: orderTotal,
     invoice_status: "UNPAID",
 
+
+
+
+
+
+
+
     price_mode: order.priceMode || order.price_mode || null,
     order_price_mode: order.priceMode || order.price_mode || null,
     order_number: getOrderReference(order),
+
+
+
+
+
+
+
 
     confirmed_by: confirmedBy || null,
     driver_name: currentUser?.name || currentUser?.username || null,
@@ -2624,9 +4357,23 @@ export function buildInvoiceLedgerPayload({ order, confirmedBy, currentUser } = 
   };
 }
 
+
+
+
+
+
+
+
 const stripUnsupportedColumns = (payload, errorMessage = "") => {
   const text = String(errorMessage).toLowerCase();
   const next = { ...payload };
+
+
+
+
+
+
+
 
   [
     "customer_account_id",
@@ -2653,16 +4400,51 @@ const stripUnsupportedColumns = (payload, errorMessage = "") => {
     if (text.includes(key.toLowerCase())) delete next[key];
   });
 
+
+
+
+
+
+
+
   return next;
 };
+
+
+
+
+
+
+
 
 export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedBy, currentUser } = {}) {
   if (!order) throw new Error("Order is required");
 
+
+
+
+
+
+
+
   const referenceNo = getOrderReference(order);
   if (!referenceNo) throw new Error("Order reference is required");
 
+
+
+
+
+
+
+
   const payload = buildInvoiceLedgerPayload({ order, confirmedBy, currentUser });
+
+
+
+
+
+
+
 
   const existing = await supabase
     .from("customer_ledger")
@@ -2672,9 +4454,30 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
     .order("created_at", { ascending: true })
     .limit(1);
 
+
+
+
+
+
+
+
   if (existing.error) throw existing.error;
 
+
+
+
+
+
+
+
   const existingInvoice = Array.isArray(existing.data) ? existing.data[0] : existing.data;
+
+
+
+
+
+
+
 
   if (existingInvoice?.id) {
     const paidAmount = roundMoney(
@@ -2688,11 +4491,32 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
     );
   }
 
+
+
+
+
+
+
+
   let query = existingInvoice?.id
     ? supabase.from("customer_ledger").update(payload).eq("id", existingInvoice.id)
     : supabase.from("customer_ledger").insert(payload);
 
+
+
+
+
+
+
+
   let { data, error } = await query.select().single();
+
+
+
+
+
+
+
 
   if (error) {
     const fallbackPayload = stripUnsupportedColumns(payload, error.message || error.details || "");
@@ -2700,14 +4524,104 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
       ? supabase.from("customer_ledger").update(fallbackPayload).eq("id", existingInvoice.id)
       : supabase.from("customer_ledger").insert(fallbackPayload);
 
+
+
+
+
+
+
+
     const retry = await query.select().single();
     data = retry.data;
     error = retry.error;
   }
 
+
+
+
+
+
+
+
   if (error) throw error;
+
+
+
+
+
+
+
+
+  // customer_invoices is protected by RLS. Do not insert into it directly
+  // from the browser. Use the existing SECURITY DEFINER sync RPC so the
+  // canonical invoice is created/updated from the authoritative order row.
+  let canonicalOrderUuid = [
+    order.id,
+    order.dbId,
+    order.order_uuid,
+    order.order_id,
+  ]
+    .map((value) => String(value || "").trim())
+    .find((value) => UUID_PATTERN.test(value));
+
+
+
+
+
+
+
+
+  if (!canonicalOrderUuid) {
+    const { data: orderRow, error: orderLookupError } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("order_number", referenceNo)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+
+
+
+
+
+
+
+    if (orderLookupError) throw orderLookupError;
+    canonicalOrderUuid = orderRow?.id || null;
+  }
+
+
+
+
+
+
+
+
+  if (canonicalOrderUuid) {
+    const { error: invoiceSyncError } = await supabase.rpc(
+      "sync_customer_invoice_from_order_v1",
+      { p_order_id: canonicalOrderUuid }
+    );
+    if (invoiceSyncError) throw invoiceSyncError;
+  }
+
+
+
+
+
+
+
+
   return data;
 }
+
+
+
+
+
+
+
 
 export async function allocateCustomerPaymentToInvoices({
   customerAccountId,
@@ -2718,16 +4632,37 @@ export async function allocateCustomerPaymentToInvoices({
     .select("*")
     .order("created_at", { ascending: true });
 
-  if (customerName) {
-    query = query.eq("customer_name", customerName);
-  } else if (customerAccountId) {
+
+
+
+
+
+
+
+  if (customerAccountId) {
     query = query.eq("customer_account_id", customerAccountId);
+  } else if (customerName) {
+    query = query.eq("customer_name", customerName);
   } else {
     return [];
   }
 
+
+
+
+
+
+
+
   const { data, error } = await query;
   if (error) throw error;
+
+
+
+
+
+
+
 
   const processingQueueOrders = await loadProcessingQueueOrders({
     customerAccountId,
@@ -2740,8 +4675,22 @@ export async function allocateCustomerPaymentToInvoices({
   const allocatedRows = applyInvoicePaymentAllocations(allocationSourceRows);
   const invoiceRows = allocatedRows.filter((row) => getLedgerType(row) === "INVOICE");
 
+
+
+
+
+
+
+
   for (const invoice of invoiceRows) {
     if (!invoice.id || String(invoice.id).startsWith("delivered-invoice-")) continue;
+
+
+
+
+
+
+
 
     const payload = {
       invoice_total: roundMoney(invoice.invoice_total),
@@ -2751,10 +4700,24 @@ export async function allocateCustomerPaymentToInvoices({
       invoice_status: invoice.invoice_status,
     };
 
+
+
+
+
+
+
+
     let { error: updateError } = await supabase
       .from("customer_ledger")
       .update(payload)
       .eq("id", invoice.id);
+
+
+
+
+
+
+
 
     if (updateError) {
       const fallbackPayload = stripUnsupportedColumns(
@@ -2768,16 +4731,44 @@ export async function allocateCustomerPaymentToInvoices({
       updateError = retry.error;
     }
 
+
+
+
+
+
+
+
     if (updateError) throw updateError;
   }
 
+
+
+
+
+
+
+
   return invoiceRows;
 }
+
+
+
+
+
+
+
 
 const isDeliveredInvoiceStatus = (status) =>
   ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
     String(status || "").trim().toLowerCase()
   );
+
+
+
+
+
+
+
 
 const mapOrderItemForLedgerFallback = (item = {}) => ({
   id: item.product_id || item.productId || item.id,
@@ -2815,14 +4806,35 @@ const mapOrderItemForLedgerFallback = (item = {}) => ({
   vat_total: Number(item.vat_total || item.vatTotal || item.vat_amount || 0),
 });
 
+
+
+
+
+
+
+
 const getProcessingQueueLineItems = (row = {}) => {
   const snapshot = row.transaction_snapshot || {};
+
+
+
+
+
+
+
 
   if (Array.isArray(row.line_items)) return row.line_items;
   if (Array.isArray(snapshot.order_items)) return snapshot.order_items;
   if (Array.isArray(snapshot.items)) return snapshot.items;
   return [];
 };
+
+
+
+
+
+
+
 
 export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
   const snapshot = row.transaction_snapshot || {};
@@ -2852,6 +4864,13 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
     "";
   const priceMode = row.price_mode || snapshot.price_mode || "vat";
   const lineItems = getProcessingQueueLineItems(row);
+
+
+
+
+
+
+
 
   return {
     ...snapshot,
@@ -2898,6 +4917,13 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
   0
 ),
 
+
+
+
+
+
+
+
     subtotal: Number(row.subtotal || snapshot.subtotal || 0),
     net_total: Number(row.net_total || snapshot.net_total || snapshot.subtotal || 0),
     vatTotal: Number(row.vat_total || snapshot.vat_total || snapshot.total_vat || 0),
@@ -2915,12 +4941,26 @@ export const mapProcessingQueueRowToOperationalOrder = (row = {}) => {
   };
 };
 
+
+
+
+
+
+
+
 export const mergeOperationalOrders = (normalOrders = [], processingQueueOrders = []) => {
   const seenReferences = new Set(
     (normalOrders || [])
       .map((order) => String(order.orderId || order.order_number || order.orderNumber || "").trim())
       .filter(Boolean)
   );
+
+
+
+
+
+
+
 
   const queueOnlyOrders = (processingQueueOrders || []).filter((order) => {
     const reference = String(order.orderId || order.order_number || order.orderNumber || "").trim();
@@ -2929,37 +4969,105 @@ export const mergeOperationalOrders = (normalOrders = [], processingQueueOrders 
     return true;
   });
 
+
+
+
+
+
+
+
   return [...(normalOrders || []), ...queueOnlyOrders];
 };
+
+
+
+
+
+
+
 
 export async function loadProcessingQueueOrders({
   customerAccountId,
   customerName,
 } = {}) {
   const runQuery = async (buildQuery) => {
-    let query = supabase
-      .from("processing_queue")
-      .select("*")
-      .in("queue_status", activeProcessingQueueStatuses)
-      .order("confirmed_at", { ascending: true, nullsFirst: false })
-      .order("queued_at", { ascending: true });
+    // processing_queue rows can contain large JSON snapshots. Load the active
+    // queue in small indexed pages so PostgREST does not hit statement timeout,
+    // while preserving the same rows and snapshot data used by existing logic.
+    const pageSize = 50;
+    const rows = [];
 
-    query = buildQuery ? buildQuery(query) : query;
-    const { data, error } = await query;
+    for (let from = 0; ; from += pageSize) {
+      let query = supabase
+        .from("processing_queue")
+        .select([
+          "id",
+          "order_id",
+          "order_number",
+          "customer_account_id",
+          "customer_branch_id",
+          "branch_id",
+          "customer_name",
+          "branch_name",
+          "price_mode",
+          "queue_status",
+          "confirmed_at",
+          "queued_at",
+          "created_at",
+          "grand_total",
+          "subtotal",
+          "net_total",
+          "vat_total",
+          "total_quantity",
+          "total_lines",
+          "line_items",
+          "transaction_snapshot",
+        ].join(","))
+        .in("queue_status", activeProcessingQueueStatuses)
+        .order("queued_at", { ascending: true })
+        .range(from, from + pageSize - 1);
 
-    if (error) {
-      console.warn("ProcessingQueue operational load skipped:", error.message);
-      return [];
+      query = buildQuery ? buildQuery(query) : query;
+      const { data, error } = await query;
+
+      if (error) {
+        console.warn("ProcessingQueue operational load skipped:", error.message);
+        return [];
+      }
+
+      const pageRows = data || [];
+      rows.push(...pageRows);
+      if (pageRows.length < pageSize) break;
     }
 
-    return data || [];
+    return rows;
   };
 
+
+
+
+
+
+
   let rows = [];
+
+
+
+
+
+
+
 
   if (customerAccountId) {
     rows = await runQuery((query) => query.eq("customer_account_id", customerAccountId));
   }
+
+
+
+
+
+
+
 
   if ((!customerAccountId || !rows.length) && customerName) {
     rows = [
@@ -2968,9 +5076,23 @@ export async function loadProcessingQueueOrders({
     ];
   }
 
+
+
+
+
+
+
+
   if (!customerAccountId && !customerName) {
     rows = await runQuery();
   }
+
+
+
+
+
+
+
 
   const seen = new Set();
   return rows
@@ -2985,6 +5107,13 @@ export async function loadProcessingQueueOrders({
     })
     .map(mapProcessingQueueRowToOperationalOrder);
 }
+
+
+
+
+
+
+
 
 const mapOrderForLedgerFallback = (order = {}) => ({
   dbId: order.id,
@@ -3018,6 +5147,13 @@ const mapOrderForLedgerFallback = (order = {}) => ({
   items: filterActiveInvoiceLines(order.order_items || []).map(mapOrderItemForLedgerFallback),
 });
 
+
+
+
+
+
+
+
 export function mergeDeliveredOrderInvoicesIntoLedgerRows(
   ledgerRows = [],
   deliveredOrders = []
@@ -3029,6 +5165,13 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
       .filter(Boolean)
   );
 
+
+
+
+
+
+
+
   const fallbackRows = deliveredOrders
     .filter((order) => {
       const referenceNo = String(getOrderReference(order) || "").trim();
@@ -3038,6 +5181,13 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
       const activeItems = filterActiveInvoiceLines(order.items || []);
       const totals = calculateDocumentTotals(activeItems, { ...order, items: activeItems });
       const invoiceTotal = roundMoney(totals.grandTotal);
+
+
+
+
+
+
+
 
       return {
         id: `delivered-invoice-${getOrderReference(order)}`,
@@ -3070,10 +5220,24 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
       };
     });
 
+
+
+
+
+
+
+
   return [...ledgerRows, ...fallbackRows].sort((a, b) => {
     const aTime = new Date(a.created_at || 0).getTime();
     const bTime = new Date(b.created_at || 0).getTime();
     if (aTime !== bTime) return aTime - bTime;
+
+
+
+
+
+
+
 
     const aType = getLedgerType(a);
     const bType = getLedgerType(b);
@@ -3082,6 +5246,13 @@ export function mergeDeliveredOrderInvoicesIntoLedgerRows(
     return 0;
   });
 }
+
+
+
+
+
+
+
 
 export const getAllocatedOutstanding = (ledgerRows = [], openingBalance = 0) =>
   roundMoney(
@@ -3095,6 +5266,13 @@ export const getAllocatedOutstanding = (ledgerRows = [], openingBalance = 0) =>
       )
   );
 
+
+
+
+
+
+
+
 export async function loadCustomerOutstandingSnapshot({
   customerAccountId,
   customerName,
@@ -3102,6 +5280,13 @@ export async function loadCustomerOutstandingSnapshot({
   if (!customerAccountId && !customerName) {
     return { openingBalance: 0, ledgerRows: [], allocatedRows: [], totalOutstanding: 0, branchOutstanding: {} };
   }
+
+
+
+
+
+
+
 
   const [{ data: balanceRow }, ledgerResult, ordersResult, processingQueueOrders] = await Promise.all([
     customerName
@@ -3122,8 +5307,22 @@ export async function loadCustomerOutstandingSnapshot({
     loadProcessingQueueOrders({ customerAccountId, customerName }),
   ]);
 
+
+
+
+
+
+
+
   if (ledgerResult.error) throw ledgerResult.error;
   if (ordersResult.error) throw ordersResult.error;
+
+
+
+
+
+
+
 
   const openingBalance = Number(balanceRow?.opening_balance || 0);
   const deliveredOrders = (ordersResult.data || [])
@@ -3137,9 +5336,23 @@ export async function loadCustomerOutstandingSnapshot({
   const allocatedRows = applyInvoicePaymentAllocations(ledgerRows);
   const branchOutstanding = {};
 
+
+
+
+
+
+
+
   allocatedRows.forEach((row) => {
     const branchKey = String(row.branch_id || row.customer_branch_id || row.branch_name || "");
     if (!branchKey) return;
+
+
+
+
+
+
+
 
     branchOutstanding[branchKey] = roundMoney(
       Number(branchOutstanding[branchKey] || 0) +
@@ -3147,6 +5360,13 @@ export async function loadCustomerOutstandingSnapshot({
         getPaymentLedgerTotal(row)
     );
   });
+
+
+
+
+
+
+
 
   return {
     openingBalance,

@@ -6,6 +6,25 @@ export const PROMOTION_RULE_KINDS = {
   REDUCED_PRICE: "REDUCED_PRICE",
 };
 
+export const PROMOTION_AUDIENCE_TYPES = {
+  ALL: "all",
+  SALES_REP: "sales_rep",
+  AGENT: "agent",
+  GUEST: "guest",
+};
+
+export const PROMOTION_PRICE_MODES = {
+  EX_VAT: "ex_vat",
+  INC_VAT: "inc_vat",
+  BOTH: "both",
+};
+
+export const PROMOTION_FLAVOUR_MODES = {
+  ALL: "all",
+  INCLUDE: "include",
+  EXCLUDE: "exclude",
+};
+
 export const PROMOTION_LABELS = [
   { value: "", label: "No Label" },
   { value: "promotion", label: "Promotion" },
@@ -84,11 +103,18 @@ export async function getPromotionRules() {
         "promotion_name",
         "rule_kind",
         "active",
+        "audience_type",
+        "price_mode",
         "trigger_brand",
         "trigger_series",
+        "trigger_flavour_mode",
+        "trigger_flavours",
         "trigger_product_id",
         "buy_qty",
+        "free_brand",
         "free_series",
+        "free_flavour_mode",
+        "free_flavours",
         "free_product_id",
         "free_qty",
         "offer_price",
@@ -119,18 +145,50 @@ export async function getActivePromotionRules() {
   return data || [];
 }
 
+const normalizeFlavourArray = (values) =>
+  [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
+
+const normalizeRulePriceModeForSave = (value) => {
+  const mode = String(value || "").trim().toLowerCase().replace(/[.\s-]+/g, "_");
+  if (mode === PROMOTION_PRICE_MODES.INC_VAT) return PROMOTION_PRICE_MODES.INC_VAT;
+  if (mode === PROMOTION_PRICE_MODES.BOTH) return PROMOTION_PRICE_MODES.BOTH;
+  return PROMOTION_PRICE_MODES.EX_VAT;
+};
+
+const normalizeFlavourModeForSave = (value) => {
+  const mode = String(value || "").trim().toLowerCase();
+  return Object.values(PROMOTION_FLAVOUR_MODES).includes(mode) ? mode : PROMOTION_FLAVOUR_MODES.ALL;
+};
+
+const buildAutomaticPromotionName = (rule = {}) => {
+  const kind = rule.rule_kind;
+  if (kind === PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE) {
+    const buySeries = String(rule.trigger_series || "Series").trim();
+    const freeSeries = String(rule.free_series || buySeries || "Series").trim();
+    return `Buy ${Number(rule.buy_qty || 0)} ${buySeries} Get ${Number(rule.free_qty || 0)} ${freeSeries} Free`;
+  }
+  if (kind === PROMOTION_RULE_KINDS.REDUCED_PRICE) return "Reduced Price";
+  return "Promotion Price";
+};
+
 export async function savePromotionRule(rule, productIdsToLabel = []) {
   const payload = {
     promotion_type_id: rule.promotion_type_id || null,
-    promotion_name: String(rule.promotion_name || "").trim(),
+    promotion_name: String(rule.promotion_name || "").trim() || buildAutomaticPromotionName(rule),
     rule_kind: rule.rule_kind,
     active: rule.active !== false,
+    audience_type: PROMOTION_AUDIENCE_TYPES.ALL,
+    price_mode: normalizeRulePriceModeForSave(rule.price_mode || rule.priceMode),
     trigger_brand: rule.trigger_brand || null,
     trigger_series: rule.trigger_series || null,
+    trigger_flavour_mode: normalizeFlavourModeForSave(rule.trigger_flavour_mode || rule.triggerFlavourMode),
+    trigger_flavours: normalizeFlavourArray(rule.trigger_flavours || rule.triggerFlavours),
     trigger_product_id: rule.trigger_product_id || null,
     buy_qty: rule.buy_qty ? Number(rule.buy_qty) : null,
     free_brand: rule.free_brand || null,
     free_series: rule.free_series || null,
+    free_flavour_mode: normalizeFlavourModeForSave(rule.free_flavour_mode || rule.freeFlavourMode),
+    free_flavours: normalizeFlavourArray(rule.free_flavours || rule.freeFlavours),
     free_product_id: rule.free_product_id || null,
     free_qty: rule.free_qty ? Number(rule.free_qty) : null,
     offer_price: rule.offer_price ? Number(rule.offer_price) : null,
@@ -184,9 +242,35 @@ const normalizePromotionType = (value) =>
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
 
-const isVatPriceMode = (priceMode) => {
-  const mode = normalizeMatchValue(priceMode);
-  return mode === "vat" || mode === "ex vat" || mode === "ex. vat";
+const normalizeCurrentPriceMode = (priceMode) => {
+  const mode = normalizeMatchValue(priceMode).replace(/[._-]+/g, " ").replace(/\s+/g, " ");
+  if (mode === "server" || mode === "inc vat" || mode === "incvat") return PROMOTION_PRICE_MODES.INC_VAT;
+  if (mode === "vat" || mode === "ex vat" || mode === "exvat") return PROMOTION_PRICE_MODES.EX_VAT;
+  return "";
+};
+
+export const promotionRuleAppliesToPriceMode = (rule, priceMode) => {
+  const current = normalizeCurrentPriceMode(priceMode);
+  if (!current) return false;
+  const ruleMode = normalizeRulePriceModeForSave(rule?.price_mode || rule?.priceMode);
+  return ruleMode === PROMOTION_PRICE_MODES.BOTH || ruleMode === current;
+};
+
+
+const normalizeAudienceType = (value) => {
+  const normalized = normalizePromotionType(value);
+  if (normalized === "salesrep" || normalized === "sales_rep") {
+    return PROMOTION_AUDIENCE_TYPES.SALES_REP;
+  }
+  if (normalized === "agent") return PROMOTION_AUDIENCE_TYPES.AGENT;
+  if (normalized === "guest") return PROMOTION_AUDIENCE_TYPES.GUEST;
+  return PROMOTION_AUDIENCE_TYPES.ALL;
+};
+
+export const promotionRuleAppliesToAudience = (rule, audienceType = "all") => {
+  const ruleAudience = normalizeAudienceType(rule?.audience_type || rule?.audienceType);
+  const currentAudience = normalizeAudienceType(audienceType);
+  return ruleAudience === PROMOTION_AUDIENCE_TYPES.ALL || ruleAudience === currentAudience;
 };
 
 const isPromotionPriceRule = (rule) => {
@@ -326,6 +410,12 @@ const buildPromotionPriceDiscountLines = (
       promotionDiscountVatAmount: discountAmount * (getVatRate(line) / 100),
       discountedProductNames: line.name ? [line.name] : [],
       isPromotionPriceDiscount: true,
+      promotionRuleKind: PROMOTION_RULE_KINDS.PROMOTION_PRICE,
+      promotionAudienceType: "all",
+      promotionPriceMode: rule.price_mode || PROMOTION_PRICE_MODES.EX_VAT,
+      promotionTriggerProductId: line.id || null,
+      promotionPaidQtyQualified: qty,
+      promotionFreeQtyEarned: 0,
     };
   })
   .filter(Boolean);
@@ -351,6 +441,44 @@ const restorePromotionPriceLines = (paidLines = []) =>
 const lineMatchesSeries = (line, brand, series) =>
   (!brand || normalizeMatchValue(line?.brand) === normalizeMatchValue(brand)) &&
   (!series || normalizeMatchValue(line?.series) === normalizeMatchValue(series));
+
+export const promotionFlavourMatches = (flavour, mode = PROMOTION_FLAVOUR_MODES.ALL, values = []) => {
+  const normalizedMode = normalizeFlavourModeForSave(mode);
+  const selected = normalizeFlavourArray(values).map(normalizeMatchValue);
+  if (normalizedMode === PROMOTION_FLAVOUR_MODES.ALL || !selected.length) return true;
+  const matches = selected.includes(normalizeMatchValue(flavour));
+  return normalizedMode === PROMOTION_FLAVOUR_MODES.INCLUDE ? matches : !matches;
+};
+
+const lineMatchesRuleSide = (line, rule, side = "trigger") => {
+  const isFree = side === "free";
+  const brand = isFree ? rule.free_brand : rule.trigger_brand;
+  const series = isFree ? rule.free_series : rule.trigger_series;
+  const flavourMode = isFree ? rule.free_flavour_mode : rule.trigger_flavour_mode;
+  const flavours = isFree ? rule.free_flavours : rule.trigger_flavours;
+  if (!lineMatchesSeries(line, brand, series)) return false;
+
+  const normalizedMode = normalizeFlavourModeForSave(flavourMode);
+  const selectedFlavours = normalizeFlavourArray(flavours);
+  if (normalizedMode === PROMOTION_FLAVOUR_MODES.ALL || !selectedFlavours.length) return true;
+
+  // Customer-order cart rows do not always carry a dedicated flavour field.
+  // Prefer the structured flavour value, but safely fall back to the product name
+  // so selected/excluded flavour promotions still match the physical cart item.
+  const structuredFlavour = line?.flavour ?? line?.flavor;
+  const normalizedStructuredFlavour = normalizeMatchValue(structuredFlavour);
+  const normalizedProductName = normalizeMatchValue(line?.name ?? line?.product_name ?? line?.productName);
+  const matchesSelectedFlavour = selectedFlavours.some((value) => {
+    const normalizedValue = normalizeMatchValue(value);
+    if (!normalizedValue) return false;
+    if (normalizedStructuredFlavour) return normalizedStructuredFlavour === normalizedValue;
+    return normalizedProductName.includes(normalizedValue);
+  });
+
+  return normalizedMode === PROMOTION_FLAVOUR_MODES.INCLUDE
+    ? matchesSelectedFlavour
+    : !matchesSelectedFlavour;
+};
 
 const restorePromotionFreeLines = (cartLines = []) => {
   const paidLines = [];
@@ -431,7 +559,7 @@ const buildPromotionDiscountLine = (rule, paidLines, freeQtyEarned) => {
   const discountedNames = [];
 
   paidLines
-    .filter((line) => lineMatchesSeries(line, null, rule.free_series))
+    .filter((line) => lineMatchesRuleSide(line, rule, "free"))
     .forEach((line) => {
       if (remainingFreeQty <= 0) return;
 
@@ -474,7 +602,39 @@ const buildPromotionDiscountLine = (rule, paidLines, freeQtyEarned) => {
     promotionDiscountAmount: discountAmount,
     promotionDiscountVatAmount: discountVatAmount,
     discountedProductNames: discountedNames,
+    promotionRuleKind: PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE,
+    promotionAudienceType: "all",
+    promotionPriceMode: rule.price_mode || PROMOTION_PRICE_MODES.EX_VAT,
+    promotionTriggerBrand: rule.trigger_brand || "",
+    promotionTriggerSeries: rule.trigger_series || "",
+    promotionTriggerFlavourMode: rule.trigger_flavour_mode || PROMOTION_FLAVOUR_MODES.ALL,
+    promotionTriggerFlavours: normalizeFlavourArray(rule.trigger_flavours),
+    promotionFreeBrand: rule.free_brand || "",
+    promotionFreeSeries: rule.free_series || "",
+    promotionFreeFlavourMode: rule.free_flavour_mode || PROMOTION_FLAVOUR_MODES.ALL,
+    promotionFreeFlavours: normalizeFlavourArray(rule.free_flavours),
+    promotionBuyQty: Number(rule.buy_qty || 0),
+    promotionFreeQtyPerRun: Number(rule.free_qty || 0),
+    promotionPaidQtyQualified: Math.floor(Number(freeQtyEarned || 0) / Math.max(1, Number(rule.free_qty || 1))) * Number(rule.buy_qty || 0),
+    promotionFreeQtyEarned: Number(freeQtyEarned || 0),
+    promotionFreeQtyApplied: discountedQty,
   };
+};
+
+export const productMatchesPromotionSeriesRule = ({ product, rules = [], series, priceMode }) => {
+  const targetSeries = normalizeMatchValue(series);
+  if (!targetSeries) return true;
+  const matchingRules = (rules || []).filter((rule) =>
+    rule?.active !== false &&
+    promotionRuleAppliesToPriceMode(rule, priceMode) &&
+    (normalizeMatchValue(rule?.trigger_series) === targetSeries || normalizeMatchValue(rule?.free_series) === targetSeries)
+  );
+  if (!matchingRules.length) return true;
+  return matchingRules.some((rule) => {
+    if (normalizeMatchValue(rule?.trigger_series) === targetSeries && lineMatchesRuleSide(product, rule, "trigger")) return true;
+    if (normalizeMatchValue(rule?.free_series) === targetSeries && lineMatchesRuleSide(product, rule, "free")) return true;
+    return false;
+  });
 };
 
 export function applyPromotionRulesToCart(
@@ -491,18 +651,20 @@ export function applyPromotionRulesToCart(
   let paidLines = restorePromotionFreeLines(cartLines);
   paidLines = restorePromotionPriceLines(paidLines);
 
-  if (!isVatPriceMode(priceMode)) {
-    return paidLines;
-  }
+  const applicablePromotionRules = activePromotionRules.filter((rule) =>
+    promotionRuleAppliesToPriceMode(rule, priceMode)
+  );
+
+  if (!normalizeCurrentPriceMode(priceMode)) return paidLines;
 
   const promotionPriceDiscountLines = buildPromotionPriceDiscountLines(
     paidLines,
-    activePromotionRules
+    applicablePromotionRules
   );
 
   const generatedDiscountLines = [...promotionPriceDiscountLines];
 
-  activePromotionRules
+  applicablePromotionRules
     .filter((rule) => rule.rule_kind === PROMOTION_RULE_KINDS.BULK_BUY_GET_FREE)
     .forEach((rule) => {
       const buyQty = Number(rule.buy_qty || 0);
@@ -510,9 +672,7 @@ export function applyPromotionRulesToCart(
       if (!buyQty || !freeQty || !rule.trigger_series || !rule.free_series) return;
 
       const buySeriesQty = paidLines
-        .filter((line) =>
-          lineMatchesSeries(line, rule.trigger_brand, rule.trigger_series)
-        )
+        .filter((line) => lineMatchesRuleSide(line, rule, "trigger"))
         .reduce((sum, line) => sum + Number(line.qty || 0), 0);
 
       const freeQtyEarned = Math.floor(buySeriesQty / buyQty) * freeQty;

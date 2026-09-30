@@ -7,6 +7,7 @@ export function isOwnerUser(user) {
 const MANUAL_PAYMENT_SECTION = Object.freeze(["manual", "Manual Payment"]);
 const OWNER_FINANCIAL_SECTIONS = Object.freeze([
   Object.freeze(["history", "Payment History"]),
+  Object.freeze(["unallocated", "Unallocated"]),
   Object.freeze(["archive", "Payment Archive"]),
   Object.freeze(["ledger", "Global Ledger & Archive"]),
 ]);

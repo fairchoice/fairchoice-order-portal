@@ -39,13 +39,31 @@ export const SUPPLIER_LEDGER_TYPE_LABELS = Object.freeze({
   credit_adjustment: "Credit adjustment",
 });
 
+export function supplierLedgerTypeLabel(row = {}) {
+  if (
+    row.transaction_type === "payment" &&
+    row.description === "Supplier Payment"
+  ) {
+    return "Supplier Payment";
+  }
+  return (
+    SUPPLIER_LEDGER_TYPE_LABELS[row.transaction_type] ||
+    row.transaction_type ||
+    ""
+  );
+}
+
 const OPTIONAL_TEXT_FIELDS = [
   "contact_name",
   "company_legal_name",
+  "supplier_reference",
+  "mobile",
+  "telephone",
   "vat_number",
   "address_line_1",
   "address_line_2",
   "city",
+  "county",
   "postcode",
   "country",
   "phone",
@@ -53,6 +71,12 @@ const OPTIONAL_TEXT_FIELDS = [
   "payment_terms",
   "default_payment_method",
   "bank_payment_reference",
+  "account_default",
+  "bank_account_name",
+  "bank_sort_code",
+  "bank_account_number",
+  "bank_bic_swift",
+  "bank_iban",
   "notes",
 ];
 
@@ -82,6 +106,13 @@ export function validateSupplier(input = {}) {
     supplier[field] = normalizeOptionalText(input[field]);
   }
   supplier.vat_registered = input.vat_registered !== false;
+  supplier.import_agent = Boolean(input.import_agent);
+  supplier.reverse_charge = Boolean(input.reverse_charge);
+  supplier.credit_terms_enabled = Boolean(input.credit_terms_enabled);
+  supplier.account_on_hold = Boolean(input.account_on_hold);
+  supplier.credit_limit = input.credit_limit === "" || input.credit_limit == null ? null : Number(input.credit_limit);
+  supplier.credit_terms_days = input.credit_terms_days === "" || input.credit_terms_days == null ? null : Number(input.credit_terms_days);
+  supplier.credit_terms_type = normalizeOptionalText(input.credit_terms_type);
 
   const errors = {};
   if (!supplier.supplier_name) {
@@ -462,8 +493,7 @@ export function printSupplierStatement({
           <td>${escapeHtml(
             row.is_opening_balance
               ? "Opening balance"
-              : SUPPLIER_LEDGER_TYPE_LABELS[row.transaction_type] ||
-                  row.transaction_type,
+              : supplierLedgerTypeLabel(row),
           )}</td>
           <td>${escapeHtml(row.reference || row.invoice_number || "")}</td>
           <td>${escapeHtml(row.description || "")}</td>
@@ -498,4 +528,57 @@ export function printSupplierStatement({
     <script>window.addEventListener("load",()=>window.print());</script>
     </body></html>`);
   printWindow.document.close();
+}
+
+export const SUPPLIER_PRICING_BASES = Object.freeze([
+  { value: "STANDARD", label: "Standard" },
+  { value: "INCLUSIVE", label: "Inclusive" },
+]);
+
+export async function loadSupplierProductPricing(user, supplierId, includeHistory = false) {
+  if (!supplierId) return { products: [], rows: [] };
+  const data = await callSupplierRpc("fc_list_supplier_product_pricing_v1", {
+    ...sessionArguments(user),
+    p_supplier_id: supplierId,
+    p_include_history: Boolean(includeHistory),
+  });
+  return data || { products: [], rows: [] };
+}
+
+export async function saveSupplierProductPricing(input, user) {
+  const supplierId = String(input?.supplierId || "").trim();
+  const productId = String(input?.productId || "").trim();
+  const pricingBasis = String(input?.pricingBasis || "").trim().toUpperCase();
+  const unitCost = Number(input?.unitCost);
+  if (!supplierId) throw new Error("Supplier is required.");
+  if (!productId) throw new Error("Product is required.");
+  if (!["STANDARD", "INCLUSIVE"].includes(pricingBasis)) throw new Error("Select Standard or Inclusive.");
+  if (!Number.isFinite(unitCost) || unitCost < 0) throw new Error("Enter a valid unit cost.");
+  return callSupplierRpc("fc_save_supplier_product_pricing_v1", {
+    ...sessionArguments(user),
+    p_supplier_id: supplierId,
+    p_product_id: productId,
+    p_pricing_basis: pricingBasis,
+    p_unit_cost: unitCost,
+    p_effective_from: input?.effectiveFrom || null,
+    p_note: String(input?.note || "").trim() || null,
+  });
+}
+
+export async function deactivateSupplierProductPricing(pricingId, user) {
+  if (!pricingId) throw new Error("Supplier pricing ID is required.");
+  return callSupplierRpc("fc_deactivate_supplier_product_pricing_v1", {
+    ...sessionArguments(user),
+    p_pricing_id: pricingId,
+  });
+}
+
+export async function bulkSaveSupplierProductPricing(supplierId, rows, user) {
+  if (!supplierId) throw new Error("Supplier is required.");
+  if (!Array.isArray(rows) || !rows.length) throw new Error("No valid pricing rows to import.");
+  return callSupplierRpc("fc_bulk_save_supplier_product_pricing_v1", {
+    ...sessionArguments(user),
+    p_supplier_id: supplierId,
+    p_rows: rows,
+  });
 }

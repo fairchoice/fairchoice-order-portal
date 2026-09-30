@@ -1,12 +1,12 @@
 import { supabase } from "./supabase";
 import { getStoredCustomerStatus } from "../utils/customerStatus";
 import { isTestAccount } from "../utils/testAccountFiltering";
+import { getFcSessionState, readStoredFcProfile } from "./fcSession";
 
 const normaliseStatus = getStoredCustomerStatus;
 const normalisePriceMode = (mode) => {
   const normalizedMode = String(mode || "VAT").trim().toLowerCase();
-  if (["server", "inc.vat", "inc vat"].includes(normalizedMode)) return "Server";
-  if (["super", "admin", "admin offer"].includes(normalizedMode)) return "Admin Offer";
+  if (["server", "inc.vat", "inc vat", "royalty", "owner offer", "manager", "manager offer"].includes(normalizedMode)) return "Server";
   return "VAT";
 };
 
@@ -83,6 +83,25 @@ export async function toggleCustomerActive(id, active) {
   return data;
 }
 
+export async function syncCustomerAddressToOrders({ customerAccountId = null, customerBranchId = null } = {}) {
+  if (!customerAccountId && !customerBranchId) return { orders_updated: 0 };
+
+  const session = getFcSessionState(readStoredFcProfile());
+  if (!session.valid) {
+    throw new Error("A valid FairChoice staff session is required to update existing order addresses.");
+  }
+
+  const { data, error } = await supabase.rpc("fc_sync_customer_address_to_orders_v1", {
+    p_username: session.username,
+    p_session_token: session.token,
+    p_customer_account_id: customerAccountId,
+    p_customer_branch_id: customerBranchId,
+  });
+
+  if (error) throw error;
+  return Array.isArray(data) ? data[0] || { orders_updated: 0 } : data || { orders_updated: 0 };
+}
+
 export async function saveCustomerAccount(account) {
   const addressLine1 = account.address_line_1 || account.address || "";
   const fullAddress = [
@@ -113,13 +132,15 @@ export async function saveCustomerAccount(account) {
 
     payment_terms: account.payment_terms || "",
     credit_limit: Number(account.credit_limit || 0),
-    default_price_mode: defaultPriceMode === "Admin Offer" ? "VAT" : defaultPriceMode,
+    default_price_mode: defaultPriceMode,
+    customer_price_code_id: account.customer_price_code_id || null,
 
     status: normaliseStatus(account.status),
     active: account.active ?? true,
 
-    allow_vat: account.allow_vat ?? true,
-    allow_server: account.allow_server ?? false,
+    // Legacy flags remain compatible with the two normal base modes.
+    allow_vat: defaultPriceMode === "VAT",
+    allow_server: defaultPriceMode === "Server",
     allow_manager: false,
     allow_super: false,
   };
@@ -133,6 +154,7 @@ export async function saveCustomerAccount(account) {
       .single();
 
     if (error) throw error;
+    await syncCustomerAddressToOrders({ customerAccountId: account.id });
     return data;
   }
 
@@ -166,6 +188,7 @@ export async function saveCustomerBranch(branch) {
       .single();
 
     if (error) throw error;
+    await syncCustomerAddressToOrders({ customerBranchId: branch.id });
     return data;
   }
 

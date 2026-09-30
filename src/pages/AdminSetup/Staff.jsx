@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
+import { MASTER_ADMIN_USERNAME, STAFF_ROLES, canPerform } from "../../security/accessControlRegistry";
 
 const emptyStaffForm = {
   first_name: "",
@@ -29,46 +30,51 @@ function buildDisplayName(form) {
     .join(" ");
 }
 
-export default function Staff() {
+export default function Staff({ currentUser, onOpenAccessControl = () => {} }) {
   const [staff, setStaff] = useState([]);
+  const [loginUsers, setLoginUsers] = useState([]);
   const [form, setForm] = useState(emptyStaffForm);
   const [showModal, setShowModal] = useState(false);
   const [activeTab, setActiveTab] = useState("personal");
   const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingStaffId, setEditingStaffId] = useState(null);
   const [roleError, setRoleError] = useState("");
+  const canManageStaff = canPerform(currentUser, "staff.manage");
+  const canOpenAccessControl = canPerform(currentUser, "page.login.access_control");
 
   useEffect(() => {
     fetchStaff();
   }, []);
 
   async function fetchStaff() {
-    const { data, error } = await supabase
-      .from("staff_users")
-      .select("*")
-      .order("staff_name");
+    const [staffResult, loginResult] = await Promise.all([
+      supabase.from("staff_users").select("*").order("staff_name"),
+      supabase.from("login_users").select("id, staff_id, username, role, active").neq("role", "Customer"),
+    ]);
 
-    if (error) {
-      alert(error.message);
+    if (staffResult.error || loginResult.error) {
+      alert(staffResult.error?.message || loginResult.error?.message);
       return;
     }
 
-    setStaff(data || []);
+    setStaff(staffResult.data || []);
+    setLoginUsers(loginResult.data || []);
   }
 
   const filteredStaff = useMemo(() => {
     const searchText = search.trim().toLowerCase();
-    if (!searchText) return staff;
-
-    return staff.filter((row) =>
-      `${row.staff_name || ""} ${row.username || ""} ${row.email || ""} ${
-        row.job_position || ""
-      } ${row.job_role || ""} ${row.portal_access || ""}`
-        .toLowerCase()
-        .includes(searchText)
-    );
-  }, [search, staff]);
+    return staff.filter((row) => {
+      const login = loginUsers.find((item) => String(item.staff_id) === String(row.id));
+      const role = login?.role || row.role || row.job_role || "";
+      const matchesSearch = !searchText || `${row.staff_name || ""} ${login?.username || row.username || ""} ${row.email || ""} ${role}`.toLowerCase().includes(searchText);
+      const matchesRole = !roleFilter || role === roleFilter;
+      const status = row.active !== false && login?.active !== false ? "active" : "inactive";
+      return matchesSearch && matchesRole && (!statusFilter || status === statusFilter);
+    });
+  }, [loginUsers, roleFilter, search, staff, statusFilter]);
 
   function updateField(field, value) {
     if (field === "job_role" && value.trim()) {
@@ -87,6 +93,7 @@ export default function Staff() {
   }
 
   function openNewStaffModal() {
+    if (!canManageStaff) return;
     setEditingStaffId(null);
     setForm(emptyStaffForm);
     setRoleError("");
@@ -95,6 +102,7 @@ export default function Staff() {
   }
 
   function openEditStaffModal(row) {
+    if (!canManageStaff) return;
     setEditingStaffId(row.id);
     setRoleError("");
     setForm({
@@ -132,6 +140,10 @@ export default function Staff() {
 
   async function saveStaff(event) {
     event.preventDefault();
+    if (!canManageStaff) {
+      alert("You do not have permission to change staff records.");
+      return;
+    }
 
     const displayName = buildDisplayName(form) || form.staff_name.trim();
     if (!displayName) {
@@ -143,6 +155,13 @@ export default function Staff() {
     if (!role) {
       setRoleError("Role is required.");
       setActiveTab("full");
+      return;
+    }
+
+    const existingLogin = loginUsers.find((item) => String(item.staff_id) === String(editingStaffId));
+    const protectedMaster = String(existingLogin?.username || form.username || "").trim().toLowerCase() === MASTER_ADMIN_USERNAME;
+    if (protectedMaster && form.active === false) {
+      alert("Nisstaj_admin is the protected master Admin and cannot be deactivated.");
       return;
     }
 
@@ -204,19 +223,22 @@ export default function Staff() {
         <button
           type="button"
           onClick={openNewStaffModal}
-          className="rounded-full bg-green-700 px-5 py-3 text-sm font-bold text-white hover:bg-green-800"
+          disabled={!canManageStaff}
+          className="rounded-full bg-green-700 px-5 py-3 text-sm font-bold text-white hover:bg-green-800 disabled:bg-slate-300"
         >
           New Staff
         </button>
       </div>
 
-      <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-[1fr_220px_180px]">
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           className="w-full rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
           placeholder="Search staff..."
         />
+        <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-3 text-sm"><option value="">All roles</option>{STAFF_ROLES.map((role) => <option key={role}>{role}</option>)}</select>
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-3 text-sm"><option value="">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -224,31 +246,29 @@ export default function Staff() {
           <thead className="bg-slate-800 text-white">
             <tr>
               <th className="p-3 text-left">Staff Name</th>
-              <th className="p-3 text-left">Job Position</th>
-              <th className="p-3 text-left">Job Role</th>
-              <th className="p-3 text-left">Portal Access</th>
-              <th className="p-3 text-left">Mobile</th>
+              <th className="p-3 text-left">Username</th>
+              <th className="p-3 text-left">Role</th>
               <th className="p-3 text-left">Status</th>
+              <th className="p-3 text-left">Login</th>
               <th className="p-3 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
             {filteredStaff.length === 0 ? (
               <tr>
-                <td className="p-4 text-slate-600" colSpan={7}>
+                <td className="p-4 text-slate-600" colSpan={6}>
                   No staff found.
                 </td>
               </tr>
             ) : (
-              filteredStaff.map((row) => (
-                <tr key={row.id} className="border-b border-slate-100">
+              filteredStaff.map((row) => {
+                const login = loginUsers.find((item) => String(item.staff_id) === String(row.id));
+                return <tr key={row.id} className="border-b border-slate-100">
                   <td className="p-3 font-semibold text-slate-900">
                     {row.staff_name || "-"}
                   </td>
-                  <td className="p-3">{row.job_position || "-"}</td>
-                  <td className="p-3">{row.job_role || row.role || "-"}</td>
-                  <td className="p-3">{row.portal_access || "-"}</td>
-                  <td className="p-3">{row.mobile || "-"}</td>
+                  <td className="p-3">{login?.username || row.username || "-"}</td>
+                  <td className="p-3">{login?.role || row.job_role || row.role || "-"}</td>
                   <td className="p-3">
                     <span
                       className={`rounded-full px-3 py-1 text-xs font-bold ${
@@ -260,17 +280,20 @@ export default function Staff() {
                       {row.active === false ? "Inactive" : "Active"}
                     </span>
                   </td>
+                  <td className="p-3">{login ? (login.active === false ? "Disabled" : "Enabled") : "Not configured"}</td>
                   <td className="p-3">
                     <button
                       type="button"
                       onClick={() => openEditStaffModal(row)}
-                      className="rounded-lg border border-green-700 px-3 py-2 text-sm font-bold text-green-700 hover:bg-green-50"
+                      disabled={!canManageStaff}
+                      className="rounded-lg border border-green-700 px-3 py-2 text-sm font-bold text-green-700 hover:bg-green-50 disabled:border-slate-300 disabled:text-slate-300"
                     >
-                      View
+                      Edit
                     </button>
+                    {canOpenAccessControl && <button type="button" onClick={() => onOpenAccessControl(row.id)} className="ml-2 rounded-lg border border-blue-700 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50">Access Control</button>}
                   </td>
-                </tr>
-              ))
+                </tr>;
+              })
             )}
           </tbody>
         </table>
@@ -421,13 +444,17 @@ export default function Staff() {
                       value={form.username}
                       onChange={(value) => updateField("username", value)}
                     />
-                    <Field
-                      label="Role"
-                      value={form.job_role}
-                      onChange={(value) => updateField("job_role", value)}
-                      required
-                      error={roleError}
-                    />
+                    <label className="grid grid-cols-1 gap-2 text-sm font-bold text-slate-900 sm:grid-cols-[130px_1fr] sm:items-center">
+                      <span className="sm:text-right">Role *</span>
+                      <span>
+                        <select value={form.job_role} onChange={(event) => updateField("job_role", event.target.value)} required className="w-full rounded-xl border border-slate-300 px-3 py-3 text-sm font-normal outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
+                          <option value="">Select role</option>
+                          {form.job_role && !STAFF_ROLES.includes(form.job_role) && <option value={form.job_role}>{form.job_role} (legacy)</option>}
+                          {STAFF_ROLES.map((role) => <option key={role}>{role}</option>)}
+                        </select>
+                        {roleError && <span className="mt-1 block text-xs font-semibold text-red-700">{roleError}</span>}
+                      </span>
+                    </label>
                     <Field
                       label="Job Access"
                       value={form.job_access}

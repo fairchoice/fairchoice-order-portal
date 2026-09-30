@@ -2,6 +2,7 @@ import { supabase } from "./supabase";
 
 export async function saveHandover(data) {
   const payload = {
+    collector_staff_id: data.collectorStaffId || null,
     collector_type: data.collectorType,
     collector_name: data.collectorName,
 

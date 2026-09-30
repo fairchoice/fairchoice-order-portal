@@ -8,7 +8,7 @@ import {
   resolveDriverDeliveryAllocations,
 } from "./driverCashCollectionForm.js";
 
-test("TODAY_INVOICE uses one exact-order allocation with the same UUID as p_order_id", () => {
+test("TODAY_INVOICE keeps the canonical customer invoice UUID from the preview allocation", () => {
   const orderUuid = "37c527c4-fdff-4a1a-9ebc-33124a5b6966";
   const allocations = resolveDriverDeliveryAllocations({
     effectiveCollectionType: "TODAY_INVOICE",
@@ -28,11 +28,12 @@ test("TODAY_INVOICE uses one exact-order allocation with the same UUID as p_orde
   assert.deepEqual(allocations, [
     {
       invoiceReference: "ORD-1783300314589",
-      invoiceSourceId: orderUuid,
+      invoiceSourceId: "5fa0f648-1ac3-48c1-9999-25585f118c88",
       customerBranchId: "8f598571-db45-424b-9d23-1fe2fba98d78",
       allocatedAmount: 43,
     },
   ]);
+  assert.notEqual(allocations[0].invoiceSourceId, orderUuid);
   assert.notEqual(allocations[0].invoiceSourceId, allocations[0].invoiceReference);
 });
 
@@ -41,11 +42,34 @@ test("TODAY_INVOICE rejects a readable order reference used as the UUID", () => 
     () =>
       resolveDriverDeliveryAllocations({
         effectiveCollectionType: "TODAY_INVOICE",
+        previewAllocations: [
+          {
+            invoiceReference: "ORD-1783300314589",
+            invoiceSourceId: "5fa0f648-1ac3-48c1-9999-25585f118c88",
+            allocatedAmount: 43,
+          },
+        ],
         orderUuid: "ORD-1783300314589",
         invoiceReference: "ORD-1783300314589",
         allocatedAmount: 43,
       }),
     /database order UUID/
+  );
+});
+
+
+
+test("TODAY_INVOICE rejects a missing canonical invoice allocation", () => {
+  assert.throws(
+    () =>
+      resolveDriverDeliveryAllocations({
+        effectiveCollectionType: "TODAY_INVOICE",
+        previewAllocations: [],
+        orderUuid: "37c527c4-fdff-4a1a-9ebc-33124a5b6966",
+        invoiceReference: "ORD-1783300314589",
+        allocatedAmount: 43,
+      }),
+    /canonical customer invoice/
   );
 });
 

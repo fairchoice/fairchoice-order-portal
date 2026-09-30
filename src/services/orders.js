@@ -342,6 +342,9 @@ export async function createCustomerOrder({
   delivery_address = "",
   delivery_postcode = "",
   customer_country = "",
+  wallet_use_requested = false,
+  wallet_requested_amount = null,
+  wallet_requested_at = null,
   notes = "",
 }) {
   const orderNumber = requestedOrderNumber || "ORD-" + Date.now();
@@ -366,6 +369,12 @@ const orderPayload = {
   delivery_address: delivery_address || "",
   delivery_postcode: delivery_postcode || "",
   customer_country: customer_country || "",
+  wallet_use_requested: Boolean(wallet_use_requested),
+  wallet_requested_amount:
+    wallet_requested_amount === null || wallet_requested_amount === undefined
+      ? null
+      : Number(wallet_requested_amount || 0),
+  wallet_requested_at: wallet_requested_at || null,
 
   postcode: delivery_postcode || "",
   price_mode: priceMode.toUpperCase(),
@@ -572,7 +581,12 @@ const orderItems = calculatedOrderItems.map((item) => ({
     throw itemsError;
   }
 
-  for (const item of cart) {
+  // Promotion discount/free lines are synthetic calculation rows. Physical
+  // inventory is already represented by the paid product quantities, so never
+  // write stock movements for the synthetic rows.
+  const stockItems = (cart || []).filter((item) => !item?.isPromotionFree);
+
+  for (const item of stockItems) {
     const stockAfter = Math.max(0, item.stock - item.qty);
 
     await supabase
@@ -593,6 +607,34 @@ const orderItems = calculatedOrderItems.map((item) => ({
   return {
     orderNumber,
     order,
+  };
+}
+
+export async function getCustomerOrderByNumber(orderNumber) {
+  const normalizedOrderNumber = String(orderNumber || "").trim();
+  if (!normalizedOrderNumber) return null;
+
+  const { data: order, error: orderError } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("order_number", normalizedOrderNumber)
+    .maybeSingle();
+
+  if (orderError) throw orderError;
+  if (!order) return null;
+
+  const { count, error: itemsError } = await supabase
+    .from("order_items")
+    .select("id", { count: "exact", head: true })
+    .eq("order_id", order.id);
+
+  if (itemsError) throw itemsError;
+  if (Number(count || 0) <= 0) return null;
+
+  return {
+    orderNumber: normalizedOrderNumber,
+    order,
+    alreadyCreated: true,
   };
 }
 

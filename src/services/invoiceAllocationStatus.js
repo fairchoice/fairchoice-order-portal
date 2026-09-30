@@ -198,18 +198,27 @@ export function resolveInvoiceRowFromAllocations({
     const payment = paymentsById.get(String(allocation.payment_id || ""));
     if (!payment || !isActiveInvoicePayment(payment)) return sum;
 
-    if (
-      customerAccountId &&
-      String(allocation.customer_account_id || "") !== customerAccountId
-    ) {
-      return sum;
-    }
-    if (
-      branchId &&
-      String(allocation.customer_branch_id || allocation.branch_id || "") !== branchId
-    ) {
-      return sum;
-    }
+const allocationCustomerAccountId = String(
+  allocation.customer_account_id || ""
+);
+
+if (
+  customerAccountId &&
+  allocationCustomerAccountId !== customerAccountId
+) {
+  return sum;
+}
+
+const allocationBranchId = String(
+  allocation.customer_branch_id || allocation.branch_id || ""
+);
+
+if (
+  branchId &&
+  allocationBranchId !== branchId
+) {
+  return sum;
+}
 
     const allocationSourceId = String(allocation.invoice_source_id || "").trim();
     const allocationReference = normalizeRef(allocation.invoice_reference);
@@ -239,8 +248,13 @@ export function resolveInvoiceRowFromAllocations({
     if (!isActiveInvoicePayment(payment) || !hasMatchingScope(row, payment)) return sum;
 
     const paymentOrderId = String(payment.order_id || "").trim();
-    const hasComparableSourceIds = UUID_PATTERN.test(paymentOrderId) && sourceIds.size > 0;
-    const uuidMatch = hasComparableSourceIds && sourceIds.has(paymentOrderId);
+    const paymentInvoiceId = String(payment.invoice_id || "").trim();
+    const hasComparableSourceIds =
+      (UUID_PATTERN.test(paymentOrderId) || UUID_PATTERN.test(paymentInvoiceId)) &&
+      sourceIds.size > 0;
+    const uuidMatch =
+      (UUID_PATTERN.test(paymentOrderId) && sourceIds.has(paymentOrderId)) ||
+      (UUID_PATTERN.test(paymentInvoiceId) && sourceIds.has(paymentInvoiceId));
     const paymentReferences = getPaymentReferenceKeys(payment);
     const referenceMatch = [...paymentReferences].some((reference) =>
       ledgerReferences.has(reference)
@@ -254,6 +268,22 @@ export function resolveInvoiceRowFromAllocations({
 
   const total = Math.max(0, Number(invoiceTotal || 0));
   const storedLedgerInvoicePaidAmount = getStoredLedgerInvoicePaidAmount(row, total);
+  const freshOrder = row?._freshOrder || row || {};
+  const paymentCollected = normalize(
+    freshOrder.payment_collected ?? freshOrder.paymentCollected
+  );
+  const operationalOrderPaidAmount = ["YES", "TRUE"].includes(paymentCollected)
+    ? Math.max(
+        0,
+        Number(
+          freshOrder.payment_amount ??
+            freshOrder.paymentAmount ??
+            freshOrder.paid_amount ??
+            freshOrder.paidAmount ??
+            0
+        )
+      )
+    : 0;
   // A canonical payment may also have a customer_ledger mirror. Taking the
   // larger resolved effect prevents counting the same payment twice while
   // retaining support for legacy ledger-only payments.
@@ -262,6 +292,7 @@ export function resolveInvoiceRowFromAllocations({
     canonicalReferencePaidAmount,
     legacyLedgerPaidAmount,
     storedLedgerInvoicePaidAmount,
+    operationalOrderPaidAmount,
   );
   const paidAmount = Math.min(total || resolvedPaidAmount, resolvedPaidAmount);
   const invoiceStatus =
@@ -285,6 +316,7 @@ export function resolveInvoiceRowFromAllocations({
     _canonicalReferencePaidAmount: canonicalReferencePaidAmount,
     _legacyLedgerPaidAmount: legacyLedgerPaidAmount,
     _storedLedgerInvoicePaidAmount: storedLedgerInvoicePaidAmount,
+    _operationalOrderPaidAmount: operationalOrderPaidAmount,
   };
 }
 
