@@ -607,11 +607,51 @@ useEffect(() => {
 
 
 
+  const isPromotionRunOrder = (order = {}) => {
+    const markers = [
+      order.sale_type,
+      order.saleType,
+      order.order_type,
+      order.orderType,
+      order.order_source,
+      order.orderSource,
+      order.source,
+      order.channel,
+      order.notes,
+    ]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+
+    return markers.some(
+      (value) => value === "promotion_run" || value.includes("promotion run sale")
+    );
+  };
+
+
+
+
+  const isPaymentCollected = (order = {}) => {
+    const collected = order.paymentCollected ?? order.payment_collected;
+    const paymentStatus = String(order.paymentStatus || order.payment_status || "")
+      .trim()
+      .toLowerCase();
+
+    return (
+      collected === true ||
+      String(collected || "").trim().toLowerCase() === "yes" ||
+      paymentStatus === "paid"
+    );
+  };
+
+
+
+
   const driverNames = [
     "All",
     ...new Set(
       orders
         .filter((order) =>
+          !isPromotionRunOrder(order) &&
           ["Ready For Driver", "Delivered"].includes(order.status)
         )
         .map((order) => order.driverName || order.driver_name)
@@ -628,6 +668,11 @@ useEffect(() => {
 
 
 
+  if (isPromotionRunOrder(order)) return false;
+
+
+
+
   const isReadyForDriver = order.status === "Ready For Driver";
 
 
@@ -637,10 +682,7 @@ useEffect(() => {
     order.status === "Delivered" &&
     !order.paymentType &&
     !order.payment_type &&
-    order.paymentCollected !== "Yes" &&
-    order.payment_collected !== "Yes" &&
-    order.paymentCollected !== true &&
-    order.payment_collected !== true;
+    !isPaymentCollected(order);
 
 
 
@@ -2113,8 +2155,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
 
 
                 {order.status === "Delivered" &&
-                    order.payment_collected !== "Yes" &&
-                    order.payment_collected !== true && (
+                    !isPaymentCollected(order) &&
+                    !isPromotionRunOrder(order) && (
                   <button
                     onClick={() => openCashCollection(order)}
                     className="bg-yellow-500 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"
