@@ -209,6 +209,71 @@ const loggedInUser = JSON.parse(
 
 
 
+const [promotionRunOrderNumbers, setPromotionRunOrderNumbers] = useState(() => new Set());
+
+
+
+
+useEffect(() => {
+  let active = true;
+
+  const loadPromotionRunOrderNumbers = async () => {
+    const username = String(
+      loggedInUser.username || loggedInUser.user_name || ""
+    ).trim();
+    const sessionToken =
+      loggedInUser.fc_session_token ||
+      loggedInUser.session_token ||
+      loggedInUser.sessionToken ||
+      null;
+
+    if (!username || !sessionToken) return;
+
+    const { data, error } = await supabase.rpc(
+      "fc_list_promotion_run_order_numbers_v1",
+      {
+        p_username: username,
+        p_session_token: sessionToken,
+      }
+    );
+
+    if (error) {
+      console.warn(
+        "Promotion Run exclusion list load skipped:",
+        error?.message || error
+      );
+      return;
+    }
+
+    if (!active) return;
+
+    setPromotionRunOrderNumbers(
+      new Set(
+        (data || [])
+          .map((row) => String(row?.order_number || "").trim())
+          .filter(Boolean)
+      )
+    );
+  };
+
+  loadPromotionRunOrderNumbers();
+  window.addEventListener("focus", loadPromotionRunOrderNumbers);
+
+  return () => {
+    active = false;
+    window.removeEventListener("focus", loadPromotionRunOrderNumbers);
+  };
+}, [
+  loggedInUser?.username,
+  loggedInUser?.user_name,
+  loggedInUser?.fc_session_token,
+  loggedInUser?.session_token,
+  loggedInUser?.sessionToken,
+]);
+
+
+
+
 const [supplierHighlights, setSupplierHighlights] = useState({});
 
 
@@ -608,6 +673,12 @@ useEffect(() => {
 
 
   const isPromotionRunOrder = (order = {}) => {
+    const orderNumber = String(
+      order.orderId || order.order_number || order.orderNumber || ""
+    ).trim();
+
+    if (orderNumber && promotionRunOrderNumbers.has(orderNumber)) return true;
+
     const markers = [
       order.sale_type,
       order.saleType,
