@@ -82,7 +82,7 @@ const enrichQueueRowsWithProductCodes = async (rows = []) => {
   if (missingProductIds.length) {
     const { data } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("id", missingProductIds);
 
     productsById = Object.fromEntries(
@@ -93,7 +93,7 @@ const enrichQueueRowsWithProductCodes = async (rows = []) => {
   if (missingNames.length) {
     const { data } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("product_name", missingNames);
 
     const groupedByName = (data || []).reduce((groups, product) => {
