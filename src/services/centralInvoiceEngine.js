@@ -546,7 +546,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   if (missingCodeNames.length) {
     const { data: namedProducts, error: namedProductsError } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("product_name", missingCodeNames);
 
 
@@ -1283,7 +1283,7 @@ const withProductCodeFallbacks = async (order = {}) => {
   if (missingProductIds.length) {
     const { data, error } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("id", missingProductIds);
 
 
@@ -1312,7 +1312,7 @@ const withProductCodeFallbacks = async (order = {}) => {
   if (missingProductNames.length) {
     const { data, error } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("product_name", missingProductNames);
 
 
