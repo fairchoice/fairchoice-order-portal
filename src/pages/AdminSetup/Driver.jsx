@@ -210,6 +210,7 @@ const loggedInUser = JSON.parse(
 
 
 const [promotionRunOrderNumbers, setPromotionRunOrderNumbers] = useState(() => new Set());
+const [promotionRunExclusionsLoaded, setPromotionRunExclusionsLoaded] = useState(false);
 
 
 
@@ -227,7 +228,10 @@ useEffect(() => {
       loggedInUser.sessionToken ||
       null;
 
-    if (!username || !sessionToken) return;
+    if (!username || !sessionToken) {
+      if (active) setPromotionRunExclusionsLoaded(true);
+      return;
+    }
 
     const { data, error } = await supabase.rpc(
       "fc_list_promotion_run_order_numbers_v1",
@@ -733,7 +737,8 @@ useEffect(() => {
 
 
 
-      const driverOrders = orders.filter((order) => {
+      const driverOrders = promotionRunExclusionsLoaded
+        ? orders.filter((order) => {
   const driverName = order.driverName || order.driver_name;
 
 
@@ -776,7 +781,8 @@ useEffect(() => {
     matchesDriver &&
     !collectionCompletedLocally
   );
-  });
+  })
+        : [];
 const loadDriverCreditOutstanding = async ({
   customerAccountId,
   customerName,
