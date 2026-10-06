@@ -799,6 +799,17 @@ const getOrderBillingAddressLines = (order = {}) => {
 
 
 export const getDeliveryAddressLines = (order = {}) => {
+  // Use the address snapshot stored on the order first. This keeps an edited
+  // invoice independent from later changes to the customer or branch master data.
+  const orderLines = [];
+  pushAddressValue(orderLines, order.deliveryAddress || order.delivery_address);
+  pushAddressValue(orderLines, order.delivery_address_line_1 || order.deliveryAddressLine1);
+  pushAddressValue(orderLines, order.delivery_address_line_2 || order.deliveryAddressLine2);
+  pushAddressValue(orderLines, order.delivery_town || order.delivery_city);
+  pushAddressValue(orderLines, order.deliveryPostcode || order.delivery_postcode || order.postcode);
+
+  if (orderLines.length) return uniqueAddressLines(orderLines);
+
   const branchLines = [];
   pushAddressValue(
     branchLines,
@@ -822,44 +833,7 @@ export const getDeliveryAddressLines = (order = {}) => {
       order.branch?.postcode
   );
 
-
-
-
-
-
-
-
   if (branchLines.length) return uniqueAddressLines(branchLines);
-
-
-
-
-
-
-
-
-  const orderLines = [];
-  pushAddressValue(orderLines, order.deliveryAddress || order.delivery_address);
-  pushAddressValue(orderLines, order.delivery_address_line_1 || order.deliveryAddressLine1);
-  pushAddressValue(orderLines, order.delivery_address_line_2 || order.deliveryAddressLine2);
-  pushAddressValue(orderLines, order.delivery_town || order.delivery_city);
-  pushAddressValue(orderLines, order.deliveryPostcode || order.delivery_postcode);
-
-
-
-
-
-
-
-
-  if (orderLines.length) return uniqueAddressLines(orderLines);
-
-
-
-
-
-
-
 
   const customerLines = [];
   pushAddressValue(
@@ -876,25 +850,10 @@ export const getDeliveryAddressLines = (order = {}) => {
   pushAddressValue(customerLines, order.town || order.city);
   pushAddressValue(customerLines, order.postcode || order.billing_postcode);
 
-
-
-
-
-
-
-
   if (customerLines.length) return uniqueAddressLines(customerLines);
-
-
-
-
-
-
-
 
   return ["Address not available"];
 };
-
 
 
 

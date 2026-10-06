@@ -433,6 +433,9 @@ export default function InvoicesPortal() {
   const [form, setForm] = useState({
     customerId: "",
     branchId: "",
+    customerName: "",
+    deliveryAddress: "",
+    deliveryPostcode: "",
     priceMode: "VAT",
     productId: "",
     qty: 1,
@@ -650,6 +653,9 @@ export default function InvoicesPortal() {
     setForm({
       customerId: "",
       branchId: "",
+      customerName: "",
+      deliveryAddress: "",
+      deliveryPostcode: "",
       priceMode: "VAT",
       productId: "",
       qty: 1,
@@ -754,6 +760,9 @@ export default function InvoicesPortal() {
     setForm({
       customerId: order.customer_account_id || order.customerAccountId || "",
       branchId: order.customer_branch_id || order.customerBranchId || "",
+      customerName: order.company_name || order.companyName || "",
+      deliveryAddress: order.delivery_address || order.deliveryAddress || "",
+      deliveryPostcode: order.delivery_postcode || order.postcode || order.deliveryPostcode || "",
       priceMode: order.price_mode || order.priceMode || "VAT",
       productId: "",
       qty: 1,
@@ -981,6 +990,10 @@ export default function InvoicesPortal() {
       return;
     }
     if (!amendOrder) return;
+    if (!form.customerName.trim()) {
+      alert("Customer name is required.");
+      return;
+    }
     if (!form.lines.length) {
       alert("Invoice must contain at least one line.");
       return;
@@ -1041,6 +1054,11 @@ export default function InvoicesPortal() {
       const { error: orderUpdateError } = await supabase
         .from("orders")
         .update({
+          company_name: form.customerName.trim(),
+          delivery_address: form.deliveryAddress.trim(),
+          delivery_postcode: form.deliveryPostcode.trim(),
+          postcode: form.deliveryPostcode.trim(),
+          price_mode: String(form.priceMode || "VAT").toUpperCase(),
           subtotal: totals.netTotal.toFixed(2),
           net_total: totals.netTotal.toFixed(2),
           vat_total: totals.vatTotal.toFixed(2),
@@ -1143,6 +1161,15 @@ export default function InvoicesPortal() {
 
       const amendedOrder = {
         ...amendOrder,
+        companyName: form.customerName.trim(),
+        company_name: form.customerName.trim(),
+        deliveryAddress: form.deliveryAddress.trim(),
+        delivery_address: form.deliveryAddress.trim(),
+        deliveryPostcode: form.deliveryPostcode.trim(),
+        delivery_postcode: form.deliveryPostcode.trim(),
+        postcode: form.deliveryPostcode.trim(),
+        priceMode: String(form.priceMode || "VAT").toUpperCase(),
+        price_mode: String(form.priceMode || "VAT").toUpperCase(),
         items: calculatedItems,
         order_items: calculatedItems,
         order_total: totals.grandTotal,
@@ -1166,6 +1193,7 @@ export default function InvoicesPortal() {
           .from("customer_invoices")
           .update({
             invoice_total: totals.grandTotal,
+            price_mode: String(form.priceMode || "VAT").toUpperCase(),
             updated_at: updatedAt,
           })
           .eq("invoice_number", invoiceReference);
@@ -1182,6 +1210,8 @@ export default function InvoicesPortal() {
         const { error: ledgerUpdateError } = await supabase
           .from("customer_ledger")
           .update({
+            customer_name: form.customerName.trim(),
+            price_mode: String(form.priceMode || "VAT").toUpperCase(),
             debit: totals.grandTotal,
             amount: totals.grandTotal,
             invoice_amount: totals.grandTotal,
@@ -2120,9 +2150,88 @@ const runInvoiceAction = async (row, action) => {
 
 
           {workbenchMode === "amend" && amendOrder && (
-            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm font-bold text-amber-800">
-              Amending {formatDisplayOrderId(amendOrder.orderId || amendOrder.order_number)} for{" "}
-              {amendOrder.companyName || amendOrder.company_name}
+            <div className="space-y-3 rounded-xl bg-amber-50 border border-amber-200 p-3">
+              <div className="text-sm font-bold text-amber-800">
+                Amending {formatDisplayOrderId(amendOrder.orderId || amendOrder.order_number)}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="text-xs font-bold text-slate-700">
+                  Customer Name
+                  <input
+                    value={form.customerName}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, customerName: event.target.value }))
+                    }
+                    className="mt-1 w-full border border-slate-300 rounded-xl p-3 bg-white text-sm font-normal"
+                  />
+                </label>
+                <label className="text-xs font-bold text-slate-700">
+                  Price Mode
+                  <select
+                    value={form.priceMode}
+                    onChange={(event) => {
+                      const nextMode = event.target.value;
+                      setForm((current) => ({
+                        ...current,
+                        priceMode: nextMode,
+                        lines: current.lines.map((line) => {
+                          const product = products.find(
+                            (item) =>
+                              String(item.id) ===
+                              String(line.productId || line.product_id || line.id)
+                          );
+                          if (!product) return line;
+
+                          const nextPrice = getProductPriceForMode(
+                            product,
+                            nextMode,
+                            selectedPricingCountry,
+                            pricingSettings
+                          );
+                          if (!Number.isFinite(Number(nextPrice))) return line;
+
+                          return {
+                            ...line,
+                            price: Number(nextPrice),
+                            selectedPrice: Number(nextPrice),
+                            unit_price: Number(nextPrice),
+                          };
+                        }),
+                      }));
+                    }}
+                    className="mt-1 w-full border border-slate-300 rounded-xl p-3 bg-white text-sm font-normal"
+                  >
+                    <option value="VAT">Ex.VAT</option>
+                    <option value="CASH">Cash</option>
+                    <option value="SERVER">Inc.VAT</option>
+                    <option value="MANAGER">Manager</option>
+                  </select>
+                </label>
+                <label className="text-xs font-bold text-slate-700 md:col-span-2">
+                  Customer / Delivery Address
+                  <textarea
+                    value={form.deliveryAddress}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, deliveryAddress: event.target.value }))
+                    }
+                    rows={2}
+                    className="mt-1 w-full border border-slate-300 rounded-xl p-3 bg-white text-sm font-normal"
+                  />
+                </label>
+                <label className="text-xs font-bold text-slate-700">
+                  Postcode
+                  <input
+                    value={form.deliveryPostcode}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, deliveryPostcode: event.target.value }))
+                    }
+                    className="mt-1 w-full border border-slate-300 rounded-xl p-3 bg-white text-sm font-normal"
+                  />
+                </label>
+              </div>
+              <p className="text-xs text-amber-800">
+                Customer account, previous payments, allocations and customer credit are not changed by these identity/address fields.
+              </p>
             </div>
           )}
 
