@@ -228,9 +228,13 @@ if (
     const compatibilityMatch =
       allocationReference && compatibilityReferences.has(allocationReference);
     const hasComparableSourceIds = UUID_PATTERN.test(allocationSourceId) && sourceIds.size > 0;
+    // Exact full invoice references remain valid after an invoice is rebuilt
+    // with a new source UUID. Never let a shortened compatibility reference
+    // override a conflicting UUID.
     if (
-      (hasComparableSourceIds && !sourceMatch) ||
-      (!hasComparableSourceIds && !exactReferenceMatch && !compatibilityMatch)
+      !exactReferenceMatch &&
+      ((hasComparableSourceIds && !sourceMatch) ||
+        (!hasComparableSourceIds && !compatibilityMatch))
     ) return sum;
 
     return sum + Math.max(0, Number(allocation.allocated_amount || 0));
