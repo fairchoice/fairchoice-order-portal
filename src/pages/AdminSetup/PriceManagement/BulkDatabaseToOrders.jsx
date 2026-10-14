@@ -17,6 +17,8 @@ export default function BulkDatabaseToOrders({
   setPage,
   toggleProduct,
   toggleAllOnPage,
+  orderStatus,
+  setOrderStatus,
   previewRows,
   loading,
   onPreview,
@@ -36,11 +38,19 @@ export default function BulkDatabaseToOrders({
   return (
     <div className="mt-6 border rounded-2xl p-5">
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        <div className="font-extrabold">Sensitive update: Database to Received Orders only</div>
+        <div className="font-extrabold">Sensitive update: Database to active orders only</div>
         <div className="mt-1">
-          This updates only matching order items inside orders with status <b>Received</b>.
-          It never adds products, removes products, or updates Warehouse Packing, Delivered, or Cancelled orders.
+          This updates prices and line totals only in the selected active order stage.
+          Warehouse price override does not change quantities, pre-supply, stock or order status. Delivered and previous invoices are excluded.
         </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <label htmlFor="order-stage" className="font-bold text-sm">Order stage</label>
+        <select id="order-stage" className="border rounded-xl px-4 py-3" value={orderStatus} onChange={(e) => setOrderStatus(e.target.value)} disabled={loading}>
+          <option value="Received">Receive Order</option>
+          <option value="Warehouse Packing">Warehouse</option>
+        </select>
       </div>
 
       <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -89,7 +99,7 @@ export default function BulkDatabaseToOrders({
           <div className="text-2xl font-extrabold text-slate-800">{selectedIds.length}</div>
         </div>
         <div className="border rounded-xl p-4 bg-slate-50">
-          <div className="text-xs font-bold text-slate-500 uppercase">Received orders affected</div>
+          <div className="text-xs font-bold text-slate-500 uppercase">Selected-stage orders affected</div>
           <div className="text-2xl font-extrabold text-slate-800">{orderCount}</div>
         </div>
         <div className="border rounded-xl p-4 bg-slate-50">
@@ -152,7 +162,7 @@ export default function BulkDatabaseToOrders({
           {loading ? "Checking..." : "Preview Updates"}
         </button>
         <button onClick={onUpdate} disabled={loading || !previewRows.length} className="bg-purple-700 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50">
-          Update Received Orders
+          Update Selected Orders
         </button>
         <button onClick={onReset} className="bg-slate-600 text-white font-bold px-5 py-3 rounded-xl">Reset Form</button>
       </div>
