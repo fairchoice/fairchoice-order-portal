@@ -19,6 +19,7 @@ import {
 import {
   allocatePaymentOldestFirst,
   applyAllocationsToInvoices,
+  filterInvoicesForAllocation,
 } from "../../utils/centralPaymentCalculations";
 import { saveConfirmedServerManagerOrderToProcessingQueue } from "../../services/orders";
 import {
@@ -188,6 +189,10 @@ export default function Driver({
 
 
 const [savingPayment, setSavingPayment] = useState(false);
+const [driverInvoiceSnapshot, setDriverInvoiceSnapshot] = useState(null);
+const [driverInvoiceLoading, setDriverInvoiceLoading] = useState(false);
+const [driverInvoiceError, setDriverInvoiceError] = useState("");
+const [driverInvoiceSelections, setDriverInvoiceSelections] = useState({});
 const [savingPreviousBalance, setSavingPreviousBalance] = useState(false);
 const [previousBalanceOutstanding, setPreviousBalanceOutstanding] = useState({
   totalOutstanding: 0,
@@ -623,6 +628,53 @@ const selectedCreditBranches =
 const selectedCreditBranch = selectedCreditBranches.find(
   (branch) => String(branch.id) === String(selectedCreditBranchId)
 );
+
+useEffect(() => {
+  let active = true;
+  setDriverInvoiceSnapshot(null);
+  setDriverInvoiceSelections({});
+  setDriverInvoiceError("");
+  if (!selectedCreditCustomer?.id || (selectedCreditBranches.length > 0 && !selectedCreditBranch)) return () => { active = false; };
+  setDriverInvoiceLoading(true);
+  loadCentralPaymentSnapshot({
+    customerAccountId: selectedCreditCustomer.id,
+    customerName: selectedCreditCustomer.account_name,
+    customer: selectedCreditCustomer,
+    selectedBranchId: selectedCreditBranch?.id || "",
+  }).then((result) => { if (active) setDriverInvoiceSnapshot(result); })
+    .catch((error) => { if (active) setDriverInvoiceError(error.message || "Could not load invoices."); })
+    .finally(() => { if (active) setDriverInvoiceLoading(false); });
+  return () => { active = false; };
+}, [selectedCreditCustomer?.id, selectedCreditBranch?.id]);
+
+const driverOpenInvoices = driverInvoiceSnapshot
+  ? filterInvoicesForAllocation(applyAllocationsToInvoices(driverInvoiceSnapshot.invoices || [], driverInvoiceSnapshot.allocations || []), selectedCreditBranch?.id || "")
+      .filter((invoice) => Number(invoice.remainingAmount || 0) > 0.009)
+      .map((invoice) => ({...invoice, _collectionReference: String(invoice.invoice_number || invoice.reference_no || invoice.order_number || invoice.orderId || invoice.order_id || invoice.id || "")}))
+  : [];
+const driverCollectionAllocations = driverOpenInvoices.flatMap((invoice) => {
+  const choice = driverInvoiceSelections[invoice._collectionReference];
+  if (!choice || choice.mode !== "paid" && choice.mode !== "part") return [];
+  const remaining = Math.round(Number(invoice.remainingAmount || 0) * 100) / 100;
+  const amount = choice.mode === "paid" ? remaining : Number(choice.amount || 0);
+  if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) / 100 !== amount || amount > remaining) return [];
+  return [{invoiceReference: invoice._collectionReference, invoiceSourceId: invoice.id ? String(invoice.id) : null,
+    customerBranchId: invoice.customer_branch_id || invoice.branch_id || null, allocatedAmount: amount}];
+});
+const driverCollectionTotal = Math.round(driverCollectionAllocations.reduce((sum, item) => sum + item.allocatedAmount, 0) * 100) / 100;
+const driverInvalidPart = driverOpenInvoices.some((invoice) => {
+  const choice = driverInvoiceSelections[invoice._collectionReference];
+  if (!choice || choice.mode !== "part") return false;
+  const amount = Number(choice.amount);
+  return !Number.isFinite(amount) || amount <= 0 || amount >= Number(invoice.remainingAmount) || Math.round(amount * 100) / 100 !== amount;
+});
+useEffect(() => {
+  if (previousBalanceForm.paymentType !== "Bank Transfer") {
+    setPreviousBalanceForm((current) => ({...current, amount: String(driverCollectionTotal || "")}));
+  }
+}, [driverCollectionTotal, previousBalanceForm.paymentType]);
+
+
 
 
 
@@ -1092,6 +1144,22 @@ const openCashCollection = async (order) => {
 
 
 
+  if (previousBalanceForm.paymentType !== "Bank Transfer" &&
+      (driverInvoiceLoading || !driverInvoiceSnapshot || driverInvoiceError || driverInvalidPart ||
+       driverCollectionTotal - paymentAmount > 0.009)) {
+    alert("Invoice allocations cannot exceed the collected amount. Any excess stays unallocated as customer credit.");
+    return;
+  }
+  if (driverOpenInvoices.some((invoice) => ["previous_paid", "previous_part"].includes(driverInvoiceSelections[invoice._collectionReference]?.mode))) {
+    alert("Previous Paid / Previous Part Paid requires an existing payment record. These invoices are still outstanding; reconcile the existing payment before changing their status.");
+    return;
+  }
+  const driverRefs = driverOpenInvoices.map((invoice) => invoice._collectionReference);
+  if (new Set(driverRefs).size !== driverRefs.length || driverRefs.some((ref) => !ref)) {
+    alert("Duplicate or missing invoice references detected. Cannot allocate safely.");
+    return;
+  }
+
   if (!previousBalanceForm.whoPaid.trim()) {
     alert("Please enter who paid.");
     return;
@@ -1157,6 +1225,7 @@ const openCashCollection = async (order) => {
         `Driver previous balance collection - ${previousBalanceForm.paymentType}`,
       paymentIntentId: previousBalanceForm.paymentIntentId,
       metadata: { payment_applies_to: "PREVIOUS_BALANCE" },
+      allocations: previousBalanceForm.paymentType === "Bank Transfer" ? [] : driverCollectionAllocations,
     });
   } catch (error) {
     alert("Could not save previous balance payment: " + error.message);
@@ -2023,6 +2092,30 @@ const paymentCollected = isCredit ? "No" : "Yes";
 
 
 
+
+    {selectedCreditCustomer && (
+      <div className="border rounded-xl p-3 bg-white space-y-2">
+        <h4 className="font-bold">Unpaid invoices — Paid / Part Paid</h4>
+        {driverInvoiceLoading && <p>Loading invoices...</p>}
+        {driverInvoiceError && <p className="text-red-700">{driverInvoiceError}</p>}
+        {!driverInvoiceLoading && !driverInvoiceError && !driverOpenInvoices.length && <p>No unpaid invoices found.</p>}
+        <p className="text-xs text-slate-600">Previous Paid options do not record money; an outstanding invoice must first be reconciled against an existing payment.</p>
+        {driverOpenInvoices.map((invoice) => {
+          const ref = invoice._collectionReference;
+          const choice = driverInvoiceSelections[ref] || {mode: "none", amount: ""};
+          return <div key={ref} className="grid grid-cols-1 sm:grid-cols-3 gap-2 border-b py-2 items-center">
+            <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div>Due: {formatCurrency(invoice.remainingAmount)}</div></div>
+            <select className="border rounded-lg p-2" value={choice.mode} onChange={(event) => setDriverInvoiceSelections((current) => ({...current, [ref]: {mode: event.target.value, amount: ""}}))}>
+              <option value="none">Unpaid</option><option value="paid">Paid</option><option value="part">Part Paid</option><option value="previous_paid">Previous Paid (verify existing payment)</option><option value="previous_part">Previous Part Paid (verify existing payment)</option>
+            </select>
+            {choice.mode === "part" ? <input className="border rounded-lg p-2" type="number" min="0.01" step="0.01" max={invoice.remainingAmount} placeholder="Part payment £" value={choice.amount} onChange={(event) => setDriverInvoiceSelections((current) => ({...current, [ref]: {...current[ref], amount: event.target.value}}))} /> :
+              <span className="text-sm">{choice.mode === "paid" ? formatCurrency(invoice.remainingAmount) : formatCurrency(0)}</span>}
+          </div>;
+        })}
+        <div className="font-bold">Allocated: {formatCurrency(driverCollectionTotal)} / Collected: {formatCurrency(Number(previousBalanceForm.amount || 0))} / Unallocated credit: {formatCurrency(Math.max(0, Number(previousBalanceForm.amount || 0) - driverCollectionTotal))}</div>
+        {(driverInvalidPart || (Number(previousBalanceForm.amount || 0) > 0 && driverCollectionTotal - Number(previousBalanceForm.amount || 0) > 0.009)) && <p className="text-red-700 text-sm">Allocated amount cannot exceed collected amount; any extra remains customer credit.</p>}
+      </div>
+    )}
 
     <input
       type="number"

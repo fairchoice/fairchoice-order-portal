@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
@@ -68,7 +68,7 @@ const getReferenceCandidates = (row = {}) =>
     .map((value) => String(value || "").trim())
     .filter(Boolean);
 const getAmount = (row) =>
-  row._freshOrder
+  row._canonicalInvoiceReconciled ? Number(row.invoice_total || 0) : row._freshOrder
     ? getInvoiceTotal(row._freshOrder)
     : Number(row.invoice_total ?? row.invoice_amount ?? row.amount ?? row.debit ?? 0);
 const isInvoiceFinanciallyVoided = (row = {}) =>
@@ -253,53 +253,76 @@ const getOrderInvoiceListRow = (order = {}) => {
 // Rows without a stable customer account retain their existing compatibility
 // status because allocations cannot be scoped safely for them.
 const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
-  const customerAccountIds = [
-    ...new Set(
-      invoiceRows
-        .map((row) => row.customer_account_id || row._freshOrder?.customer_account_id)
-        .filter(Boolean)
-    ),
-  ];
-
-
+  // Find canonical invoices by their exact full reference, even when legacy
+  // order/ledger rows do not carry customer_account_id.
+  const fullReferences = [...new Set(invoiceRows.flatMap((row) =>
+    [...getInvoiceLedgerReferenceKeys(row)]))];
+  const chunkValues = (values, size = 100) => {
+    const chunks = [];
+    for (let index = 0; index < values.length; index += size) chunks.push(values.slice(index, index + size));
+    return chunks;
+  };
+  const canonicalResults = await Promise.all(chunkValues(fullReferences).map((refs) =>
+    supabase.from("customer_invoices")
+      .select("id, customer_account_id, customer_branch_id, invoice_number, invoice_total, financial_status")
+      .in("invoice_number", refs)
+  ));
+  const canonicalByReference = new Map();
+  canonicalResults.forEach(({data, error}) => {
+    if (error) {
+      console.warn("Could not read canonical invoice balances:", error);
+      return;
+    }
+    (data || []).forEach((invoice) => {
+      const key = String(invoice.invoice_number || "").trim().toUpperCase();
+      if (!key) return;
+      const existing = canonicalByReference.get(key);
+      // Ambiguous invoice references must never be assigned automatically.
+      canonicalByReference.set(key, canonicalByReference.has(key) ? null : invoice);
+    });
+  });
+  const customerAccountIds = [...new Set([
+    ...invoiceRows.map((row) => row.customer_account_id || row._freshOrder?.customer_account_id || row._freshOrder?.customerAccountId),
+    ...[...canonicalByReference.values()].map((invoice) => invoice?.customer_account_id),
+  ].filter(Boolean))];
   const allocationsResult = customerAccountIds.length
-    ? await supabase
-        .from("customer_payment_allocations")
-        .select("*")
+    ? await supabase.from("customer_payment_allocations").select("*")
         .in("customer_account_id", customerAccountIds)
     : { data: [], error: null };
-
-
-  if (allocationsResult.error) {
-    if (!isSchemaCompatibilityError(allocationsResult.error)) {
-      console.warn("Could not resolve invoice payment allocations:", allocationsResult.error);
-    }
+  if (allocationsResult.error && !isSchemaCompatibilityError(allocationsResult.error)) {
+    console.warn("Could not resolve invoice payment allocations:", allocationsResult.error);
   }
 
+  const sourceIds = [...new Set(invoiceRows.flatMap((row) =>
+    [...getInvoiceAllocationKeys(row).sourceIds]))];
 
-  const allocations = allocationsResult.error ? [] : allocationsResult.data || [];
+  // Account-scoped queries alone miss legacy allocations when an older order
+  // has no account id (or was moved between account records). Retrieve exact
+  // invoice references and source IDs as well; never infer by amount.
+  const allocationResultsByInvoice = await Promise.all([
+    ...chunkValues(fullReferences).map((refs) =>
+      supabase.from("customer_payment_allocations").select("*").in("invoice_reference", refs)),
+    ...chunkValues([...new Set([
+      ...sourceIds,
+      ...[...canonicalByReference.values()].filter(Boolean).map((row) => row.id),
+    ].filter(Boolean))]).map((ids) =>
+      supabase.from("customer_payment_allocations").select("*").in("invoice_source_id", ids)),
+  ]);
+  const allocationsByIdentity = new Map();
+  [...(allocationsResult.error ? [] : allocationsResult.data || []),
+   ...allocationResultsByInvoice.flatMap(({ data, error }) => {
+     if (error) console.warn("Invoice allocation lookup failed:", error);
+     return error ? [] : data || [];
+   })].forEach((allocation) => {
+    const key = String(allocation.id || `${allocation.payment_id}|${allocation.invoice_source_id}|${allocation.invoice_reference}|${allocation.allocated_amount}`);
+    allocationsByIdentity.set(key, allocation);
+  });
+  const allocations = [...allocationsByIdentity.values()];
   const paymentIds = [
     ...new Set(allocations.map((row) => row.payment_id).filter(Boolean)),
   ];
 
 
-  const fullReferences = [
-    ...new Set(
-      invoiceRows.flatMap((row) => [...getInvoiceLedgerReferenceKeys(row)])
-    ),
-  ];
-  const sourceIds = [
-    ...new Set(
-      invoiceRows.flatMap((row) => [...getInvoiceAllocationKeys(row).sourceIds])
-    ),
-  ];
-  const chunkValues = (values, size = 100) => {
-    const chunks = [];
-    for (let index = 0; index < values.length; index += size) {
-      chunks.push(values.slice(index, index + size));
-    }
-    return chunks;
-  };
   const referenceChunks = chunkValues(fullReferences);
   const sourceIdChunks = chunkValues(sourceIds);
 
@@ -376,17 +399,66 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
 
 
   return invoiceRows.map((row) => {
-    const customerAccountId = row.customer_account_id || row._freshOrder?.customer_account_id;
-
-
-    return resolveInvoiceRowFromAllocations({
-      row,
-      allocations: customerAccountId ? allocations : [],
-      paymentsById,
-      referencePayments: [...paymentsById.values()],
-      legacyLedgerPayments,
-      invoiceTotal: getAmount(row),
+    const rowAccountId = row.customer_account_id || row._freshOrder?.customer_account_id || row._freshOrder?.customerAccountId;
+    const canonical = [...getInvoiceLedgerReferenceKeys(row)]
+      .map((reference) => canonicalByReference.get(reference))
+      .find(Boolean);
+    // A supplied account ID must agree with the canonical invoice owner.
+    if (!canonical || (rowAccountId && String(rowAccountId) !== String(canonical.customer_account_id)) ||
+        ["VOID", "VOIDED", "FINANCIALLY_VOIDED"].includes(String(canonical.financial_status || "").toUpperCase())) {
+      return resolveInvoiceRowFromAllocations({
+        row, allocations: rowAccountId ? allocations : [], paymentsById,
+        referencePayments: [...paymentsById.values()], legacyLedgerPayments,
+        invoiceTotal: getAmount(row),
+      });
+    }
+    const customerAccountId = canonical.customer_account_id;
+    const canonicalTotal = Number(canonical.invoice_total);
+    // Canonical invoice UUIDs can change after invoice reconstruction. Existing
+    // posted allocations may still point at the previous UUID, but retain the
+    // exact full invoice reference. Accept either identity, never an amount match.
+    const canonicalReference = String(canonical.invoice_number || "").trim().toUpperCase();
+    const matchingAllocations = allocations.filter((allocation) => {
+      if (String(allocation.customer_account_id || "") !== String(customerAccountId)) return false;
+      const sourceMatch = String(allocation.invoice_source_id || "") === String(canonical.id);
+      const referenceMatch = canonicalReference &&
+        String(allocation.invoice_reference || "").trim().toUpperCase() === canonicalReference;
+      if (!sourceMatch && !referenceMatch) return false;
+      const allocationBranch = allocation.customer_branch_id || allocation.branch_id;
+      if (allocationBranch && canonical.customer_branch_id &&
+          String(allocationBranch) !== String(canonical.customer_branch_id)) return false;
+      return true;
     });
+    const validAllocated = matchingAllocations.reduce((sum, allocation) => {
+      const payment = paymentsById.get(String(allocation.payment_id || ""));
+      if (!payment || !["ACTIVE", "POSTED", "CONFIRMED", "COMPLETED", "PAID"].includes(String(payment.status || "").toUpperCase())) return sum;
+      if (payment.voided_at || allocation.voided_at || allocation.reversed_at ||
+          !["ACTIVE", "POSTED"].includes(String(allocation.status || "ACTIVE").toUpperCase())) return sum;
+      if (String(payment.customer_account_id || "") !== String(customerAccountId)) return sum;
+      if (String(payment.payment_method || "").toUpperCase().replace(/_/g, " ") === "BANK TRANSFER" &&
+          ["PENDING", "PENDING_VERIFICATION", "REJECTED"].includes(String(payment.verification_status || "").toUpperCase())) return sum;
+      return sum + Math.max(0, Number(allocation.allocated_amount || 0));
+    }, 0);
+    // An exact, posted canonical allocation is authoritative. Legacy display
+    // statuses cannot override it or assign unmatched credit to an invoice.
+    const paid = Math.min(Math.max(0, canonicalTotal), validAllocated);
+    const status = paid >= canonicalTotal - 0.01 && canonicalTotal > 0
+      ? "PAID" : paid > 0 ? "PART PAID" : "UNPAID";
+    return {
+      ...row,
+      invoice_total: canonicalTotal,
+      invoice_amount: canonicalTotal,
+      amount: canonicalTotal,
+      debit: canonicalTotal,
+      paid_amount: paid,
+      amount_paid: paid,
+      remaining_amount: Math.max(0, canonicalTotal - paid),
+      outstanding_amount: Math.max(0, canonicalTotal - paid),
+      invoice_status: status,
+      payment_status: status,
+      status,
+      _canonicalInvoiceReconciled: true,
+    };
   });
 };
 const getProductName = (product) => product?.name || product?.productName || product?.product_name || "";
@@ -460,6 +532,9 @@ export default function InvoicesPortal() {
       localStorage.getItem("fairchoice_user") ||
       "null"
   );
+  const invoiceVerificationUsername = String(loggedInUser?.username || "").trim();
+  const invoiceVerificationSessionToken =
+    loggedInUser?.fc_session_token || loggedInUser?.session_token || "";
   const userRole = String(loggedInUser?.role || loggedInUser?.access_level || "").toLowerCase();
   const isAdminUser = userRole.includes("admin") || loggedInUser?.permissions?.access_accounts === true;
   const isNisstajAdmin =
@@ -1872,6 +1947,8 @@ const runInvoiceAction = async (row, action) => {
   }, [canViewServerManagerInvoices, search]);
 
 
+  const [verifiedInvoiceStatuses, setVerifiedInvoiceStatuses] = useState({});
+
   const filteredInvoices = useMemo(() => {
     const value = normalizeSearchText(search);
     const orderSearch = getOrderSearch(search);
@@ -1925,13 +2002,103 @@ const runInvoiceAction = async (row, action) => {
   }, [invoiceTotalPages]);
 
 
+  // Secure, read-only reconciliation for both normal browsing and search.
+  // The V3 RPC accepts at most 60 invoice references per request.
+  useEffect(() => {
+    let cancelled = false;
+    const verify = async () => {
+      if (!invoiceVerificationUsername || !invoiceVerificationSessionToken) {
+        console.warn("Invoice verification requires a valid FairChoice staff session");
+        return;
+      }
+
+      const refs = filteredInvoices
+        .filter((row) => !isInvoiceFinanciallyVoided(row))
+        .map((row) => ({
+          row,
+          reference: String(
+            row._freshOrder?.order_number || row.order_number ||
+              row.full_order_number || row.canonical_order_number ||
+              row.invoice_number || ""
+          ).trim(),
+        }))
+        .filter(({ reference }) => reference.startsWith("ORD-"));
+      if (!refs.length) return;
+
+      const uniqueRefs = [...new Set(refs.map(({ reference }) => reference))];
+      const verifiedByInvoice = new Map();
+      for (let index = 0; index < uniqueRefs.length; index += 50) {
+        const { data, error } = await supabase.rpc("fc_invoice_payment_statuses_v1", {
+          p_username: invoiceVerificationUsername,
+          p_session_token: invoiceVerificationSessionToken,
+          p_invoice_numbers: uniqueRefs.slice(index, index + 50),
+        });
+        if (cancelled) return;
+        if (error) {
+          console.warn("Secure invoice status verification failed:", error.message);
+          continue;
+        }
+
+        (data || []).forEach((item) => {
+          const reference = String(item.invoice_number || "").trim();
+          if (!reference) return;
+          // A duplicate full reference is ambiguous and must retain fallback data.
+          verifiedByInvoice.set(
+            reference,
+            verifiedByInvoice.has(reference) ? null : item
+          );
+        });
+      }
+      if (cancelled) return;
+
+      const results = {};
+      refs.forEach(({ row, reference }) => {
+        const verified = verifiedByInvoice.get(reference);
+        if (!verified) return;
+
+        const total = Number(verified.invoice_total);
+        const paidAmount = Number(verified.paid_amount);
+        if (!Number.isFinite(total) || total <= 0 ||
+            !Number.isFinite(paidAmount) || paidAmount < 0) return;
+
+        const paid = Math.min(total, paidAmount);
+        const remaining = Math.max(0, Math.round((total - paid) * 100) / 100);
+        const status = remaining <= 0.01
+          ? "PAID"
+          : paid > 0
+            ? "PART PAID"
+            : "UNPAID";
+        results[getReference(row)] = {
+          invoice_total: total,
+          invoice_amount: total,
+          amount: total,
+          debit: total,
+          paid_amount: paid,
+          amount_paid: paid,
+          remaining_amount: remaining,
+          outstanding_amount: remaining,
+          invoice_status: status,
+          _canonicalInvoiceReconciled: true,
+        };
+      });
+      if (!cancelled) setVerifiedInvoiceStatuses(results);
+    };
+    verify();
+    return () => { cancelled = true; };
+  }, [filteredInvoices, invoiceVerificationSessionToken, invoiceVerificationUsername]);
+
+  const displayedInvoices = useMemo(() => filteredInvoices.map((row) => {
+    const verified = verifiedInvoiceStatuses[getReference(row)];
+    return verified ? {...row, ...verified} : row;
+  }), [filteredInvoices, verifiedInvoiceStatuses]);
+
   const pagedInvoices = useMemo(() => {
     const start = (invoicePage - 1) * invoicePageSize;
-    return filteredInvoices.slice(start, start + invoicePageSize);
-  }, [filteredInvoices, invoicePage, invoicePageSize]);
+    return displayedInvoices.slice(start, start + invoicePageSize);
+  }, [displayedInvoices, invoicePage, invoicePageSize]);
 
 
-  const totalOutstanding = sumResolvedInvoiceOutstanding(filteredInvoices);
+  const totalOutstanding = sumResolvedInvoiceOutstanding(displayedInvoices);
 
 
   return (
@@ -1981,7 +2148,7 @@ const runInvoiceAction = async (row, action) => {
           </div>
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
             <div className="text-xs font-bold text-slate-500 uppercase">Total</div>
-            <div className="text-2xl font-extrabold">{formatCurrency(filteredInvoices.reduce((sum, row) => sum + getAmount(row), 0))}</div>
+            <div className="text-2xl font-extrabold">{formatCurrency(displayedInvoices.reduce((sum, row) => sum + (row._canonicalInvoiceReconciled ? Number(row.invoice_total || 0) : getAmount(row)), 0))}</div>
           </div>
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
             <div className="text-xs font-bold text-slate-500 uppercase">Outstanding</div>
