@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { calculateDocumentTotals } from "../../utils/documentTotals";
@@ -24,6 +24,7 @@ import {
 import { saveConfirmedServerManagerOrderToProcessingQueue } from "../../services/orders";
 import {
   CANONICAL_PAYMENT_SOURCES,
+  createPaymentIntentId,
   postCanonicalCustomerPayment,
   shouldCreateCanonicalDeliveryPayment,
 } from "../../services/canonicalPaymentService";
@@ -932,6 +933,7 @@ const loadDriverCreditOutstanding = async ({
 
 
 const openCashCollection = async (order) => {
+  deliveryPaymentIntentRef.current = createPaymentIntentId();
   setCashCollectionOrder(getCollectionOrderKey(order));
 
 
@@ -1458,8 +1460,12 @@ const buildDeliveryPaymentAllocations = ({
 
 
 
+  const savingPaymentRef = useRef(false);
+  const deliveryPaymentIntentRef = useRef(null);
+
   const saveCashCollection = async (order) => {
-    if (savingPayment) return;
+    if (savingPayment || savingPaymentRef.current) return;
+    savingPaymentRef.current = true;
 
 
 
@@ -1848,9 +1854,9 @@ const paymentCollected = isCredit ? "No" : "Yes";
           collectorRole:
             loggedInUser.role || loggedInUser.access_level || "Driver",
           orderId: canonicalOrderUuid,
-          paymentIntentId: `delivery:${
-            order.id || order.orderId || order.order_number
-          }:${collectionType}:${paymentAmount}`,
+          // One stable intent per collection attempt: retries reuse it, while a
+          // separate collection gets a new intent even for the same amount.
+          paymentIntentId: deliveryPaymentIntentRef.current || (deliveryPaymentIntentRef.current = createPaymentIntentId()),
           notes: `Delivery collection - ${paymentType} - ${transactionReason}`,
           metadata: {
             order_uuid: canonicalOrderUuid,
@@ -1978,6 +1984,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
       console.error("Cash collection error:", error);
       alert("Could not save collection: " + error.message);
     } finally {
+      savingPaymentRef.current = false;
       setSavingPayment(false);
     }
   };

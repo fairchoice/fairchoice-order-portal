@@ -27,3 +27,6 @@ dist-ssr
 .vercel
 .env*
 supabase/.temp/
+*.ini
+*.jsx
+changes-review.txt
