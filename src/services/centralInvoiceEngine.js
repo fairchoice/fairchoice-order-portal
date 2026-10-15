@@ -3312,13 +3312,6 @@ export function buildStandardInvoiceHtml(
       </head>
       <body>
         <div class="page">
-          ${
-            !isOrderForm && !isDeliveryNote
-              ? `<div class="watermark ${paymentStatus
-                  .toLowerCase()
-                  .replace(/\s+/g, "-")}">${escapeHtml(paymentStatus)}</div>`
-              : ""
-          }
           <main class="content">
             ${
               showHeaderFooter
