@@ -48,7 +48,8 @@ export default function BulkDatabaseToOrders({
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label htmlFor="order-stage" className="font-bold text-sm">Order stage</label>
         <select id="order-stage" className="border rounded-xl px-4 py-3" value={orderStatus} onChange={(e) => setOrderStatus(e.target.value)} disabled={loading}>
-          <option value="Received">Receive Order</option>
+          <option value="both">Received orders and Warehouse</option>
+          <option value="Received">Received orders</option>
           <option value="Warehouse Packing">Warehouse</option>
         </select>
       </div>
@@ -162,7 +163,7 @@ export default function BulkDatabaseToOrders({
           {loading ? "Checking..." : "Preview Updates"}
         </button>
         <button onClick={onUpdate} disabled={loading || !previewRows.length} className="bg-purple-700 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50">
-          Update Selected Orders
+          Update Prices in Orders / Warehouse
         </button>
         <button onClick={onReset} className="bg-slate-600 text-white font-bold px-5 py-3 rounded-xl">Reset Form</button>
       </div>
@@ -174,6 +175,7 @@ export default function BulkDatabaseToOrders({
             <thead className="bg-slate-100">
               <tr>
                 <th className="border p-3 text-left">Order</th>
+                <th className="border p-3 text-left">Stage</th>
                 <th className="border p-3 text-left">Product</th>
                 <th className="border p-3">Qty</th>
                 <th className="border p-3">Current Price</th>
@@ -188,6 +190,7 @@ export default function BulkDatabaseToOrders({
                 return (
                   <tr key={row.itemId}>
                     <td className="border p-3 font-bold">{formatDisplayOrderId(row.orderNumber)}</td>
+                    <td className="border p-3">{row.orderStatus === "Warehouse Packing" ? "Warehouse" : row.orderStatus}</td>
                     <td className="border p-3">{row.productName}</td>
                     <td className="border p-3 text-right">{row.qty}</td>
                     <td className="border p-3 text-right">£{Number(row.oldPrice || 0).toFixed(2)}</td>
