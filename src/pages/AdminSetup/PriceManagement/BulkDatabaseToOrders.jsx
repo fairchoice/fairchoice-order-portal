@@ -38,10 +38,11 @@ export default function BulkDatabaseToOrders({
   return (
     <div className="mt-6 border rounded-2xl p-5">
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        <div className="font-extrabold">Sensitive update: Database to active orders only</div>
+        <div className="font-extrabold">Pending database price updates</div>
         <div className="mt-1">
-          This updates prices and line totals only in the selected active order stage.
-          Warehouse price override does not change quantities, pre-supply, stock or order status. Delivered and previous invoices are excluded.
+          Only products saved through the bulk or single database update appear here.
+          Apply latest prices overwrites existing prices in the selected Received / Warehouse stage.
+          Clear pending changes keeps the saved database prices and leaves orders unchanged.
         </div>
       </div>
 
@@ -90,7 +91,7 @@ export default function BulkDatabaseToOrders({
           disabled={loading}
           className="bg-blue-600 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50"
         >
-          Refresh Current Prices
+          Refresh pending prices
         </button>
       </div>
 
@@ -114,7 +115,7 @@ export default function BulkDatabaseToOrders({
       </div>
 
       <div className="mt-6 text-sm font-bold text-slate-700">
-        {filteredProducts.length} product(s) found. Showing 20 per page.
+        {filteredProducts.length} pending product(s). Showing 20 per page.
       </div>
 
       <div className="mt-4 overflow-x-auto">
@@ -146,7 +147,7 @@ export default function BulkDatabaseToOrders({
               );
             })}
             {pagedProducts.length === 0 && (
-              <tr><td colSpan="4" className="border p-6 text-center text-slate-500">No products found.</td></tr>
+              <tr><td colSpan="4" className="border p-6 text-center text-slate-500">No pending database price updates. Save a product price in Bulk to DB or Single to DB first.</td></tr>
             )}
           </tbody>
         </table>
@@ -162,10 +163,10 @@ export default function BulkDatabaseToOrders({
         <button onClick={onPreview} disabled={loading || !selectedIds.length} className="bg-blue-600 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50">
           {loading ? "Checking..." : "Preview Updates"}
         </button>
-        <button onClick={onUpdate} disabled={loading || !previewRows.length} className="bg-purple-700 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50">
-          Update Prices in Orders / Warehouse
+        <button onClick={onUpdate} disabled={loading || !selectedIds.length} className="bg-purple-700 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50">
+          Apply latest prices to Received / Warehouse
         </button>
-        <button onClick={onReset} className="bg-slate-600 text-white font-bold px-5 py-3 rounded-xl">Reset Form</button>
+        <button onClick={onReset} disabled={loading} className="bg-slate-600 text-white font-bold px-5 py-3 rounded-xl">Clear pending changes</button>
       </div>
 
       {previewRows.length > 0 && (

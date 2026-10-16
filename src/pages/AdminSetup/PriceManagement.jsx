@@ -4,10 +4,10 @@ import { getFcSessionState, profileWithFcLoginSession, readStoredFcProfile } fro
 import { supabase } from "../../supabaseClient";
 import { getProductPricePreview, roundMoney } from "../../utils/pricing";
 import PriceApprovalDialog from "./PriceManagement/PriceApprovalDialog.jsx";
-import { activePriceOrderStages, buildPriceOrderPreview, sameReviewedPriceRows } from "../../utils/priceManagementOrders.js";
+import { activePriceOrderStages, buildPriceOrderPreview } from "../../utils/priceManagementOrders.js";
 import BulkToDatabase from "./PriceManagement/BulkToDatabase";
 import BulkDatabaseToOrders from "./PriceManagement/BulkDatabaseToOrders";
-import SingleDatabaseToOrder from "./PriceManagement/SingleDatabaseToOrder";
+import { mergePendingPriceUpdates, removePendingPriceUpdates, readPendingPriceUpdates, writePendingPriceUpdates } from "../../utils/priceUpdateQueue.js";
 import {
   loadSupplierSetup,
   loadSupplierProductPricing,
@@ -38,6 +38,48 @@ export default function PriceManagement({
   userRef.current = user;
   const currentUser = readStoredFcProfile() || user;
   const { username: supplierUsername, token: supplierSessionToken } = getFcSessionState(currentUser);
+  const pendingQueueKey = `fairchoice_pending_price_updates:${currentUser?.login_user_id || currentUser?.id || supplierUsername || "unknown"}`;
+  const [pendingProductIds, setPendingProductIds] = useState(() => readPendingPriceUpdates(pendingQueueKey));
+  const pendingIdsRef = useRef(pendingProductIds);
+  const [pendingCatalogProducts, setPendingCatalogProducts] = useState([]);
+  const [reviewMessage, setReviewMessage] = useState("");
+  function savePendingProducts(ids) {
+    // Save the pending decision before leaving the database update screen.
+    writePendingPriceUpdates(pendingQueueKey, ids);
+    pendingIdsRef.current = ids;
+    setPendingProductIds(ids);
+  }
+  useEffect(() => {
+    const ids = readPendingPriceUpdates(pendingQueueKey);
+    pendingIdsRef.current = ids;
+    setPendingProductIds(ids);
+    setOrderSelectedIds(ids);
+    setBulkOrderPreviewRows([]);
+  }, [pendingQueueKey]);
+  useEffect(() => {
+    const syncQueue = event => {
+      if (event.key !== pendingQueueKey) return;
+      const ids = readPendingPriceUpdates(pendingQueueKey);
+      pendingIdsRef.current = ids;
+      setPendingProductIds(ids);
+      setOrderSelectedIds(ids);
+      setBulkOrderPreviewRows([]);
+      previewRequest.current++;
+    };
+    window.addEventListener("storage", syncQueue);
+    return () => window.removeEventListener("storage", syncQueue);
+  }, [pendingQueueKey]);
+  useEffect(() => {
+    let active = true;
+    if (!pendingProductIds.length) { setPendingCatalogProducts([]); return undefined; }
+    supabase.from("products").select("*").in("id", pendingProductIds).then(({ data, error }) => {
+      if (!active) return;
+      if (error) setReviewMessage(`Pending products could not be refreshed: ${error.message}`);
+      else setPendingCatalogProducts(data || []);
+    });
+    return () => { active = false; };
+  }, [pendingProductIds]);
+
   const [supplierReload, setSupplierReload] = useState(0);
   const [supplierListLoading, setSupplierListLoading] = useState(false);
   const [supplierListError, setSupplierListError] = useState("");
@@ -68,14 +110,9 @@ export default function PriceManagement({
   const [orderSeries, setOrderSeries] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
   const [orderPage, setOrderPage] = useState(1);
-  const [orderSelectedIds, setOrderSelectedIds] = useState([]);
+  const [orderSelectedIds, setOrderSelectedIds] = useState(() => readPendingPriceUpdates(pendingQueueKey));
   const [bulkOrderPreviewRows, setBulkOrderPreviewRows] = useState([]);
   const [bulkOrderLoading, setBulkOrderLoading] = useState(false);
-
-  const [singleOrderSearch, setSingleOrderSearch] = useState("");
-  const [singleOrderProductId, setSingleOrderProductId] = useState("");
-  const [singleOrderPreviewRows, setSingleOrderPreviewRows] = useState([]);
-  const [singleOrderLoading, setSingleOrderLoading] = useState(false);
 
   const brands = useMemo(() => {
     return [...new Set(safeProducts.map((p) => p.brand).filter(Boolean))].sort();
@@ -96,12 +133,12 @@ export default function PriceManagement({
     return [
       ...new Set(
         safeProducts
-          .filter((p) => !orderBrand || String(p.brand || "") === orderBrand)
+          .filter((p) => pendingProductIds.includes(String(getProductId(p))) && (!orderBrand || String(p.brand || "") === orderBrand))
           .map((p) => p.series)
           .filter(Boolean)
       ),
     ].sort();
-  }, [safeProducts, orderBrand]);
+  }, [safeProducts, orderBrand, pendingProductIds]);
 
   function getProductId(product) {
     if (!product) return "";
@@ -353,10 +390,21 @@ export default function PriceManagement({
     pricingSettings
   );
 
+  const pendingProducts = useMemo(() => {
+    const ids = new Set(pendingProductIds.map(String));
+    const byId = new Map(safeProducts.filter(product => ids.has(String(getProductId(product)))).map(product => [String(getProductId(product)), product]));
+    pendingCatalogProducts.forEach(product => {
+      if (ids.has(String(getProductId(product)))) byId.set(String(getProductId(product)), product);
+    });
+    return [...byId.values()];
+  }, [safeProducts, pendingProductIds, pendingCatalogProducts]);
+
+  const pendingBrands = [...new Set(pendingProducts.map(product => product.brand).filter(Boolean))].sort();
+
   const filteredOrderProducts = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
 
-    return safeProducts.filter((p) => {
+    return pendingProducts.filter((p) => {
       const matchBrand = !orderBrand || String(p.brand || "") === orderBrand;
       const matchSeries = !orderSeries || String(p.series || "") === orderSeries;
 
@@ -367,7 +415,7 @@ export default function PriceManagement({
 
       return matchBrand && matchSeries && matchSearch;
     });
-  }, [safeProducts, orderBrand, orderSeries, orderSearch]);
+  }, [pendingProducts, orderBrand, orderSeries, orderSearch]);
 
   const orderTotalPages = Math.max(
     1,
@@ -378,22 +426,6 @@ export default function PriceManagement({
   const pagedOrderProducts = filteredOrderProducts.slice(
     (orderSafePage - 1) * PRICE_PAGE_SIZE,
     orderSafePage * PRICE_PAGE_SIZE
-  );
-
-  const singleOrderProducts = useMemo(() => {
-    const q = singleOrderSearch.trim().toLowerCase();
-
-    return safeProducts.filter((p) => {
-      return (
-        !q ||
-        String(productName(p)).toLowerCase().includes(q) ||
-        String(productCode(p)).toLowerCase().includes(q)
-      );
-    });
-  }, [safeProducts, singleOrderSearch]);
-
-  const selectedSingleOrderProduct = safeProducts.find(
-    (p) => String(getProductId(p)) === String(singleOrderProductId)
   );
 
   function toggleProduct(id) {
@@ -496,8 +528,8 @@ export default function PriceManagement({
         : "Selling price updated in database."
     );
     resetBulkEdit();
-    await refreshProducts();
     await openUpdatedProductsReview(updatedProductIds);
+    await refreshProducts();
   }
 
   async function loadFreshPricingSettings() {
@@ -536,14 +568,17 @@ export default function PriceManagement({
   }
 
   async function openUpdatedProductsReview(productIds) {
-    setOrderSelectedIds(productIds);
+    const pending = mergePendingPriceUpdates(mergePendingPriceUpdates(readPendingPriceUpdates(pendingQueueKey), pendingIdsRef.current), productIds);
+    savePendingProducts(pending);
+    setReviewMessage("Database prices saved. Choose Apply latest prices to update Received / Warehouse, or Clear pending changes to leave orders unchanged.");
+    setOrderSelectedIds(pending);
     setOrderBrand(""); setOrderSeries(""); setOrderSearch(""); setOrderPage(1);
     setBulkOrderPreviewRows([]);
     setActiveTab("bulkOrder");
     const request = ++previewRequest.current;
     setBulkOrderLoading(true);
     try {
-      const rows = await loadActiveOrderMatches(productIds);
+      const rows = await loadActiveOrderMatches(pending);
       if (request === previewRequest.current) setBulkOrderPreviewRows(rows);
     }
     catch (error) { alert(`Product prices were saved. Preview could not load: ${error.message}`); }
@@ -554,13 +589,19 @@ export default function PriceManagement({
     previewRequest.current++;
     setOrderStatus(stage);
     setBulkOrderPreviewRows([]);
-    setSingleOrderPreviewRows([]);
   }
 
-  async function updateActiveOrderRows(rows) {
-    if (!window.confirm(`Apply the reviewed database prices to ${rows.length} line(s) in Received orders / Warehouse?`)) return false;
-    const currentRows = await loadActiveOrderMatches([...new Set(rows.map(row => row.productId))]);
-    if (!sameReviewedPriceRows(rows, currentRows)) throw new Error("Product prices, pricing rules or order lines changed. Preview again before updating.");
+  async function updateActiveOrderRows(productIds) {
+    // A Yes decision means use the latest database price, replacing saved line
+    // prices even when they were manually set before this decision.
+    const rows = await loadActiveOrderMatches(productIds);
+    setBulkOrderPreviewRows(rows);
+    if (!rows.length) {
+      setReviewMessage("No matching Received / Warehouse lines. Pending products are retained until you clear them.");
+      return null;
+    }
+    const changed = rows.filter(row => row.oldPrice !== row.newPrice).length;
+    if (!window.confirm(`YES: overwrite saved prices with the latest database prices for ${changed} changed line(s) (${rows.length} matching lines) in the selected Received / Warehouse stage?\n\nCancel leaves all order prices unchanged.`)) return null;
     const session = getFcSessionState(readStoredFcProfile() || user);
     const { data, error } = await supabase.rpc("fc_update_active_order_prices_v1", {
       p_username: session.username, p_session_token: session.token, p_items: rows,
@@ -593,69 +634,20 @@ export default function PriceManagement({
   }
 
   async function handleBulkOrderUpdate() {
-    if (!bulkOrderPreviewRows.length) {
-      alert("Preview matching orders first.");
-      return;
-    }
-
-    if (!(await requireAdminPassword("Apply product prices to Received orders / Warehouse"))) return;
-
+    const productIds = orderSelectedIds.filter(id => pendingIdsRef.current.includes(String(id))).map(String);
+    if (!productIds.length) { alert("No pending product updates are selected."); return; }
+    if (!(await requireAdminPassword("Apply latest database prices to Received orders / Warehouse"))) return;
     setBulkOrderLoading(true);
     try {
-      const updated = await updateActiveOrderRows(bulkOrderPreviewRows);
+      const updated = await updateActiveOrderRows(productIds);
       if (!updated) return;
-      alert(`${bulkOrderPreviewRows.length} order / Warehouse item(s) updated.`);
+      savePendingProducts(removePendingPriceUpdates(pendingIdsRef.current, productIds));
+      setReviewMessage(`${updated.updated_lines} Received / Warehouse line(s) updated to the latest database prices.`);
       setBulkOrderPreviewRows([]);
-      setOrderSelectedIds([]);
+      setOrderSelectedIds(current => current.filter(id => !productIds.includes(String(id))));
     } catch (error) {
-      alert(error.message || "Failed to update active order prices. Preview again if the order changed.");
-    } finally {
-      setBulkOrderLoading(false);
-    }
-  }
-
-  async function handleSingleOrderPreview() {
-    if (!selectedSingleOrderProduct) {
-      alert("Please select a product first.");
-      return;
-    }
-
-    const request = ++previewRequest.current;
-    setSingleOrderLoading(true);
-    try {
-      const rows = await loadActiveOrderMatches([getProductId(selectedSingleOrderProduct)]);
-      if (request !== previewRequest.current) return;
-      setSingleOrderPreviewRows(rows);
-
-      if (!rows.length) {
-        alert("No matching product found in the selected Received / Warehouse stage.");
-      }
-    } catch (error) {
-      alert(error.message || "Failed to preview matching orders.");
-    } finally {
-      setSingleOrderLoading(false);
-    }
-  }
-
-  async function handleSingleOrderUpdate() {
-    if (!singleOrderPreviewRows.length) {
-      alert("Preview matching orders first.");
-      return;
-    }
-
-    if (!(await requireAdminPassword("Apply single product price to Received orders / Warehouse"))) return;
-
-    setSingleOrderLoading(true);
-    try {
-      const updated = await updateActiveOrderRows(singleOrderPreviewRows);
-      if (!updated) return;
-      alert(`${singleOrderPreviewRows.length} order / Warehouse item(s) updated.`);
-      setSingleOrderPreviewRows([]);
-    } catch (error) {
-      alert(error.message || "Failed to update active order prices. Preview again if the order changed.");
-    } finally {
-      setSingleOrderLoading(false);
-    }
+      setReviewMessage(error.message || "No prices were applied. Retry after refreshing the preview.");
+    } finally { setBulkOrderLoading(false); }
   }
 
   async function handleSingleUpdate(showView = false) {
@@ -726,6 +718,7 @@ export default function PriceManagement({
         : "Product selling price updated."
     );
 
+    await openUpdatedProductsReview([getProductId(selectedSingleProduct)]);
     await refreshProducts();
 
     if (showView) {
@@ -734,7 +727,6 @@ export default function PriceManagement({
         updatedProduct,
       });
     }
-    await openUpdatedProductsReview([getProductId(selectedSingleProduct)]);
   }
 
   function resetBulkEdit() {
@@ -757,21 +749,13 @@ export default function PriceManagement({
     setSingleViewProduct(null);
   }
 
-  function resetBulkOrderForm() {
+  function clearPendingOrderUpdates() {
     previewRequest.current++;
-    setOrderBrand("");
-    setOrderSeries("");
-    setOrderSearch("");
-    setOrderPage(1);
+    savePendingProducts([]);
     setOrderSelectedIds([]);
     setBulkOrderPreviewRows([]);
-  }
-
-  function resetSingleOrderForm() {
-    previewRequest.current++;
-    setSingleOrderSearch("");
-    setSingleOrderProductId("");
-    setSingleOrderPreviewRows([]);
+    setOrderBrand(""); setOrderSeries(""); setOrderSearch(""); setOrderPage(1);
+    setReviewMessage("Pending changes cleared. Database prices are saved; Received / Warehouse prices were not changed.");
   }
 
   return (
@@ -792,8 +776,7 @@ export default function PriceManagement({
         {[
           ["bulkPrice", "Bulk to DB"],
           ["individualPrice", "Single to DB"],
-          ["bulkOrder", "Update Products to Orders / Warehouse"],
-          ["individualOrder", "Single Product to Orders / Warehouse"],
+          ["bulkOrder", `Update to Received / Warehouse (${pendingProductIds.length})`],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -888,6 +871,8 @@ export default function PriceManagement({
 )}
 
       {activeTab === "bulkOrder" && (
+        <>
+        {reviewMessage && <div role="status" className="mt-4 rounded-xl bg-blue-50 p-3 text-sm text-blue-900">{reviewMessage}</div>}
         <BulkDatabaseToOrders
           orderStatus={orderStatus}
           setOrderStatus={changeOrderStage}
@@ -897,7 +882,7 @@ export default function PriceManagement({
           setSeries={setOrderSeries}
           search={orderSearch}
           setSearch={setOrderSearch}
-          brands={brands}
+          brands={pendingBrands}
           seriesList={orderSeriesList}
           filteredProducts={filteredOrderProducts}
           pagedProducts={pagedOrderProducts}
@@ -915,42 +900,13 @@ export default function PriceManagement({
             await refreshProducts();
             setBulkOrderPreviewRows([]);
           }}
-          onReset={resetBulkOrderForm}
+          onReset={clearPendingOrderUpdates}
           getProductId={getProductId}
           productCode={productCode}
           productName={productName}
           vatPrice={vatPrice}
         />
-      )}
-
-      {activeTab === "individualOrder" && (
-        <SingleDatabaseToOrder
-          orderStatus={orderStatus}
-          setOrderStatus={changeOrderStage}
-          search={singleOrderSearch}
-          setSearch={setSingleOrderSearch}
-          productId={singleOrderProductId}
-          setProductId={(value) => {
-            previewRequest.current++;
-            setSingleOrderProductId(value);
-            setSingleOrderPreviewRows([]);
-          }}
-          products={singleOrderProducts}
-          selectedProduct={selectedSingleOrderProduct}
-          previewRows={singleOrderPreviewRows}
-          loading={singleOrderLoading}
-          onPreview={handleSingleOrderPreview}
-          onUpdate={handleSingleOrderUpdate}
-          onRefreshPrices={async () => {
-            await refreshProducts();
-            setSingleOrderPreviewRows([]);
-          }}
-          onReset={resetSingleOrderForm}
-          getProductId={getProductId}
-          productCode={productCode}
-          productName={productName}
-          vatPrice={vatPrice}
-        />
+        </>
       )}
 
       {activeTab === "individualPrice" && (

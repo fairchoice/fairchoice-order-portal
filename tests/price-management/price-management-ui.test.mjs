@@ -24,5 +24,5 @@ const props={brands:[],seriesList:[],filteredProducts:[],pagedProducts:[],select
 for(const name of ['BulkDatabaseToOrders','SingleDatabaseToOrder'])test(`${name} offers Received and Warehouse with a separate apply button`,()=>{
  const html=renderToStaticMarkup(React.createElement(components[name],props));
  assert.match(html,/value="both" selected=""/);assert.match(html,/value="Received"/);assert.match(html,/value="Warehouse Packing"/);
- assert.match(html,/Update Prices in Orders \/ Warehouse/);
+ assert.match(html,name === 'BulkDatabaseToOrders' ? /Apply latest prices to Received \/ Warehouse/ : /Update Prices in Orders \/ Warehouse/);
 });
