@@ -19,13 +19,16 @@ import { returnDisplayStatus } from "../../services/returnHeaderPersistence.js";
 const getReference = (row) => row.return_number || row.reference_no || row.id || "-";
 const getCustomer = (row) => row.customer_name || row.company_name || "-";
 const getDate = (row) => row.created_at || row.return_date || row.date || "";
-const isPendingReturn = (row) => row.status === "Pending Warehouse Confirmation";
+const isReversedReturn = (row) => Boolean(row.reversed_at) ||
+  String(row.status || "").trim().toLowerCase() === "reversed";
+const isPendingReturn = (row) => !isReversedReturn(row) && row.status === "Pending Warehouse Confirmation";
 
 export default function ReturnsPortal() {
   const [returns, setReturns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [returnScope, setReturnScope] = useState("current");
   const [approvingId, setApprovingId] = useState(null);
   const [success, setSuccess] = useState("");
   const [approvalModal, setApprovalModal] = useState(null);
@@ -183,15 +186,16 @@ export default function ReturnsPortal() {
 
   const filteredReturns = useMemo(() => {
     const value = search.trim().toLowerCase();
-    if (!value) return returns;
-
-    return returns.filter((row) =>
-      [getReference(row), row.order_number, getCustomer(row), row.return_type, row.status]
+    return returns.filter((row) => {
+      const reversed = isReversedReturn(row);
+      if (returnScope === "current" && reversed) return false;
+      if (returnScope === "reversed" && !reversed) return false;
+      return !value || [getReference(row), row.order_number, getCustomer(row), row.return_type, returnDisplayStatus(row)]
         .join(" ")
         .toLowerCase()
-        .includes(value)
-    );
-  }, [returns, search]);
+        .includes(value);
+    });
+  }, [returns, search, returnScope]);
 
   const pendingCount = filteredReturns.filter(isPendingReturn).length;
 
@@ -230,12 +234,27 @@ export default function ReturnsPortal() {
           </div>
         </div>
 
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search return, order, customer, type, status"
-          className="mt-5 w-full border border-slate-300 rounded-xl p-3"
-        />
+        <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-end">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search returns"
+            placeholder="Search return, order, customer, type, status"
+            className="w-full flex-1 border border-slate-300 rounded-xl p-3"
+          />
+          <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+            Show returns
+            <select
+              value={returnScope}
+              onChange={(e) => setReturnScope(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-white p-3 font-normal"
+            >
+              <option value="current">Current returns</option>
+              <option value="reversed">Reversed returns</option>
+              <option value="all">All returns</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       {error && <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4">{error}</div>}
@@ -273,7 +292,7 @@ export default function ReturnsPortal() {
               {loading ? (
                 <tr><td className="p-5 text-center text-slate-500" colSpan="9">Loading returns...</td></tr>
               ) : filteredReturns.length === 0 ? (
-                <tr><td className="p-5 text-center text-slate-500" colSpan="9">No returns found yet.</td></tr>
+                <tr><td className="p-5 text-center text-slate-500" colSpan="9">No returns match the selected filters.</td></tr>
               ) : (
                 filteredReturns.map((row) => (
                   <Fragment key={row.id || getReference(row)}>
