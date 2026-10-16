@@ -28,7 +28,9 @@ export default function ReturnsPortal() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [returnScope, setReturnScope] = useState("current");
+  const [returnScope, setReturnScope] = useState("pending");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [approvingId, setApprovingId] = useState(null);
   const [success, setSuccess] = useState("");
   const [approvalModal, setApprovalModal] = useState(null);
@@ -188,14 +190,23 @@ export default function ReturnsPortal() {
     const value = search.trim().toLowerCase();
     return returns.filter((row) => {
       const reversed = isReversedReturn(row);
-      if (returnScope === "current" && reversed) return false;
+      if (returnScope === "pending" && !isPendingReturn(row)) return false;
+      if (returnScope === "approved" && (reversed || !["confirmed", "approved", "credited"].includes(String(row.status || "").trim().toLowerCase()))) return false;
       if (returnScope === "reversed" && !reversed) return false;
+      if (dateFrom || dateTo) {
+        const date = new Date(getDate(row));
+        if (Number.isNaN(date.getTime())) return false;
+        // Match the local calendar date displayed in the table, including both endpoints.
+        const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+        if (dateFrom && day < dateFrom) return false;
+        if (dateTo && day > dateTo) return false;
+      }
       return !value || [getReference(row), row.order_number, getCustomer(row), row.return_type, returnDisplayStatus(row)]
         .join(" ")
         .toLowerCase()
         .includes(value);
     });
-  }, [returns, search, returnScope]);
+  }, [returns, search, returnScope, dateFrom, dateTo]);
 
   const pendingCount = filteredReturns.filter(isPendingReturn).length;
 
@@ -234,7 +245,7 @@ export default function ReturnsPortal() {
           </div>
         </div>
 
-        <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-end">
+        <div className="mt-5 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -249,11 +260,26 @@ export default function ReturnsPortal() {
               onChange={(e) => setReturnScope(e.target.value)}
               className="rounded-xl border border-slate-300 bg-white p-3 font-normal"
             >
-              <option value="current">Current returns</option>
+              <option value="pending">Waiting for approval</option>
+              <option value="approved">Approved returns</option>
               <option value="reversed">Reversed returns</option>
               <option value="all">All returns</option>
             </select>
           </label>
+          <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+            From date
+            <input type="date" value={dateFrom} max={dateTo || undefined}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-white p-3 font-normal" />
+          </label>
+          <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+            To date
+            <input type="date" value={dateTo} min={dateFrom || undefined}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-white p-3 font-normal" />
+          </label>
+          <button type="button" onClick={() => { setSearch(""); setReturnScope("pending"); setDateFrom(""); setDateTo(""); }}
+            className="rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold">Clear filters</button>
         </div>
       </div>
 
