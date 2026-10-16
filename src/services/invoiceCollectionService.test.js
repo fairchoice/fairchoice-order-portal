@@ -33,6 +33,7 @@ test("ambiguous, stale and non-canonical invoice choices cannot be saved", () =>
   assert.ok(planInvoiceCollection([invoice(1), invoice(1)], {}).errors.length);
   assert.ok(planInvoiceCollection([], {"ORD-1":{mode:"paid"}}).errors.length);
   assert.ok(planInvoiceCollection([{...invoice(1),id:"order-not-canonical"}], {"ORD-1":{mode:"paid"}}).errors.length);
+  assert.ok(planInvoiceCollection([{...invoice(1),source:"orders"}], {"ORD-1":{mode:"previous_paid"}}).errors.length);
 });
 
 test("old allocation and previous acknowledgement are not added twice; later new payments increase the paid amount", () => {
@@ -94,4 +95,17 @@ test("previous part-paid input is an absolute paid total, never a second increme
   assert.equal(plan.previousStatuses[0].previouslyPaidAmount,30);
   assert.equal(plan.collectedTotal,0);
   assert.ok(planInvoiceCollection([i], {"ORD-1":{mode:"previous_part",amount:"20"}}).errors.length);
+});
+
+test("collection snapshot keeps canonical invoice identity and never falls back to orders", async () => {
+  const { loadInvoiceCollectionSnapshot } = await import('./invoiceCollectionService.js');
+  const canonical = {...invoice(1), source:'customer_invoices'};
+  const calls=[];
+  const client={rpc:async(name,params)=>{calls.push({name,params});return {data:{invoices:[canonical],allocations:[]}};}};
+  const result=await loadInvoiceCollectionSnapshot({customerAccountId:'customer',selectedBranchId:''},{client,session});
+  assert.equal(result.invoices[0].id,canonical.id);
+  assert.equal(calls[0].name,'fc_invoice_collection_snapshot_v1');
+  assert.equal(calls[0].params.p_customer_branch_id,null);
+  await assert.rejects(loadInvoiceCollectionSnapshot({customerAccountId:'customer'},{session,client:{rpc:async()=>({error:new Error('Permission denied')})}}),/Permission denied/);
+  await assert.rejects(loadInvoiceCollectionSnapshot({customerAccountId:'customer'},{session,client:{rpc:async()=>({data:null})}}),/Could not verify/);
 });

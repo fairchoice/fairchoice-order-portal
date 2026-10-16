@@ -29,7 +29,7 @@ export function planInvoiceCollection(invoices = [], selections = {}) {
     const isPart = choice.mode === "part" || choice.mode === "previous_part";
     const limit = isPrevious ? total : remaining;
     const amount = isPart ? moneyCents(choice.amount) : limit;
-    if (!UUID.test(String(invoice.id || ""))) {
+    if (invoice.source === "orders" || !UUID.test(String(invoice.id || ""))) {
       errors.push(`Invoice ${reference} needs a canonical invoice record before saving.`);
       continue;
     }

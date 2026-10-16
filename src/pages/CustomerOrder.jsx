@@ -21,7 +21,7 @@ import {
   postCanonicalCustomerPayment,
 } from "../services/canonicalPaymentService";
 import { planInvoiceCollection, moneyCents } from "../utils/invoiceCollectionActions.js";
-import { saveInvoiceCollection } from "../services/invoiceCollectionService.js";
+import { saveInvoiceCollection, loadInvoiceCollectionSnapshot } from "../services/invoiceCollectionService.js";
 import PricingRule from "./AdminSetup/PricingRule";
 import Suppliers from "./AdminSetup/Suppliers";
 import SupplierAccounts from "./AdminSetup/SupplierAccounts";
@@ -1122,7 +1122,7 @@ useEffect(() => {
   if (!selectedSalesPaymentCustomer?.id ||
       (selectedSalesPaymentBranches.length > 0 && !selectedSalesPaymentBranch)) return () => { active = false; };
   setSalesInvoiceLoading(true);
-  loadCentralPaymentSnapshot({
+  loadInvoiceCollectionSnapshot({
     customerAccountId: selectedSalesPaymentCustomer.id,
     customerName: selectedSalesPaymentCustomer.account_name,
     customer: selectedSalesPaymentCustomer,

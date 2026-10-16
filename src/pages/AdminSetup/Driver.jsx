@@ -39,7 +39,7 @@ import {
   resolveDriverDeliveryAllocations,
 } from "../../utils/driverCashCollectionForm";
 import { planInvoiceCollection, moneyCents } from "../../utils/invoiceCollectionActions.js";
-import { saveInvoiceCollection } from "../../services/invoiceCollectionService.js";
+import { saveInvoiceCollection, loadInvoiceCollectionSnapshot } from "../../services/invoiceCollectionService.js";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
 import { loadPreOrderSupplyHistory } from "../../services/preOrderSupplyHistory";
 
@@ -640,7 +640,7 @@ useEffect(() => {
   setDriverInvoiceError("");
   if (!selectedCreditCustomer?.id || (selectedCreditBranches.length > 0 && !selectedCreditBranch)) return () => { active = false; };
   setDriverInvoiceLoading(true);
-  loadCentralPaymentSnapshot({
+  loadInvoiceCollectionSnapshot({
     customerAccountId: selectedCreditCustomer.id,
     customerName: selectedCreditCustomer.account_name,
     customer: selectedCreditCustomer,

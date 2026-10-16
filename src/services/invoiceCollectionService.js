@@ -42,3 +42,22 @@ export async function saveInvoiceCollection(input, runtime = {}) {
   }
   return data;
 }
+
+// Never fall back to orders here: an order UUID is not a canonical invoice UUID.
+export async function loadInvoiceCollectionSnapshot(input, runtime = {}) {
+  if (!input.customerAccountId) throw new Error("Select a customer before loading collection invoices.");
+  const session = runtime.session || getFcSessionState(readStoredFcProfile());
+  if (!session.username || !session.token) throw new Error("FC login session is missing. Sign out and sign in again.");
+  const client = runtime.client || (await import("./supabase.js")).supabase;
+  const { data, error } = await client.rpc("fc_invoice_collection_snapshot_v1", {
+    p_customer_account_id: input.customerAccountId,
+    p_customer_branch_id: input.selectedBranchId || null,
+    p_username: session.username,
+    p_session_token: session.token,
+  });
+  if (error) throw error;
+  if (!Array.isArray(data?.invoices) || !Array.isArray(data?.allocations)) {
+    throw new Error("Could not verify collection invoices. Reload before saving.");
+  }
+  return data;
+}

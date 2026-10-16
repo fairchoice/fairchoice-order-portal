@@ -13,6 +13,9 @@ const migration=(await readdir(migrationDir)).find(n=>n.endsWith('_invoice_colle
 const sql=await readFile(new URL(migration,migrationDir),'utf8');
 await db.exec(sql);
 await db.exec(sql); // Additive migration can be reapplied without losing markers.
+const snapshotMigration=(await readdir(migrationDir)).find(n=>n.endsWith('_invoice_collection_snapshot.sql'));
+await db.exec(await readFile(new URL(snapshotMigration,migrationDir),'utf8'));
+
 async function scalar(query,args=[]) { const r=await db.query(query,args); return Object.values(r.rows[0])[0]; }
 async function scope() {
  const account=randomUUID(), branch=randomUUID();
@@ -149,3 +152,32 @@ test('migration refuses an unreviewed FIFO implementation before making schema c
 });
 
 test.after(async()=>{await db.close();});
+
+test('RLS-hidden account invoices use canonical identity; status-only save survives reload',async()=>{
+ const account=randomUUID(),id=randomUUID(),ref='ORD-1791154205690-fixture';
+ await db.query('insert into customer_accounts values ($1)',[account]);
+ await db.query("insert into customer_invoices(id,customer_account_id,invoice_number,invoice_total) values($1,$2,$3,335.04)",[id,account,ref]);
+ await db.query("insert into customer_ledger(customer_account_id,entry_type,reference_no,remaining_amount) values($1,'INVOICE',$2,335.04)",[account,ref]);
+ await db.exec('alter table customer_invoices enable row level security; grant select on customer_invoices to anon; set role anon;');
+ try {
+  assert.equal(await scalar('select count(*)::int from customer_invoices'),0);
+  const snapshot=()=>scalar('select fc_invoice_collection_snapshot_v1($1,null,$2,$3)',[account,'cash_staff','test-session']);
+  const before=await snapshot();
+  assert.equal(before.invoices[0].id,id);assert.equal(before.invoices[0].customer_branch_id,null);
+  const planned=before.invoices[0];
+  const selection={invoiceSourceId:planned.id,invoiceReference:planned.invoice_number,customerBranchId:null,expectedRemainingAmount:335.04,mode:'previous_paid',previouslyPaidAmount:335.04};
+  await scalar("select fc_save_invoice_collection_v1($1,null,0,now(),'Cash','SALES_REP_COLLECTION','','','{}','[]',$2::jsonb,$3,'cash_staff','test-session')",[account,JSON.stringify([selection]),'invoice-collection:'+randomUUID()]);
+  const after=await snapshot();assert.equal(Number(after.invoices[0].collection_previous_paid_amount),335.04);
+  await assert.rejects(scalar('select fc_invoice_collection_snapshot_v1($1,null,$2,$3)',[account,'cash_staff','wrong']),/Permission denied/);
+ } finally {await db.exec('reset role;');}
+ assert.equal(await scalar('select count(*)::int from customer_payments where customer_account_id=$1',[account]),0);
+ assert.equal(await scalar('select count(*)::int from customer_payment_allocations where customer_account_id=$1',[account]),0);
+ assert.equal(await scalar('select invoice_status from customer_ledger where reference_no=$1',[ref]),'PAID');
+});
+
+test('collection snapshot strictly scopes customer and branch',async()=>{
+ const a=await scope(),b=await scope(),i=await a.invoice();await b.invoice();
+ const result=await scalar('select fc_invoice_collection_snapshot_v1($1,$2,$3,$4)',[a.account,a.branch,'cash_staff','test-session']);
+ assert.deepEqual(result.invoices.map(row=>row.id),[i.id]);
+ await assert.rejects(scalar('select fc_invoice_collection_snapshot_v1($1,$2,$3,$4)',[a.account,b.branch,'cash_staff','test-session']),/Branch does not belong/);
+});
