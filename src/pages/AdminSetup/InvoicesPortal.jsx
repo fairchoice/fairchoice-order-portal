@@ -1,3 +1,4 @@
+import { isActiveReturnCredit } from "../../services/returnHeaderPersistence.js";
 import { previousStatusPaidAmount } from "../../utils/invoiceCollectionActions.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
@@ -1427,8 +1428,9 @@ const openReturnPrintDialog = async (row) => {
 
     let query = supabase
       .from("customer_returns")
-      .select("id, return_number, order_number, customer_account_id, customer_name, branch_name, return_type, status, return_total, total_qty, confirmed_at, reversed_at")
+      .select("id, return_number, order_number, customer_account_id, customer_name, branch_name, return_type, status, return_total, total_qty, confirmed_at, reversed_at, financial_disposition")
       .eq("status", "Confirmed")
+      .eq("financial_disposition", "CUSTOMER_CREDIT")
       .is("reversed_at", null)
       .order("confirmed_at", { ascending: false });
 
@@ -1692,10 +1694,7 @@ const runInvoiceAction = async (row, action) => {
       const confirmedReturnRows = confirmedReturnsResult.error
         ? []
         : (confirmedReturnsResult.data || [])
-            .filter((row) => {
-              const status = String(row.status || "").trim().toLowerCase();
-              return status === "confirmed" || status === "credited" || Boolean(row.confirmed_at);
-            })
+            .filter(isActiveReturnCredit)
             .map((row) => {
               const amount = Number(
                 row.return_total || row.grand_total || row.amount || row.invoice_total || 0

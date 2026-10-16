@@ -6,12 +6,15 @@ import {
   confirmReturnCredit,
   loadReturnFinancialReconciliation,
   reverseReturnApproval,
+  linkReturnCustomer,
 } from "../../services/centralReturnEngine";
 import {
   canApproveReturns as canCurrentLoginApproveReturns,
   canReconcileReturns as canCurrentLoginReconcileReturns,
   canReverseReturns as canCurrentLoginReverseReturns,
 } from "../../security/returnAuthorization";
+
+import { returnDisplayStatus } from "../../services/returnHeaderPersistence.js";
 
 const getReference = (row) => row.return_number || row.reference_no || row.id || "-";
 const getCustomer = (row) => row.customer_name || row.company_name || "-";
@@ -28,6 +31,18 @@ export default function ReturnsPortal() {
   const [approvalModal, setApprovalModal] = useState(null);
   const [reversalModal, setReversalModal] = useState(null);
   const [viewingId, setViewingId] = useState(null);
+  const [linkModal, setLinkModal] = useState(null);
+  const [linkCustomers, setLinkCustomers] = useState([]);
+  const openCustomerLink = async (row) => {
+    setError("");
+    setLinkModal({ row, customerId: "", branchId: "", reason: "" });
+    try {
+      const { data, error: loadError } = await supabase.from("customer_accounts")
+        .select("id, account_name, customer_branches(id, branch_name, active)").order("account_name");
+      if (loadError) throw loadError;
+      setLinkCustomers(data || []);
+    } catch (err) { setError(err.message || "Could not load customer accounts."); }
+  };
   const [reconciliation, setReconciliation] = useState(null);
   const [reconciliationLoading, setReconciliationLoading] = useState(false);
   const approvalLocks = useRef(new Set());
@@ -103,9 +118,9 @@ export default function ReturnsPortal() {
         },
         currentUser,
       });
-      setSuccess(
-        `${getReference(row)} approved. The customer credit was posted and allocated to outstanding invoices.`
-      );
+      setSuccess(financialDisposition === "CUSTOMER_CREDIT"
+        ? `${getReference(row)} approved. Customer credit is available in Wallet and the return credit note is available in Invoices.`
+        : `${getReference(row)} approved without financial credit.`);
       await loadReturns();
       setApprovalModal(null);
     } catch (err) {
@@ -134,6 +149,24 @@ export default function ReturnsPortal() {
       approvalLocks.current.delete(reversalKey);
       setApprovingId(null);
     }
+  };
+
+  const saveCustomerLink = async () => {
+    if (!linkModal || !canReconcileReturns) return;
+    const key = `link:${linkModal.row.id}`;
+    if (approvalLocks.current.has(key)) return;
+    approvalLocks.current.add(key);
+    setApprovingId(key);
+    setError("");
+    try {
+      await linkReturnCustomer({ returnRequest: linkModal.row, currentUser,
+        customerAccountId: linkModal.customerId, customerBranchId: linkModal.branchId,
+        reason: linkModal.reason });
+      await loadReturns();
+      setLinkModal(null);
+      setSuccess("Return linked to the selected customer. Any active confirmed credit was added to Wallet once.");
+    } catch (err) { setError(err.message || "Could not link this return."); }
+    finally { approvalLocks.current.delete(key); setApprovingId(null); }
   };
 
   const loadReconciliation = async () => {
@@ -247,13 +280,14 @@ export default function ReturnsPortal() {
                   <tr className="border-t border-slate-100">
                     <td className="p-3 font-bold text-slate-900">{formatDisplayOrderId(getReference(row))}</td>
                     <td className="p-3">{formatDisplayOrderId(row.order_number) || "-"}</td>
-                    <td className="p-3">{getCustomer(row)}</td>
+                    <td className="p-3">{getCustomer(row)}{!row.customer_account_id && <div className="text-xs font-bold text-red-700">Customer account not linked</div>}</td>
                     <td className="p-3">{row.return_type || "-"}</td>
                     <td className="p-3 text-right">{Number(row.total_qty || 0)}</td>
                     <td className="p-3 text-right font-bold">{formatCurrency(Number(row.return_total || 0))}</td>
-                    <td className="p-3"><span className="rounded-full bg-amber-50 text-amber-700 px-3 py-1 text-xs font-bold">{row.status || "Pending"}</span></td>
+                    <td className="p-3"><span className="rounded-full bg-amber-50 text-amber-700 px-3 py-1 text-xs font-bold">{returnDisplayStatus(row)}</span></td>
                     <td className="p-3">{getDate(row) ? new Date(getDate(row)).toLocaleDateString() : "-"}</td>
                     <td className="p-3 text-right">
+                      {!row.customer_account_id && canReconcileReturns && <button type="button" onClick={() => openCustomerLink(row)} className="mb-2 rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Link customer</button>}
                       {isPendingReturn(row) ? (
                         <div className="flex justify-end gap-2">
                           <button
@@ -265,7 +299,7 @@ export default function ReturnsPortal() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setApprovalModal({ row, note: "", financialDisposition: "" })}
+                            onClick={() => { setError(""); setApprovalModal({ row, note: "", financialDisposition: "" }); }}
                             disabled={!canApproveReturns || approvingId === (row.id || getReference(row))}
                             title={
                               canApproveReturns
@@ -283,7 +317,7 @@ export default function ReturnsPortal() {
                         <div className="flex justify-end gap-2">
                           <button type="button" onClick={() => setViewingId((value) => value === row.id ? null : row.id)} className="rounded-lg border px-3 py-2 text-xs font-bold">View</button>
                           {row.status === "Confirmed" && !row.reversed_at && canReverseReturns && (
-                            <button type="button" onClick={() => setReversalModal({ row, reason: "" })} className="rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white">Reverse Approval</button>
+                            <button type="button" onClick={() => { setError(""); setReversalModal({ row, reason: "" }); }} className="rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white">Reverse Approval</button>
                           )}
                         </div>
                       )}
@@ -306,12 +340,33 @@ export default function ReturnsPortal() {
         </div>
       </div>
 
+      {linkModal && (
+        <DialogShell>
+          <h3 className="text-xl font-extrabold">Link return to customer</h3>
+          <p className="mt-2 text-sm">{getReference(linkModal.row)} · {getCustomer(linkModal.row)} · {formatCurrency(linkModal.row.return_total)}</p>
+          <p className="mt-2 text-sm text-slate-600">Choose the customer this return belongs to. For an active confirmed credit, this also posts its missing Wallet credit once. Original approval history is retained.</p>
+          {error && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-red-800">{error}</p>}
+          <label className="mt-4 block font-bold">Customer account</label>
+          <select className="mt-1 w-full rounded-xl border p-3" value={linkModal.customerId} onChange={event => setLinkModal({ ...linkModal, customerId: event.target.value, branchId: "" })}>
+            <option value="">Select customer</option>{linkCustomers.map(customer => <option key={customer.id} value={customer.id}>{customer.account_name}</option>)}
+          </select>
+          <label className="mt-3 block font-bold">Branch</label>
+          <select className="mt-1 w-full rounded-xl border p-3" value={linkModal.branchId} onChange={event => setLinkModal({ ...linkModal, branchId: event.target.value })}>
+            <option value="">Main customer account / no branch</option>{(linkCustomers.find(customer => customer.id === linkModal.customerId)?.customer_branches || []).filter(branch => branch.active !== false).map(branch => <option key={branch.id} value={branch.id}>{branch.branch_name}</option>)}
+          </select>
+          <label className="mt-3 block font-bold">Reason</label>
+          <textarea className="mt-1 w-full rounded-xl border p-3" value={linkModal.reason} onChange={event => setLinkModal({ ...linkModal, reason: event.target.value })} />
+          <div className="mt-5 flex justify-end gap-2"><button type="button" disabled={Boolean(approvingId)} onClick={() => setLinkModal(null)} className="rounded-xl border px-4 py-2 font-bold">Cancel</button><button type="button" disabled={Boolean(approvingId) || !linkModal.customerId || !linkModal.reason.trim()} onClick={saveCustomerLink} className="rounded-xl bg-blue-700 px-4 py-2 font-bold text-white disabled:opacity-50">{approvingId ? "Linking..." : "Confirm customer link"}</button></div>
+        </DialogShell>
+      )}
+
       {approvalModal && (
         <ReturnApprovalDialog
           state={approvalModal}
           busy={approvingId === (approvalModal.row.id || getReference(approvalModal.row))}
           onChange={setApprovalModal}
           onCancel={() => setApprovalModal(null)}
+          error={error}
           onConfirm={() => approveReturn(approvalModal)}
         />
       )}
@@ -321,6 +376,7 @@ export default function ReturnsPortal() {
           busy={approvingId === `reverse:${reversalModal.row.id}`}
           onChange={setReversalModal}
           onCancel={() => setReversalModal(null)}
+          error={error}
           onConfirm={() => reverseReturn(reversalModal)}
         />
       )}
@@ -383,11 +439,12 @@ function DialogShell({ children }) {
   );
 }
 
-function ReturnApprovalDialog({ state, busy, onChange, onCancel, onConfirm }) {
+function ReturnApprovalDialog({ state, busy, error, onChange, onCancel, onConfirm }) {
   const { row } = state;
   return (
     <DialogShell>
       <h3 className="text-xl font-extrabold">Approve this return?</h3>
+      {error && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-red-800">{error}</p>}
       <p className="mt-2 text-sm text-slate-600">This will create the selected customer financial effect and cannot be directly edited afterward.</p>
       <div className="mt-4 grid grid-cols-2 gap-2 text-sm"><b>Return Number</b><span>{getReference(row)}</span><b>Customer</b><span>{getCustomer(row)}</span><b>Return Type</b><span>{row.return_type}</span><b>Price Mode</b><span>{row.price_mode || "-"}</span><b>Quantity</b><span>{Number(row.total_qty || 0)}</span><b>Value</b><span>{formatCurrency(row.return_total)}</span><b>Stock Effect</b><span>Pending / Not processed</span></div>
       <div className="mt-4"><ReturnProductDetails row={row} /></div>
@@ -402,11 +459,12 @@ function ReturnApprovalDialog({ state, busy, onChange, onCancel, onConfirm }) {
   );
 }
 
-function ReturnReversalDialog({ state, busy, onChange, onCancel, onConfirm }) {
+function ReturnReversalDialog({ state, busy, error, onChange, onCancel, onConfirm }) {
   const { row } = state;
   return (
     <DialogShell>
       <h3 className="text-xl font-extrabold">Reverse this approved return?</h3>
+      {error && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-red-800">{error}</p>}
       <p className="mt-2 text-sm text-slate-600">The original credit will remain in financial history and an opposite reversal transaction will be created.</p>
       <div className="mt-4 grid grid-cols-2 gap-2 text-sm"><b>Return Number</b><span>{getReference(row)}</span><b>Customer</b><span>{getCustomer(row)}</span><b>Original Credit</b><span>{formatCurrency(row.return_total)}</span><b>Approved By</b><span>{row.confirmed_by_name || "-"}</span><b>Approved Date</b><span>{row.confirmed_at ? new Date(row.confirmed_at).toLocaleString() : "-"}</span></div>
       <label className="mt-4 block text-sm font-bold">Reason for reversal (required)</label>
