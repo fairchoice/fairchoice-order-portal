@@ -1,4 +1,5 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import {moneyCents} from "../../utils/invoiceCollectionActions.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../services/supabase.js";
 import { getFcSessionState } from "../../services/fcSession.js";
 import { formatCurrency } from "../../utils/currency";
@@ -21,6 +22,7 @@ export default function CustomerWallet({ currentUser }) {
   const [applyAmount, setApplyAmount] = useState("");
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
+  const applyLock = useRef(false);
   const [error, setError] = useState("");
 
 
@@ -82,10 +84,13 @@ export default function CustomerWallet({ currentUser }) {
 
 
   const applyWallet = async () => {
-    if (!selectedInvoiceId) return;
+    if (!selectedInvoiceId || applyLock.current) return;
+    applyLock.current = true;
     setApplying(true); setError("");
     try {
-      const amount = Number(applyAmount || 0);
+      const cents = moneyCents(applyAmount);
+      if (String(applyAmount).trim() && (cents === null || cents <= 0)) throw new Error("Enter a positive Wallet amount with at most two decimals.");
+      const amount = String(applyAmount).trim() ? cents / 100 : 0;
       const { error: rpcError } = await supabase.rpc("fc_apply_customer_wallet_to_invoice_v1", {
         p_username: session.username,
         p_session_token: session.token,
@@ -93,9 +98,10 @@ export default function CustomerWallet({ currentUser }) {
         p_amount: amount > 0 ? amount : null,
       });
       if (rpcError) throw rpcError;
+      window.dispatchEvent(new CustomEvent("fairchoice:fc-payment-posted", { detail: { customerAccountId: selectedId, statusOnly: true, source: "WALLET_APPLICATION" } }));
       await Promise.all([loadAccounts(), loadDetail(selectedId)]);
     } catch (e) { setError(e.message || "Wallet could not be applied."); }
-    finally { setApplying(false); }
+    finally { applyLock.current = false; setApplying(false); }
   };
 
 

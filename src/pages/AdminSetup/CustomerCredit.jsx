@@ -117,7 +117,7 @@ const formatTransactionDate = (row = {}) => {
 function StatusBadge({ status }) {
   const normalized = String(status || "UNPAID").replaceAll("_", " ").toUpperCase();
   const className =
-    normalized === "PAID" || normalized === "COMPLETED" || normalized === "POSTED"
+    normalized === "PAID" || normalized === "RETURN PAID" || normalized === "COMPLETED" || normalized === "POSTED"
       ? "bg-green-100 text-green-700"
       : normalized.includes("PARTIAL") || normalized === "PART PAID" || normalized === "PENDING"
       ? "bg-amber-100 text-amber-700"
@@ -493,6 +493,7 @@ export default function CustomerCredit({ readOnly = false, initialView = "indivi
         ? creditHistory.filter(
             (row) =>
               row.transaction_type === "PAYMENT" ||
+              row.transaction_type === "RETURN_PAYMENT" ||
               row.transaction_type === "CREDIT" ||
               row.transaction_type === "ADJUSTMENT"
           )

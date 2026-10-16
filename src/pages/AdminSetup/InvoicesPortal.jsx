@@ -1,3 +1,4 @@
+import {loadInvoiceFinancialSnapshot} from "../../services/invoiceFinancialSnapshot.js";
 import { isActiveReturnCredit } from "../../services/returnHeaderPersistence.js";
 import { previousStatusPaidAmount } from "../../utils/invoiceCollectionActions.js";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -2030,11 +2031,13 @@ const runInvoiceAction = async (row, action) => {
       const uniqueRefs = [...new Set(refs.map(({ reference }) => reference))];
       const verifiedByInvoice = new Map();
       for (let index = 0; index < uniqueRefs.length; index += 50) {
-        const { data, error } = await supabase.rpc("fc_invoice_payment_statuses_v1", {
-          p_username: invoiceVerificationUsername,
-          p_session_token: invoiceVerificationSessionToken,
-          p_invoice_numbers: uniqueRefs.slice(index, index + 50),
-        });
+        let data, error;
+        try {
+          const snapshot = await loadInvoiceFinancialSnapshot({ invoiceNumbers: uniqueRefs.slice(index, index + 50) }, {
+            session: { username: invoiceVerificationUsername, token: invoiceVerificationSessionToken },
+          });
+          data = snapshot?.invoices || [];
+        } catch (failure) { error = failure; }
         if (cancelled) return;
         if (error) {
           console.warn("Secure invoice status verification failed:", error.message);
@@ -2076,6 +2079,7 @@ const runInvoiceAction = async (row, action) => {
           amount: total,
           debit: total,
           paid_amount: paid,
+          wallet_applied_amount: Number(verified.wallet_applied_amount || 0),
           amount_paid: paid,
           remaining_amount: remaining,
           outstanding_amount: remaining,

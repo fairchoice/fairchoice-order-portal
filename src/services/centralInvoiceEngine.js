@@ -1,4 +1,5 @@
-﻿import { supabase } from "./supabase";
+import {loadInvoiceFinancialSnapshot,withInvoiceFinancialState,currentInvoiceNotes} from "./invoiceFinancialSnapshot.js";
+import { supabase } from "./supabase";
 import { calculateDocumentTotals } from "../utils/documentTotals";
 import {
   calculateCartOrderItems,
@@ -478,7 +479,14 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   ]);
   const customerAccount = customerAccountResult.data || null;
   const customerBranch = customerBranchResult.data || null;
-  const invoiceRecord = invoiceRecordResult.error ? null : invoiceRecordResult.data || null;
+  let invoiceRecord = invoiceRecordResult.error ? null : invoiceRecordResult.data || null;
+  let financialState = null;
+  try {
+    const reference = order.invoice_number || order.order_number || order.orderId;
+    const snapshot = reference ? await loadInvoiceFinancialSnapshot({ invoiceNumbers: [reference] }) : null;
+    financialState = snapshot?.invoices.find(row => row.invoice_number === reference) || null;
+    if (financialState) invoiceRecord = financialState;
+  } catch (error) { console.warn("Invoice financial snapshot lookup failed", error.message); }
 
 
 
@@ -587,7 +595,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
   return normalizeInvoiceOrder({
-    ...order,
+    ...withInvoiceFinancialState(order, financialState),
     invoice_id: invoiceRecord?.id || order.invoice_id || null,
     invoice_number: invoiceRecord?.invoice_number || order.invoice_number || order.order_number,
     invoice_total: Number(invoiceRecord?.invoice_total ?? order.invoice_total ?? order.order_total ?? 0),
@@ -1516,8 +1524,16 @@ export async function resolveInvoiceLedgerPaymentStatus(order = {}) {
 
 export async function withResolvedInvoicePaymentStatus(order = {}) {
   const productCodeOrder = await withProductCodeFallbacks(order);
-  const invoiceOrder = normalizeInvoiceOrder(productCodeOrder);
+  let invoiceOrder = normalizeInvoiceOrder(productCodeOrder);
+  if (!invoiceOrder._financialStatusVerified) {
+    try {
+      const reference = getOrderReference(invoiceOrder);
+      const snapshot = reference ? await loadInvoiceFinancialSnapshot({ invoiceNumbers: [reference] }) : null;
+      invoiceOrder = withInvoiceFinancialState(invoiceOrder, snapshot?.invoices.find(row => row.invoice_number === reference));
+    } catch (error) { console.warn("Invoice financial status lookup failed", error.message); }
+  }
   const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+  if (invoiceOrder._financialStatusVerified) return invoiceOrder;
 
 
 
@@ -2745,7 +2761,7 @@ function buildLegacyStandardInvoiceHtml(
 
 
 
-            ${(settings.defaultNotes || invoiceOrder.notes) ? `<section class="notes">${escapeHtml(invoiceOrder.notes || settings.defaultNotes)}</section>` : ""}
+            ${currentInvoiceNotes(invoiceOrder.notes || settings.defaultNotes, invoiceOrder._financialStatusVerified) ? `<section class="notes">${escapeHtml(currentInvoiceNotes(invoiceOrder.notes || settings.defaultNotes, invoiceOrder._financialStatusVerified))}</section>` : ""}
           </main>
           ${
             showHeaderFooter
@@ -2827,15 +2843,17 @@ export function buildStandardInvoiceHtml(
         0
     )
   );
-  const returnAdjustmentTotal = manuallySelectedReturnTotal > 0
-    ? manuallySelectedReturnTotal
-    : walletAppliedAmount;
+  const returnAdjustmentTotal = walletAppliedAmount > 0 ? walletAppliedAmount : manuallySelectedReturnTotal;
+  const otherPaidAmount = invoiceOrder._financialStatusVerified
+    ? Math.max(0, Number(invoiceOrder.paid_amount || 0) - walletAppliedAmount) : 0;
   const showReturnAdjustment =
     !isOrderForm &&
     !isDeliveryNote &&
     !isReturnInvoice &&
     returnAdjustmentTotal > 0;
-  const adjustedInvoiceTotal = manuallySelectedReturnTotal > 0
+  const adjustedInvoiceTotal = walletAppliedAmount > 0 && invoiceOrder._financialStatusVerified
+    ? Number(invoiceOrder.remaining_amount || 0)
+    : manuallySelectedReturnTotal > 0
     ? Number(totals.grandTotal || 0) - returnAdjustmentTotal
     : returnAdjustmentTotal > 0
     ? Math.max(0, Number(totals.grandTotal || 0) - returnAdjustmentTotal)
@@ -2843,16 +2861,12 @@ export function buildStandardInvoiceHtml(
       invoiceOrder.amount_to_collect !== undefined
     ? Number(invoiceOrder.amount_to_collect)
     : Number(totals.grandTotal || 0);
-  const returnAdjustmentReferences = selectedReturnAdjustments
+  const returnAdjustmentReferences = (walletAppliedAmount > 0 ? [] : selectedReturnAdjustments)
     .map((row) => String(row?.return_number || row?.reference_no || row?.id || "").trim())
     .filter(Boolean)
     .join(", ");
-  const returnAdjustmentLabel = manuallySelectedReturnTotal > 0
-    ? "Return Total"
-    : "Wallet Deduction";
-  const adjustedInvoiceTotalLabel = manuallySelectedReturnTotal > 0
-    ? "Total After Return"
-    : "Amount to Collect";
+  const returnAdjustmentLabel = walletAppliedAmount > 0 ? "Return / Wallet credit applied" : "Return Total";
+  const adjustedInvoiceTotalLabel = walletAppliedAmount > 0 ? "Grand Total Due" : "Total After Return";
   const referenceLabel = isOrderForm || isDeliveryNote ? "Order Number" : "Invoice Number";
   const rawReference = getOrderReference(invoiceOrder) || "-";
   const reference =
@@ -3472,10 +3486,12 @@ export function buildStandardInvoiceHtml(
                               <div class="total-label">${escapeHtml(returnAdjustmentLabel)}${returnAdjustmentReferences ? ` (${escapeHtml(returnAdjustmentReferences)})` : ""}</div>
                               <div class="total-value">-${escapeHtml(formatCurrency(returnAdjustmentTotal))}</div>
                             </div>
+                            ${otherPaidAmount > 0 ? `<div class="total-row"><div class="total-label">Other paid amount</div><div class="total-value">-${escapeHtml(formatCurrency(otherPaidAmount))}</div></div>` : ""}
                             <div class="total-row grand-total">
                               <div class="total-label">${escapeHtml(adjustedInvoiceTotalLabel)}</div>
                               <div class="total-value">${escapeHtml(formatCurrency(adjustedInvoiceTotal))}</div>
                             </div>
+                            ${walletAppliedAmount > 0 ? `<div class="total-row"><div class="total-label">Payment Status</div><div class="total-value">${escapeHtml(getInvoicePaymentStatus(invoiceOrder, totals))}</div></div>` : ""}
                           `
                         : `
                             <div class="total-row grand-total">
@@ -3515,7 +3531,7 @@ export function buildStandardInvoiceHtml(
 
 
 
-            ${(settings.defaultNotes || invoiceOrder.notes) ? `<section class="notes">${escapeHtml(invoiceOrder.notes || settings.defaultNotes)}</section>` : ""}
+            ${currentInvoiceNotes(invoiceOrder.notes || settings.defaultNotes, invoiceOrder._financialStatusVerified) ? `<section class="notes">${escapeHtml(currentInvoiceNotes(invoiceOrder.notes || settings.defaultNotes, invoiceOrder._financialStatusVerified))}</section>` : ""}
           </main>
           ${
             showHeaderFooter

@@ -294,9 +294,10 @@ if (
   // larger resolved effect prevents counting the same payment twice while
   // retaining support for legacy ledger-only payments.
   const previousAcknowledgement = previousStatusPaidAmount(row._ledgerRow || row, allocatedAmount);
+  const walletAmount = Number((row._ledgerRow || row).wallet_applied_amount || 0);
   const resolvedPaidAmount = Math.max(
     previousAcknowledgement,
-    allocatedAmount,
+    allocatedAmount + walletAmount,
     canonicalReferencePaidAmount,
     legacyLedgerPaidAmount,
     storedLedgerInvoicePaidAmount,
