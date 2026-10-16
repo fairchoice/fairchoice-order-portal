@@ -28,5 +28,12 @@ dist-ssr
 .env*
 supabase/.temp/
 *.ini
-*.jsx
+# Local backup copies
+*.before-*.jsx
+*.collection-fix.jsx
+*.fixed.jsx
+*.backup.jsx
+*.jsx.backup
+.InvoicesPortal-fix-transfer.jsx
+Fairchoice-app-test-Local/
 changes-review.txt
