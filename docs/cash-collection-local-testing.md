@@ -1,6 +1,7 @@
 # Cash collection local testing
 
-Review branch: `fix/cash-collection-review`, based on `test` at `7c90477`.
+Testing branch: `test`. The cash collection fix is saved directly on this branch.
+Use only `test`, `main`, and `dev` for future FairChoice work.
 
 This branch keeps previous-payment invoice status acknowledgements separate from
 newly collected money. Previous Part Paid is the total already paid toward the
@@ -12,8 +13,8 @@ installed on **Fairchoice-V4-test** (`gezflswhzapymabhkbga`). Its filename match
 that test project's recorded migration version. Do not apply it to production or
 run a broad migration push while testing this branch.
 
-The branch's `vercel.json` disables automatic Vercel deployment for this exact
-review branch. `main` and `test` are unchanged.
+The branch's `vercel.json` disables automatic Vercel deployment for `test` and
+`dev`. `main` and production have not been changed.
 
 ## Preserve the existing local work
 
@@ -23,8 +24,9 @@ PowerShell terminal:
 
 ```powershell
 git fetch origin
-git worktree add ..\fairchoice-cash-collection-review -b fix/cash-collection-review origin/fix/cash-collection-review
-Copy-Item .env.local ..\fairchoice-cash-collection-review\.env.local
+git worktree add ..\fairchoice-test test
+git -C ..\fairchoice-test pull --ff-only origin test
+Copy-Item .env.local ..\fairchoice-test\.env.local
 ```
 
 The copied `.env.local` must remain the confirmed V4 test configuration. Do not
@@ -34,7 +36,7 @@ Stop the old local dev server before starting this one, so the browser uses the
 intended project:
 
 ```powershell
-cd ..\fairchoice-cash-collection-review
+cd ..\fairchoice-test
 npm ci
 npm run dev
 ```
