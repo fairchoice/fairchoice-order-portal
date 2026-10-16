@@ -1,3 +1,4 @@
+import { isActiveReturnCredit } from "./returnHeaderPersistence.js";
 import { previousStatusPaidAmount } from "../utils/invoiceCollectionActions.js";
 
 const INACTIVE_PAYMENT_STATUSES = new Set([
@@ -185,6 +186,19 @@ export function resolveInvoiceRowFromAllocations({
   legacyLedgerPayments = [],
   invoiceTotal = 0,
 } = {}) {
+  // A confirmed credit note settles the return itself. It is not a sales
+  // invoice awaiting a cash allocation, even when linked to an unpaid order.
+  if (normalize(row?.entry_type || row?.transaction_type) === "RETURN_INVOICE") {
+    const header = row._returnHeader;
+    const credited = header ? isActiveReturnCredit(header)
+      : !row.reversed_at && [row.invoice_status, row.status].some(value => ["CREDITED", "PAID"].includes(normalize(value)));
+    const voided = [row.financial_status, row.invoice_status, row.status].some(value => ["VOID", "VOIDED", "REVERSED", "CANCELLED"].includes(normalize(value)));
+    if (!credited || voided) return row;
+    const total = Math.max(0, Number(invoiceTotal || row.invoice_total || row.invoice_amount || row.amount || 0));
+    return { ...row, paid_amount: total, amount_paid: total,
+      remaining_amount: 0, outstanding_amount: 0,
+      invoice_status: "PAID", payment_status: "PAID", status: "PAID" };
+  }
   const { sourceIds, exactReferences, compatibilityReferences } =
     getInvoiceAllocationKeys(row);
   const customerAccountId = String(

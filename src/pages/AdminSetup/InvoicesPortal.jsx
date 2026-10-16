@@ -402,6 +402,9 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
 
 
   return invoiceRows.map((row) => {
+    if (String(row.entry_type || row.transaction_type || "").toUpperCase() === "RETURN_INVOICE") {
+      return resolveInvoiceRowFromAllocations({ row, invoiceTotal: getAmount(row) });
+    }
     const rowAccountId = row.customer_account_id || row._freshOrder?.customer_account_id || row._freshOrder?.customerAccountId;
     const canonical = [...getInvoiceLedgerReferenceKeys(row)]
       .map((reference) => canonicalByReference.get(reference))
@@ -1531,8 +1534,9 @@ const runInvoiceAction = async (row, action) => {
         createdAt: returnHeader?.confirmed_at || returnHeader?.created_at || row.created_at,
         created_at: returnHeader?.confirmed_at || returnHeader?.created_at || row.created_at,
         notes: returnHeader?.notes || row.notes || "Return credit",
-        payment_status: "CREDITED",
-        invoice_status: "CREDITED",
+        payment_status: getInvoiceDisplayStatus(row),
+        invoice_status: getInvoiceDisplayStatus(row),
+        _documentPaymentStatus: getInvoiceDisplayStatus(row),
         items: (returnItems || []).map((item) => ({
           id: item.id,
           productId: item.product_id,
@@ -1754,6 +1758,15 @@ const runInvoiceAction = async (row, action) => {
         const reference = String(row.reference_no || "").trim();
         if (reference && !existingReturnReferences.has(reference)) {
           ledgerRows.push(row);
+        } else if (reference) {
+          const index = ledgerRows.findIndex(existing =>
+            String(existing.entry_type || "").toUpperCase() === "RETURN_INVOICE" &&
+            String(existing.reference_no || existing.invoice_number || "").trim() === reference &&
+            String(existing.customer_account_id || "") === String(row.customer_account_id || "")
+          );
+          if (index >= 0 && !isInvoiceFinanciallyVoided(ledgerRows[index])) {
+            ledgerRows[index] = { ...ledgerRows[index], ...row };
+          }
         }
       });
 
@@ -2016,7 +2029,7 @@ const runInvoiceAction = async (row, action) => {
       }
 
       const refs = filteredInvoices
-        .filter((row) => !isInvoiceFinanciallyVoided(row))
+        .filter((row) => !isInvoiceFinanciallyVoided(row) && String(row.entry_type || row.transaction_type || "").toUpperCase() !== "RETURN_INVOICE")
         .map((row) => ({
           row,
           reference: String(

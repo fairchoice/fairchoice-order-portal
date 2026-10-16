@@ -557,3 +557,23 @@ test("collected order payment is reflected immediately while allocation catches 
   assert.equal(resolved.outstanding_amount, 40);
   assert.equal(resolved._operationalOrderPaidAmount, 60);
 });
+
+test("confirmed return credit stays Paid without a cash allocation to its linked sales order", () => {
+  const row = { entry_type: "RETURN_INVOICE", reference_no: "RET-example", order_number: "ORD-example",
+    invoice_total: 45.99, invoice_status: "UNPAID", paid_amount: 0,
+    _returnHeader: { status: "Confirmed", financial_disposition: "CUSTOMER_CREDIT" } };
+  const resolved = resolveInvoiceRowFromAllocations({ row, invoiceTotal: 45.99 });
+  assert.equal(resolved.invoice_status, "PAID");
+  assert.equal(resolved.paid_amount, 45.99);
+  assert.equal(resolved.outstanding_amount, 0);
+});
+
+test("return credit status does not mark reversed or no-credit returns Paid", () => {
+  for (const header of [
+    { status: "Confirmed", financial_disposition: "NO_CREDIT" },
+    { status: "Confirmed", financial_disposition: "CUSTOMER_CREDIT", reversed_at: "2026-10-16" },
+  ]) {
+    const row = { entry_type: "RETURN_INVOICE", invoice_status: "UNPAID", invoice_total: 45.99, _returnHeader: header };
+    assert.equal(resolveInvoiceRowFromAllocations({ row }).invoice_status, "UNPAID");
+  }
+});
