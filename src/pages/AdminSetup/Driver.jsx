@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
 import { calculateDocumentTotals } from "../../utils/documentTotals";
@@ -19,6 +19,7 @@ import {
 import {
   allocatePaymentOldestFirst,
   applyAllocationsToInvoices,
+  filterInvoicesForAllocation,
 } from "../../utils/centralPaymentCalculations";
 import { saveConfirmedServerManagerOrderToProcessingQueue } from "../../services/orders";
 import {
@@ -36,6 +37,8 @@ import {
   normalizeDriverCollectionType,
   resolveDriverDeliveryAllocations,
 } from "../../utils/driverCashCollectionForm";
+import { planInvoiceCollection, moneyCents } from "../../utils/invoiceCollectionActions.js";
+import { saveInvoiceCollection, loadInvoiceCollectionSnapshot } from "../../services/invoiceCollectionService.js";
 import ReturnRequestModal from "../../components/ReturnRequestModal";
 import { loadPreOrderSupplyHistory } from "../../services/preOrderSupplyHistory";
 
@@ -188,6 +191,11 @@ export default function Driver({
 
 
 const [savingPayment, setSavingPayment] = useState(false);
+const [driverInvoiceSnapshot, setDriverInvoiceSnapshot] = useState(null);
+const [driverInvoiceLoading, setDriverInvoiceLoading] = useState(false);
+const [driverInvoiceError, setDriverInvoiceError] = useState("");
+const [driverInvoiceSelections, setDriverInvoiceSelections] = useState({});
+const previousBalanceSavingRef = useRef(false);
 const [savingPreviousBalance, setSavingPreviousBalance] = useState(false);
 const [previousBalanceOutstanding, setPreviousBalanceOutstanding] = useState({
   totalOutstanding: 0,
@@ -313,7 +321,7 @@ const cleanLegacyTestAmount = (value, order = {}) => {
     const resolvedOrder = await withResolvedInvoicePaymentStatus(safeOrder);
     printThermalReceipt(resolvedOrder);
   };
- 
+
   const [paymentForm, setPaymentForm] = useState({
   paymentType: "Cash",
   collectionType: "TODAY_INVOICE",
@@ -554,6 +562,42 @@ const selectedCreditBranches =
 const selectedCreditBranch = selectedCreditBranches.find(
   (branch) => String(branch.id) === String(selectedCreditBranchId)
 );
+
+useEffect(() => {
+  let active = true;
+  setDriverInvoiceSnapshot(null);
+  setDriverInvoiceSelections({});
+  setDriverInvoiceError("");
+  if (!selectedCreditCustomer?.id || (selectedCreditBranches.length > 0 && !selectedCreditBranch)) return () => { active = false; };
+  setDriverInvoiceLoading(true);
+  loadInvoiceCollectionSnapshot({
+    customerAccountId: selectedCreditCustomer.id,
+    customerName: selectedCreditCustomer.account_name,
+    customer: selectedCreditCustomer,
+    selectedBranchId: selectedCreditBranch?.id || "",
+  }).then((result) => { if (active) setDriverInvoiceSnapshot(result); })
+    .catch((error) => { if (active) setDriverInvoiceError(error.message || "Could not load invoices."); })
+    .finally(() => { if (active) setDriverInvoiceLoading(false); });
+  return () => { active = false; };
+}, [selectedCreditCustomer?.id, selectedCreditBranch?.id]);
+
+const driverOpenInvoices = driverInvoiceSnapshot
+  ? filterInvoicesForAllocation(applyAllocationsToInvoices(driverInvoiceSnapshot.invoices || [], driverInvoiceSnapshot.allocations || []), selectedCreditBranch?.id || "")
+      .filter((invoice) => Number(invoice.remainingAmount || 0) > 0.009)
+      .map((invoice) => ({...invoice, _collectionReference: String(invoice.invoice_number || invoice.reference_no || invoice.order_number || invoice.orderId || invoice.order_id || invoice.id || "")}))
+  : [];
+const driverCollectionPlan = planInvoiceCollection(driverOpenInvoices, driverInvoiceSelections);
+const driverCollectionAllocations = driverCollectionPlan.allocations;
+const driverCollectionTotal = driverCollectionPlan.collectedTotal;
+const driverInvalidPart = driverCollectionPlan.errors.length > 0;
+
+useEffect(() => {
+  if (previousBalanceForm.paymentType !== "Bank Transfer") {
+    setPreviousBalanceForm((current) => ({...current, amount: String(driverCollectionTotal || "")}));
+  }
+}, [driverCollectionTotal, previousBalanceForm.paymentType]);
+
+
 
 
 
@@ -944,134 +988,45 @@ const openCashCollection = async (order) => {
 
 
   const savePreviousBalancePayment = async () => {
-  const paymentAmount = Number(previousBalanceForm.amount || 0);
-
-
-
-
-  if (!selectedCreditCustomer) {
-    alert("Please select customer.");
-    return;
-  }
-
-
-
-
-  if (selectedCreditBranches.length > 0 && !selectedCreditBranch) {
-    alert("Please select branch / shop.");
-    return;
-  }
-
-
-
-
-  if (!paymentAmount || paymentAmount <= 0) {
-    alert("Please enter amount.");
-    return;
-  }
-
-
-
-
-  if (!previousBalanceForm.whoPaid.trim()) {
-    alert("Please enter who paid.");
-    return;
-  }
-
-
-
-
-  if (isLegacyTestText(previousBalanceForm.whoPaid)) {
-    alert("Please replace the test payer name before saving.");
-    return;
-  }
-
-
-
-
-  const selectedOutstanding = selectedCreditBranch
-    ? Number(
-        previousBalanceOutstanding.branchOutstanding[selectedCreditBranch.id] ??
-          previousBalanceOutstanding.branchOutstanding[
-            selectedCreditBranch.branch_name
-          ] ??
-          0
-      )
-    : Number(previousBalanceOutstanding.totalOutstanding || 0);
-
-
-
-
-  if (
-    selectedOutstanding > 0 &&
-    paymentAmount > selectedOutstanding &&
-    !window.confirm(
-      "Payment is higher than selected branch outstanding. Continue?"
-    )
-  ) {
-    return;
-  }
-
-
-
-
-  setSavingPreviousBalance(true);
-  try {
-    const paymentDate = new Date().toISOString();
-
-
-
-
-    await postPreviousBalanceCollection({
-      customerAccountId: selectedCreditCustomer.id,
-      customerBranchId: selectedCreditBranch?.id || null,
-      amount: paymentAmount,
-      paymentMethod: previousBalanceForm.paymentType,
-      paymentDate,
-      payerName: previousBalanceForm.whoPaid,
-      collectorName:
-        loggedInUser.staff_name || loggedInUser.name || loggedInUser.username || "",
-      collectorStaffId: loggedInUser.staff_id || loggedInUser.id || null,
-      collectorRole: loggedInUser.role || loggedInUser.access_level || "",
-      notes:
-        previousBalanceForm.notes ||
-        `Driver previous balance collection - ${previousBalanceForm.paymentType}`,
-      paymentIntentId: previousBalanceForm.paymentIntentId,
-      metadata: { payment_applies_to: "PREVIOUS_BALANCE" },
-    });
-  } catch (error) {
-    alert("Could not save previous balance payment: " + error.message);
-    return;
-  } finally {
-    setSavingPreviousBalance(false);
-  }
-
-
-
-
-  alert("Previous Balance Payment saved successfully.");
-
-
-
-
-  setPreviousBalanceForm({
-    amount: "",
-    paymentType: "Cash",
-    whoPaid: "",
-    notes: "",
-    paymentIntentId: createPreviousBalancePaymentIntentId(),
-  });
-
-
-
-
-  setSelectedCreditCustomerId("");
-  setSelectedCreditBranchId("");
-  setShowPreviousBalance(false);
-};
-
-
-
+    if (previousBalanceSavingRef.current) return;
+    const amountCents = moneyCents(previousBalanceForm.amount || 0);
+    const previousStatuses = driverCollectionPlan.previousStatuses;
+    if (!selectedCreditCustomer) { alert("Please select customer."); return; }
+    if (selectedCreditBranches.length && !selectedCreditBranch) { alert("Please select branch / shop."); return; }
+    if (driverInvoiceLoading || !driverInvoiceSnapshot || driverInvoiceError || driverInvalidPart) {
+      alert(driverCollectionPlan.errors[0] || driverInvoiceError || "Wait for invoices to load and check the entered amounts."); return;
+    }
+    if (amountCents === null || amountCents < 0 || (!amountCents && !previousStatuses.length)) {
+      alert("Choose a previous-payment status or enter a positive new collection amount."); return;
+    }
+    if (driverCollectionTotal * 100 - amountCents > 0.001) { alert("New invoice payments cannot exceed money collected now."); return; }
+    if (amountCents > 0 && (!previousBalanceForm.whoPaid.trim() || isLegacyTestText(previousBalanceForm.whoPaid))) {
+      alert("Please enter who paid, using the actual payer name."); return;
+    }
+    if (previousBalanceForm.paymentType === "Bank Transfer" && driverCollectionAllocations.length) {
+      alert("Bank transfers stay pending until verified. Leave new invoice choices as Unpaid; previous-payment status corrections can still be saved."); return;
+    }
+    previousBalanceSavingRef.current = true;
+    setSavingPreviousBalance(true);
+    try {
+      await saveInvoiceCollection({
+        customerAccountId: selectedCreditCustomer.id, customerBranchId: selectedCreditBranch?.id || null,
+        amount: amountCents / 100, paymentMethod: previousBalanceForm.paymentType,
+        paymentSource: CANONICAL_PAYMENT_SOURCES.PREVIOUS_BALANCE,
+        paidBy: previousBalanceForm.whoPaid, notes: previousBalanceForm.notes,
+        paymentIntentId: previousBalanceForm.paymentIntentId,
+        allocations: driverCollectionAllocations, previousStatuses,
+      });
+      setPreviousBalanceForm({ amount: "", paymentType: "Cash", whoPaid: "", notes: "", paymentIntentId: createPreviousBalancePaymentIntentId() });
+      setDriverInvoiceSelections({});
+      setDriverInvoiceSnapshot(null);
+      setSelectedCreditCustomerId("");
+      setSelectedCreditBranchId("");
+      setShowPreviousBalance(false);
+      alert(amountCents ? "Collection saved once. Previous-payment choices updated status only." : "Previous-payment invoice statuses updated. No payment was created or allocated.");
+    } catch (error) { alert("Could not save collection: " + error.message); }
+    finally { previousBalanceSavingRef.current = false; setSavingPreviousBalance(false); }
+  };
 
   const confirmDelivery = async (order, confirmedBy) => {
   try {
@@ -1819,7 +1774,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
 
 
                 {showPreviousBalance && (
-  <div className="mb-4 border rounded-2xl p-4 bg-slate-50 space-y-3">
+  <fieldset disabled={savingPreviousBalance} className="mb-4 border rounded-2xl p-4 bg-slate-50 space-y-3">
     <h3 className="font-bold text-center">Previous Balance Collection</h3>
 
 
@@ -1865,7 +1820,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
       {branch.postcode ? ` - ${branch.postcode}` : ""}
     </option>
   ))}
-  
+
 </select>
 
 
@@ -1904,6 +1859,31 @@ const paymentCollected = isCredit ? "No" : "Yes";
 
 
 
+
+    {selectedCreditCustomer && (
+      <div className="border rounded-xl p-3 bg-white space-y-2">
+        <h4 className="font-bold">Unpaid invoices — Paid / Part Paid</h4>
+        {driverInvoiceLoading && <p>Loading invoices...</p>}
+        {driverInvoiceError && <p className="text-red-700">{driverInvoiceError}</p>}
+        {!driverInvoiceLoading && !driverInvoiceError && !driverOpenInvoices.length && <p>No unpaid invoices found.</p>}
+        <p className="text-xs text-slate-600">Previous Paid / Previous Part Paid update invoice status only. They do not collect money or allocate an existing payment. For Previous Part Paid, enter the total already paid toward that invoice. Enter only money received now in Amount Collected.</p>
+        {driverOpenInvoices.map((invoice) => {
+          const ref = invoice._collectionReference;
+          const choice = driverInvoiceSelections[ref] || {mode: "none", amount: ""};
+          return <div key={ref} className="grid grid-cols-1 sm:grid-cols-3 gap-2 border-b py-2 items-center">
+            <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div>Due: {formatCurrency(invoice.remainingAmount)}</div></div>
+            <select className="border rounded-lg p-2" value={choice.mode} onChange={(event) => setDriverInvoiceSelections((current) => ({...current, [ref]: {mode: event.target.value, amount: ""}}))}>
+              <option value="none">Unpaid</option><option value="paid">Paid</option><option value="part">Part Paid</option><option value="previous_paid">Previous Paid — status only</option><option value="previous_part">Previous Part Paid — status only</option>
+            </select>
+            {["part", "previous_part"].includes(choice.mode) ? <input className="border rounded-lg p-2" type="number" min="0.01" step="0.01" max={choice.mode === "previous_part" ? invoice.invoiceAmount : invoice.remainingAmount} placeholder={choice.mode === "previous_part" ? "Total previously paid £" : "New part payment £"} aria-label={choice.mode === "previous_part" ? "Total previously paid toward this invoice" : "New part payment"} value={choice.amount} onChange={(event) => setDriverInvoiceSelections((current) => ({...current, [ref]: {...current[ref], amount: event.target.value}}))} /> :
+              <span className="text-sm">{choice.mode === "previous_paid" ? formatCurrency(invoice.invoiceAmount) : choice.mode === "paid" ? formatCurrency(invoice.remainingAmount) : formatCurrency(0)}</span>}
+          </div>;
+        })}
+        <div className="text-sm">Previous-payment status corrections: {formatCurrency(driverCollectionPlan.previousTotal)} — excluded from money collected now.</div>
+        <div className="font-bold">Allocated: {formatCurrency(driverCollectionTotal)} / Collected: {formatCurrency(Number(previousBalanceForm.amount || 0))} / Unallocated credit: {formatCurrency(Math.max(0, Number(previousBalanceForm.amount || 0) - driverCollectionTotal))}</div>
+        {(driverInvalidPart || (Number(previousBalanceForm.amount || 0) > 0 && driverCollectionTotal - Number(previousBalanceForm.amount || 0) > 0.009)) && <p className="text-red-700 text-sm">{driverCollectionPlan.errors[0] || "New invoice allocations cannot exceed money collected now; any extra remains customer credit."}</p>}
+      </div>
+    )}
 
     <input
       type="number"
@@ -1978,7 +1958,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
       >
         {savingPreviousBalance ? "Saving securely..." : "Save Previous Balance Payment"}
       </button>
-          </div>
+          </fieldset>
         )}
 
 
@@ -2824,7 +2804,7 @@ const canSave =
     </>
   );
 })()}
-              </div>             
+              </div>
             )}
           </div>
         ))}

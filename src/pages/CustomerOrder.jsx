@@ -10,12 +10,18 @@ import {
   buildPaymentPreview,
   loadCentralPaymentSnapshot,
   loadReadOnlyCustomerCreditSnapshot,
+  listOwnerUnallocatedPayments,
+  listOwnerUnallocatedPaymentTargets,
+  allocateOwnerUnallocatedPayment,
 } from "../services/centralPaymentService";
+import { applyAllocationsToInvoices, filterInvoicesForAllocation } from "../utils/centralPaymentCalculations";
 import {
   CANONICAL_PAYMENT_SOURCES,
   createPaymentIntentId,
   postCanonicalCustomerPayment,
 } from "../services/canonicalPaymentService";
+import { planInvoiceCollection, moneyCents } from "../utils/invoiceCollectionActions.js";
+import { saveInvoiceCollection, loadInvoiceCollectionSnapshot } from "../services/invoiceCollectionService.js";
 import PricingRule from "./AdminSetup/PricingRule";
 import Suppliers from "./AdminSetup/Suppliers";
 import SupplierAccounts from "./AdminSetup/SupplierAccounts";
@@ -793,6 +799,71 @@ const loggedInUser =
   const isCustomer = normalizedRole === "customer";
   const isBrandPartner = normalizedRole === "brandpartner" || normalizedRole === "partner";
   const activeUsername = String(activeUser?.username || activeUser?.staff_username || activeUser?.email || activeUser?.name || "").trim().toLowerCase();
+  const canReconcileExistingCredit = activeUsername === "nisstaj_admin";
+  const loadExistingCreditForCustomer = async () => {
+    if (!canReconcileExistingCredit || !selectedSalesPaymentCustomer?.id) return;
+    setExistingCreditLoading(true);
+    setExistingCreditError("");
+    try {
+      // The owner-only server RPC returns only genuinely unallocated posted payments.
+      const result = await listOwnerUnallocatedPayments({ currentUser: activeUser, page: 1 });
+      setExistingCreditRows((result.records || []).filter((payment) =>
+        String(payment.customer_account_id || payment.customerAccountId || "") === String(selectedSalesPaymentCustomer.id)
+      ));
+    } catch (error) { setExistingCreditError(error.message || "Could not load existing credit."); }
+    finally { setExistingCreditLoading(false); }
+  };
+  const selectExistingCredit = async (payment) => {
+    setExistingCreditSelected(payment);
+    setExistingCreditTargets([]);
+    setExistingCreditTargetId("");
+    setExistingCreditAmount("");
+    setExistingCreditError("");
+    try {
+      const targets = await listOwnerUnallocatedPaymentTargets({ currentUser: activeUser, paymentId: payment.payment_id || payment.id });
+      setExistingCreditTargets(targets);
+    } catch (error) { setExistingCreditError(error.message || "Could not load eligible invoices."); }
+  };
+  const saveExistingCreditAllocation = async () => {
+    if (existingCreditSaving || !existingCreditSelected || !existingCreditTargetId) return;
+    const target = existingCreditTargets.find((item) => String(item.invoice_id || item.id) === String(existingCreditTargetId));
+    const amount = Number(existingCreditAmount);
+    const paymentRemaining = Number(existingCreditSelected.unallocated_amount ?? existingCreditSelected.remaining_unallocated_amount ?? existingCreditSelected.remaining_amount ?? 0);
+    const invoiceRemaining = Number(target?.remaining_amount ?? target?.remaining_balance ?? target?.remainingAmount ?? 0);
+    if (!Number.isSafeInteger(Math.round(amount * 100)) || amount <= 0 || Math.round(amount * 100) / 100 !== amount ||
+        amount > paymentRemaining + 0.001 || amount > invoiceRemaining + 0.001) {
+      alert("Allocation must not exceed either the existing payment credit or the invoice's remaining balance.");
+      return;
+    }
+    if (!existingCreditReason.trim()) { alert("Enter an allocation reason for the audit trail."); return; }
+    if (!window.confirm(`Allocate ${formatCurrency(amount)} from the EXISTING payment to this invoice? No new payment will be created.`)) return;
+    setExistingCreditSaving(true);
+    try {
+      await allocateOwnerUnallocatedPayment({
+        currentUser: activeUser,
+        paymentId: existingCreditSelected.payment_id || existingCreditSelected.id,
+        invoiceId: existingCreditTargetId,
+        amount,
+        reason: existingCreditReason.trim(),
+      });
+      setExistingCreditSelected(null);
+      setExistingCreditTargets([]);
+      setExistingCreditAmount("");
+      setExistingCreditReason("");
+      await loadExistingCreditForCustomer();
+      const refreshed = await loadCentralPaymentSnapshot({
+        customerAccountId: selectedSalesPaymentCustomer.id,
+        customerName: selectedSalesPaymentCustomer.account_name,
+        customer: selectedSalesPaymentCustomer,
+        selectedBranchId: selectedSalesPaymentBranch?.id || "",
+      });
+      setSalesInvoiceSnapshot(refreshed);
+      setSalesInvoiceSelections({});
+      alert("Existing payment allocated successfully. No second payment was posted.");
+    } catch (error) { setExistingCreditError(error.message || "Allocation failed; no new payment was created."); }
+    finally { setExistingCreditSaving(false); }
+  };
+
   const isNisstajAdmin = activeUsername === "nisstaj_admin";
   const dutyRestricted = Boolean(activeDuty) && !isNisstajAdmin && !isCustomer;
   const isAdmin = isNisstajAdmin || (dutyRestricted ? activeDuty === "admin" : isAdminStaffRole(role));
@@ -935,7 +1006,25 @@ const [salesOutstandingSnapshot, setSalesOutstandingSnapshot] = useState({
 
 
 
+const [salesInvoiceSnapshot, setSalesInvoiceSnapshot] = useState(null);
+const [salesInvoiceLoading, setSalesInvoiceLoading] = useState(false);
+const [salesInvoiceError, setSalesInvoiceError] = useState("");
+const [salesInvoiceSelections, setSalesInvoiceSelections] = useState({});
+const [salesPreviousCreditAmount, setSalesPreviousCreditAmount] = useState("");
 const [savingSalesPayment, setSavingSalesPayment] = useState(false);
+const salesCollectionSavingRef = useRef(false);
+const [salesCollectionRefresh, setSalesCollectionRefresh] = useState(0);
+// Existing-payment reconciliation is separate from posting a new collection.
+const [existingCreditRows, setExistingCreditRows] = useState([]);
+const [existingCreditLoading, setExistingCreditLoading] = useState(false);
+const [existingCreditError, setExistingCreditError] = useState("");
+const [existingCreditSelected, setExistingCreditSelected] = useState(null);
+const [existingCreditTargets, setExistingCreditTargets] = useState([]);
+const [existingCreditTargetId, setExistingCreditTargetId] = useState("");
+const [existingCreditAmount, setExistingCreditAmount] = useState("");
+const [existingCreditReason, setExistingCreditReason] = useState("");
+const [existingCreditSaving, setExistingCreditSaving] = useState(false);
+
 
 
 
@@ -1024,6 +1113,50 @@ useEffect(() => {
 
 
 
+
+useEffect(() => {
+  let active = true;
+  setSalesInvoiceSnapshot(null);
+  setSalesInvoiceSelections({});
+  setSalesInvoiceError("");
+  if (!selectedSalesPaymentCustomer?.id ||
+      (selectedSalesPaymentBranches.length > 0 && !selectedSalesPaymentBranch)) return () => { active = false; };
+  setSalesInvoiceLoading(true);
+  loadInvoiceCollectionSnapshot({
+    customerAccountId: selectedSalesPaymentCustomer.id,
+    customerName: selectedSalesPaymentCustomer.account_name,
+    customer: selectedSalesPaymentCustomer,
+    selectedBranchId: selectedSalesPaymentBranch?.id || "",
+  }).then((result) => { if (active) setSalesInvoiceSnapshot(result); })
+    .catch((error) => { if (active) setSalesInvoiceError(error.message || "Could not load invoices."); })
+    .finally(() => { if (active) setSalesInvoiceLoading(false); });
+  return () => { active = false; };
+}, [selectedSalesPaymentCustomer?.id, selectedSalesPaymentBranch?.id, salesCollectionRefresh]);
+
+const salesOpenInvoices = useMemo(() => {
+  if (!salesInvoiceSnapshot) return [];
+  const invoices = applyAllocationsToInvoices(salesInvoiceSnapshot.invoices || [], salesInvoiceSnapshot.allocations || []);
+  return filterInvoicesForAllocation(invoices, selectedSalesPaymentBranch?.id || "")
+    .filter((invoice) => Number(invoice.remainingAmount || 0) > 0.009)
+    .map((invoice) => ({
+      ...invoice,
+      _collectionReference: String(invoice.invoice_number || invoice.reference_no || invoice.order_number || invoice.orderId || invoice.order_id || invoice.id || ""),
+    }));
+}, [salesInvoiceSnapshot, selectedSalesPaymentBranch?.id]);
+
+const salesCollectionPlan = planInvoiceCollection(salesOpenInvoices, salesInvoiceSelections);
+const salesCollectionAllocations = salesCollectionPlan.allocations;
+const salesCollectionAllocatedTotal = salesCollectionPlan.collectedTotal;
+const salesManualCreditAmount = Number(salesPreviousCreditAmount || 0);
+const salesManualCreditValid = moneyCents(salesPreviousCreditAmount || 0) !== null && salesManualCreditAmount >= 0;
+const salesCollectionTotal = Math.round((salesCollectionAllocatedTotal + (salesManualCreditValid ? salesManualCreditAmount : 0)) * 100) / 100;
+const salesCollectionHasInvalidChoice = salesCollectionPlan.errors.length > 0;
+
+useEffect(() => {
+  if (salesPaymentForm.paymentType !== "Bank Transfer") {
+    setSalesPaymentForm((current) => ({...current, amount: String(salesCollectionTotal || "")}));
+  }
+}, [salesCollectionTotal, salesPaymentForm.paymentType]);
 
   const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
  
@@ -4584,203 +4717,60 @@ const getCustomerInvoiceStatus = (row = {}) => {
 
 
   const saveSalesRepCollection = async () => {
-  if (savingSalesPayment) return;
-
-
-
-
-  const customer = selectedSalesPaymentCustomer;
-  const salesCustomerBranches = selectedSalesPaymentBranches;
-  const selectedSalesBranch = selectedSalesPaymentBranch;
-  const paymentAmount = Number(salesPaymentForm.amount || 0);
-  const selectedBranchOutstanding = selectedSalesBranch
-    ? Number(
-        salesOutstandingSnapshot.branchOutstanding[selectedSalesBranch.id] ??
-          salesOutstandingSnapshot.branchOutstanding[selectedSalesBranch.branch_name] ??
-          0
-      )
-    : Number(salesOutstandingSnapshot.totalOutstanding || 0);
-
-
-
-
-  if (!customer) {
-    alert("Please select customer.");
-    return;
-  }
-
-
-
-
-  if (salesCustomerBranches.length > 0 && !selectedSalesBranch) {
-    alert("Please select branch / shop.");
-    return;
-  }
-
-
-
-
-  if (!(paymentAmount > 0)) {
-    alert("Please enter amount.");
-    return;
-  }
-
-
-
-
-  if (!salesPaymentForm.whoPaid.trim()) {
-    alert("Please enter who paid.");
-    return;
-  }
-
-
-
-
-  if (
-    !window.confirm(
-      `Save collection of ${formatCurrency(salesPaymentForm.amount)}`
-    )
-  ) {
-    return;
-  }
-
-
-
-
-  setSavingSalesPayment(true);
-
-
-
-
-  try {
-    const now = new Date();
-    const localToday = new Date(
-      now.getTime() - now.getTimezoneOffset() * 60000
-    )
-      .toISOString()
-      .split("T")[0];
-
-
-
-
-    const selectedCollectionDate = String(
-      salesPaymentForm.collectionDate || ""
-    ).trim();
-
-
-
-
-    const paymentDate =
-      !selectedCollectionDate || selectedCollectionDate === localToday
-        ? now.toISOString()
-        : `${selectedCollectionDate}T12:00:00`;
-
-
-
-
-    const unallocatedOutstanding = Math.max(
-      0,
-      selectedBranchOutstanding - paymentAmount
-    );
-
-
-
-
-    await postCanonicalCustomerPayment({
-      customerAccountId: customer.id,
-      customerBranchId: selectedSalesBranch?.id || null,
-      amount: paymentAmount,
-      paymentDate,
-      paymentMethod: salesPaymentForm.paymentType,
-      paymentSource: CANONICAL_PAYMENT_SOURCES.SALES_REP,
-      paymentReference: "SALES_REP_COLLECTION",
-      paidBy: salesPaymentForm.whoPaid,
-      collectorName:
-        activeUser.staff_name ||
-        activeUser.name ||
-        activeUser.username ||
-        "",
-      collectorStaffId: activeUser.staff_id || activeUser.id || null,
-      collectorRole:
-        activeUser.role || activeUser.access_level || "Sales Rep",
-      paymentIntentId: salesPaymentForm.paymentIntentId,
-      notes: [
-        selectedSalesBranch
-          ? `Branch: ${selectedSalesBranch.branch_name}`
-          : "",
-        salesPaymentForm.collectionDate
-          ? `Collection date: ${salesPaymentForm.collectionDate}`
-          : "",
-        unallocatedOutstanding > 0
-          ? `Partial collection - unallocated outstanding remaining: ${formatCurrency(
-              unallocatedOutstanding
-            )}`
-          : "",
-        salesPaymentForm.notes || "",
-      ]
-        .filter(Boolean)
-        .join("`n"),
-      metadata: {
-        payment_applies_to: "SALES_REP_COLLECTION",
-        allocation_mode: "CANONICAL_FIFO",
-        collection_status:
-          unallocatedOutstanding > 0
-            ? "PARTIAL_COLLECTION"
-            : "COLLECTION",
-        unallocated_outstanding_amount: unallocatedOutstanding,
-      },
-      allocations: [],
-    });
-
-
-
-
-    const { outstandingState } = await loadSalesRepOutstanding({
-      customer,
-      selectedBranchId: selectedSalesBranch?.id || "",
-    });
-
-
-
-
-    setSalesOutstandingSnapshot(outstandingState);
-
-
-
-
-    if (
-      String(selectedCustomerAccount?.id || "") ===
-      String(customer.id || "")
-    ) {
-      await loadCustomerCreditSnapshot(selectedCustomerAccount);
+    if (salesCollectionSavingRef.current) return;
+    const customer = selectedSalesPaymentCustomer;
+    const branch = selectedSalesPaymentBranch;
+    const amountCents = moneyCents(salesPaymentForm.amount || 0);
+    const previousStatuses = salesCollectionPlan.previousStatuses;
+    const bankTransfer = salesPaymentForm.paymentType === "Bank Transfer";
+    if (!customer) { alert("Please select customer."); return; }
+    if (selectedSalesPaymentBranches.length && !branch) { alert("Please select branch / shop."); return; }
+    if (salesInvoiceLoading || !salesInvoiceSnapshot || salesInvoiceError || salesCollectionHasInvalidChoice || !salesManualCreditValid) {
+      alert(salesCollectionPlan.errors[0] || salesInvoiceError || "Wait for invoices to load and check the entered amounts."); return;
     }
-
-
-
-
-    alert("Collection saved successfully.");
-
-
-
-
-    setSalesPaymentForm({
-      customerId: customer.id,
-      branchId: selectedSalesBranch?.id || "",
-      amount: "",
-      paymentType: "Cash",
-      whoPaid: "",
-      collectionDate: new Date().toISOString().split("T")[0],
-      notes: "",
-      paymentIntentId: createPaymentIntentId(),
-    });
-  } catch (error) {
-    alert(error.message);
-  } finally {
-    setSavingSalesPayment(false);
-  }
-};
-
-
+    if (amountCents === null || amountCents < 0 || (!amountCents && !previousStatuses.length)) {
+      alert("Choose a previous-payment status or enter a positive new collection amount."); return;
+    }
+    if (salesCollectionTotal * 100 - amountCents > 0.001) {
+      alert("New invoice payments and opening-balance collections cannot exceed the amount collected now."); return;
+    }
+    if (amountCents > 0 && !salesPaymentForm.whoPaid.trim()) { alert("Please enter who paid."); return; }
+    if (bankTransfer && salesCollectionAllocations.length) {
+      alert("Bank transfers stay pending until verified. Leave new invoice choices as Unpaid; previous-payment status corrections can still be saved."); return;
+    }
+    if (!window.confirm(`Save ${formatCurrency(amountCents / 100)} collected now and ${previousStatuses.length} previous-payment status correction(s)?`)) return;
+    salesCollectionSavingRef.current = true;
+    setSavingSalesPayment(true);
+    try {
+      const now = new Date();
+      const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().split("T")[0];
+      const date = String(salesPaymentForm.collectionDate || "").trim();
+      await saveInvoiceCollection({
+        customerAccountId: customer.id, customerBranchId: branch?.id || null,
+        amount: amountCents / 100, paymentMethod: salesPaymentForm.paymentType,
+        paymentDate: !date || date === today ? now.toISOString() : `${date}T12:00:00`,
+        paymentSource: CANONICAL_PAYMENT_SOURCES.SALES_REP,
+        paidBy: salesPaymentForm.whoPaid, notes: salesPaymentForm.notes,
+        paymentIntentId: salesPaymentForm.paymentIntentId,
+        metadata: { manually_entered_previous_credit_amount: salesManualCreditAmount },
+        allocations: salesCollectionAllocations, previousStatuses,
+      });
+      // The save succeeded. Rotate the intent even if a later refresh fails.
+      setSalesInvoiceSelections({});
+      setSalesPreviousCreditAmount("");
+      setSalesInvoiceSnapshot(null);
+      setSalesCollectionRefresh((value) => value + 1);
+      setSalesPaymentForm({ customerId: customer.id, branchId: branch?.id || "", amount: "",
+        paymentType: "Cash", whoPaid: "", collectionDate: today, notes: "", paymentIntentId: createPaymentIntentId() });
+      try {
+        const { outstandingState } = await loadSalesRepOutstanding({ customer, selectedBranchId: branch?.id || "" });
+        setSalesOutstandingSnapshot(outstandingState);
+        if (String(selectedCustomerAccount?.id || "") === String(customer.id)) await loadCustomerCreditSnapshot(selectedCustomerAccount);
+      } catch (refreshError) { console.warn("Collection saved; balance refresh failed:", refreshError); }
+      alert(amountCents ? "Collection saved once. Previous-payment choices updated status only." : "Previous-payment invoice statuses updated. No payment was created or allocated.");
+    } catch (error) { alert(error.message); }
+    finally { salesCollectionSavingRef.current = false; setSavingSalesPayment(false); }
+  };
 
 
 const submitOrder = async () => {
@@ -7724,7 +7714,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
   </div>
 )}
        {isSalesRep && canCollectCash && page === "salesCashCollection" && (
-  <div className="p-4">
+  <fieldset disabled={savingSalesPayment || existingCreditSaving} className="p-4">
     <div className="bg-white border rounded-2xl p-4 shadow-sm space-y-3">
       <h2 className="text-xl font-bold">
         Sales Rep Cash Collection
@@ -7782,6 +7772,74 @@ const portalPageIsAllowed = page === "order" && !isCustomer
 
 
 
+      {selectedSalesPaymentCustomer && (
+        <div className="border rounded-xl p-3 bg-white space-y-2">
+          <h3 className="font-bold">Invoice payments and previous-payment status</h3>
+          {salesInvoiceLoading && <p>Loading outstanding invoices...</p>}
+          {salesInvoiceError && <p className="text-red-700">{salesInvoiceError}</p>}
+          {!salesInvoiceLoading && !salesInvoiceError && !salesOpenInvoices.length && <p>No unpaid invoices found.</p>}
+          <p className="text-xs text-slate-600">Previous Paid / Previous Part Paid update invoice status only. They do not collect money or allocate an existing payment. For Previous Part Paid, enter the total already paid toward that invoice. Enter only money received now in Amount Collected.</p>
+          {salesOpenInvoices.map((invoice) => {
+            const ref = invoice._collectionReference;
+            const choice = salesInvoiceSelections[ref] || { mode: "none", amount: "" };
+            return <div key={ref} className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-center border-b py-2">
+              <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div>Due: {formatCurrency(invoice.remainingAmount)}</div></div>
+              <select className="border rounded-lg p-2" value={choice.mode} onChange={(event) => setSalesInvoiceSelections((current) => ({...current, [ref]: { mode: event.target.value, amount: "" }}))}>
+                <option value="none">Unpaid</option><option value="paid">Paid</option><option value="part">Part Paid</option><option value="previous_paid">Previous Paid — status only</option><option value="previous_part">Previous Part Paid — status only</option>
+              </select>
+              {["part", "previous_part"].includes(choice.mode) ? <input className="border rounded-lg p-2" type="number" min="0.01" step="0.01" max={choice.mode === "previous_part" ? invoice.invoiceAmount : invoice.remainingAmount} placeholder={choice.mode === "previous_part" ? "Total previously paid £" : "New part payment £"} aria-label={choice.mode === "previous_part" ? "Total previously paid toward this invoice" : "New part payment"} value={choice.amount} onChange={(event) => setSalesInvoiceSelections((current) => ({...current, [ref]: {...current[ref], amount: event.target.value}}))} /> :
+                <span className="text-sm">{choice.mode === "previous_paid" ? formatCurrency(invoice.invoiceAmount) : choice.mode === "paid" ? formatCurrency(invoice.remainingAmount) : formatCurrency(0)}</span>}
+            </div>;
+          })}
+          <div className="mt-3 rounded-lg border p-3 bg-white space-y-2">
+            <label className="block font-semibold text-sm">New collection against opening balance (£)</label>
+            <input type="number" min="0" step="0.01" className="w-full border rounded-lg p-2"
+              placeholder="New money received now" value={salesPreviousCreditAmount}
+              onChange={(event) => setSalesPreviousCreditAmount(event.target.value)} />
+            <p className="text-xs text-slate-600">Enter additional money received now against an opening balance. Do not enter previously recorded payments here; this amount creates a new payment.</p>
+          </div>
+          <div className="text-sm">Previous-payment status corrections: {formatCurrency(salesCollectionPlan.previousTotal)} — excluded from money collected now.</div>
+          <div className="font-bold">Invoices: {formatCurrency(salesCollectionAllocatedTotal)} + Opening-balance collection: {formatCurrency(salesManualCreditValid ? salesManualCreditAmount : 0)} / Collected: {formatCurrency(Number(salesPaymentForm.amount || 0))} / Unallocated: {formatCurrency(Math.max(0, Number(salesPaymentForm.amount || 0) - salesCollectionAllocatedTotal))}</div>
+          {(salesCollectionHasInvalidChoice || (Number(salesPaymentForm.amount || 0) > 0 && salesCollectionTotal - Number(salesPaymentForm.amount || 0) > 0.009)) && <p className="text-red-700 text-sm">{salesCollectionPlan.errors[0] || "New invoice allocations cannot exceed money collected now; any excess remains unallocated."}</p>}
+        </div>
+      )}
+
+      {selectedSalesPaymentCustomer && canReconcileExistingCredit && (
+        <div className="border-2 border-blue-200 rounded-xl p-4 space-y-3 bg-blue-50">
+          <h3 className="font-bold">Unallocated existing payments — allocate only (owner)</h3>
+          <p className="text-sm">For money already recorded in Customer Transactions or Credit. This does NOT accept or create another payment. A paid invoice is updated only through a validated allocation of existing money.</p>
+          <button type="button" className="bg-slate-800 text-white px-3 py-2 rounded-lg" disabled={existingCreditLoading || existingCreditSaving} onClick={loadExistingCreditForCustomer}>
+            {existingCreditLoading ? "Checking existing payments..." : "Check existing unallocated payments"}
+          </button>
+          {existingCreditError && <p className="text-red-700 text-sm">{existingCreditError}</p>}
+          {!existingCreditLoading && existingCreditRows.map((payment) => {
+            const paymentId = payment.payment_id || payment.id;
+            const remaining = Number(payment.unallocated_amount ?? payment.remaining_unallocated_amount ?? payment.remaining_amount ?? 0);
+            return <div key={String(paymentId)} className="bg-white border rounded-lg p-3 flex items-center justify-between gap-3">
+              <div className="text-sm">Existing payment {String(payment.payment_reference || payment.reference || paymentId)} — Unallocated: <strong>{formatCurrency(remaining)}</strong></div>
+              <button type="button" className="bg-blue-700 text-white px-3 py-2 rounded-lg" disabled={existingCreditSaving || remaining <= 0} onClick={() => selectExistingCredit(payment)}>Allocate</button>
+            </div>;
+          })}
+          {existingCreditSelected && (
+            <div className="bg-white border rounded-lg p-3 space-y-2">
+              <div className="font-semibold">Choose an eligible unpaid invoice</div>
+              <select className="w-full border rounded-lg p-2" value={existingCreditTargetId} onChange={(e) => setExistingCreditTargetId(e.target.value)}>
+                <option value="">Select invoice</option>
+                {existingCreditTargets.map((invoice) => <option key={String(invoice.invoice_id || invoice.id)} value={String(invoice.invoice_id || invoice.id)}>
+                  {String(invoice.invoice_number || invoice.reference_no || invoice.invoice_id || invoice.id)} — Due {formatCurrency(Number(invoice.remaining_amount ?? invoice.remaining_balance ?? invoice.remainingAmount ?? 0))}
+                </option>)}
+              </select>
+              {!existingCreditTargets.length && <p className="text-sm">No eligible invoice match. Leave the existing payment unallocated; do not post it again.</p>}
+              <input className="w-full border rounded-lg p-2" type="number" min="0.01" step="0.01" placeholder="Amount to allocate from existing payment" value={existingCreditAmount} onChange={(e) => setExistingCreditAmount(e.target.value)} />
+              <input className="w-full border rounded-lg p-2" placeholder="Reason for allocation (required)" value={existingCreditReason} onChange={(e) => setExistingCreditReason(e.target.value)} />
+              <button type="button" className="bg-green-700 text-white px-3 py-2 rounded-lg disabled:opacity-50" disabled={existingCreditSaving || !existingCreditTargetId || !existingCreditAmount || !existingCreditReason.trim()} onClick={saveExistingCreditAllocation}>
+                {existingCreditSaving ? "Allocating existing credit..." : "Confirm allocation — no new payment"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <input
         type="number"
         placeholder="Amount Collected"
@@ -7812,6 +7870,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
         <option value="Bank Transfer">
           Bank Transfer
         </option>
+        <option value="Card">Card</option>
         <option value="Cheque">Cheque</option>
       </select>
 
@@ -7873,7 +7932,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           : "Save Collection"}
       </button>
     </div>
-  </div>
+  </fieldset>
 )}      
 
 

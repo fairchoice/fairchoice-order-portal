@@ -1,3 +1,5 @@
+import { previousStatusPaidAmount } from "./invoiceCollectionActions.js";
+
 export const money = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
@@ -228,7 +230,8 @@ export function applyAllocationsToInvoices(invoices = [], allocations = []) {
     .map((invoice) => {
       const invoiceAmount = getInvoiceAmount(invoice);
       const reference = getInvoiceReference(invoice);
-      const paidAmount = money(allocatedByInvoice[reference] || 0);
+      const allocatedAmount = money(allocatedByInvoice[reference] || 0);
+      const paidAmount = money(Math.max(allocatedAmount, previousStatusPaidAmount(invoice, allocatedAmount)));
       const remainingAmount = money(Math.max(0, invoiceAmount - paidAmount));
       const paymentStatus =
         remainingAmount <= 0 ? "PAID" : paidAmount > 0 ? "PARTIALLY PAID" : "UNPAID";

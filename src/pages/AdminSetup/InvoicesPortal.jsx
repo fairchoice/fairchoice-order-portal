@@ -1,3 +1,4 @@
+import { previousStatusPaidAmount } from "../../utils/invoiceCollectionActions.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { formatCurrency } from "../../utils/currency";
@@ -264,7 +265,7 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
   };
   const canonicalResults = await Promise.all(chunkValues(fullReferences).map((refs) =>
     supabase.from("customer_invoices")
-      .select("id, customer_account_id, customer_branch_id, invoice_number, invoice_total, financial_status")
+      .select("*")
       .in("invoice_number", refs)
   ));
   const canonicalByReference = new Map();
@@ -441,7 +442,8 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
     }, 0);
     // An exact, posted canonical allocation is authoritative. Legacy display
     // statuses cannot override it or assign unmatched credit to an invoice.
-    const paid = Math.min(Math.max(0, canonicalTotal), validAllocated);
+    const acknowledgedPaid = previousStatusPaidAmount(canonical, validAllocated);
+    const paid = Math.min(Math.max(0, canonicalTotal), Math.max(validAllocated, acknowledgedPaid));
     const status = paid >= canonicalTotal - 0.01 && canonicalTotal > 0
       ? "PAID" : paid > 0 ? "PART PAID" : "UNPAID";
     return {
@@ -458,6 +460,7 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
       payment_status: status,
       status,
       _canonicalInvoiceReconciled: true,
+      _collectionPreviousStatusPaidAmount: acknowledgedPaid,
     };
   });
 };
@@ -2061,7 +2064,7 @@ const runInvoiceAction = async (row, action) => {
         if (!Number.isFinite(total) || total <= 0 ||
             !Number.isFinite(paidAmount) || paidAmount < 0) return;
 
-        const paid = Math.min(total, paidAmount);
+        const paid = Math.min(total, Math.max(paidAmount, Number(row._collectionPreviousStatusPaidAmount || 0)));
         const remaining = Math.max(0, Math.round((total - paid) * 100) / 100);
         const status = remaining <= 0.01
           ? "PAID"

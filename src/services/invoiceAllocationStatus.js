@@ -1,3 +1,5 @@
+import { previousStatusPaidAmount } from "../utils/invoiceCollectionActions.js";
+
 const INACTIVE_PAYMENT_STATUSES = new Set([
   "PENDING",
   "PENDING_VERIFICATION",
@@ -291,7 +293,9 @@ if (
   // A canonical payment may also have a customer_ledger mirror. Taking the
   // larger resolved effect prevents counting the same payment twice while
   // retaining support for legacy ledger-only payments.
+  const previousAcknowledgement = previousStatusPaidAmount(row._ledgerRow || row, allocatedAmount);
   const resolvedPaidAmount = Math.max(
+    previousAcknowledgement,
     allocatedAmount,
     canonicalReferencePaidAmount,
     legacyLedgerPaidAmount,
@@ -316,6 +320,7 @@ if (
     payment_status: invoiceStatus,
     status: invoiceStatus,
     _allocationPaidAmount: resolvedPaidAmount,
+    _collectionPreviousStatusPaidAmount: previousAcknowledgement,
     _canonicalAllocationPaidAmount: allocatedAmount,
     _canonicalReferencePaidAmount: canonicalReferencePaidAmount,
     _legacyLedgerPaidAmount: legacyLedgerPaidAmount,
