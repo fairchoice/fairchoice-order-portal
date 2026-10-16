@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { getFcSessionState, profileWithFcLoginSession, readStoredFcProfile } from "../../services/fcSession.js";
 
 import { supabase } from "../../supabaseClient";
 import { getProductPriceForMode, getProductPricePreview, getVatRate, isVatPriceMode, roundMoney } from "../../utils/pricing";
@@ -17,22 +18,21 @@ export default function PriceManagement({
   products = [],
   fetchProducts,
   pricingSettings = {},
+  user = null,
+  onProfileRefresh,
 }) {
   const safeProducts = Array.isArray(products) ? products : [];
 
   const [activeTab, setActiveTab] = useState("bulkPrice");
 
-  const currentUser = useMemo(() => {
-    try {
-      return JSON.parse(
-        localStorage.getItem("loggedInUser") ||
-          localStorage.getItem("fairchoice_user") ||
-          "null"
-      );
-    } catch {
-      return null;
-    }
-  }, []);
+  // Read the live FC profile rather than freezing a token when this page mounts.
+  const userRef = useRef(user);
+  userRef.current = user;
+  const currentUser = readStoredFcProfile() || user;
+  const { username: supplierUsername, token: supplierSessionToken } = getFcSessionState(currentUser);
+  const [supplierReload, setSupplierReload] = useState(0);
+  const [supplierListLoading, setSupplierListLoading] = useState(false);
+  const [supplierListError, setSupplierListError] = useState("");
 
   const [suppliers, setSuppliers] = useState([]);
   const [supplierId, setSupplierId] = useState("");
@@ -126,19 +126,53 @@ export default function PriceManagement({
 
   useEffect(() => {
     let active = true;
-    if (!currentUser) return undefined;
-
-    loadSupplierSetup(currentUser, { includeInactive: false })
-      .then((rows) => {
+    let retryTimer;
+    let attempt = 0;
+    const load = async () => {
+      setSupplierListLoading(true);
+      setSupplierListError("");
+      try {
+        const profile = readStoredFcProfile() || userRef.current;
+        const session = getFcSessionState(profile);
+        if (!session.username || !session.token) {
+          throw new Error("Your session is unavailable. Refresh suppliers after signing in.");
+        }
+        const rows = await loadSupplierSetup(profile, { includeInactive: false });
+        if (!Array.isArray(rows)) throw new Error("The supplier list could not be read. Please refresh suppliers.");
+        if (active) setSuppliers(rows.filter((supplier) => supplier.active !== false));
+      } catch (error) {
         if (!active) return;
-        setSuppliers((rows || []).filter((supplier) => supplier.active !== false));
-      })
-      .catch((error) => console.error("Supplier list loading error:", error));
-
-    return () => {
-      active = false;
+        setSupplierListError(error.message || "Suppliers could not be loaded. Please refresh suppliers.");
+        // Retry a temporary read failure once; permission/session failures remain visible.
+        const transient = Number(error.status) >= 500 ||
+          ["PGRST000", "PGRST001", "PGRST002", "PGRST003", "57014", "53300"].includes(error.code) ||
+          /fetch|network|timeout|timed out/i.test(error.message || "");
+        if (transient && attempt++ === 0) retryTimer = window.setTimeout(load, 1200);
+      } finally {
+        if (active) setSupplierListLoading(false);
+      }
     };
-  }, [currentUser]);
+    void load();
+    return () => { active = false; window.clearTimeout(retryTimer); };
+  }, [supplierUsername, supplierSessionToken, supplierReload]);
+
+  useEffect(() => {
+    const refresh = () => setSupplierReload(value => value + 1);
+    const visible = () => { if (document.visibilityState === "visible") refresh(); };
+    const storageChanged = (event) => {
+      if (!event.key || ["loggedInUser", "fairchoice_user"].includes(event.key)) refresh();
+    };
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    window.addEventListener("storage", storageChanged);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("storage", storageChanged);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, []);
 
   const refreshSelectedSupplierPricing = async (selectedSupplierId = supplierId) => {
     if (!selectedSupplierId || !currentUser) {
@@ -148,7 +182,7 @@ export default function PriceManagement({
 
     setSupplierPricingLoading(true);
     try {
-      const data = await loadSupplierProductPricing(currentUser, selectedSupplierId, false);
+      const data = await loadSupplierProductPricing(readStoredFcProfile() || user, selectedSupplierId, false);
       const rows = Array.isArray(data?.rows) ? data.rows : [];
       setSupplierPricingRows(rows);
       return rows;
@@ -161,7 +195,7 @@ export default function PriceManagement({
     void refreshSelectedSupplierPricing(supplierId).catch((error) =>
       console.error("Supplier pricing loading error:", error)
     );
-  }, [supplierId, currentUser]);
+  }, [supplierId, supplierUsername, supplierSessionToken]);
 
   function supplierCostRow(productId) {
     return supplierPricingRows
@@ -215,6 +249,16 @@ export default function PriceManagement({
       return false;
     }
 
+    try {
+      const refreshedProfile = profileWithFcLoginSession(readStoredFcProfile() || user, data);
+      localStorage.setItem("fairchoice_user", JSON.stringify(refreshedProfile));
+      localStorage.setItem("loggedInUser", JSON.stringify(refreshedProfile));
+      onProfileRefresh?.(refreshedProfile);
+      setSupplierReload(value => value + 1);
+    } catch (sessionError) {
+      alert(sessionError.message || "The verified session could not be saved. Please sign in again.");
+      return false;
+    }
     return true;
   }
 
@@ -435,7 +479,7 @@ export default function PriceManagement({
             effectiveFrom: new Date().toISOString().slice(0, 10),
             note: "Price Management",
           },
-          currentUser
+          readStoredFcProfile() || user
         );
       }
       await refreshSelectedSupplierPricing();
@@ -713,7 +757,7 @@ export default function PriceManagement({
           effectiveFrom: new Date().toISOString().slice(0, 10),
           note: "Price Management",
         },
-        currentUser
+        readStoredFcProfile() || user
       );
       await refreshSelectedSupplierPricing();
     }
@@ -809,6 +853,21 @@ export default function PriceManagement({
           </button>
         ))}
       </div>
+
+      {["bulkPrice", "individualPrice"].includes(activeTab) && (
+        <div className="mt-4 flex flex-wrap items-center gap-3" aria-live="polite">
+          <button type="button" disabled={supplierListLoading}
+            onClick={() => setSupplierReload(value => value + 1)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold disabled:opacity-50">
+            {supplierListLoading ? "Loading suppliers..." : "Refresh suppliers"}
+          </button>
+          {supplierListError ? (
+            <span role="alert" className="text-sm font-semibold text-red-700">{supplierListError}</span>
+          ) : !supplierListLoading && suppliers.length === 0 ? (
+            <span className="text-sm text-slate-600">No active suppliers are available.</span>
+          ) : null}
+        </div>
+      )}
 
       {activeTab === "bulkPrice" && (
         <>
