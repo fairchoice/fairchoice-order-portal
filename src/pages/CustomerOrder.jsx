@@ -7791,7 +7791,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             const ref = invoice._collectionReference;
             const choice = salesInvoiceSelections[ref] || { mode: "none", amount: "" };
             return <div key={ref} className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-center border-b py-2">
-              <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div>Due: {formatCurrency(invoice.remainingAmount)}</div></div>
+              <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div className="font-semibold">Invoice total: {formatCurrency(invoice.invoiceAmount)}</div><div>Amount due: {formatCurrency(invoice.remainingAmount)}</div></div>
               <select className="border rounded-lg p-2" value={choice.mode} onChange={(event) => setSalesInvoiceSelections((current) => ({...current, [ref]: { mode: event.target.value, amount: "" }}))}>
                 <option value="none">Unpaid</option><option value="paid">Paid</option><option value="part">Part Paid</option><option value="previous_paid">Previous Paid — status only</option><option value="previous_part">Previous Part Paid — status only</option>
               </select>
