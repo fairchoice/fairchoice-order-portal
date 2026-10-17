@@ -85,6 +85,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
   {
     title: "Reports",
     items: [
+      page("page.reports.agency_performance", "Agency Performance", "agencyPerformance", STAFF_ROLES, { readOnly: true }),
       page("page.reports.profit", "Profit Analysis", "profitPortal"),
       page("page.reports.total_credit_outstanding", "Total Credit Outstanding", "totalCreditOutstanding"),
       page("page.reports.product_line", "Product Line Analysis", "productLineAnalysis"),
@@ -218,7 +219,7 @@ export function canAccessPage(user, pageOrPermissionKey) {
   // permission map has not been explicitly populated yet.
   const normalizedRole = normalizeRole(user.role || user.access_level);
   if (normalizedRole === "Brand Partner") {
-    return ["page.order.sales_rep", "page.reports.brand_performance"].includes(permissionKey);
+    return ["page.order.sales_rep", "page.reports.brand_performance", "page.reports.agency_performance"].includes(permissionKey);
   }
   if (entry?.defaultRoles?.includes(normalizedRole)) return true;
 
@@ -229,7 +230,7 @@ export function getRoleDefaultPermissionKeys(role) {
   const normalized = normalizeRole(role);
   if (normalized === "Super Admin") return [...ALL_REGISTERED_PERMISSION_KEYS];
   if (normalized === "Brand Partner") {
-    return ["page.order.sales_rep", "page.reports.brand_performance"];
+    return ["page.order.sales_rep", "page.reports.brand_performance", "page.reports.agency_performance"];
   }
   return PAGE_REGISTRY.filter((item) => item.defaultRoles.includes(normalized)).map((item) => item.key);
 }
