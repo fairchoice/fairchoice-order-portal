@@ -1,3 +1,4 @@
+import {loadInvoiceFinancialSnapshot} from "./invoiceFinancialSnapshot.js";
 import { supabase } from "./supabase";
 import { calculateDocumentTotals } from "../utils/documentTotals";
 import { hydrateOrdersWithFullOrderItems } from "./centralInvoiceEngine";
@@ -470,6 +471,18 @@ export async function loadCentralPaymentSnapshot({
     loadAllocations(customerAccountId),
     loadPaymentAuditHistory(customerAccountId),
   ]);
+  let walletApplications = [];
+  try {
+    const financial = customerAccountId ? await loadInvoiceFinancialSnapshot({ customerAccountId }) : null;
+    if (financial) {
+      const byReference = new Map(financial.invoices.map(row => [row.invoice_number, row]));
+      invoices = invoices.map(row => {
+        const state = byReference.get(row.invoice_number);
+        return state ? { ...row, ...state, source: "customer_invoices" } : row;
+      });
+      walletApplications = financial.wallet_applications;
+    }
+  } catch (error) { console.warn("Account invoice financial snapshot unavailable", error.message); }
   let allPayments = loadedPayments;
 
   // Branch accounting is ON only when the customer has active branches.
@@ -571,6 +584,7 @@ export async function loadCentralPaymentSnapshot({
     payments: selectedBranchId ? selectedAllPayments : allPayments,
     allocations: selectedBranchId ? selectedAllocations : allocations,
     paymentAudits,
+    walletApplications: selectedBranchId ? walletApplications.filter(row => String(row.customer_branch_id || "") === String(selectedBranchId)) : walletApplications,
     sortDirection: "oldest",
   });
   const activeBranchKeys = new Set(branches.map((branch) => getBranchKey(branch.id)));
@@ -591,6 +605,7 @@ export async function loadCentralPaymentSnapshot({
       payments: branchAllPayments,
       allocations: branchAllocations,
       paymentAudits,
+      walletApplications: walletApplications.filter(row => String(row.customer_branch_id || "") === branchId),
     });
 
     return {
@@ -617,6 +632,7 @@ export async function loadCentralPaymentSnapshot({
     openingBalances: unassignedOpeningRows,
     invoices: unassignedInvoices,
     payments: unassignedAllPayments,
+    walletApplications: walletApplications.filter(row => !activeBranchKeys.has(getBranchKey(row.customer_branch_id))),
     allocations: branches.length
       ? allocations.filter((row) => row._branchMatched !== true)
       : allocations,
@@ -645,6 +661,7 @@ export async function loadCentralPaymentSnapshot({
     payments: allPayments,
     allocations,
     paymentAudits,
+    walletApplications,
     sortDirection: "oldest",
   });
   const customerSummary = fullAccountHistory.summary;
@@ -661,6 +678,7 @@ export async function loadCentralPaymentSnapshot({
     payments,
     allPayments,
     allocations,
+    walletApplications,
     paymentAudits,
     allocatedInvoices,
     transactionHistory: accountHistory.transactions,

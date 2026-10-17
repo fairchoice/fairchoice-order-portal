@@ -230,8 +230,9 @@ export function applyAllocationsToInvoices(invoices = [], allocations = []) {
     .map((invoice) => {
       const invoiceAmount = getInvoiceAmount(invoice);
       const reference = getInvoiceReference(invoice);
-      const allocatedAmount = money(allocatedByInvoice[reference] || 0);
-      const paidAmount = money(Math.max(allocatedAmount, previousStatusPaidAmount(invoice, allocatedAmount)));
+      const allocatedAmount = money(Math.max(allocatedByInvoice[reference] || 0, Number(invoice.cash_allocated_amount || 0)));
+      const walletAmount = money(Math.max(0, Number(invoice.wallet_applied_amount || 0)));
+      const paidAmount = money(Math.min(invoiceAmount, Math.max(allocatedAmount + walletAmount, previousStatusPaidAmount(invoice, allocatedAmount))));
       const remainingAmount = money(Math.max(0, invoiceAmount - paidAmount));
       const paymentStatus =
         remainingAmount <= 0 ? "PAID" : paidAmount > 0 ? "PARTIALLY PAID" : "UNPAID";

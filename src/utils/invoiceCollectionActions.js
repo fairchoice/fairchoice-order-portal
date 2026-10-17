@@ -69,6 +69,7 @@ export function planInvoiceCollection(invoices = [], selections = {}) {
 export function previousStatusPaidAmount(invoice = {}, allocatedAmount = 0) {
   const acknowledged = Number(invoice.collection_previous_paid_amount || 0);
   const baseline = Number(invoice.collection_previous_allocated_amount || 0);
+  const walletLater = Math.max(0, Number(invoice.wallet_applied_amount || 0) - Number(invoice.collection_previous_wallet_amount || 0));
   if (!(acknowledged > 0)) return 0;
-  return Math.round((acknowledged + Math.max(0, allocatedAmount - baseline)) * 100) / 100;
+  return Math.round((acknowledged + Math.max(0, allocatedAmount - baseline) + walletLater) * 100) / 100;
 }

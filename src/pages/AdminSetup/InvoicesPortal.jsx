@@ -1,3 +1,5 @@
+import {loadInvoiceFinancialSnapshot} from "../../services/invoiceFinancialSnapshot.js";
+import { isActiveReturnCredit } from "../../services/returnHeaderPersistence.js";
 import { previousStatusPaidAmount } from "../../utils/invoiceCollectionActions.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../services/supabase";
@@ -400,6 +402,9 @@ const resolveInvoiceRowsWithAllocationData = async (invoiceRows = []) => {
 
 
   return invoiceRows.map((row) => {
+    if (String(row.entry_type || row.transaction_type || "").toUpperCase() === "RETURN_INVOICE") {
+      return resolveInvoiceRowFromAllocations({ row, invoiceTotal: getAmount(row) });
+    }
     const rowAccountId = row.customer_account_id || row._freshOrder?.customer_account_id || row._freshOrder?.customerAccountId;
     const canonical = [...getInvoiceLedgerReferenceKeys(row)]
       .map((reference) => canonicalByReference.get(reference))
@@ -1427,8 +1432,9 @@ const openReturnPrintDialog = async (row) => {
 
     let query = supabase
       .from("customer_returns")
-      .select("id, return_number, order_number, customer_account_id, customer_name, branch_name, return_type, status, return_total, total_qty, confirmed_at, reversed_at")
+      .select("id, return_number, order_number, customer_account_id, customer_name, branch_name, return_type, status, return_total, total_qty, confirmed_at, reversed_at, financial_disposition")
       .eq("status", "Confirmed")
+      .eq("financial_disposition", "CUSTOMER_CREDIT")
       .is("reversed_at", null)
       .order("confirmed_at", { ascending: false });
 
@@ -1528,8 +1534,9 @@ const runInvoiceAction = async (row, action) => {
         createdAt: returnHeader?.confirmed_at || returnHeader?.created_at || row.created_at,
         created_at: returnHeader?.confirmed_at || returnHeader?.created_at || row.created_at,
         notes: returnHeader?.notes || row.notes || "Return credit",
-        payment_status: "CREDITED",
-        invoice_status: "CREDITED",
+        payment_status: getInvoiceDisplayStatus(row),
+        invoice_status: getInvoiceDisplayStatus(row),
+        _documentPaymentStatus: getInvoiceDisplayStatus(row),
         items: (returnItems || []).map((item) => ({
           id: item.id,
           productId: item.product_id,
@@ -1692,10 +1699,7 @@ const runInvoiceAction = async (row, action) => {
       const confirmedReturnRows = confirmedReturnsResult.error
         ? []
         : (confirmedReturnsResult.data || [])
-            .filter((row) => {
-              const status = String(row.status || "").trim().toLowerCase();
-              return status === "confirmed" || status === "credited" || Boolean(row.confirmed_at);
-            })
+            .filter(isActiveReturnCredit)
             .map((row) => {
               const amount = Number(
                 row.return_total || row.grand_total || row.amount || row.invoice_total || 0
@@ -1754,6 +1758,15 @@ const runInvoiceAction = async (row, action) => {
         const reference = String(row.reference_no || "").trim();
         if (reference && !existingReturnReferences.has(reference)) {
           ledgerRows.push(row);
+        } else if (reference) {
+          const index = ledgerRows.findIndex(existing =>
+            String(existing.entry_type || "").toUpperCase() === "RETURN_INVOICE" &&
+            String(existing.reference_no || existing.invoice_number || "").trim() === reference &&
+            String(existing.customer_account_id || "") === String(row.customer_account_id || "")
+          );
+          if (index >= 0 && !isInvoiceFinanciallyVoided(ledgerRows[index])) {
+            ledgerRows[index] = { ...ledgerRows[index], ...row };
+          }
         }
       });
 
@@ -2016,7 +2029,7 @@ const runInvoiceAction = async (row, action) => {
       }
 
       const refs = filteredInvoices
-        .filter((row) => !isInvoiceFinanciallyVoided(row))
+        .filter((row) => !isInvoiceFinanciallyVoided(row) && String(row.entry_type || row.transaction_type || "").toUpperCase() !== "RETURN_INVOICE")
         .map((row) => ({
           row,
           reference: String(
@@ -2031,11 +2044,13 @@ const runInvoiceAction = async (row, action) => {
       const uniqueRefs = [...new Set(refs.map(({ reference }) => reference))];
       const verifiedByInvoice = new Map();
       for (let index = 0; index < uniqueRefs.length; index += 50) {
-        const { data, error } = await supabase.rpc("fc_invoice_payment_statuses_v1", {
-          p_username: invoiceVerificationUsername,
-          p_session_token: invoiceVerificationSessionToken,
-          p_invoice_numbers: uniqueRefs.slice(index, index + 50),
-        });
+        let data, error;
+        try {
+          const snapshot = await loadInvoiceFinancialSnapshot({ invoiceNumbers: uniqueRefs.slice(index, index + 50) }, {
+            session: { username: invoiceVerificationUsername, token: invoiceVerificationSessionToken },
+          });
+          data = snapshot?.invoices || [];
+        } catch (failure) { error = failure; }
         if (cancelled) return;
         if (error) {
           console.warn("Secure invoice status verification failed:", error.message);
@@ -2077,6 +2092,7 @@ const runInvoiceAction = async (row, action) => {
           amount: total,
           debit: total,
           paid_amount: paid,
+          wallet_applied_amount: Number(verified.wallet_applied_amount || 0),
           amount_paid: paid,
           remaining_amount: remaining,
           outstanding_amount: remaining,

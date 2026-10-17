@@ -6343,6 +6343,8 @@ const backOfficeContent = comingSoonTitle ? (
 )}
   {page === "priceManagement" && (
   <PriceManagement
+    onProfileRefresh={onProfileRefresh}
+    user={activeUser}
     products={products || []}
     fetchProducts={fetchProducts}
     pricingSettings={pricingSettings}

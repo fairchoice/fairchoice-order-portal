@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { insertReturnHeader, returnStaffId } from "./returnHeaderPersistence.js";
 import { getFcSessionState } from "./fcSession";
 import { findMatchingReturn } from "./returnDuplicateDetection.js";
 export { findMatchingReturn } from "./returnDuplicateDetection.js";
@@ -61,23 +62,6 @@ export function calculateReturnTotals(items = []) {
   );
 }
 
-const insertReturnHeader = async (payload) => {
-  let { data, error } = await supabase.from("customer_returns").insert(payload).select().single();
-
-  if (error) {
-    const fallback = { ...payload };
-    ["customer_account_id", "customer_branch_id", "branch_id", "branch_name", "price_mode", "created_by", "created_by_name", "created_by_role"].forEach(
-      (key) => delete fallback[key]
-    );
-    const retry = await supabase.from("customer_returns").insert(fallback).select().single();
-    data = retry.data;
-    error = retry.error;
-  }
-
-  if (error) throw error;
-  return data;
-};
-
 export async function createReturnRequest({ order, returnType, items, source, currentUser, notes = "", priceMode, allowDuplicate = false } = {}) {
   if (!order) throw new Error("Order is required");
   if (!RETURN_TYPES.includes(returnType)) throw new Error("Valid return type is required");
@@ -99,7 +83,7 @@ export async function createReturnRequest({ order, returnType, items, source, cu
   const returnNumber = `RET-${Date.now()}`;
   const orderReference = getOrderReference(order);
 
-  const header = await insertReturnHeader({
+  const header = await insertReturnHeader(supabase, {
     return_number: returnNumber,
     order_id: order.dbId || order.id || null,
     order_number: orderReference,
@@ -113,10 +97,10 @@ export async function createReturnRequest({ order, returnType, items, source, cu
     status: "Pending Warehouse Confirmation",
     source: source || "RETURN_PORTAL",
     total_qty: totals.qty,
-    net_total: totals.netTotal,
-    vat_total: totals.vatTotal,
-    return_total: totals.grandTotal,
-    created_by: currentUser?.id || currentUser?.staff_id || null,
+    net_total: Number(totals.netTotal.toFixed(2)),
+    vat_total: Number(totals.vatTotal.toFixed(2)),
+    return_total: Number(totals.grandTotal.toFixed(2)),
+    created_by: returnStaffId(currentUser),
     created_by_name: currentUser?.name || currentUser?.username || null,
     created_by_role: currentUser?.role || null,
     notes,
@@ -197,4 +181,17 @@ export async function loadPotentialDuplicateReturns(order) {
     .in("status", ["Pending Warehouse Confirmation", "Confirmed"]);
   if (error) throw error;
   return data || [];
+}
+
+export async function linkReturnCustomer({ returnRequest, currentUser, customerAccountId, customerBranchId, reason } = {}) {
+  if (!returnRequest?.id || !customerAccountId) throw new Error("Select the return and its customer account.");
+  const session = getFcSessionState(currentUser);
+  if (!session.valid) throw new Error("FC login session is missing or expired. Sign in again.");
+  const { data, error } = await supabase.rpc("fc_link_customer_return_v1", {
+    p_username: session.username, p_session_token: session.token,
+    p_return_id: returnRequest.id, p_customer_account_id: customerAccountId,
+    p_customer_branch_id: customerBranchId || null, p_reason: String(reason || "").trim(),
+  });
+  if (error) throw error;
+  return data;
 }

@@ -54,9 +54,9 @@ test("Outstanding summary consumes allocation-resolved rows", () => {
 });
 
 test("secure status verification covers unfiltered and large invoice lists in safe batches", () => {
-  assert.match(source, /supabase\.rpc\("fc_invoice_payment_statuses_v1"/);
-  assert.match(source, /p_username:\s*invoiceVerificationUsername/);
-  assert.match(source, /p_session_token:\s*invoiceVerificationSessionToken/);
+  assert.match(source, /await loadInvoiceFinancialSnapshot\(\{ invoiceNumbers:/);
+  assert.match(source, /username:\s*invoiceVerificationUsername/);
+  assert.match(source, /token:\s*invoiceVerificationSessionToken/);
   assert.match(source, /uniqueRefs\.slice\(index, index \+ 50\)/);
   assert.doesNotMatch(source, /term\.length < 2/);
   assert.doesNotMatch(source, /filteredInvoices\.length > 60/);
