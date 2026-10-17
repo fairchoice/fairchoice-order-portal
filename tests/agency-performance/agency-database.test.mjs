@@ -5,6 +5,9 @@ import assert from 'node:assert/strict';
 import test, { after, beforeEach } from 'node:test';
 const db=new PGlite();after(()=>db.close());
 await db.exec(`create role anon;create role authenticated;
+create table fc_permissions(permission_key text primary key,permission_name text,category text,description text,active boolean,updated_at timestamptz default now());
+create table fc_staff_permissions(staff_id uuid,permission_key text,allowed boolean);
+create table mock_staff(username text primary key,id uuid unique);
 create table customer_accounts(id uuid primary key,account_name text,country text,postcode text,town_city text,address text,address_line_1 text,address_line_2 text);
 create table customer_branches(id uuid primary key,customer_account_id uuid,country text,postcode text,delivery_address text);
 create table customer_invoices(id uuid primary key,customer_account_id uuid,customer_branch_id uuid,invoice_number text,invoice_date timestamptz,invoice_total numeric,status text default 'ISSUED',financial_status text default 'ACTIVE',voided_at timestamptz,order_id uuid);
@@ -17,9 +20,18 @@ create table customer_branch_opening_balances(customer_account_id uuid,customer_
 create table stock_locations(id uuid primary key,location_name text,country text,active boolean);
 create table product_location_stock(location_id uuid,product_id uuid,qty integer,low_stock_alert integer);
 create table business_payouts(amount numeric,status text,voided_at timestamptz,payout_date date);
-create function fc_require_session_permission_v2(u text,t text,p text) returns table(staff_id uuid,staff_role text) language plpgsql as $$begin
+create function fc_require_session_permission_v2(u text,t text,p text) returns table(staff_id uuid,staff_role text,effective_permissions jsonb) language plpgsql as $$declare sid uuid;perms jsonb;begin
  if t<>'valid' or u='customer' or p<>'order.checkout.payment' then raise exception 'Denied' using errcode='42501'; end if;
- return query select '00000000-0000-0000-0000-000000000001'::uuid,u;end;$$;`);
+ select m.id into sid from mock_staff m where m.username=u;
+ if found then
+  select coalesce(jsonb_object_agg(sp.permission_key,sp.allowed),'{}'::jsonb) into perms from fc_staff_permissions sp join fc_permissions fp on fp.permission_key=sp.permission_key and fp.active where sp.staff_id=sid;
+ elsif u in ('owner','Super Admin') then sid:='00000000-0000-0000-0000-000000000001';perms:='{"all_access":true}'::jsonb;
+ else
+  sid:='00000000-0000-0000-0000-000000000002';
+  -- Existing report fixtures are explicitly assigned every scoped group.
+  perms:='{"agency.middleton_england":true,"agency.south_england":true,"agency.west_england":true,"agency.east_england":true,"agency.wales":true,"agency.shared_totals":true}'::jsonb;
+ end if;
+ return query select sid,u,perms;end;$$;`);
 const migrations=new URL('../../supabase/migrations/',import.meta.url);
 const file=(await readdir(migrations)).find(n=>n.endsWith('_agency_performance_report.sql'));
 const migration=await readFile(new URL(file,migrations),'utf8');await db.exec(migration);await db.exec(migration);
@@ -28,16 +40,18 @@ const groupsSql=await readFile(new URL((await readdir(migrations)).find(n=>n.end
 await db.exec("insert into customer_accounts(id,country,town_city) values('00000000-0000-0000-0000-000000000011','England','Southampton'),('00000000-0000-0000-0000-000000000012','England','Milton Keynes')");
 await db.exec(groupsSql);
 const pagesSql=await readFile(new URL((await readdir(migrations)).find(n=>n.endsWith('_agency_customer_sales_pages.sql')),migrations),'utf8');await db.exec(pagesSql);await db.exec(pagesSql);
+const accessSql=await readFile(new URL((await readdir(migrations)).find(n=>n.endsWith('_agency_access_control.sql')),migrations),'utf8');await db.exec(accessSql);await db.exec(accessSql);
 const backfilled=(await db.query('select performance_group from customer_accounts order by id')).rows.map(r=>r.performance_group);
 const scalar=async(q,p=[])=>Object.values((await db.query(q,p)).rows[0])[0];
-const report=(prefix=null,city=null,from='2026-10-01',to='2026-10-31',user='Driver',token='valid')=>scalar('select fc_agency_performance_v1($1,$2,$3,$4,$5,$6)',[user,token,from,to,prefix,city]);
+const report=(prefix=null,city=null,from='2026-10-01',to='2026-10-31',user='owner',token='valid')=>scalar('select fc_agency_performance_v1($1,$2,$3,$4,$5,$6)',[user,token,from,to,prefix,city]);
 const number=n=>Number(n||0);
 const account=async(country='England',postcode='MK9 1AB',city='Milton Keynes')=>{const id=randomUUID();await db.query('insert into customer_accounts(id,country,postcode,town_city,address) values($1,$2,$3,$4,$5)',[id,country,postcode,city,city]);return id;};
 const invoice=async(a,amount=100,branch=null,date='2026-10-17T12:00Z',status='ISSUED')=>{const id=randomUUID();await db.query('insert into customer_invoices(id,customer_account_id,customer_branch_id,invoice_number,invoice_date,invoice_total,status) values($1,$2,$3,$4,$5,$6,$7)',[id,a,branch,id,date,amount,status]);return id;};
 const payment=async(a,amount=30,branch=null,status='POSTED',method='Cash',type='PAYMENT',date='2026-10-17T12:00Z',ref=randomUUID())=>{const id=randomUUID();await db.query('insert into customer_payments(id,customer_account_id,customer_branch_id,amount,status,payment_method,transaction_type,payment_date,payment_reference) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,a,branch,amount,status,method,type,date,ref]);return id;};
-beforeEach(()=>db.exec('truncate customer_accounts,customer_branches,customer_invoices,orders,customer_payments,customer_ledger,central_payment_archive,customer_wallet_transactions,customer_branch_opening_balances,stock_locations,product_location_stock,business_payouts;'));
-test('all active staff roles get only aggregates; customer and invalid sessions are denied',async()=>{
- for(const role of ['Admin','Accounts','Accountant','Sales Rep','Driver','Warehouse','Brand Partner','Super Admin']) {const r=await report(null,null,null,null,role);assert.equal(number(r.sales),0);assert.equal('invoices' in r,false);}
+beforeEach(()=>db.exec('truncate mock_staff,fc_staff_permissions,customer_accounts,customer_branches,customer_invoices,orders,customer_payments,customer_ledger,central_payment_archive,customer_wallet_transactions,customer_branch_opening_balances,stock_locations,product_location_stock,business_payouts;'));
+test('system administrators get legacy aggregates; scoped staff, customers and invalid sessions are denied',async()=>{
+ for(const role of ['owner','Super Admin']) {const r=await report(null,null,null,null,role);assert.equal(number(r.sales),0);assert.equal('invoices' in r,false);}
+ await assert.rejects(report(null,null,null,null,'Driver'),/Agency access denied/);
  await assert.rejects(report(null,null,null,null,'customer'),/Denied/);await assert.rejects(report(null,null,null,null,'Driver','expired'),/Denied/);
 });
 test('England totals and postcode filters exclude Wales and use MK/LU fallback for UK country',async()=>{
@@ -127,4 +141,33 @@ test('empty customer pages are valid; invalid pages, groups, customers and expir
  await assert.rejects(customerPage(0),/Page must/);await assert.rejects(customerPage(null),/Page must/);await assert.rejects(customerPage(1,'Unknown'),/Invalid Performance Group/);
  for(const [user,token] of [['customer','valid'],['Driver','expired']]) await assert.rejects(customerPage(1,'Middleton England',null,null,null,null,user,token),/Denied/);
  const a=await account();await invoice(a);const row=(await customerPage()).rows[0];assert.deepEqual(Object.keys(row).sort(),['customer_id','customer_name','invoice_count','sales']);
+});
+
+const accessFor=(user='owner',token='valid')=>scalar('select fc_agency_access_snapshot_v1($1,$2)',[user,token]);
+const scopedSummary=(user,group)=>scalar('select fc_agency_performance_v2($1,$2,null,null,null,null,$3)',[user,'valid',group]);
+const staffMember=async(username,keys=[])=>{const id=randomUUID();await db.query('insert into mock_staff values($1,$2)',[username,id]);for(const key of keys) await db.query('insert into fc_staff_permissions values($1,$2,true)',[id,key]);return id;};
+test('several individuals share Middleton access without gaining other groups or changing each other',async()=>{
+ const a=await staffMember('scope-a',['agency.middleton_england']),b=await staffMember('scope-b',['agency.middleton_england']);
+ for(const user of ['scope-a','scope-b']) {assert.deepEqual((await accessFor(user)).groups,['Middleton England']);assert.equal(number((await scopedSummary(user,'Middleton England')).sales),0);await assert.rejects(scopedSummary(user,'South England'),/Agency access denied/);await assert.rejects(customerPage(1,'Wales',null,null,null,null,user),/Agency access denied/);}
+ await db.query('delete from fc_staff_permissions where staff_id=$1',[a]);assert.deepEqual((await accessFor('scope-a')).groups,[]);await assert.rejects(scopedSummary('scope-a','Middleton England'),/Agency access denied/);assert.deepEqual((await accessFor('scope-b')).groups,['Middleton England']);assert.notEqual(a,b);
+});
+test('unassigned users see no agencies; direct summary, customer-page and legacy requests cannot bypass scope',async()=>{
+ await staffMember('no-agency');assert.deepEqual((await accessFor('no-agency')).groups,[]);
+ await assert.rejects(scopedSummary('no-agency','Middleton England'),/Agency access denied/);
+ await assert.rejects(customerPage(1,'Middleton England',null,null,null,null,'no-agency'),/Agency access denied/);
+ await assert.rejects(report(null,null,null,null,'no-agency'),/Agency access denied/);
+});
+test('only selected group data and customer names are returned; shared totals are redacted unless separately granted',async()=>{
+ const sid=await staffMember('limited',['agency.south_england']);await invoice(await account('England','SO1 1AB','Southampton'),50);await invoice(await account('England','MK1 1AB','Milton Keynes'),900);
+ const r=await scopedSummary('limited','South England');assert.equal(number(r.sales),50);assert.equal(r.shared_totals_visible,false);assert.equal(r.stock_units,null);assert.equal(r.shared_expenses,null);assert.deepEqual(r.stock_locations,[]);assert.equal('unlocated_accounts' in r,false);
+ const names=await customerPage(1,'South England',null,null,null,null,'limited');assert.equal(number(names.total_rows),1);assert.equal(number(names.total_sales),50);
+ await db.query("insert into fc_staff_permissions values($1,'agency.shared_totals',true)",[sid]);const shared=await scopedSummary('limited','South England');assert.equal(shared.shared_totals_visible,true);assert.equal(number(shared.shared_expenses),0);await assert.rejects(scopedSummary('limited','Middleton England'),/Agency access denied/);
+});
+test('fresh stored permissions take effect immediately and caller-supplied filters cannot widen access',async()=>{
+ const sid=await staffMember('changing',['agency.wales']);assert.deepEqual((await accessFor('changing')).groups,['Wales']);await db.query("update fc_staff_permissions set allowed=false where staff_id=$1",[sid]);await assert.rejects(scopedSummary('changing','Wales'),/Agency access denied/);await db.query("insert into fc_staff_permissions values($1,'agency.east_england',true)",[sid]);assert.deepEqual((await accessFor('changing')).groups,['East England']);await assert.rejects(scopedSummary('changing','Wales'),/Agency access denied/);
+});
+test('master access includes all agencies while invalid/customer sessions remain denied',async()=>{
+ assert.equal((await accessFor('owner')).groups.length,5);assert.equal((await accessFor('owner')).can_view_shared_totals,true);
+ await assert.rejects(accessFor('customer'),/Denied/);await assert.rejects(accessFor('owner','expired'),/Denied/);
+ const privileges=await scalar("select has_function_privilege('anon','fc_require_agency_access_v1(text,text,text)','execute')");assert.equal(privileges,false);
 });

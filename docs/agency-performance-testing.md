@@ -2,8 +2,28 @@
 
 On `test`, open **Reports → Agency Performance → Middleton England Performance**.
 Sales Reps also have an Agency Performance button in their order menu. The report
-is read only and available to all active staff roles, including Warehouse,
-Driver and Brand Partner. Customer logins and invalid/revoked/expired FC sessions
+is read only. Every active staff role may open it, including Warehouse, Driver
+and Brand Partner, but report data requires individual agency assignments.
+In **Access Control → select a user → Agencies**, tick that person's Performance
+Groups and Save Access Control. Several people may share a group (for example,
+assign Middleton England separately to both Dinesh and Rifkhan). No names are
+hard-coded and this migration makes no real-user assignments. No selected
+groups means no report data. Master Admin and Super Admin retain automatic
+access to every agency. Changing page/role defaults preserves agency selections.
+
+The report loads its permitted tabs from a fresh FC-session-guarded server
+snapshot, selects an available group and shows no unassigned tabs. Refresh
+agency access picks up new assignments without trusting cached profile JSON.
+Summary and customer sales RPCs validate the requested group on every call;
+revocation is immediate for subsequent requests. The legacy unscoped England
+RPC is restricted to system-wide administrators, closing the old-client path.
+This scope applies to Agency Performance reports; other application pages keep
+their own permissions.
+
+**Shared country stock and business expenses** is a separate optional checkbox.
+Without it, the server removes these values and the UI hides their cards/table;
+country/business totals must not leak other agencies' figures. It does not grant
+any agency by itself. Group reports also omit the old unrelated-account count. Customer logins and invalid/revoked/expired FC sessions
 cannot call the aggregate RPC. No standalone finance-page access or financial
 write permissions are added.
 
@@ -61,12 +81,14 @@ The RPC returns aggregate amounts, postcode-area rows, location stock totals and
 city choices. A separate staff-guarded customer sales RPC returns at most 30
 customer names, IDs, invoice/order counts and sales amounts per page; it returns
 no contacts, addresses, invoice details, payment details or staff records.
+Assigned-group scope is applied before aggregation or pagination.
 Customer sales use the identical group/date/area/invoice rules as the summary,
 with one row per customer (including zero sales), highest sales first and stable
 name/ID ordering for ties. First/Previous/Next/Last controls show the page and
 row count. Date/area/group changes restart at page 1; navigation keeps the applied
 filters even if filter controls have been edited but not applied. Out-of-range
-pages clamp to the last page, and totals across all pages reconcile to sales. It uses the existing custom FC all-active-staff session guard;
+pages clamp to the last page, and totals across all pages reconcile to sales. It uses the existing custom FC staff-session guard plus fresh registered
+per-staff agency permission checks;
 anon/authenticated EXECUTE is intentional for the FC client, PUBLIC is revoked,
 and source tables remain protected. Reading refreshes session activity only;
 no business transactions or stock quantities are changed.
@@ -83,7 +105,8 @@ npm run test:migrations
 Isolated PGlite tests cover area/country scope, branches, opening balances, valid
 payments/legacy mirror suppression, Wallet settlement, posted expenses, shared
 stock, account-credit isolation, old-order fallback, UK date boundaries, role
-navigation and customer/session rejection. UI rendering tests exercise every
+navigation, multiple users sharing a group, cross-group/legacy denial,
+immediate revocation, shared-total redaction and customer/session rejection. UI rendering tests exercise every
 staff layout and initial filters. The full existing `npm test` baseline has 65
 pre-existing failures; compare against the unchanged test head for regressions.
 
@@ -92,4 +115,5 @@ has not received this feature. To test locally, use your existing V4 `.env.local
 pull `test`, restart the local dev server, then compare date/prefix/city filters
 with known invoices, collections and England stock. Confirm failed refreshes
 show an error rather than stale totals. A production release must include the report and Performance Group
-migrations, customer sales pagination migration and the UI/navigation changes after approval.
+migrations, customer sales pagination and agency access migrations, and the
+UI/navigation changes after approval.

@@ -1,3 +1,5 @@
+import { AGENCY_ACCESS_OPTIONS } from "../utils/performanceGroups.js";
+
 export const MASTER_ADMIN_USERNAME = "nisstaj_admin";
 
 export const STAFF_ROLES = Object.freeze([
@@ -166,6 +168,7 @@ export const ALL_IMPORTANT_FUNCTION_KEYS = Object.freeze(IMPORTANT_FUNCTION_PERM
 export const ALL_REGISTERED_PERMISSION_KEYS = Object.freeze([
   ...ALL_PAGE_PERMISSION_KEYS,
   ...ALL_IMPORTANT_FUNCTION_KEYS,
+  ...AGENCY_ACCESS_OPTIONS.map((option) => option.key),
 ]);
 
 export function normalizeRole(role) {

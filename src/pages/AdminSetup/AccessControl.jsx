@@ -1,3 +1,5 @@
+import AgencyAccessOptions from "./AgencyAccessOptions.jsx";
+import { AGENCY_ACCESS_OPTIONS } from "../../utils/performanceGroups.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
 import { getFcSessionState, readStoredFcProfile } from "../../services/fcSession";
@@ -24,6 +26,9 @@ const emptySelection = {
   new_password: "",
   brand_access: "",
 };
+
+const agencyKeys = new Set(AGENCY_ACCESS_OPTIONS.map((option) => option.key));
+const keepAgencies = (keys) => keys.filter((key) => agencyKeys.has(key));
 
 const flattenItems = (items = []) => items.flatMap((item) => item.children || [item]);
 
@@ -105,23 +110,23 @@ export default function AccessControl({ initialStaffId = "" }) {
   const applyRoleDefaults = () => {
     if (protectedMaster) return;
     const defaults = getRoleDefaultPermissionKeys(selected.role);
-    if (!window.confirm(`Replace this staff member's individual permissions with the ${selected.role} role defaults?`)) return;
-    updateSelected("permission_keys", defaults);
+    if (!window.confirm(`Replace page and function permissions (keep agency assignments) with the ${selected.role} role defaults?`)) return;
+    updateSelected("permission_keys", [...new Set([...defaults, ...keepAgencies(selected.permission_keys)])]);
   };
 
   const selectAll = () => {
-    if (protectedMaster || !window.confirm("Grant every registered page and important function permission to this staff member?")) return;
+    if (protectedMaster || !window.confirm("Grant every registered page, important function and agency permission to this staff member?")) return;
     updateSelected("permission_keys", [...ALL_REGISTERED_PERMISSION_KEYS]);
   };
 
   const clearOptional = () => {
-    if (protectedMaster || !window.confirm("Clear optional permissions and keep only this role's defaults?")) return;
-    updateSelected("permission_keys", getRoleDefaultPermissionKeys(selected.role));
+    if (protectedMaster || !window.confirm("Clear optional page/function permissions, keep role defaults and agency assignments?")) return;
+    updateSelected("permission_keys", [...new Set([...getRoleDefaultPermissionKeys(selected.role), ...keepAgencies(selected.permission_keys)])]);
   };
 
   const save = async () => {
     if (!selected.staff_id || protectedMaster || saving) return;
-    if (!window.confirm(`Save page and important-function access for ${selected.staff_name || selected.username}?`)) return;
+    if (!window.confirm(`Save page, function and agency access for ${selected.staff_name || selected.username}?`)) return;
     setSaving(true);
     setError("");
     const permissionKeys = new Set(selected.permission_keys || []);
@@ -277,6 +282,7 @@ export default function AccessControl({ initialStaffId = "" }) {
                 <button type="button" disabled={protectedMaster || !isMasterAdmin(currentUser)} onClick={selectAll} className="rounded-xl border px-4 py-2 font-bold disabled:text-slate-300">Select All</button>
                 <button type="button" disabled={protectedMaster} onClick={clearOptional} className="rounded-xl border px-4 py-2 font-bold disabled:text-slate-300">Clear Optional</button>
               </div>
+              <AgencyAccessOptions selectedKeys={selectedKeys} disabled={protectedMaster || selected.role === "Super Admin"} onToggle={togglePermission} />
               <PermissionArea title="PAGE ACCESS" description="Controls navigation and direct page access.">
                 {PAGE_ACCESS_SECTIONS.map((section) => <PermissionGroup key={section.title} title={section.title} items={flattenItems(section.items)} selectedKeys={selectedKeys} disabled={protectedMaster} onToggle={togglePermission} />)}
               </PermissionArea>

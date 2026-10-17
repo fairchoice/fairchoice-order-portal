@@ -18,3 +18,12 @@ export function suggestPerformanceGroup(customer = {}) {
   if (/\bkent\b/i.test(address)) return "East England";
   return /^(wales|wls|gb-wls)$/i.test(String(customer.country || "").trim()) ? "Wales" : "Middleton England";
 }
+
+export const AGENCY_GROUP_PERMISSIONS = Object.freeze(PERFORMANCE_GROUPS.map((group) => Object.freeze({
+  key: `agency.${group.toLowerCase().replaceAll(" ", "_")}`, label: group,
+})));
+export const AGENCY_SHARED_PERMISSION = "agency.shared_totals";
+export const AGENCY_ACCESS_OPTIONS = Object.freeze([
+  ...AGENCY_GROUP_PERMISSIONS,
+  Object.freeze({ key: AGENCY_SHARED_PERMISSION, label: "Shared stock and business expenses" }),
+]);
