@@ -1,6 +1,6 @@
 # Agency Performance
 
-On `test`, open **Reports → Agency Performance → England Performance**.
+On `test`, open **Reports → Agency Performance → Middleton England Performance**.
 Sales Reps also have an Agency Performance button in their order menu. The report
 is read only and available to all active staff roles, including Warehouse,
 Driver and Brand Partner. Customer logins and invalid/revoked/expired FC sessions
@@ -9,14 +9,28 @@ write permissions are added.
 
 ## Scope and totals
 
-- All England is the default. Country comes from the branch, then account.
-  MK/LU postcodes identify England only when country is blank or UK. Explicit
-  Wales/other countries never become England because of a postcode.
-- Filter by postcode prefix (MK, LU, or another prefix) and saved **customer
-  town/city**. Bedford also matches a whole word in the delivery address. This
-  is not geocoding: a branch without its own city field uses its account's
-  town/city. Correct country/postcode/address data is needed for accurate scope.
-  Additional saved England customer towns automatically appear in the dropdown.
+- **Performance Group** is compulsory for every customer account. The options
+  are Middleton England, South England, West England, East England and Wales.
+  Customer setup, workbook import/export and the list filter include this field.
+  New/edit forms and workbook rows require a valid explicit selection. Older
+  integrations that omit the column are classified by a database insert trigger;
+  explicit blank/invalid groups and clearing an existing group are rejected.
+- The one-time migration assigns Southampton, Portsmouth and Shillington to
+  South England; Swindon to West England; Newport to Wales; Kent to East England.
+  It checks whole place names in account town/address fields. Other Wales
+  accounts remain Wales; the remaining customers become Middleton England.
+  Existing town/address spelling and completeness determine the initial result;
+  review and correct groups in Customer Setup where needed.
+- The report defaults to **Middleton England Performance**. Separate tabs show
+  South England, West England, East England and Wales. Membership uses the saved
+  Performance Group, so other groups are excluded from Middleton England.
+  Branches follow their account's group. Editing an address never silently
+  changes a saved group. Trade applications receive an initial group using their
+  shop address/country and can be corrected in Customer Setup.
+- Postcode prefix and saved customer town/city filters narrow the selected group.
+  Bedford also matches a whole word in the delivery address. This is not
+  geocoding: branches without a city field use the account town/city. Additional
+  saved towns automatically appear in their Performance Group's dropdown.
 - Sales: issued, financially active canonical invoice totals, including VAT;
   older delivered orders without a canonical invoice contribute their saved
   order totals. Void/cancelled canonical invoices suppress order fallback.
@@ -36,7 +50,7 @@ write permissions are added.
 - Sales and collections use the selected **UK dates**, including British Summer
   Time. Older order timestamp columns contain UTC ISO values written by the app.
   Outstanding and stock are **current snapshots**, unaffected by date filters.
-- Stock: active England location quantities only, all cities. Global legacy
+- Stock: active country location quantities only, shared by all groups in that country. Wales uses Wales stock; the England groups use England stock. Global legacy
   inventory without a location is not attributed to England or repeated by city.
 - Expenses: posted, nonvoid `business_payouts` in the chosen dates. Expenses have
   no country/city columns, so the card explicitly says **Shared business
@@ -66,9 +80,9 @@ navigation and customer/session rejection. UI rendering tests exercise every
 staff layout and initial filters. The full existing `npm test` baseline has 65
 pre-existing failures; compare against the unchanged test head for regressions.
 
-Both report migrations are installed on V4 (`gezflswhzapymabhkbga`). Production
+The report and Performance Group migrations are installed on V4 (`gezflswhzapymabhkbga`). Production
 has not received this feature. To test locally, use your existing V4 `.env.local`,
 pull `test`, restart the local dev server, then compare date/prefix/city filters
 with known invoices, collections and England stock. Confirm failed refreshes
-show an error rather than stale totals. A production release must include both
+show an error rather than stale totals. A production release must include the report and Performance Group
 migrations and the UI/navigation changes after approval.

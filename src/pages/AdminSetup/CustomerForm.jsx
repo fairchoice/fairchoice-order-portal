@@ -10,6 +10,8 @@ import {
 } from "../../utils/customerStatus";
 import { getCustomerPriceCodes } from "../../services/priceCodes";
 
+import { PERFORMANCE_GROUPS, requirePerformanceGroup } from "../../utils/performanceGroups.js";
+
 const inputClass =
   "h-9 w-full rounded border border-slate-400 px-2 text-sm outline-none focus:border-green-700";
 const labelClass = "mb-1 block text-sm font-bold text-slate-700";
@@ -30,6 +32,7 @@ export default function CustomerForm({
   const [form, setForm] = useState({
     id: editingCustomer?.id,
     account_name: editingCustomer?.account_name || "",
+    performance_group: editingCustomer?.performance_group || "",
     contact_name: editingCustomer?.contact_name || "",
     phone: editingCustomer?.phone || "",
     mobile: editingCustomer?.mobile || "",
@@ -158,6 +161,9 @@ export default function CustomerForm({
       return;
     }
 
+    try { requirePerformanceGroup(form.performance_group); }
+    catch (error) { alert(error.message); return; }
+
     const previousStatus = getCustomerStatusLabel(editingCustomer?.status);
     const nextStatus = getCustomerStatusLabel(form.status);
     if (
@@ -258,6 +264,13 @@ export default function CustomerForm({
 
           {activeTab === "customer" && (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <label htmlFor="customer-performance-group" className={labelClass}>Performance Group *</label>
+                <select id="customer-performance-group" required className={inputClass} value={form.performance_group} onChange={(e) => updateField("performance_group", e.target.value)}>
+                  <option value="">Select Performance Group</option>
+                  {PERFORMANCE_GROUPS.map((group) => <option key={group} value={group}>{group}</option>)}
+                </select>
+              </div>
               <div>
                 <label className={labelClass}>Account Name</label>
                 <input

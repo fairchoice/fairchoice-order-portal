@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import test, { after, beforeEach } from 'node:test';
 const db=new PGlite();after(()=>db.close());
 await db.exec(`create role anon;create role authenticated;
-create table customer_accounts(id uuid primary key,country text,postcode text,town_city text,address text);
+create table customer_accounts(id uuid primary key,country text,postcode text,town_city text,address text,address_line_1 text,address_line_2 text);
 create table customer_branches(id uuid primary key,customer_account_id uuid,country text,postcode text,delivery_address text);
 create table customer_invoices(id uuid primary key,customer_account_id uuid,customer_branch_id uuid,invoice_number text,invoice_date timestamptz,invoice_total numeric,status text default 'ISSUED',financial_status text default 'ACTIVE',voided_at timestamptz,order_id uuid);
 create table orders(id uuid primary key,customer_account_id uuid,customer_branch_id uuid,branch_id uuid,order_number text,status text,financial_status text,financial_voided_at timestamptz,delivered_at timestamp,created_at timestamp,order_total numeric,grand_total numeric);
@@ -24,10 +24,14 @@ const migrations=new URL('../../supabase/migrations/',import.meta.url);
 const file=(await readdir(migrations)).find(n=>n.endsWith('_agency_performance_report.sql'));
 const migration=await readFile(new URL(file,migrations),'utf8');await db.exec(migration);await db.exec(migration);
 const dates=await readFile(new URL((await readdir(migrations)).find(n=>n.endsWith('_agency_performance_order_dates.sql')),migrations),'utf8');await db.exec(dates);await db.exec(dates);
+const groupsSql=await readFile(new URL((await readdir(migrations)).find(n=>n.endsWith('_customer_performance_groups.sql')),migrations),'utf8');
+await db.exec("insert into customer_accounts(id,country,town_city) values('00000000-0000-0000-0000-000000000011','England','Southampton'),('00000000-0000-0000-0000-000000000012','England','Milton Keynes')");
+await db.exec(groupsSql);
+const backfilled=(await db.query('select performance_group from customer_accounts order by id')).rows.map(r=>r.performance_group);
 const scalar=async(q,p=[])=>Object.values((await db.query(q,p)).rows[0])[0];
 const report=(prefix=null,city=null,from='2026-10-01',to='2026-10-31',user='Driver',token='valid')=>scalar('select fc_agency_performance_v1($1,$2,$3,$4,$5,$6)',[user,token,from,to,prefix,city]);
 const number=n=>Number(n||0);
-const account=async(country='England',postcode='MK9 1AB',city='Milton Keynes')=>{const id=randomUUID();await db.query('insert into customer_accounts values($1,$2,$3,$4,$5)',[id,country,postcode,city,city]);return id;};
+const account=async(country='England',postcode='MK9 1AB',city='Milton Keynes')=>{const id=randomUUID();await db.query('insert into customer_accounts(id,country,postcode,town_city,address) values($1,$2,$3,$4,$5)',[id,country,postcode,city,city]);return id;};
 const invoice=async(a,amount=100,branch=null,date='2026-10-17T12:00Z',status='ISSUED')=>{const id=randomUUID();await db.query('insert into customer_invoices(id,customer_account_id,customer_branch_id,invoice_number,invoice_date,invoice_total,status) values($1,$2,$3,$4,$5,$6,$7)',[id,a,branch,id,date,amount,status]);return id;};
 const payment=async(a,amount=30,branch=null,status='POSTED',method='Cash',type='PAYMENT',date='2026-10-17T12:00Z',ref=randomUUID())=>{const id=randomUUID();await db.query('insert into customer_payments(id,customer_account_id,customer_branch_id,amount,status,payment_method,transaction_type,payment_date,payment_reference) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,a,branch,amount,status,method,type,date,ref]);return id;};
 beforeEach(()=>db.exec('truncate customer_accounts,customer_branches,customer_invoices,orders,customer_payments,customer_ledger,central_payment_archive,customer_wallet_transactions,customer_branch_opening_balances,stock_locations,product_location_stock,business_payouts;'));
@@ -77,4 +81,24 @@ test('canonical and legacy mirrors count once, including void canonical records 
 
 test('older order timestamps written as UTC follow the same UK date boundaries as invoices',async()=>{
  const a=await account();await db.query("insert into orders(id,customer_account_id,order_number,status,delivered_at,order_total) values($1,$3,'OLD-A','Delivered','2026-09-30T23:00:00',15),($2,$3,'OLD-B','Delivered','2026-10-01T23:00:00',40)",[randomUUID(),randomUUID(),a]);assert.equal(number((await report(null,null,'2026-10-01','2026-10-01')).sales),15);
+});
+
+const groupReport=(group='Middleton England')=>scalar('select fc_agency_performance_v2($1,$2,null,null,null,null,$3)',['Warehouse','valid',group]);
+test('migration backfills named places and Middleton; groups cannot be empty, invalid or cleared',async()=>{
+ assert.deepEqual(backfilled,['South England','Middleton England']);const a=await account();
+ await assert.rejects(db.query("update customer_accounts set performance_group='' where id=$1",[a]),/constraint/);
+ await assert.rejects(db.query("update customer_accounts set performance_group=null where id=$1",[a]),/null/);
+ await assert.rejects(db.query("update customer_accounts set performance_group='Unknown' where id=$1",[a]),/constraint/);
+});
+test('each listed location belongs to exactly its regional group and is excluded from Middleton',async()=>{
+ const cases=[['Southampton','South England',10],['Portsmouth','South England',20],['Shillington','South England',30],['Swindon','West England',40],['Newport','Wales',50],['Kent','East England',60],['Milton Keynes','Middleton England',70],['Luton','Middleton England',80],['Bedford','Middleton England',90]];
+ for(const [city,group,amount] of cases){const a=await account(city==='Newport'?'Wales':'England','MK1 1AB',city);await invoice(a,amount);assert.equal(await scalar('select performance_group from customer_accounts where id=$1',[a]),group);}
+ for(const [group,amount] of [['South England',60],['West England',40],['Wales',50],['East England',60],['Middleton England',240]]){const r=await groupReport(group);assert.equal(number(r.sales),amount);assert.equal(r.performance_group,group);}
+ await assert.rejects(groupReport('Unknown'),/Invalid Performance Group/);
+});
+test('manual group choice survives address updates; branches follow the customer group',async()=>{
+ const a=await account('England','SO1 1AB','Southampton');await db.query("update customer_accounts set performance_group='East England',town_city='Swindon' where id=$1",[a]);const b=randomUUID();await db.query("insert into customer_branches values($1,$2,'England','MK1 1AB','Bedford')",[b,a]);await invoice(a,100,b);assert.equal(number((await groupReport('East England')).sales),100);assert.equal(number((await groupReport()).sales),0);
+});
+test('Wales group reads Wales stock; England groups share country stock without inventing agency quantities',async()=>{
+ const eng=randomUUID(),wal=randomUUID(),p=randomUUID();await db.query("insert into stock_locations values($1,'England warehouse','England',true),($2,'Wales warehouse','Wales',true)",[eng,wal]);await db.query('insert into product_location_stock values($1,$3,5,0),($2,$3,80,0)',[eng,wal,p]);assert.equal(number((await groupReport('Wales')).stock_units),80);assert.equal(number((await groupReport('South England')).stock_units),5);
 });

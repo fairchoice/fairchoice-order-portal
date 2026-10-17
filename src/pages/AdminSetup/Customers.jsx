@@ -12,6 +12,8 @@ import { formatCurrency } from "../../utils/currency";
 import { getCustomerStatusLabel } from "../../utils/customerStatus";
 import { getPriceModeLabel } from "../../utils/pricing";
 
+import { PERFORMANCE_GROUPS, suggestPerformanceGroup } from "../../utils/performanceGroups.js";
+
 const inputClass =
   "h-9 rounded border border-slate-400 px-2 text-sm outline-none focus:border-green-700";
 const buttonClass =
@@ -119,6 +121,7 @@ export default function Customers() {
   const [loading, setLoading] = useState(false);
 
   const [search, setSearch] = useState("");
+  const [groupFilter, setGroupFilter] = useState("All");
   const [countryFilter, setCountryFilter] = useState("All");
   const [cityFilter, setCityFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -202,12 +205,13 @@ export default function Customers() {
           contact.includes(keyword) ||
           phone.includes(keyword) ||
           email.includes(keyword)) &&
+        (groupFilter === "All" || c.performance_group === groupFilter) &&
         (countryFilter === "All" || c.country === countryFilter) &&
         (cityFilter === "All" || townCity === cityFilter) &&
         (statusFilter === "All" || status === statusFilter)
       );
     });
-  }, [customers, search, countryFilter, cityFilter, statusFilter]);
+  }, [customers, search, groupFilter, countryFilter, cityFilter, statusFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredCustomers.length / rowsPerPage));
 
@@ -236,6 +240,7 @@ export default function Customers() {
 
   const resetFilters = () => {
     setSearch("");
+    setGroupFilter("All");
     setCountryFilter("All");
     setCityFilter("All");
     setStatusFilter("All");
@@ -246,6 +251,7 @@ export default function Customers() {
     const accountRows = customers.map((customer) => ({
       "Customer Account ID": customer.id,
       "Customer Name": customer.account_name,
+      "Performance Group": customer.performance_group || "",
       "Account Code": customer.account_code || "",
       "Contact Name": customer.contact_name || "",
       Phone: customer.phone || "",
@@ -268,6 +274,7 @@ export default function Customers() {
         "Branch ID": branch.id,
         "Customer Account ID": customer.id,
         "Customer Name": customer.account_name,
+        "Performance Group": customer.performance_group || "",
         "Branch Name": branch.branch_name,
         "Delivery Address": branch.delivery_address || "",
         Postcode: branch.postcode || "",
@@ -292,6 +299,7 @@ export default function Customers() {
         {
           "Customer Account ID": "",
           "Customer Name": "",
+          "Performance Group": "",
           "Account Code": "",
           "Contact Name": "",
           Phone: "",
@@ -332,6 +340,7 @@ export default function Customers() {
   const parseCustomerAccountRow = (row, rowNumber, mode = "import") => {
     const errors = [];
     const country = normalize(row.Country || row.country);
+    const performanceGroup = normalize(row["Performance Group"] || row.performance_group);
     const creditLimit = toNumber(row["Credit Limit"] ?? row.credit_limit);
     const active = toBool(row.Active ?? row.active ?? true);
     const defaultPriceMode = normalizePriceMode(
@@ -347,6 +356,9 @@ export default function Customers() {
     if (mode !== "update" && !DEFAULT_PRICE_MODES.has(defaultPriceMode.toLowerCase())) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Default Price Mode", message: "Default Price Mode must be Ex.VAT or Inc.VAT" });
     }
+    if (!PERFORMANCE_GROUPS.includes(performanceGroup)) {
+      errors.push({ rowNumber, sheet: "Customer Accounts", field: "Performance Group", message: "Performance Group is required: " + PERFORMANCE_GROUPS.join(", ") });
+    }
     if (creditLimit === null) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Credit Limit", message: "Credit Limit must be numeric" });
     }
@@ -359,6 +371,7 @@ export default function Customers() {
       row: {
         id: normalize(row["Customer Account ID"] || row.id),
         account_name: normalize(row["Customer Name"] || row.account_name),
+        performance_group: performanceGroup,
         account_code: normalize(row["Account Code"] || row.account_code),
         contact_name: normalize(row["Contact Name"] || row.contact_name),
         phone: normalize(row.Phone || row.phone),
@@ -668,6 +681,7 @@ export default function Customers() {
       }
 
       const customerAccount = await saveCustomerAccount({
+        performance_group: suggestPerformanceGroup({ country: application.country || "Wales", address: application.shop_address }),
         account_name: application.business_name,
         contact_name: application.contact_name,
         phone: application.phone,
@@ -1055,6 +1069,10 @@ export default function Customers() {
             className={`${inputClass} md:col-span-2`}
           />
 
+          <select aria-label="Performance Group" value={groupFilter} onChange={(e) => { setGroupFilter(e.target.value); setPage(1); }} className={inputClass}>
+            <option value="All">All Performance Groups</option>
+            {PERFORMANCE_GROUPS.map((group) => <option key={group}>{group}</option>)}
+          </select>
           <select
             value={countryFilter}
             onChange={(e) => {
@@ -1115,6 +1133,7 @@ export default function Customers() {
                   <th className="px-2 py-2 text-left">Contact</th>
                   <th className="px-2 py-2 text-left">Phone</th>
                   <th className="px-2 py-2 text-left">Town / City</th>
+                  <th className="px-2 py-2 text-left">Performance Group</th>
                   <th className="px-2 py-2 text-left">Country</th>
                   <th className="px-2 py-2 text-left">Status</th>
                   <th className="px-2 py-2 text-right">Credit Limit</th>
@@ -1132,6 +1151,7 @@ export default function Customers() {
                     <td className="px-2 py-2">
                       {customer.town_city || customer.city || "-"}
                     </td>
+                    <td className="px-2 py-2">{customer.performance_group || "Unassigned"}</td>
                     <td className="px-2 py-2">{customer.country || "-"}</td>
                     <td className="px-2 py-2">
                       <span
