@@ -4,12 +4,15 @@ import {
   getCustomerAccounts,
   saveCustomerAccount,
   saveCustomerBranch,
+  syncCustomerAddressToOrders,
 } from "../../services/customerManagement";
 import { supabase } from "../../services/supabase";
 import CustomerForm from "./CustomerForm";
 import { formatCurrency } from "../../utils/currency";
 import { getCustomerStatusLabel } from "../../utils/customerStatus";
 import { getPriceModeLabel } from "../../utils/pricing";
+
+import { PERFORMANCE_GROUPS, suggestPerformanceGroup } from "../../utils/performanceGroups.js";
 
 const inputClass =
   "h-9 rounded border border-slate-400 px-2 text-sm outline-none focus:border-green-700";
@@ -57,8 +60,8 @@ const getRowValue = (row, keys) => {
 };
 const normalizePriceMode = (value) => {
   const mode = normalize(value);
-  if (mode.toLowerCase() === "ex. vat" || mode.toLowerCase() === "ex vat") return "VAT";
-  if (mode.toLowerCase() === "inc.vat" || mode.toLowerCase() === "inc vat") return "Server";
+  if (["ex.vat", "ex. vat", "ex vat", "vat"].includes(mode.toLowerCase())) return "VAT";
+  if (["inc.vat", "inc vat", "server"].includes(mode.toLowerCase())) return "Server";
   return mode || "VAT";
 };
 
@@ -69,7 +72,7 @@ const parseAllowedModes = (value) => {
     .filter(Boolean);
 
   return {
-    allow_vat: modes.length ? modes.includes("vat") || modes.includes("ex vat") || modes.includes("ex. vat") : true,
+    allow_vat: modes.length ? modes.includes("vat") || modes.includes("ex.vat") || modes.includes("ex vat") || modes.includes("ex. vat") : true,
     allow_server: modes.includes("server") || modes.includes("inc.vat") || modes.includes("inc vat"),
     allow_manager: false,
     allow_super: false,
@@ -118,6 +121,7 @@ export default function Customers() {
   const [loading, setLoading] = useState(false);
 
   const [search, setSearch] = useState("");
+  const [groupFilter, setGroupFilter] = useState("All");
   const [countryFilter, setCountryFilter] = useState("All");
   const [cityFilter, setCityFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -201,12 +205,13 @@ export default function Customers() {
           contact.includes(keyword) ||
           phone.includes(keyword) ||
           email.includes(keyword)) &&
+        (groupFilter === "All" || c.performance_group === groupFilter) &&
         (countryFilter === "All" || c.country === countryFilter) &&
         (cityFilter === "All" || townCity === cityFilter) &&
         (statusFilter === "All" || status === statusFilter)
       );
     });
-  }, [customers, search, countryFilter, cityFilter, statusFilter]);
+  }, [customers, search, groupFilter, countryFilter, cityFilter, statusFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredCustomers.length / rowsPerPage));
 
@@ -235,6 +240,7 @@ export default function Customers() {
 
   const resetFilters = () => {
     setSearch("");
+    setGroupFilter("All");
     setCountryFilter("All");
     setCityFilter("All");
     setStatusFilter("All");
@@ -245,6 +251,7 @@ export default function Customers() {
     const accountRows = customers.map((customer) => ({
       "Customer Account ID": customer.id,
       "Customer Name": customer.account_name,
+      "Performance Group": customer.performance_group || "",
       "Account Code": customer.account_code || "",
       "Contact Name": customer.contact_name || "",
       Phone: customer.phone || "",
@@ -259,7 +266,6 @@ export default function Customers() {
         customer.allow_vat ? "Ex.VAT" : "",
         customer.allow_server ? "Inc.VAT" : "",
       ].filter(Boolean).join(", "),
-      "Opening Balance": Number(customer.opening_balance || 0),
       Active: customer.active !== false,
     }));
 
@@ -268,6 +274,7 @@ export default function Customers() {
         "Branch ID": branch.id,
         "Customer Account ID": customer.id,
         "Customer Name": customer.account_name,
+        "Performance Group": customer.performance_group || "",
         "Branch Name": branch.branch_name,
         "Delivery Address": branch.delivery_address || "",
         Postcode: branch.postcode || "",
@@ -292,6 +299,7 @@ export default function Customers() {
         {
           "Customer Account ID": "",
           "Customer Name": "",
+          "Performance Group": "",
           "Account Code": "",
           "Contact Name": "",
           Phone: "",
@@ -303,7 +311,6 @@ export default function Customers() {
           "Credit Limit": 0,
           "Default Price Mode": "Ex.VAT",
           "Allowed Price Modes": "Ex.VAT, Inc.VAT",
-          "Opening Balance": 0,
           Active: true,
         },
       ]),
@@ -330,11 +337,11 @@ export default function Customers() {
     XLSX.writeFile(workbook, "fairchoice-customer-import-template.xlsx");
   };
 
-  const parseCustomerAccountRow = (row, rowNumber) => {
+  const parseCustomerAccountRow = (row, rowNumber, mode = "import") => {
     const errors = [];
     const country = normalize(row.Country || row.country);
+    const performanceGroup = normalize(row["Performance Group"] || row.performance_group);
     const creditLimit = toNumber(row["Credit Limit"] ?? row.credit_limit);
-    const openingBalance = toNumber(row["Opening Balance"] ?? row.opening_balance);
     const active = toBool(row.Active ?? row.active ?? true);
     const defaultPriceMode = normalizePriceMode(
       row["Default Price Mode"] || row.default_price_mode
@@ -346,14 +353,14 @@ export default function Customers() {
     if (!COUNTRY_VALUES.has(country.toLowerCase())) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Country", message: "Country must be Wales or England" });
     }
-    if (!DEFAULT_PRICE_MODES.has(defaultPriceMode.toLowerCase())) {
+    if (mode !== "update" && !DEFAULT_PRICE_MODES.has(defaultPriceMode.toLowerCase())) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Default Price Mode", message: "Default Price Mode must be Ex.VAT or Inc.VAT" });
+    }
+    if (!PERFORMANCE_GROUPS.includes(performanceGroup)) {
+      errors.push({ rowNumber, sheet: "Customer Accounts", field: "Performance Group", message: "Performance Group is required: " + PERFORMANCE_GROUPS.join(", ") });
     }
     if (creditLimit === null) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Credit Limit", message: "Credit Limit must be numeric" });
-    }
-    if (openingBalance === null) {
-      errors.push({ rowNumber, sheet: "Customer Accounts", field: "Opening Balance", message: "Opening Balance must be numeric" });
     }
     if (active === null) {
       errors.push({ rowNumber, sheet: "Customer Accounts", field: "Active", message: "Active must be TRUE or FALSE" });
@@ -364,6 +371,7 @@ export default function Customers() {
       row: {
         id: normalize(row["Customer Account ID"] || row.id),
         account_name: normalize(row["Customer Name"] || row.account_name),
+        performance_group: performanceGroup,
         account_code: normalize(row["Account Code"] || row.account_code),
         contact_name: normalize(row["Contact Name"] || row.contact_name),
         phone: normalize(row.Phone || row.phone),
@@ -384,7 +392,6 @@ export default function Customers() {
         country,
         credit_limit: creditLimit ?? 0,
         default_price_mode: defaultPriceMode,
-        opening_balance: openingBalance ?? 0,
         active: active ?? true,
         ...parseAllowedModes(row["Allowed Price Modes"] || row.allowed_price_modes),
       },
@@ -423,7 +430,7 @@ export default function Customers() {
     };
   };
 
-  const handleCustomerImportFile = async (event) => {
+  const handleCustomerImportFile = async (event, mode = "import") => {
     const file = event.target.files[0];
     event.target.value = "";
     if (!file) return;
@@ -449,10 +456,18 @@ export default function Customers() {
           (customer.customer_branches || []).map((branch) => [String(branch.id), branch])
         )
       );
+      const existingBranchesByCustomerAndName = new Map(
+        customers.flatMap((customer) =>
+          (customer.customer_branches || []).map((branch) => [
+            `${String(customer.id)}::${normalizeKey(branch.branch_name)}`,
+            branch,
+          ])
+        )
+      );
 
       accountRows.forEach((rawRow, index) => {
         const rowNumber = index + 2;
-        const { row, errors: rowErrors } = parseCustomerAccountRow(rawRow, rowNumber);
+        const { row, errors: rowErrors } = parseCustomerAccountRow(rawRow, rowNumber, mode);
         errors.push(...rowErrors);
         if (rowErrors.length) return;
 
@@ -462,25 +477,66 @@ export default function Customers() {
             errors.push({ rowNumber, sheet: "Customer Accounts", field: "Customer Account ID", message: "Invalid Customer Account ID" });
             return;
           }
-          accountUpdates.push(row);
+          accountUpdates.push({
+            ...row,
+            id: existing.id,
+            ...(mode === "update" ? { default_price_mode: existing.default_price_mode } : {}),
+          });
+          return;
+        }
+
+        const existingByName = existingAccountsByName.get(normalizeKey(row.account_name));
+        if (existingByName) {
+          accountUpdates.push({
+            ...row,
+            id: existingByName.id,
+            ...(mode === "update" ? { default_price_mode: existingByName.default_price_mode } : {}),
+          });
+          return;
+        }
+
+        if (mode === "update") {
+          errors.push({ rowNumber, sheet: "Customer Accounts", field: "Customer Name", message: "No existing customer matched this exact Customer Name" });
           return;
         }
 
         accountCreates.push(row);
       });
 
-      branchRows.forEach((rawRow, index) => {
+      if (mode !== "update") branchRows.forEach((rawRow, index) => {
         const rowNumber = index + 2;
         const { row, errors: rowErrors } = parseCustomerBranchRow(rawRow, rowNumber);
         errors.push(...rowErrors);
         if (rowErrors.length) return;
 
         if (row.id) {
-          if (!existingBranchesById.has(String(row.id))) {
+          const existingBranch = existingBranchesById.get(String(row.id));
+          if (!existingBranch) {
             errors.push({ rowNumber, sheet: "Customer Branches", field: "Branch ID", message: "Invalid Branch ID" });
             return;
           }
-          branchUpdates.push(row);
+          branchUpdates.push({ ...row, id: existingBranch.id });
+          return;
+        }
+
+        const matchedCustomer =
+          existingAccountsById.get(String(row.customer_account_id || "")) ||
+          existingAccountsByName.get(normalizeKey(row.customer_name));
+        const existingBranch = matchedCustomer
+          ? existingBranchesByCustomerAndName.get(`${String(matchedCustomer.id)}::${normalizeKey(row.branch_name)}`)
+          : null;
+
+        if (existingBranch) {
+          branchUpdates.push({
+            ...row,
+            id: existingBranch.id,
+            customer_account_id: matchedCustomer.id,
+          });
+          return;
+        }
+
+        if (mode === "update") {
+          errors.push({ rowNumber, sheet: "Customer Branches", field: "Branch Name", message: "No existing branch matched this customer and exact Branch Name" });
           return;
         }
 
@@ -502,8 +558,9 @@ export default function Customers() {
       });
 
       setCustomerImportPreview({
+        mode,
         customersChecked: accountRows.length,
-        branchesChecked: branchRows.length,
+        branchesChecked: mode === "update" ? 0 : branchRows.length,
         accountCreates,
         accountUpdates,
         branchCreates,
@@ -517,35 +574,6 @@ export default function Customers() {
     setImportingCustomers(false);
   };
 
-  const saveImportedOpeningBalance = async (customerName, openingBalance) => {
-    if (!customerName) return;
-
-    const { data: existingBalance, error: lookupError } = await supabase
-      .from("customer_opening_balances")
-      .select("id")
-      .eq("customer_name", customerName)
-      .maybeSingle();
-
-    if (lookupError) throw lookupError;
-
-    if (existingBalance?.id) {
-      const { error } = await supabase
-        .from("customer_opening_balances")
-        .update({ opening_balance: Number(openingBalance || 0) })
-        .eq("id", existingBalance.id);
-
-      if (error) throw error;
-      return;
-    }
-
-    const { error } = await supabase.from("customer_opening_balances").insert({
-      customer_name: customerName,
-      opening_balance: Number(openingBalance || 0),
-    });
-
-    if (error) throw error;
-  };
-
   const confirmCustomerImport = async () => {
     if (!customerImportPreview || customerImportPreview.errors.length) return;
 
@@ -556,7 +584,9 @@ export default function Customers() {
         `Customers updated: ${customerImportPreview.accountUpdates.length}`,
         `Branches created: ${customerImportPreview.branchCreates.length}`,
         `Branches updated: ${customerImportPreview.branchUpdates.length}`,
-        "Apply these changes now?",
+        customerImportPreview.mode === "update"
+          ? "Update matched customer accounts and refresh existing order addresses now? Branch sheet changes will be ignored."
+          : "Apply these changes now?",
       ].join("\n")
     );
 
@@ -568,14 +598,14 @@ export default function Customers() {
       const createdCustomerByName = new Map();
 
       for (const account of customerImportPreview.accountUpdates) {
-        const { id, opening_balance, ...payload } = account;
+        const { id, ...payload } = account;
         const { error } = await supabase.from("customer_accounts").update(payload).eq("id", id);
         if (error) throw error;
-        await saveImportedOpeningBalance(account.account_name, opening_balance);
+        await syncCustomerAddressToOrders({ customerAccountId: id });
       }
 
       for (const account of customerImportPreview.accountCreates) {
-        const { id, opening_balance, ...payload } = account;
+        const { id, ...payload } = account;
         const { data, error } = await supabase
           .from("customer_accounts")
           .insert(payload)
@@ -583,13 +613,13 @@ export default function Customers() {
           .single();
         if (error) throw error;
         createdCustomerByName.set(normalizeKey(data.account_name), data);
-        await saveImportedOpeningBalance(data.account_name, opening_balance);
       }
 
       for (const branch of customerImportPreview.branchUpdates) {
         const { id, customer_name, email, ...payload } = branch;
         const { error } = await supabase.from("customer_branches").update(payload).eq("id", id);
         if (error) throw error;
+        await syncCustomerAddressToOrders({ customerBranchId: id });
       }
 
       for (const branch of customerImportPreview.branchCreates) {
@@ -651,6 +681,7 @@ export default function Customers() {
       }
 
       const customerAccount = await saveCustomerAccount({
+        performance_group: suggestPerformanceGroup({ country: application.country || "Wales", address: application.shop_address }),
         account_name: application.business_name,
         contact_name: application.contact_name,
         phone: application.phone,
@@ -789,11 +820,21 @@ export default function Customers() {
               <input
                 type="file"
                 accept=".xlsx,.csv"
-                onChange={handleCustomerImportFile}
+                onChange={(event) => handleCustomerImportFile(event, "import")}
                 disabled={importingCustomers}
                 className="hidden"
               />
               Import Customers
+            </label>
+            <label className="flex h-9 cursor-pointer items-center rounded-full bg-indigo-700 px-4 text-sm font-bold text-white hover:bg-indigo-800">
+              <input
+                type="file"
+                accept=".xlsx,.csv"
+                onChange={(event) => handleCustomerImportFile(event, "update")}
+                disabled={importingCustomers}
+                className="hidden"
+              />
+              Update Customers
             </label>
             <button
               type="button"
@@ -1028,6 +1069,10 @@ export default function Customers() {
             className={`${inputClass} md:col-span-2`}
           />
 
+          <select aria-label="Performance Group" value={groupFilter} onChange={(e) => { setGroupFilter(e.target.value); setPage(1); }} className={inputClass}>
+            <option value="All">All Performance Groups</option>
+            {PERFORMANCE_GROUPS.map((group) => <option key={group}>{group}</option>)}
+          </select>
           <select
             value={countryFilter}
             onChange={(e) => {
@@ -1088,6 +1133,7 @@ export default function Customers() {
                   <th className="px-2 py-2 text-left">Contact</th>
                   <th className="px-2 py-2 text-left">Phone</th>
                   <th className="px-2 py-2 text-left">Town / City</th>
+                  <th className="px-2 py-2 text-left">Performance Group</th>
                   <th className="px-2 py-2 text-left">Country</th>
                   <th className="px-2 py-2 text-left">Status</th>
                   <th className="px-2 py-2 text-right">Credit Limit</th>
@@ -1105,6 +1151,7 @@ export default function Customers() {
                     <td className="px-2 py-2">
                       {customer.town_city || customer.city || "-"}
                     </td>
+                    <td className="px-2 py-2">{customer.performance_group || "Unassigned"}</td>
                     <td className="px-2 py-2">{customer.country || "-"}</td>
                     <td className="px-2 py-2">
                       <span

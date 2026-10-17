@@ -1,4 +1,4 @@
-import { isVatPriceMode } from "./pricing.js";
+import { isVatPriceMode, normalizePriceMode } from "./pricing.js";
 
 const money2 = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -9,15 +9,51 @@ const hasMoneyValue = (value) =>
 const getQuantity = (item = {}) =>
   Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
 
+const isFreeDocumentItem = (item = {}) => {
+  const status = String(
+    item.sourceStatus || item.source_status || item.status || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  return (
+    status === "free" ||
+    status === "promotion free" ||
+    item.isPromotionFree === true ||
+    item.promotionFreeItem === true
+  );
+};
+
 const isPrintableDocumentItem = (item = {}) => {
+  if (isFreeDocumentItem(item)) return true;
+
   const sourceStatus = String(item.sourceStatus || item.source_status || "")
     .trim()
     .toLowerCase();
 
+  const excludedStatuses = new Set([
+    "removed",
+    "cannot supply",
+    "need supplier",
+    "pre-order",
+    "pre order",
+    "pre-order supply",
+    "pre order supply",
+    "supply needed",
+    "next supplier",
+  ]);
+
+  if (excludedStatuses.has(sourceStatus)) return false;
+
+  // Warehouse Pre-Order Supply is status-only, so an item can correctly be
+  // In Stock while retaining an old include_in_picking=false flag. Supplied
+  // status is the final authority for operational quantity/value.
+  if (sourceStatus === "in stock" || sourceStatus === "available" || sourceStatus === "supplied") {
+    return true;
+  }
+
   return item.includeInPicking !== false &&
-    item.include_in_picking !== false &&
-    sourceStatus !== "removed" &&
-    sourceStatus !== "cannot supply";
+    item.include_in_picking !== false;
 };
 
 const getSavedVatRate = (item = {}) => {
@@ -40,6 +76,14 @@ const getSavedVatRate = (item = {}) => {
 };
 
 const getDocumentItemTotals = (item = {}, { includeVat = true } = {}) => {
+  if (isFreeDocumentItem(item)) {
+    return {
+      netTotal: 0,
+      grossTotal: 0,
+      vatRate: 0,
+    };
+  }
+
   const savedNet = item.net_total ?? item.netTotal;
   const savedPrice = item.price ?? item.unit_price ?? item.unitPrice;
   const vatRate = includeVat ? getSavedVatRate(item) : 0;
@@ -54,10 +98,7 @@ const getDocumentItemTotals = (item = {}, { includeVat = true } = {}) => {
     };
   }
 
-  if (
-    hasMoneyValue(savedNet) &&
-    Number(savedNet) > 0
-  ) {
+  if (hasMoneyValue(savedNet)) {
     const netTotal = money2(savedNet);
     return {
       netTotal,
@@ -129,19 +170,21 @@ const buildVatGroups = (items = [], includeVat = true) => {
 };
 
 export const getCustomerDocumentType = (priceMode = "") => {
-  const mode = String(priceMode || "").trim().toLowerCase();
-
-  const isOrderForm =
-    mode === "server" ||
-    mode === "manager" ||
-    mode.includes("server") ||
-    mode.includes("manager");
+  const mode = normalizePriceMode(priceMode);
+  const isOrderForm = [
+    "royalty", "server", "inc vat",
+    "owner offer", "manager", "manager offer"
+  ].includes(mode);
 
   return isOrderForm ? "order_form" : "invoice";
 };
 
 export function calculateDocumentTotals(items = [], order = {}) {
-  const includeVat = isVatPriceMode(order.priceMode || order.price_mode);
+  const priceMode = order.priceMode || order.price_mode;
+  const mode = normalizePriceMode(priceMode);
+  const includeVat =
+    isVatPriceMode(priceMode) ||
+    ["admin", "admin offer", "long customer", "long customers", "super"].includes(mode);
   const printableItems = (items || [])
     .filter(isPrintableDocumentItem)
     .map((item) => {

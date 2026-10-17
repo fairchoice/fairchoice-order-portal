@@ -5,6 +5,7 @@ import { formatCurrency } from "../../utils/currency";
 import { sortPrintItems } from "../../utils/printItemSorting";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import { getPriceModeLabel } from "../../utils/pricing";
+import { canAccessPage, canPerform } from "../../security/accessControlRegistry";
 
 const VAT_RATE = 0.2;
 const VAT_DIVISOR = 1 + VAT_RATE;
@@ -15,14 +16,6 @@ const getLoggedInUser = () =>
       localStorage.getItem("fairchoice_user") ||
       "null"
   );
-
-const isAdminUser = (user) => {
-  const role = String(user?.role || user?.access_level || "").toLowerCase();
-  return role.includes("admin");
-};
-
-const isNisstajAdmin = (user) =>
-  String(user?.username || "").trim().toLowerCase() === "nisstaj_admin";
 
 const normalizePriceMode = (priceMode) =>
   String(priceMode || "")
@@ -89,7 +82,7 @@ const enrichQueueRowsWithProductCodes = async (rows = []) => {
   if (missingProductIds.length) {
     const { data } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("id", missingProductIds);
 
     productsById = Object.fromEntries(
@@ -100,7 +93,7 @@ const enrichQueueRowsWithProductCodes = async (rows = []) => {
   if (missingNames.length) {
     const { data } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("product_name", missingNames);
 
     const groupedByName = (data || []).reduce((groups, product) => {
@@ -522,8 +515,8 @@ export default function OrderSalesInvoices() {
   const [editDraft, setEditDraft] = useState(null);
   const [savingId, setSavingId] = useState("");
   const user = getLoggedInUser();
-  const canView = isAdminUser(user);
-  const canEdit = isNisstajAdmin(user);
+  const canView = canAccessPage(user, "page.order.sales_invoice");
+  const canEdit = canPerform(user, "invoices.amend");
 
   const loadRows = async () => {
     if (!canView) return;

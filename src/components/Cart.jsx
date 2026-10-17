@@ -23,7 +23,28 @@ export default function Cart({
   paymentChoice,
   onPaymentChoiceChange,
   paymentChoiceValid = false,
+  requireImmediatePayment = false,
+  walletBalance = 0,
+  walletLoading = false,
+  walletUseRequested = false,
+  onWalletUseChange,
+  bankProofFile = null,
+  onBankProofChange,
+  readOnly = false,
+  reviewMode = false,
+  hideSubmit = false,
 }) {
+  let storedRole = "";
+  if (typeof window !== "undefined") {
+    try {
+      const storedUser = JSON.parse(localStorage.getItem("loggedInUser") || "null") ||
+        JSON.parse(localStorage.getItem("fairchoice_user") || "null") || {};
+      storedRole = String(storedUser.role || storedUser.access_level || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+    } catch {
+      storedRole = "";
+    }
+  }
+  const partnerReadOnly = readOnly || storedRole === "brandpartner";
   const paidCart = cart.filter((item) => !item.isPromotionFree);
   const promotionLines = cart.filter((item) => item.isPromotionFree);
 
@@ -37,11 +58,11 @@ export default function Cart({
   const vatMode = isVatPriceMode(priceMode);
 
   return (
-    <div className="cart-panel bg-slate-50 border rounded-3xl p-3 md:p-4 sticky bottom-3 md:top-4 z-40 shadow-lg">
+    <div className={`cart-panel bg-slate-50 border rounded-3xl p-3 md:p-4 z-40 shadow-lg ${reviewMode ? "" : "sticky bottom-3 md:top-4"}`}>
       <div className="flex items-center justify-between gap-3 mb-3">
         <h3 className="cart-title font-bold text-xl">Cart</h3>
 
-        {paidCart.length > 0 && (
+        {!reviewMode && paidCart.length > 0 && (
           <button
             type="button"
             onClick={() => onEditingChange?.(!editing)}
@@ -155,24 +176,79 @@ export default function Cart({
           </div>
         )}
 
-        <PaymentChoiceSelector
-          choice={paymentChoice}
-          onChoiceChange={onPaymentChoiceChange}
-        />
+        {!partnerReadOnly && (
+          <>
+            <PaymentChoiceSelector
+              choice={paymentChoice}
+              onChoiceChange={onPaymentChoiceChange}
+              requireImmediatePayment={requireImmediatePayment}
+              bankProofFile={bankProofFile}
+              onBankProofChange={onBankProofChange}
+            />
 
-        <button
-          type="button"
-          onClick={() => {
-            if (window.confirm("Submit this order?")) {
-              onSubmit();
-            }
-          }}
-          disabled={paidCart.length === 0 || isSubmitting || !paymentChoiceValid}
-          className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {isSubmitting ? "Submitting..." : "Submit Order"}
-        </button>
-        {!paymentChoiceValid && paidCart.length > 0 && (
+            <div className="mt-3 rounded-2xl border border-emerald-300 bg-emerald-50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-emerald-950">Use Wallet Money?</div>
+                  <div className="mt-1 text-xs font-semibold text-slate-600">
+                    Available: {walletLoading ? "Loading..." : formatCurrency(Number(walletBalance || 0))}.
+                    Wallet money is deducted at delivery before payment is collected.
+                  </div>
+                </div>
+                <div className="shrink-0 text-lg font-black text-emerald-800">
+                  {walletLoading ? "..." : formatCurrency(Number(walletBalance || 0))}
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={walletLoading || Number(walletBalance || 0) <= 0}
+                  onClick={() => onWalletUseChange?.(true)}
+                  className={`rounded-xl border px-4 py-3 text-sm font-black ${walletUseRequested ? "border-emerald-700 bg-emerald-700 text-white" : "border-emerald-300 bg-white text-emerald-800"} disabled:cursor-not-allowed disabled:opacity-40`}
+                >
+                  Yes · Use Wallet
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onWalletUseChange?.(false)}
+                  className={`rounded-xl border px-4 py-3 text-sm font-black ${!walletUseRequested ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                >
+                  No · Keep Wallet
+                </button>
+              </div>
+
+              <div className="mt-2 text-xs font-bold text-slate-600">
+                Selected: <span className={walletUseRequested ? "text-emerald-700" : "text-slate-800"}>
+                  {walletUseRequested ? "USE WALLET AT DELIVERY" : "KEEP WALLET FOR LATER"}
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+
+        {partnerReadOnly && (
+          <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-center text-sm font-bold text-blue-800">
+            READ ONLY — Brand Partner users can view the order form and products, but cannot place orders.
+          </div>
+        )}
+
+        {!hideSubmit && (
+          <button
+            type="button"
+            onClick={() => {
+              if (partnerReadOnly) return;
+              if (window.confirm("Submit this order?")) {
+                onSubmit();
+              }
+            }}
+            disabled={partnerReadOnly || paidCart.length === 0 || isSubmitting || !paymentChoiceValid}
+            className="submit-order-btn checkout-btn w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {partnerReadOnly ? "Read Only — Order Disabled" : isSubmitting ? "Submitting..." : "Submit Order"}
+          </button>
+        )}
+        {!partnerReadOnly && !paymentChoiceValid && paidCart.length > 0 && (
           <p className="mt-2 text-center text-xs font-bold text-amber-700">Select how you would like to continue before submitting.</p>
         )}
       </div>
