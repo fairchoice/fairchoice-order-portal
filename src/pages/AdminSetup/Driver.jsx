@@ -24,6 +24,7 @@ import {
 import { saveConfirmedServerManagerOrderToProcessingQueue } from "../../services/orders";
 import {
   CANONICAL_PAYMENT_SOURCES,
+  createPaymentIntentId,
   postCanonicalCustomerPayment,
   shouldCreateCanonicalDeliveryPayment,
 } from "../../services/canonicalPaymentService";
@@ -213,6 +214,76 @@ const [cashCollectionOutstanding, setCashCollectionOutstanding] = useState({
 const loggedInUser = JSON.parse(
   localStorage.getItem("loggedInUser") || "{}"
 );
+
+
+
+
+const [promotionRunOrderNumbers, setPromotionRunOrderNumbers] = useState(() => new Set());
+const [promotionRunExclusionsLoaded, setPromotionRunExclusionsLoaded] = useState(false);
+
+
+
+
+useEffect(() => {
+  let active = true;
+
+  const loadPromotionRunOrderNumbers = async () => {
+    const username = String(
+      loggedInUser.username || loggedInUser.user_name || ""
+    ).trim();
+    const sessionToken =
+      loggedInUser.fc_session_token ||
+      loggedInUser.session_token ||
+      loggedInUser.sessionToken ||
+      null;
+
+    if (!username || !sessionToken) {
+      if (active) setPromotionRunExclusionsLoaded(true);
+      return;
+    }
+
+    const { data, error } = await supabase.rpc(
+      "fc_list_promotion_run_order_numbers_v1",
+      {
+        p_username: username,
+        p_session_token: sessionToken,
+      }
+    );
+
+    if (error) {
+      console.warn(
+        "Promotion Run exclusion list load skipped:",
+        error?.message || error
+      );
+      return;
+    }
+
+    if (!active) return;
+
+    setPromotionRunOrderNumbers(
+      new Set(
+        (data || [])
+          .map((row) => String(row?.order_number || "").trim())
+          .filter(Boolean)
+      )
+    );
+    setPromotionRunExclusionsLoaded(true);
+  };
+
+  loadPromotionRunOrderNumbers();
+  window.addEventListener("focus", loadPromotionRunOrderNumbers);
+
+  return () => {
+    active = false;
+    window.removeEventListener("focus", loadPromotionRunOrderNumbers);
+  };
+}, [
+  loggedInUser?.username,
+  loggedInUser?.user_name,
+  loggedInUser?.fc_session_token,
+  loggedInUser?.session_token,
+  loggedInUser?.sessionToken,
+]);
 
 
 
@@ -651,11 +722,57 @@ useEffect(() => {
 
 
 
+  const isPromotionRunOrder = (order = {}) => {
+    const orderNumber = String(
+      order.orderId || order.order_number || order.orderNumber || ""
+    ).trim();
+
+    if (orderNumber && promotionRunOrderNumbers.has(orderNumber)) return true;
+
+    const markers = [
+      order.sale_type,
+      order.saleType,
+      order.order_type,
+      order.orderType,
+      order.order_source,
+      order.orderSource,
+      order.source,
+      order.channel,
+      order.notes,
+    ]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+
+    return markers.some(
+      (value) => value === "promotion_run" || value.includes("promotion run sale")
+    );
+  };
+
+
+
+
+  const isPaymentCollected = (order = {}) => {
+    const collected = order.paymentCollected ?? order.payment_collected;
+    const paymentStatus = String(order.paymentStatus || order.payment_status || "")
+      .trim()
+      .toLowerCase();
+
+    return (
+      collected === true ||
+      String(collected || "").trim().toLowerCase() === "yes" ||
+      paymentStatus === "paid"
+    );
+  };
+
+
+
+
   const driverNames = [
     "All",
     ...new Set(
       orders
         .filter((order) =>
+          !isPromotionRunOrder(order) &&
           ["Ready For Driver", "Delivered"].includes(order.status)
         )
         .map((order) => order.driverName || order.driver_name)
@@ -666,8 +783,14 @@ useEffect(() => {
 
 
 
-      const driverOrders = orders.filter((order) => {
+      const driverOrders = promotionRunExclusionsLoaded
+        ? orders.filter((order) => {
   const driverName = order.driverName || order.driver_name;
+
+
+
+
+  if (isPromotionRunOrder(order)) return false;
 
 
 
@@ -681,10 +804,7 @@ useEffect(() => {
     order.status === "Delivered" &&
     !order.paymentType &&
     !order.payment_type &&
-    order.paymentCollected !== "Yes" &&
-    order.payment_collected !== "Yes" &&
-    order.paymentCollected !== true &&
-    order.payment_collected !== true;
+    !isPaymentCollected(order);
 
 
 
@@ -707,7 +827,8 @@ useEffect(() => {
     matchesDriver &&
     !collectionCompletedLocally
   );
-  });
+  })
+        : [];
 const loadDriverCreditOutstanding = async ({
   customerAccountId,
   customerName,
@@ -805,6 +926,7 @@ const loadDriverCreditOutstanding = async ({
 
 
 const openCashCollection = async (order) => {
+  deliveryPaymentIntentRef.current = createPaymentIntentId();
   setCashCollectionOrder(getCollectionOrderKey(order));
 
 
@@ -1225,8 +1347,12 @@ const buildDeliveryPaymentAllocations = ({
 
 
 
+  const savingPaymentRef = useRef(false);
+  const deliveryPaymentIntentRef = useRef(null);
+
   const saveCashCollection = async (order) => {
-    if (savingPayment) return;
+    if (savingPayment || savingPaymentRef.current) return;
+    savingPaymentRef.current = true;
 
 
 
@@ -1615,9 +1741,9 @@ const paymentCollected = isCredit ? "No" : "Yes";
           collectorRole:
             loggedInUser.role || loggedInUser.access_level || "Driver",
           orderId: canonicalOrderUuid,
-          paymentIntentId: `delivery:${
-            order.id || order.orderId || order.order_number
-          }:${collectionType}:${paymentAmount}`,
+          // One stable intent per collection attempt: retries reuse it, while a
+          // separate collection gets a new intent even for the same amount.
+          paymentIntentId: deliveryPaymentIntentRef.current || (deliveryPaymentIntentRef.current = createPaymentIntentId()),
           notes: `Delivery collection - ${paymentType} - ${transactionReason}`,
           metadata: {
             order_uuid: canonicalOrderUuid,
@@ -1745,6 +1871,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
       console.error("Cash collection error:", error);
       alert("Could not save collection: " + error.message);
     } finally {
+      savingPaymentRef.current = false;
       setSavingPayment(false);
     }
   };
@@ -1871,7 +1998,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
           const ref = invoice._collectionReference;
           const choice = driverInvoiceSelections[ref] || {mode: "none", amount: ""};
           return <div key={ref} className="grid grid-cols-1 sm:grid-cols-3 gap-2 border-b py-2 items-center">
-            <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div>Due: {formatCurrency(invoice.remainingAmount)}</div></div>
+            <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div className="font-semibold">Invoice total: {formatCurrency(invoice.invoiceAmount)}</div><div>Amount due: {formatCurrency(invoice.remainingAmount)}</div></div>
             <select className="border rounded-lg p-2" value={choice.mode} onChange={(event) => setDriverInvoiceSelections((current) => ({...current, [ref]: {mode: event.target.value, amount: ""}}))}>
               <option value="none">Unpaid</option><option value="paid">Paid</option><option value="part">Part Paid</option><option value="previous_paid">Previous Paid — status only</option><option value="previous_part">Previous Part Paid — status only</option>
             </select>
@@ -2093,8 +2220,8 @@ const paymentCollected = isCredit ? "No" : "Yes";
 
 
                 {order.status === "Delivered" &&
-                    order.payment_collected !== "Yes" &&
-                    order.payment_collected !== true && (
+                    !isPaymentCollected(order) &&
+                    !isPromotionRunOrder(order) && (
                   <button
                     onClick={() => openCashCollection(order)}
                     className="bg-yellow-500 text-white px-4 py-2 rounded-lg text-xs font-bold min-w-[105px]"

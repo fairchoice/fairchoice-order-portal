@@ -1,3 +1,4 @@
+import { captureInvoiceLinePricing, calculateInvoiceAmendmentTotals } from "../../utils/invoiceAmendmentPricing.js";
 import {loadInvoiceFinancialSnapshot} from "../../services/invoiceFinancialSnapshot.js";
 import { isActiveReturnCredit } from "../../services/returnHeaderPersistence.js";
 import { previousStatusPaidAmount } from "../../utils/invoiceCollectionActions.js";
@@ -557,8 +558,10 @@ export default function InvoicesPortal() {
 
 
   const formTotals = useMemo(
-    () => calculateCartTotals(activeFormLines, { priceMode: form.priceMode }),
-    [activeFormLines, form.priceMode]
+    () => workbenchMode === "amend"
+      ? calculateInvoiceAmendmentTotals(activeFormLines, { ...amendOrder, priceMode: form.priceMode })
+      : calculateCartTotals(activeFormLines, { priceMode: form.priceMode }),
+    [activeFormLines, form.priceMode, workbenchMode, amendOrder]
   );
   const formTotalQuantity = activeFormLines.reduce(
     (sum, line) => sum + Number(line.qty ?? line.quantity ?? line.pickedQty ?? 0),
@@ -859,12 +862,12 @@ export default function InvoicesPortal() {
         productCode: getOrderItemProductCode(item),
         product_code: getOrderItemProductCode(item),
         name: item.product_name || item.productName || item.name,
-        qty: Number(item.qty || item.quantity || 0),
+        qty: Number(item.qty ?? item.quantity ?? 0),
         pickedQty: Number(item.picked_qty ?? item.pickedQty ?? item.qty ?? 0),
-        price: Number(item.price || item.unit_price || 0),
-        selectedPrice: Number(item.price || item.unit_price || 0),
-        unit_price: Number(item.price || item.unit_price || 0),
-        vatRate: item.vat_rate || item.vatRate || item.vat_type || item.vatType || 20,
+        price: Number(item.price ?? item.unit_price ?? 0),
+        selectedPrice: Number(item.price ?? item.unit_price ?? 0),
+        unit_price: Number(item.price ?? item.unit_price ?? 0),
+        ...captureInvoiceLinePricing(item, order.price_mode || order.priceMode || "VAT"),
         dbId: item.id || item.dbId,
         includeInPicking: item.include_in_picking !== false,
         sourceStatus: item.source_status || item.sourceStatus || "In Stock",
@@ -1089,13 +1092,12 @@ export default function InvoicesPortal() {
 
     setSaving(true);
     try {
-      const previousTotals = calculateCartTotals(amendOrder.items || [], {
-        priceMode: amendOrder.price_mode || amendOrder.priceMode || form.priceMode,
-      });
+      const previousTotals = { grandTotal: getInvoiceTotal(amendOrder) };
       const invoiceLines = filterActiveInvoiceLines(form.lines);
-      const totals = calculateCartTotals(invoiceLines, { priceMode: form.priceMode });
+      const totals = calculateInvoiceAmendmentTotals(invoiceLines, { ...amendOrder, priceMode: form.priceMode });
       const calculatedItems = calculateCartOrderItems(invoiceLines, {
         priceMode: form.priceMode,
+        preserveSavedLineTotals: true,
       });
       const activeDbIds = new Set(
         calculatedItems.map((line) => String(line.dbId || "")).filter(Boolean)

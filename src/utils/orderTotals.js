@@ -65,6 +65,7 @@ export const getOrderItemVatRate = (item = {}) =>
     item.vat_percent ??
       item.vatPercent ??
       item.vatRate ??
+      item.vat_rate ??
       item.vat_type ??
       item.vatType
   );
@@ -171,6 +172,13 @@ export const calculateCartOrderItems = (cart = [], options = {}) => {
   const lineTotals = paidItems.map((item) => {
     const qty = Number(item.qty ?? item.quantity ?? 0);
     const price = getOrderItemUnitPrice(item);
+    const saved = item._invoiceSavedPricing;
+    if (options.preserveSavedLineTotals && saved?.free) return 0;
+    if (options.preserveSavedLineTotals && includeVat && saved &&
+        Number(saved.qty) === qty && Number(saved.price) === price &&
+        normalizePriceMode(saved.priceMode) === normalizePriceMode(options.priceMode || options.price_mode || "vat")) {
+      return roundMoney(saved.netTotal);
+    }
     return roundMoney(price * qty);
   });
 
@@ -357,6 +365,7 @@ export const calculateCartTotals = (cart = [], options = {}) => {
     priceMode,
     discountPercent,
     promotionDiscountAmount: options.promotionDiscountAmount,
+    preserveSavedLineTotals: options.preserveSavedLineTotals,
   });
 
   const totalQty = paidItems.reduce((sum, item) => sum + Number(item.qty || 0), 0);

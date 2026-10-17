@@ -511,7 +511,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   if (productIds.length) {
     const { data: products, error: productsError } = await supabase
       .from("products")
-      .select("id, product_code, code, sku")
+      .select("id, product_code")
       .in("id", productIds);
 
 
@@ -554,7 +554,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
   if (missingCodeNames.length) {
     const { data: namedProducts, error: namedProductsError } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("product_name", missingCodeNames);
 
 
@@ -1250,7 +1250,7 @@ const withProductCodeFallbacks = async (order = {}) => {
   if (missingProductIds.length) {
     const { data, error } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("id", missingProductIds);
 
 
@@ -1279,7 +1279,7 @@ const withProductCodeFallbacks = async (order = {}) => {
   if (missingProductNames.length) {
     const { data, error } = await supabase
       .from("products")
-      .select("id, product_name, product_code, code, sku")
+      .select("id, product_name, product_code")
       .in("product_name", missingProductNames);
 
 
@@ -3326,6 +3326,13 @@ export function buildStandardInvoiceHtml(
       </head>
       <body>
         <div class="page">
+          ${
+            !isOrderForm && !isDeliveryNote
+              ? `<div class="watermark ${paymentStatus
+                  .toLowerCase()
+                  .replace(/\s+/g, "-")}">${escapeHtml(paymentStatus)}</div>`
+              : ""
+          }
           <main class="content">
             ${
               showHeaderFooter
@@ -4959,70 +4966,57 @@ export async function loadProcessingQueueOrders({
   customerName,
 } = {}) {
   const runQuery = async (buildQuery) => {
-    // processing_queue contains large JSON snapshots. Selecting every column and
-    // sorting the active queue by confirmed_at was causing PostgREST statement
-    // timeouts during ordinary order refreshes. Only load the fields this mapper
-    // actually consumes and use the indexed queue_status + queued_at path.
-    let query = supabase
-      .from("processing_queue")
-      .select([
-        "id",
-        "order_id",
-        "order_number",
-        "customer_account_id",
-        "customer_branch_id",
-        "branch_id",
-        "customer_name",
-        "branch_name",
-        "price_mode",
-        "queue_status",
-        "confirmed_at",
-        "queued_at",
-        "created_at",
-        "grand_total",
-        "subtotal",
-        "net_total",
-        "vat_total",
-        "total_quantity",
-        "total_lines",
-        "line_items",
-        "transaction_snapshot",
-      ].join(","))
-      .in("queue_status", activeProcessingQueueStatuses)
-      .order("queued_at", { ascending: true });
+    // processing_queue rows can contain large JSON snapshots. Load the active
+    // queue in small indexed pages so PostgREST does not hit statement timeout,
+    // while preserving the same rows and snapshot data used by existing logic.
+    const pageSize = 50;
+    const rows = [];
 
+    for (let from = 0; ; from += pageSize) {
+      let query = supabase
+        .from("processing_queue")
+        .select([
+          "id",
+          "order_id",
+          "order_number",
+          "customer_account_id",
+          "customer_branch_id",
+          "branch_id",
+          "customer_name",
+          "branch_name",
+          "price_mode",
+          "queue_status",
+          "confirmed_at",
+          "queued_at",
+          "created_at",
+          "grand_total",
+          "subtotal",
+          "net_total",
+          "vat_total",
+          "total_quantity",
+          "total_lines",
+          "line_items",
+          "transaction_snapshot",
+        ].join(","))
+        .in("queue_status", activeProcessingQueueStatuses)
+        .order("queued_at", { ascending: true })
+        .range(from, from + pageSize - 1);
 
+      query = buildQuery ? buildQuery(query) : query;
+      const { data, error } = await query;
 
+      if (error) {
+        console.warn("ProcessingQueue operational load skipped:", error.message);
+        return [];
+      }
 
-
-
-
-
-    query = buildQuery ? buildQuery(query) : query;
-    const { data, error } = await query;
-
-
-
-
-
-
-
-
-    if (error) {
-      console.warn("ProcessingQueue operational load skipped:", error.message);
-      return [];
+      const pageRows = data || [];
+      rows.push(...pageRows);
+      if (pageRows.length < pageSize) break;
     }
 
-
-
-
-
-
-
-
-    return data || [];
+    return rows;
   };
-
 
 
 

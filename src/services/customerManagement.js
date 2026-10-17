@@ -3,6 +3,8 @@ import { getStoredCustomerStatus } from "../utils/customerStatus";
 import { isTestAccount } from "../utils/testAccountFiltering";
 import { getFcSessionState, readStoredFcProfile } from "./fcSession";
 
+import { requirePerformanceGroup } from "../utils/performanceGroups.js";
+
 const normaliseStatus = getStoredCustomerStatus;
 const normalisePriceMode = (mode) => {
   const normalizedMode = String(mode || "VAT").trim().toLowerCase();
@@ -117,6 +119,7 @@ export async function saveCustomerAccount(account) {
 
   const payload = {
     account_name: account.account_name,
+    performance_group: requirePerformanceGroup(account.performance_group),
     contact_name: account.contact_name || "",
     phone: account.phone || "",
     mobile: account.mobile || "",

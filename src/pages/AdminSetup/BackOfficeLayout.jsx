@@ -48,7 +48,7 @@ function filterSectionsByPermission(user) {
 function canAccessBackOfficePage(user, page) {
   const role = normalizeRole(user?.role || user?.access_level);
   if (role === "Customer") return page === "customerPortal";
-  if (role === "Brand Partner") return ["order", "brandPerformance"].includes(page);
+  if (role === "Brand Partner") return ["order", "brandPerformance", "agencyPerformance"].includes(page);
   return registryCanAccessPage(user, internalPagePermissions[page] || page);
 }
 
@@ -121,13 +121,14 @@ export default function BackOfficeLayout({ page, setPage, fetchOrders, currentUs
     if (role === "Brand Partner") {
       return sections.map((section) => {
         if (section.title === "Order") return { ...section, items: section.items.filter((item) => item.key === "page.order.sales_rep") };
-        if (section.title === "Reports") return { ...section, items: section.items.filter((item) => item.key === "page.reports.brand_performance") };
+        if (section.title === "Reports") return { ...section, items: section.items.filter((item) => ["page.reports.brand_performance", "page.reports.agency_performance"].includes(item.key)) };
         return { ...section, items: [] };
       }).filter((section) => section.items.length > 0);
     }
     if (!isWarehouse || isAdmin) return sections;
     return sections.map((section) => {
       if (section.title === "Operations") return section;
+      if (section.title === "Reports") return { ...section, items: section.items.filter((item) => item.key === "page.reports.agency_performance") };
       if (section.title === "Accounts") return { ...section, items: section.items.filter((item) => item.key === "page.accounts.expenses") };
       return { ...section, items: [] };
     }).filter((section) => section.items.length > 0);

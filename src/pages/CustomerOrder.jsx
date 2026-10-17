@@ -98,6 +98,7 @@ import PurchasePlanningReport from "./reports/PurchasePlanningReport";
 import WarehouseActivityReport from "./reports/WarehouseActivityReport";
 import ProfitAnalysisReport from "./reports/ProfitAnalysisReport";
 import ProductLineAnalysisReport from "./reports/ProductLineAnalysisReport";
+import AgencyPerformanceReport from "./reports/AgencyPerformanceReport";
 import BrandPerformanceReport from "./reports/BrandPerformanceReport";
 import AllCreditOutstanding from "./AdminSetup/AllCreditOutstanding";
 import SalesRouteAnalysisReport from "./reports/SalesRouteAnalysisReport";
@@ -882,6 +883,7 @@ const loggedInUser =
   const basePermissions = activeUser?.effective_permissions || activeUser?.permissions || {};
   const dutyAllowsPage = (item) => {
     if (!dutyRestricted) return canAccessPage(activeUser, item.key);
+    if (item.key === "page.reports.agency_performance") return canAccessPage(activeUser, item.key);
     if (activeDuty === "sales_rep") {
       return item.key === "page.order.sales_rep" || item.key === "page.accounts.expenses";
     }
@@ -6307,6 +6309,7 @@ const backOfficeContent = comingSoonTitle ? (
     {page === "productLineAnalysis" && (
       <ProductLineAnalysisReport currentUser={activeUser} />
     )}
+    {page === "agencyPerformance" && <AgencyPerformanceReport currentUser={activeUser} />}
     {page === "brandPerformance" && <BrandPerformanceReport currentUser={activeUser} />}
     {page === "purchasePlanning" && (
       <PurchasePlanningReport products={products} currentUser={activeUser} />
@@ -6516,6 +6519,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           )}
           <button onClick={() => setPage("order")} className={`order-tab-btn btn-secondary bg-white text-blue-800 px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "order" ? "active" : ""}`}>Order</button>
           <button type="button" onClick={() => { window.location.hash = "promotion-run"; }} className="payment-history-tab-btn border border-emerald-200 bg-emerald-500 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold">Promotion Run</button>
+          <button type="button" onClick={() => setPage("agencyPerformance")} className="payment-history-tab-btn bg-white/10 border border-white/30 text-white px-3 py-1 rounded-lg text-xs font-bold">Agency Performance</button>
           {salesRouteMode && <button onClick={() => setPage("expenses")} className={`payment-history-tab-btn bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "expenses" ? "active" : ""}`}>Expenses</button>}
           {canCollectCash && (
             <button onClick={() => { if (salesRouteMode && selectedCustomerAccount) setSalesPaymentForm((f) => ({ ...f, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); setPage("salesCashCollection"); }} className={`payment-history-tab-btn btn-primary bg-white/10 border border-white/30 text-white px-2 sm:px-3 py-1 rounded-lg text-xs font-bold ${page === "salesCashCollection" ? "active" : ""}`}>Collection</button>
@@ -6705,6 +6709,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                           { label: "Route", hidden: !salesRouteMode, onClick: () => setShowSalesRouteModal(true) },
                           { label: "Order", onClick: () => setPage("order") },
                           { label: "Promotion Run", onClick: () => { window.location.hash = "promotion-run"; } },
+                          { label: "Agency Performance", onClick: () => setPage("agencyPerformance") },
                           { label: "Expenses", hidden: !salesRouteMode, onClick: () => setPage("expenses") },
                           { label: "Cash Collection", hidden: !canCollectCash, onClick: () => { if (salesRouteMode && selectedCustomerAccount) { setSalesPaymentForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); } setPage("salesCashCollection"); } },
                           { label: "Return", onClick: () => { if (salesRouteMode && selectedCustomerAccount) { setSalesReturnForm((form) => ({ ...form, customerId: selectedCustomerAccount.id, branchId: selectedBranch?.id || "" })); } setPage("salesReturn"); } },
@@ -7191,6 +7196,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
                           { label: "Route", hidden: !salesRouteMode, onClick: () => setShowSalesRouteModal(true) },
                           { label: "Order", onClick: () => setPage("order") },
                           { label: "Promotion Run", onClick: () => { window.location.hash = "promotion-run"; } },
+                          { label: "Agency Performance", onClick: () => setPage("agencyPerformance") },
                           { label: "Expenses", hidden: !salesRouteMode, onClick: () => setPage("expenses") },
                           {
                             label: "Cash Collection",
@@ -7785,7 +7791,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             const ref = invoice._collectionReference;
             const choice = salesInvoiceSelections[ref] || { mode: "none", amount: "" };
             return <div key={ref} className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-center border-b py-2">
-              <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div>Due: {formatCurrency(invoice.remainingAmount)}</div></div>
+              <div className="text-sm"><strong>{formatDisplayOrderId(ref)}</strong><div className="font-semibold">Invoice total: {formatCurrency(invoice.invoiceAmount)}</div><div>Amount due: {formatCurrency(invoice.remainingAmount)}</div></div>
               <select className="border rounded-lg p-2" value={choice.mode} onChange={(event) => setSalesInvoiceSelections((current) => ({...current, [ref]: { mode: event.target.value, amount: "" }}))}>
                 <option value="none">Unpaid</option><option value="paid">Paid</option><option value="part">Part Paid</option><option value="previous_paid">Previous Paid — status only</option><option value="previous_part">Previous Part Paid — status only</option>
               </select>
