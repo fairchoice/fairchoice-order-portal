@@ -267,6 +267,7 @@ useEffect(() => {
           .filter(Boolean)
       )
     );
+    setPromotionRunExclusionsLoaded(true);
   };
 
   loadPromotionRunOrderNumbers();
@@ -391,7 +392,7 @@ const cleanLegacyTestAmount = (value, order = {}) => {
     const resolvedOrder = await withResolvedInvoicePaymentStatus(safeOrder);
     printThermalReceipt(resolvedOrder);
   };
- 
+
   const [paymentForm, setPaymentForm] = useState({
   paymentType: "Cash",
   collectionType: "TODAY_INVOICE",
@@ -1946,7 +1947,7 @@ const paymentCollected = isCredit ? "No" : "Yes";
       {branch.postcode ? ` - ${branch.postcode}` : ""}
     </option>
   ))}
-  
+
 </select>
 
 
@@ -2930,7 +2931,7 @@ const canSave =
     </>
   );
 })()}
-              </div>             
+              </div>
             )}
           </div>
         ))}
