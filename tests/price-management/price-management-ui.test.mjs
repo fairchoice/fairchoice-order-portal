@@ -26,3 +26,8 @@ for(const name of ['BulkDatabaseToOrders','SingleDatabaseToOrder'])test(`${name}
  assert.match(html,/value="both" selected=""/);assert.match(html,/value="Received"/);assert.match(html,/value="Warehouse Packing"/);
  assert.match(html,name === 'BulkDatabaseToOrders' ? /Apply latest prices to Received \/ Warehouse/ : /Update Prices in Orders \/ Warehouse/);
 });
+
+test('Warehouse review names the customer pricing code beside the exact proposed price',()=>{
+ const html=renderToStaticMarkup(React.createElement(components.BulkDatabaseToOrders,{...props,previewRows:[{itemId:'i',orderId:'o',orderNumber:'ORD-1792090626955-36f58f86',orderStatus:'Warehouse Packing',productName:'IVG Refill',priceModeLabel:'RCCASH01',qty:2,oldPrice:19,newPrice:17.75,lineTotal:35.50}]}));
+ assert.match(html,/RCCASH01/);assert.match(html,/£17.75/);assert.match(html,/£35.50/);
+});

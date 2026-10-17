@@ -41,7 +41,7 @@ export default function BulkDatabaseToOrders({
         <div className="font-extrabold">Pending database price updates</div>
         <div className="mt-1">
           Only products saved through the bulk or single database update appear here.
-          Apply latest prices overwrites existing prices in the selected Received / Warehouse stage.
+          Apply latest prices uses each order’s pricing mode, customer price code and exact product prices in the selected Received / Warehouse stage.
           Clear pending changes keeps the saved database prices and leaves orders unchanged.
         </div>
       </div>
@@ -177,6 +177,7 @@ export default function BulkDatabaseToOrders({
               <tr>
                 <th className="border p-3 text-left">Order</th>
                 <th className="border p-3 text-left">Stage</th>
+                <th className="border p-3 text-left">Pricing</th>
                 <th className="border p-3 text-left">Product</th>
                 <th className="border p-3">Qty</th>
                 <th className="border p-3">Current Price</th>
@@ -192,6 +193,7 @@ export default function BulkDatabaseToOrders({
                   <tr key={row.itemId}>
                     <td className="border p-3 font-bold">{formatDisplayOrderId(row.orderNumber)}</td>
                     <td className="border p-3">{row.orderStatus === "Warehouse Packing" ? "Warehouse" : row.orderStatus}</td>
+                    <td className="border p-3">{row.priceModeLabel || row.expectedPriceMode}</td>
                     <td className="border p-3">{row.productName}</td>
                     <td className="border p-3 text-right">{row.qty}</td>
                     <td className="border p-3 text-right">£{Number(row.oldPrice || 0).toFixed(2)}</td>

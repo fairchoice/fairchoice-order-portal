@@ -1,4 +1,4 @@
-import { getProductPriceForMode, getVatRate, isVatPriceMode, roundMoney } from "./pricing.js";
+import { getProductPriceForMode, getPriceModeLabel, normalizePriceMode, getVatRate, isVatPriceMode, roundMoney } from "./pricing.js";
 
 export const activePriceOrderStages = (stage = "both") => {
   if (stage === "both") return ["Received", "Warehouse Packing"];
@@ -13,6 +13,14 @@ export function buildPriceOrderPreview(orders = [], products = [], productIds = 
   for (const order of orders) {
     if (!activePriceOrderStages().includes(order.status) || order.financial_voided_at ||
         ["VOID", "VOIDED"].includes(String(order.financial_status || "").toUpperCase())) continue;
+    const mode = normalizePriceMode(order.price_mode || "vat");
+    if (mode.startsWith("code:")) {
+      const parts = mode.slice(5).split("|");
+      const codeIds = [parts[0], ...parts.filter(part => part.startsWith("overlay:")).map(part => part.slice(8))];
+      if (codeIds.some(id => !(settings.price_codes || []).some(code => String(code.id).toLowerCase() === id && code.active !== false))) {
+        throw new Error(`Customer price code is unavailable for ${order.order_number || order.id}. Refresh pricing rules before updating prices.`);
+      }
+    }
     for (const item of order.order_items || []) {
       const product = byId.get(String(item.product_id));
       if (!product || !selected.has(String(item.product_id))) continue;
@@ -27,7 +35,7 @@ export function buildPriceOrderPreview(orders = [], products = [], productIds = 
       const vat = isVatPriceMode(priceMode) ? roundMoney(net * vatRate / 100) : 0;
       if (![qty, price, net, vat].every(Number.isFinite) || qty < 0 || price < 0) throw new Error("An order line has an invalid quantity or price.");
       rows.push({ itemId: item.id, orderId: order.id, orderNumber: order.order_number || order.id,
-        orderStatus: order.status, productId: String(item.product_id), productName: item.product_name || product.product_name || product.name || "",
+        orderStatus: order.status, priceModeLabel: getPriceModeLabel(priceMode, settings), productId: String(item.product_id), productName: item.product_name || product.product_name || product.name || "",
         qty, oldPrice: Number(item.price ?? item.unit_price ?? 0), newPrice: price,
         lineTotal: net, netTotal: net, grossTotal: roundMoney(net + vat),
         expectedUpdatedAt: item.updated_at || null, expectedPriceMode: order.price_mode || "", expectedCountry: order.customer_country || "",
