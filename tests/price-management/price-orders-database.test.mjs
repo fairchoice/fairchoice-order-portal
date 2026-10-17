@@ -1,3 +1,4 @@
+import {buildPriceOrderPreview} from "../../src/utils/priceManagementOrders.js";
 import {PGlite} from '@electric-sql/pglite';
 import {readFile,readdir} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
@@ -57,4 +58,19 @@ test('header totals continue to exclude pre-supply lines without changing their 
  await apply([r]);assert.equal(Number(await scalar('select order_total from orders where id=$1',[r.orderId])),72);
  assert.equal(await scalar('select status from order_items where id=$1',[extra]),'Pre-Order Supply');
  assert.equal(Number(await scalar('select qty from order_items where id=$1',[extra])),10);
+});
+
+test('customer-code exact price survives the reviewed Warehouse write without a second VAT addition',async()=>{
+ const fixtureRow=await fixture('Warehouse Packing');
+ const code='a613c6ef-1f78-41f4-a309-957cac993e82',mode=`CODE:${code.toUpperCase()}|INC VAT`;
+ await db.query('update products set vat_price=15.69 where id=$1',[fixtureRow.productId]);
+ await db.query('update orders set price_mode=$1 where id=$2',[mode,fixtureRow.orderId]);
+ const order=(await db.query('select * from orders where id=$1',[fixtureRow.orderId])).rows[0];
+ order.order_items=(await db.query('select * from order_items where order_id=$1',[fixtureRow.orderId])).rows;
+ const products=[{id:fixtureRow.productId,vat_price:15.69,vat_type:'20',priceCodePrices:{[code]:17.75}}];
+ const reviewed=buildPriceOrderPreview([order],products,[fixtureRow.productId],{price_codes:[{id:code,code:'RCCASH01',discount_percent:3.5}]});
+ await apply(reviewed);
+ const saved=(await db.query('select price,vat_total,gross_total from order_items where id=$1',[fixtureRow.itemId])).rows[0];
+ assert.equal(Number(saved.price),17.75);assert.equal(Number(saved.vat_total),0);assert.equal(Number(saved.gross_total),88.75);
+ assert.equal(Number(await scalar('select order_total from orders where id=$1',[fixtureRow.orderId])),88.75);
 });

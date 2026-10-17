@@ -1,3 +1,4 @@
+import { loadOrderPricingContext } from "../../services/orderPricingContext.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getFcSessionState, profileWithFcLoginSession, readStoredFcProfile } from "../../services/fcSession.js";
 
@@ -532,28 +533,10 @@ export default function PriceManagement({
     await refreshProducts();
   }
 
-  async function loadFreshPricingSettings() {
-    const { data, error } = await supabase
-      .from("pricing_settings")
-      .select("*")
-      .eq("id", 1)
-      .maybeSingle();
-
-    if (error) {
-      throw new Error(`Could not load current pricing settings: ${error.message}`);
-    }
-
-    return data || pricingSettings;
-  }
-
   async function loadActiveOrderMatches(productIds, stage = orderStatus) {
     const ids = [...new Set((productIds || []).filter(Boolean).map(String))];
     if (!ids.length) return [];
-    const [settings, productResult] = await Promise.all([
-      loadFreshPricingSettings(),
-      supabase.from("products").select("*").in("id", ids),
-    ]);
-    if (productResult.error) throw productResult.error;
+    const { settings, products: currentProducts } = await loadOrderPricingContext(ids, { client: supabase });
     const orders = [];
     for (let offset = 0; ; offset += 200) {
       const result = await supabase.from("orders")
@@ -564,7 +547,7 @@ export default function PriceManagement({
       orders.push(...(result.data || []));
       if ((result.data || []).length < 200) break;
     }
-    return buildPriceOrderPreview(orders, productResult.data || [], ids, settings);
+    return buildPriceOrderPreview(orders, currentProducts, ids, settings);
   }
 
   async function openUpdatedProductsReview(productIds) {
