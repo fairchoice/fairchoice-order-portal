@@ -13,10 +13,10 @@ import {STAFF_ROLES,canAccessPage,getAccessiblePageSections} from '../../src/sec
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=await mkdtemp(path.join(tmpdir(),'fc-agency-ui-'));
 after(()=>rm(output,{recursive:true,force:true}));
-await writeFile(path.join(output,'entry.mjs'),`export {default as Layout} from ${JSON.stringify(path.join(root,'src/pages/AdminSetup/BackOfficeLayout.jsx'))};export {default as Report} from ${JSON.stringify(path.join(root,'src/pages/reports/AgencyPerformanceReport.jsx'))};export {default as CustomerForm} from ${JSON.stringify(path.join(root,'src/pages/AdminSetup/CustomerForm.jsx'))};export {default as CustomerSales} from ${JSON.stringify(path.join(root,'src/pages/reports/AgencyCustomerSales.jsx'))};export {default as AgencyOptions} from ${JSON.stringify(path.join(root,'src/pages/AdminSetup/AgencyAccessOptions.jsx'))};`);
+await writeFile(path.join(output,'entry.mjs'),`export {default as Earnings} from ${JSON.stringify(path.join(root,'src/pages/reports/AgencyEarnings.jsx'))};export {default as Layout} from ${JSON.stringify(path.join(root,'src/pages/AdminSetup/BackOfficeLayout.jsx'))};export {default as Report} from ${JSON.stringify(path.join(root,'src/pages/reports/AgencyPerformanceReport.jsx'))};export {default as CustomerForm} from ${JSON.stringify(path.join(root,'src/pages/AdminSetup/CustomerForm.jsx'))};export {default as CustomerSales} from ${JSON.stringify(path.join(root,'src/pages/reports/AgencyCustomerSales.jsx'))};export {default as AgencyOptions} from ${JSON.stringify(path.join(root,'src/pages/AdminSetup/AgencyAccessOptions.jsx'))};`);
 await promisify(execFile)(process.execPath,[path.join(root,'node_modules/vite/bin/vite.js'),'build','--ssr',path.join(output,'entry.mjs'),'--outDir',path.join(output,'build')],{cwd:root});
 await symlink(path.join(root,'node_modules'),path.join(output,'build/node_modules'),'dir');
-const {Layout,Report,CustomerForm,CustomerSales,AgencyOptions}=await import(pathToFileURL(path.join(output,'build/entry.js')));
+const {Earnings,Layout,Report,CustomerForm,CustomerSales,AgencyOptions}=await import(pathToFileURL(path.join(output,'build/entry.js')));
 test('every staff role has Agency Performance under Reports without gaining payment-write permissions',()=>{
  for(const role of STAFF_ROLES){const user={username:'staff',role,active:true,effective_permissions:{}};assert.ok(canAccessPage(user,'agencyPerformance'));assert.ok(getAccessiblePageSections(user).find(s=>s.title==='Reports')?.items.some(i=>i.key==='page.reports.agency_performance'));}
  for(const user of [{role:'Customer',effective_permissions:{all_access:true}},{role:'Admin',active:false}]) assert.equal(canAccessPage(user,'agencyPerformance'),false);
@@ -44,11 +44,11 @@ test('customer form renders required Performance Group dropdown and report defau
 });
 
 test('customer sales table displays names and amounts with complete page navigation',()=>{
- const html=renderToStaticMarkup(React.createElement(CustomerSales,{data:{rows:[{customer_id:'1',customer_name:'Example shop',sales:123.45,invoice_count:2}],page:2,page_size:30,total_rows:65,total_pages:3,total_sales:1000},onPage(){}}));
- for(const text of ['Example shop','£123.45','Page 2 of 3','31–60 of 65','First','Previous','Next','Last','£1,000.00']) assert.ok(html.includes(text));
+ const html=renderToStaticMarkup(React.createElement(CustomerSales,{data:{rows:[{customer_id:'1',customer_name:'Example shop',sales:123.45,invoice_count:2}],page:2,page_size:10,total_rows:65,total_pages:7,total_sales:1000},onPage(){}}));
+ for(const text of ['Example shop','£123.45','Page 2 of 7','11–20 of 65','First','Previous','Next','Last','£1,000.00']) assert.ok(html.includes(text));
 });
 test('customer page boundaries disable navigation and show an accurate empty state',()=>{
- const empty=renderToStaticMarkup(React.createElement(CustomerSales,{data:{rows:[],page:1,page_size:30,total_rows:0,total_pages:1,total_sales:0},onPage(){}}));assert.match(empty,/No customers match/);assert.match(empty,/Showing 0–0 of 0/);assert.equal((empty.match(/disabled=""/g)||[]).length,4);
+ const empty=renderToStaticMarkup(React.createElement(CustomerSales,{data:{rows:[],page:1,page_size:10,total_rows:0,total_pages:1,total_sales:0},onPage(){}}));assert.match(empty,/No customers match/);assert.match(empty,/Showing 0–0 of 0/);assert.equal((empty.match(/disabled=""/g)||[]).length,4);
  const loading=renderToStaticMarkup(React.createElement(CustomerSales,{loading:true,data:{rows:[],page:2,total_pages:4},onPage(){}}));assert.equal((loading.match(/disabled=""/g)||[]).length,4);
 });
 
@@ -61,4 +61,11 @@ test('agency permission keys are registered for Select All and Access Control sa
  const {ALL_REGISTERED_PERMISSION_KEYS,getRoleDefaultPermissionKeys}=await import('../../src/security/accessControlRegistry.js');
  for(const {key} of AGENCY_ACCESS_OPTIONS){assert.ok(ALL_REGISTERED_PERMISSION_KEYS.includes(key));assert.ok(getRoleDefaultPermissionKeys('Super Admin').includes(key));assert.ok(!getRoleDefaultPermissionKeys('Driver').includes(key));}
  const source=await readFile(path.join(root,'src/pages/AdminSetup/AccessControl.jsx'),'utf8');assert.match(source,/<AgencyAccessOptions/);assert.match(source,/keepAgencies\(selected.permission_keys\)/);
+});
+
+test('earnings cards show estimates, assigned expenses and filtered-area limits',()=>{
+ const html=renderToStaticMarkup(React.createElement(Earnings,{data:{net_sales_ex_vat:100,known_cost_of_goods:40,return_credits_ex_vat:0,gross_profit:60,agency_expenses:10,net_earnings:50}}));
+ for(const text of ['Profit and expenses','£100.00','£40.00','£60.00','£10.00','£50.00','Estimated earnings after expenses','shared / unassigned expenses']) assert.ok(html.includes(text));
+ const missing=renderToStaticMarkup(React.createElement(Earnings,{data:{missing_cost_lines:2,unmapped_invoices:1,unknown_returns:0,gross_profit:null,net_earnings:null,area_filtered:true}}));
+ assert.match(missing,/Unavailable/);assert.match(missing,/2 missing line costs/);assert.match(missing,/Clear city and postcode filters/);assert.match(missing,/Missing costs are not treated as profit/);
 });

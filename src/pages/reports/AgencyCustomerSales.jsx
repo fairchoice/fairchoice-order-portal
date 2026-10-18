@@ -5,10 +5,10 @@ export default function AgencyCustomerSales({ data, loading = false, onPage }) {
   const page = Number(data?.page || 1);
   const pages = Number(data?.total_pages || 1);
   const total = Number(data?.total_rows || 0);
-  const size = Number(data?.page_size || 30);
+  const size = Number(data?.page_size || 10);
   return <section className="agency-section" aria-busy={loading} aria-labelledby="agency-customer-sales-title">
     <h2 id="agency-customer-sales-title">Customer sales</h2>
-    <p>Sales including VAT for the selected Performance Group, dates, postcode and city. Highest sales first; customers with no sales are included.</p>
+    <p>Sales including VAT for the selected Performance Group, dates, postcode and city. 10 customers per page. Highest sales first; customers with no sales are included.</p>
     <div className="agency-table"><table>
       <thead><tr><th>Customer</th><th>Sales amount</th><th>Invoices / orders</th></tr></thead>
       <tbody>{rows.length ? rows.map((row) => <tr key={row.customer_id}><th scope="row">{row.customer_name || "Unnamed customer"}</th><td>{money(row.sales)}</td><td>{Number(row.invoice_count || 0).toLocaleString("en-GB")}</td></tr>) : <tr><td colSpan={3}>No customers match this selection.</td></tr>}</tbody>

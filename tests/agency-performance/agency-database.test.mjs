@@ -19,9 +19,15 @@ create table customer_wallet_transactions(invoice_id uuid,customer_account_id uu
 create table customer_branch_opening_balances(customer_account_id uuid,customer_branch_id uuid,opening_balance numeric);
 create table stock_locations(id uuid primary key,location_name text,country text,active boolean);
 create table product_location_stock(location_id uuid,product_id uuid,qty integer,low_stock_alert integer);
-create table business_payouts(amount numeric,status text,voided_at timestamptz,payout_date date);
+create table business_payouts(amount numeric,status text,voided_at timestamptz,payout_date date,id uuid primary key default gen_random_uuid(),created_at timestamptz default now(),updated_at timestamptz default now());
+create table financial_audit_log(action text,entity_type text,entity_id text,reason text,before_data jsonb,after_data jsonb,changed_by text,actor_staff_id uuid);
+create table products(id uuid primary key,cost_price numeric,vat_type text);
+create table stock_receipts(id uuid default gen_random_uuid(),product_id uuid,qty_received integer,cost_price numeric,received_date timestamptz,created_at timestamptz default now());
+create table order_items(id uuid default gen_random_uuid(),order_id uuid,product_id uuid,qty numeric,picked_qty numeric,price numeric,unit_price numeric,net_total numeric,line_total numeric,vat_rate numeric,vat_type text,source_status text,include_in_picking boolean);
+create table customer_returns(id uuid default gen_random_uuid(),customer_account_id uuid,customer_branch_id uuid,branch_id uuid,status text,financial_disposition text,return_total numeric,net_total numeric,vat_total numeric,confirmed_at timestamptz,created_at timestamptz default now(),reversed_at timestamptz);
+alter table orders add price_mode text default 'VAT';
 create function fc_require_session_permission_v2(u text,t text,p text) returns table(staff_id uuid,staff_role text,effective_permissions jsonb) language plpgsql as $$declare sid uuid;perms jsonb;begin
- if t<>'valid' or u='customer' or p<>'order.checkout.payment' then raise exception 'Denied' using errcode='42501'; end if;
+ if t<>'valid' or u='customer' or p not in ('order.checkout.payment','expenses.approve','expenses.create','expenses.view') then raise exception 'Denied' using errcode='42501'; end if;
  select m.id into sid from mock_staff m where m.username=u;
  if found then
   select coalesce(jsonb_object_agg(sp.permission_key,sp.allowed),'{}'::jsonb) into perms from fc_staff_permissions sp join fc_permissions fp on fp.permission_key=sp.permission_key and fp.active where sp.staff_id=sid;
@@ -31,6 +37,7 @@ create function fc_require_session_permission_v2(u text,t text,p text) returns t
   -- Existing report fixtures are explicitly assigned every scoped group.
   perms:='{"agency.middleton_england":true,"agency.south_england":true,"agency.west_england":true,"agency.east_england":true,"agency.wales":true,"agency.shared_totals":true}'::jsonb;
  end if;
+ if p<>'order.checkout.payment' and not coalesce((perms->>'all_access')::boolean,false) and not coalesce((perms->>p)::boolean,false) then raise exception 'Denied' using errcode='42501';end if;
  return query select sid,u,perms;end;$$;`);
 const migrations=new URL('../../supabase/migrations/',import.meta.url);
 const file=(await readdir(migrations)).find(n=>n.endsWith('_agency_performance_report.sql'));
@@ -41,6 +48,8 @@ await db.exec("insert into customer_accounts(id,country,town_city) values('00000
 await db.exec(groupsSql);
 const pagesSql=await readFile(new URL((await readdir(migrations)).find(n=>n.endsWith('_agency_customer_sales_pages.sql')),migrations),'utf8');await db.exec(pagesSql);await db.exec(pagesSql);
 const accessSql=await readFile(new URL((await readdir(migrations)).find(n=>n.endsWith('_agency_access_control.sql')),migrations),'utf8');await db.exec(accessSql);await db.exec(accessSql);
+await db.exec("insert into fc_permissions(permission_key,active) values('expenses.approve',true),('expenses.create',true),('expenses.view',true)");
+const earningsSql=await readFile(new URL('20261018114102_agency_earnings_and_expense_groups.sql',migrations),'utf8');await db.exec(earningsSql);
 const backfilled=(await db.query('select performance_group from customer_accounts order by id')).rows.map(r=>r.performance_group);
 const scalar=async(q,p=[])=>Object.values((await db.query(q,p)).rows[0])[0];
 const report=(prefix=null,city=null,from='2026-10-01',to='2026-10-31',user='owner',token='valid')=>scalar('select fc_agency_performance_v1($1,$2,$3,$4,$5,$6)',[user,token,from,to,prefix,city]);
@@ -48,7 +57,7 @@ const number=n=>Number(n||0);
 const account=async(country='England',postcode='MK9 1AB',city='Milton Keynes')=>{const id=randomUUID();await db.query('insert into customer_accounts(id,country,postcode,town_city,address) values($1,$2,$3,$4,$5)',[id,country,postcode,city,city]);return id;};
 const invoice=async(a,amount=100,branch=null,date='2026-10-17T12:00Z',status='ISSUED')=>{const id=randomUUID();await db.query('insert into customer_invoices(id,customer_account_id,customer_branch_id,invoice_number,invoice_date,invoice_total,status) values($1,$2,$3,$4,$5,$6,$7)',[id,a,branch,id,date,amount,status]);return id;};
 const payment=async(a,amount=30,branch=null,status='POSTED',method='Cash',type='PAYMENT',date='2026-10-17T12:00Z',ref=randomUUID())=>{const id=randomUUID();await db.query('insert into customer_payments(id,customer_account_id,customer_branch_id,amount,status,payment_method,transaction_type,payment_date,payment_reference) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,a,branch,amount,status,method,type,date,ref]);return id;};
-beforeEach(()=>db.exec('truncate mock_staff,fc_staff_permissions,customer_accounts,customer_branches,customer_invoices,orders,customer_payments,customer_ledger,central_payment_archive,customer_wallet_transactions,customer_branch_opening_balances,stock_locations,product_location_stock,business_payouts;'));
+beforeEach(()=>db.exec('truncate mock_staff,fc_staff_permissions,customer_accounts,customer_branches,customer_invoices,orders,customer_payments,customer_ledger,central_payment_archive,customer_wallet_transactions,customer_branch_opening_balances,stock_locations,product_location_stock,business_payouts,financial_audit_log,products,order_items,stock_receipts,customer_returns;'));
 test('system administrators get legacy aggregates; scoped staff, customers and invalid sessions are denied',async()=>{
  for(const role of ['owner','Super Admin']) {const r=await report(null,null,null,null,role);assert.equal(number(r.sales),0);assert.equal('invoices' in r,false);}
  await assert.rejects(report(null,null,null,null,'Driver'),/Agency access denied/);
@@ -82,7 +91,7 @@ test('England location stock is counted once and remains country-wide under city
  const a=await account(),eng=randomUUID(),wal=randomUUID(),p=randomUUID();await invoice(a);await db.query("insert into stock_locations values($1,'England warehouse','England',true),($2,'Wales warehouse','Wales',true)",[eng,wal]);await db.query('insert into product_location_stock values($1,$3,5,7),($2,$3,100,10)',[eng,wal,p]);assert.equal(number((await report('LU')).stock_units),5);assert.equal(number((await report()).stock_locations[0].low_stock),1);
 });
 test('shared expenses use posted nonvoid records and date filter, unaffected by area',async()=>{
- await db.exec("insert into business_payouts values(80,'POSTED',null,'2026-10-17'),(900,'DRAFT',null,'2026-10-17'),(300,'POSTED',now(),'2026-10-17'),(100,'POSTED',null,'2026-09-01')");assert.equal(number((await report('LU')).shared_expenses),80);
+ await db.exec("insert into business_payouts(amount,status,voided_at,payout_date) values(80,'POSTED',null,'2026-10-17'),(900,'DRAFT',null,'2026-10-17'),(300,'POSTED',now(),'2026-10-17'),(100,'POSTED',null,'2026-09-01')");assert.equal(number((await report('LU')).shared_expenses),80);
 });
 test('city list grows from saved towns and Bedford matches delivery address',async()=>{
  const a=await account('England','MK40 1AB','');const b=randomUUID();await db.query("insert into customer_branches values($1,$2,'England','MK40 2AB','High Street, Bedford')",[b,a]);await invoice(a,100,b);await invoice(await account('England','OX1 1AB','Oxford'),50);assert.equal(number((await report(null,'Bedford')).sales),100);assert.ok((await report()).cities.includes('Oxford'));
@@ -121,10 +130,10 @@ test('Wales group reads Wales stock; England groups share country stock without 
 const customerPage=(page=1,group='Middleton England',prefix=null,city=null,from=null,to=null,user='Driver',token='valid')=>scalar('select fc_agency_customer_sales_v1($1,$2,$3,$4,$5,$6,$7,$8)',[user,token,from,to,prefix,city,group,page]);
 test('customer sales pages are bounded, deterministic, complete and reconcile with the group summary',async()=>{
  const ids=[];for(let j=0;j<65;j++){const a=await account();ids.push(a);await db.query('update customer_accounts set account_name=$2 where id=$1',[a,'Customer '+j]);await invoice(a,j);}
- const pages=await Promise.all([customerPage(1),customerPage(2),customerPage(3)]);assert.deepEqual(pages.map(p=>p.rows.length),[30,30,5]);assert.equal(pages[0].rows[0].customer_name,'Customer 64');
+ const pages=await Promise.all(Array.from({length:7},(_,i)=>customerPage(i+1)));assert.deepEqual(pages.map(p=>p.rows.length),[10,10,10,10,10,10,5]);assert.equal(pages[0].rows[0].customer_name,'Customer 64');
  const rows=pages.flatMap(p=>p.rows);assert.equal(new Set(rows.map(r=>r.customer_id)).size,65);assert.deepEqual(new Set(rows.map(r=>r.customer_id)),new Set(ids));assert.equal(rows.reduce((sum,r)=>sum+number(r.sales),0),number((await groupReport()).sales));
- for(const page of pages){assert.equal(number(page.total_rows),65);assert.equal(number(page.total_pages),3);assert.equal(number(page.total_sales),2080);}
- assert.deepEqual((await customerPage(2)).rows,pages[1].rows);assert.equal((await customerPage(999)).page,3);
+ for(const page of pages){assert.equal(number(page.total_rows),65);assert.equal(number(page.total_pages),7);assert.equal(number(page.total_sales),2080);}
+ assert.deepEqual((await customerPage(2)).rows,pages[1].rows);assert.equal((await customerPage(999)).page,7);
 });
 test('customer names and sales stay within Performance Group and applied postcode/city/date filters',async()=>{
  const a=await account(),b=await account('England','LU1 1AB','Luton'),c=await account('England','SO1 1AB','Southampton');await invoice(a,100);await invoice(b,200);await invoice(c,900);
@@ -170,4 +179,76 @@ test('master access includes all agencies while invalid/customer sessions remain
  assert.equal((await accessFor('owner')).groups.length,5);assert.equal((await accessFor('owner')).can_view_shared_totals,true);
  await assert.rejects(accessFor('customer'),/Denied/);await assert.rejects(accessFor('owner','expired'),/Denied/);
  const privileges=await scalar("select has_function_privilege('anon','fc_require_agency_access_v1(text,text,text)','execute')");assert.equal(privileges,false);
+});
+
+const earnings=(user='owner',group='Middleton England',prefix=null,city=null,token='valid')=>scalar('select fc_agency_earnings_v1($1,$2,$3,$4,$5,$6,$7)',[user,token,'2026-10-01','2026-10-31',prefix,city,group]);
+async function costedSale({amount=120,price=100,qty=1,cost=40,mode='VAT',rate=20,city='Milton Keynes'}={}) {
+ const a=await account('England',city==='Southampton'?'SO1 1AB':'MK9 1AB',city),o=randomUUID(),p=randomUUID();
+ await db.query("insert into orders(id,customer_account_id,order_number,status,price_mode) values($1::uuid,$2,$1::uuid::text,'Delivered',$3)",[o,a,mode]);
+ const i=await invoice(a,amount);await db.query('update customer_invoices set order_id=$1 where id=$2',[o,i]);
+ await db.query("insert into products values($1,$2,'20%')",[p,cost]);
+ await db.query("insert into order_items(order_id,product_id,qty,price,vat_rate,source_status) values($1,$2,$3,$4,$5,'In Stock')",[o,p,qty,price,rate]);
+ return {a,o,p,i};
+}
+const expense=async(amount=10,group='Middleton England',status='POSTED',date='2026-10-17')=>scalar('insert into business_payouts(amount,status,payout_date,performance_group) values($1,$2,$3,$4) returning id',[amount,status,date,group]);
+test('earnings reconcile canonical VAT sales, known product costs and agency-only posted expenses',async()=>{
+ await costedSale();await expense(10);await expense(999,'South England');await expense(888,null);await expense(777,'Middleton England','DRAFT');await expense(666,'Middleton England','POSTED','2026-09-30');
+ const r=await earnings();assert.equal(number(r.sales_ex_vat),100);assert.equal(number(r.known_cost_of_goods),40);assert.equal(number(r.gross_profit),60);assert.equal(number(r.agency_expenses),10);assert.equal(number(r.net_earnings),50);assert.equal(number(r.unassigned_expenses),888);
+});
+test('IncVAT customer-code prices normalize actual invoice totals rather than stale line totals',async()=>{
+ await costedSale({amount:108,price:120,mode:'CODE:RCCASH01|IncVAT'});const r=await earnings();assert.equal(number(r.sales_ex_vat),90);assert.equal(number(r.gross_profit),50);
+});
+test('historical weighted costs exclude future receipts and accept genuine zero-cost receipts',async()=>{
+ const {p}=await costedSale({cost:99});await db.query("insert into stock_receipts(product_id,qty_received,cost_price,received_date) values($1,1,20,'2026-10-01'),($1,3,40,'2026-10-02'),($1,100,999,'2026-11-01')",[p]);let r=await earnings();assert.equal(number(r.known_cost_of_goods),35);assert.equal(number(r.fallback_cost_lines),0);
+ await db.exec('delete from stock_receipts');await db.query("insert into stock_receipts(product_id,qty_received,cost_price,received_date) values($1,1,0,'2026-10-01')",[p]);r=await earnings();assert.equal(number(r.gross_profit),100);assert.equal(number(r.missing_cost_lines),0);
+});
+test('missing cost and invoices without usable lines make earnings unavailable',async()=>{
+ await costedSale({cost:0});let r=await earnings();assert.equal(number(r.missing_cost_lines),1);assert.equal(r.gross_profit,null);assert.equal(r.net_earnings,null);
+ await invoice(await account(),50);r=await earnings();assert.equal(number(r.unmapped_invoices),1);assert.equal(r.net_earnings,null);
+});
+test('free supplied lines carry cost; removed and unpicked supply lines are excluded',async()=>{
+ const {o,p}=await costedSale();await db.query("insert into order_items(order_id,product_id,qty,price,vat_rate,source_status,include_in_picking) values($1,$2,1,0,20,'Free',true),($1,$2,100,100,20,'Removed',true),($1,$2,100,100,20,'Need Supplier',true)",[o,p]);const r=await earnings();assert.equal(number(r.sales_ex_vat),100);assert.equal(number(r.known_cost_of_goods),80);assert.equal(number(r.gross_profit),20);
+});
+test('return credits reduce sales while reversed and noncredit returns are excluded',async()=>{
+ const {a}=await costedSale();await db.query("insert into customer_returns(customer_account_id,status,financial_disposition,return_total,net_total,vat_total,confirmed_at,reversed_at) values($1,'Confirmed','CUSTOMER_CREDIT',24,20,4,'2026-10-18',null),($1,'Confirmed','CUSTOMER_CREDIT',600,500,100,'2026-10-18',now()),($1,'Confirmed','NO_CREDIT',600,500,100,'2026-10-18',null)",[a]);const r=await earnings();assert.equal(number(r.return_credits_ex_vat),20);assert.equal(number(r.gross_profit),40);
+});
+test('unknown return tax totals suppress profit instead of counting credits as earnings',async()=>{
+ const {a}=await costedSale();await db.query("insert into customer_returns(customer_account_id,status,financial_disposition,return_total,confirmed_at) values($1,'Confirmed','CUSTOMER_CREDIT',24,'2026-10-18')",[a]);const r=await earnings();assert.equal(number(r.unknown_returns),1);assert.equal(r.net_earnings,null);
+});
+test('earnings enforce fresh agency access and redact shared expenses',async()=>{
+ const sid=await staffMember('earnings-user',['agency.middleton_england']);await costedSale();await costedSale({amount:1200,price:1000,city:'Southampton'});await expense(999,null);
+ const r=await earnings('earnings-user');assert.equal(number(r.sales_ex_vat),100);assert.equal(r.unassigned_expenses,null);await assert.rejects(earnings('earnings-user','South England'),/Agency access denied/);await assert.rejects(earnings('owner',undefined,null,null,'expired'),/Denied/);
+ await db.query('delete from fc_staff_permissions where staff_id=$1',[sid]);await assert.rejects(earnings('earnings-user'),/Agency access denied/);
+});
+test('city and postcode filters never deduct whole-agency expenses from partial revenue',async()=>{
+ await costedSale();await expense(10);const r=await earnings('owner','Middleton England','MK');assert.equal(number(r.gross_profit),60);assert.equal(number(r.agency_expenses),10);assert.equal(r.area_filtered,true);assert.equal(r.net_earnings,null);
+});
+test('only approvers allocate active posted expenses with audited metadata and unchanged financial values',async()=>{
+ const id=await expense(17,null);await staffMember('approver',['expenses.approve']);await staffMember('entry',['expenses.create']);
+ await assert.rejects(scalar('select fc_assign_business_payout_agency_v1($1,$2,$3,$4)',['entry','valid',id,'Middleton England']),/Denied/);
+ const r=await scalar('select to_jsonb(fc_assign_business_payout_agency_v1($1,$2,$3,$4))',['approver','valid',id,'Middleton England']);assert.equal(number(r.amount),17);assert.equal(r.status,'POSTED');assert.equal(r.performance_group,'Middleton England');assert.equal(Number(await scalar('select count(*) from financial_audit_log')),1);
+ await assert.rejects(scalar('select fc_assign_business_payout_agency_v1($1,$2,$3,$4)',['approver','valid',id,'Unknown']),/valid expense agency/);assert.equal(await scalar('select performance_group from business_payouts where id=$1',[id]),'Middleton England');
+ const draft=await expense(20,null,'DRAFT');await assert.rejects(scalar('select fc_assign_business_payout_agency_v1($1,$2,$3,$4)',['approver','valid',draft,'Wales']),/Only posted/);
+ assert.equal(await scalar("select has_function_privilege('anon','fc_write_payout_group_v1(uuid,text,text,uuid)','execute')"),false);
+});
+
+// Legacy delegates are narrow adapters here; the existing expense suites verify
+// their financial workflow. These tests exercise the new wrappers' arguments,
+// atomic allocation and permissions without posting a real ledger transaction.
+await db.exec(`
+create function fc_create_business_payout(text,text,date,uuid,uuid,numeric,text,text,text,text,text,uuid,boolean) returns business_payouts language plpgsql as $$declare r business_payouts;begin
+ insert into business_payouts(amount,payout_date,status) values($6,$3,case when $13 then 'SUBMITTED' else 'DRAFT' end) returning * into r;return r;end;$$;
+create function fc_update_business_payout(text,text,uuid,date,uuid,uuid,numeric,text,text,text,text,text,uuid) returns business_payouts language plpgsql as $$declare r business_payouts;begin
+ update business_payouts set amount=$7,payout_date=$4 where id=$3 and status='DRAFT' returning * into strict r;return r;end;$$;
+create function fc_list_business_payouts(text,text) returns setof business_payouts language plpgsql as $$begin
+ perform fc_require_session_permission_v2($1,$2,'expenses.view');return query select * from business_payouts;end;$$;
+`);
+test('expense wrappers save agency tags for new and edited drafts and include them in lists',async()=>{
+ const createArgs=['owner','valid','2026-10-17',randomUUID(),null,12,'Cash',null,null,null,'BUSINESS',null,false,'Middleton England'];
+ const created=await scalar('select to_jsonb(fc_create_business_payout_v2($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14))',createArgs);assert.equal(created.performance_group,'Middleton England');assert.equal(created.status,'DRAFT');
+ const updated=await scalar('select to_jsonb(fc_update_business_payout_v2($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14))',['owner','valid',created.id,'2026-10-18',randomUUID(),null,15,'Cash',null,null,null,'BUSINESS',null,'South England']);assert.equal(updated.performance_group,'South England');assert.equal(number(updated.amount),15);
+ const rows=await scalar("select fc_list_business_payouts_v2('owner','valid')");assert.equal(rows[0].performance_group,'South England');assert.equal(rows.length,1);
+ await assert.rejects(scalar('select fc_create_business_payout_v2($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',[...createArgs.slice(0,13),'Unknown']),/valid expense agency/);assert.equal(Number(await scalar('select count(*) from business_payouts')),1);
+ await assert.rejects(scalar("select fc_list_business_payouts_v2('owner','expired')"),/Denied/);
+ await staffMember('admin',['expenses.create']);await assert.rejects(scalar('select fc_create_business_payout_v2($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',['admin',...createArgs.slice(1)]),/authorised staff/);
 });
