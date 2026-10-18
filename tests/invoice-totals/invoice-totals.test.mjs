@@ -31,6 +31,7 @@ await db.query("insert into customer_invoices(id,order_id,customer_account_id,in
 const migration=await readFile(new URL(files.find(n=>n.endsWith('_invoice_document_total_consistency.sql')),dir),'utf8');await db.exec(migration);
 const backfillTotal=Number(await scalar('select invoice_total from customer_invoices where id=$1',[seedInvoice]));
 const backfillAudit=await scalar("select before_data->>'invoice_total' from financial_audit_log where entity_id=$1",[seedInvoice]);
+await db.exec(await readFile(new URL(files.find(n=>n.endsWith('_invoice_saved_unit_calculation.sql')),dir),'utf8'));
 beforeEach(()=>db.exec('truncate orders,order_items,customer_invoices,customer_ledger,customer_payments,customer_payment_allocations,central_payment_archive,central_payment_balances,financial_audit_log;'));
 async function setup({items=[{qty:1,price:100,net_total:100,vat_type:'20'}],mode='VAT',header=null}={}){
  const account=randomUUID(),order=randomUUID(),invoice=randomUUID(),ref='FIXTURE-'+randomUUID();
@@ -41,9 +42,9 @@ async function setup({items=[{qty:1,price:100,net_total:100,vat_type:'20'}],mode
  return {account,order,invoice,ref,total:async()=>Number(await scalar('select invoice_total from customer_invoices where id=$1',[invoice]))};
 }
 test('existing stale 1041.70 invoice reconciles to confirmed saved-line total 1005.70 with an audit',()=>{assert.equal(backfillTotal,1005.70);assert.equal(Number(backfillAudit),1041.70);});
-test('no-change amendment preserves saved reductions instead of recalculating quantity times price',()=>{
+test('no-change amendment uses the invoice unit price rather than a stale cached net amount',()=>{
  const item={id:'line',qty:1,price:868.08,net_total:838.08,vat_type:'20'};const order={items:[item],price_mode:'VAT',order_total:1005.70,net_total:838.08,vat_total:167.62};const lines=[{...item,...captureInvoiceLinePricing(item,'VAT')}];
- assert.equal(calculateCartTotals([item],{priceMode:'VAT'}).grandTotal,1041.70);assert.equal(calculateInvoiceAmendmentTotals(lines,order).grandTotal,1005.70);assert.equal(calculateCartOrderItems(lines,{priceMode:'VAT',preserveSavedLineTotals:true})[0].net_total,838.08);
+ assert.equal(calculateCartTotals([item],{priceMode:'VAT'}).grandTotal,1041.70);assert.equal(calculateInvoiceAmendmentTotals(lines,order).grandTotal,1041.70);assert.equal(calculateCartOrderItems(lines,{priceMode:'VAT',preserveSavedLineTotals:true})[0].net_total,868.08);
  assert.equal(calculateInvoiceAmendmentTotals([{...lines[0],price:900}],order).grandTotal,1080);
 });
 test('saved header VAT rounding survives a no-change amendment and genuine penny price edits apply',()=>{
@@ -76,14 +77,14 @@ test('cash, Wallet and previous-paid acknowledgements are preserved with no paym
  assert.equal(Number(await scalar('select count(*) from customer_payments')),1);assert.equal(Number(await scalar('select count(*) from customer_payment_allocations')),1);assert.equal(Number(await scalar('select allocated_amount from customer_payment_allocations')),30);assert.equal(Number(await scalar('select remaining_amount from customer_ledger where reference_no=$1',[s.ref])),56);
 });
 test('stale invoice and later ledger writes cannot overwrite the saved document total',async()=>{
- const s=await setup({items:[{qty:1,price:868.08,net_total:838.08,vat_type:'20'}],header:1005.70});await db.query('update customer_invoices set invoice_total=1041.70 where id=$1',[s.invoice]);assert.equal(await s.total(),1005.70);await db.query('update customer_ledger set debit=1041.70,amount=1041.70 where reference_no=$1',[s.ref]);assert.equal(Number(await scalar('select debit from customer_ledger where reference_no=$1',[s.ref])),1005.70);
+ const s=await setup({items:[{qty:1,price:868.08,net_total:838.08,vat_type:'20'}],header:1005.70});await db.query('update customer_invoices set invoice_total=1041.70 where id=$1',[s.invoice]);assert.equal(await s.total(),1041.70);await db.query('update customer_ledger set debit=1041.70,amount=1041.70 where reference_no=$1',[s.ref]);assert.equal(Number(await scalar('select debit from customer_ledger where reference_no=$1',[s.ref])),1041.70);
 });
 test('manual and void invoices retain their distinct financial handling',async()=>{
  const account=randomUUID(),id=randomUUID();await db.query("insert into customer_invoices(id,customer_account_id,invoice_number,invoice_total) values($1,$2,'MANUAL',80)",[id,account]);assert.equal(Number(await scalar('select invoice_total from customer_invoices where id=$1',[id])),80);
  const s=await setup();await db.query("update customer_invoices set financial_status='VOID' where id=$1",[s.invoice]);await db.query('update order_items set net_total=200,price=200 where order_id=$1',[s.order]);assert.equal(await s.total(),120);
 });
-test('zero-value saved lines and private database helpers do not invent amounts or public access',async()=>{
- const s=await setup({items:[{qty:1,price:100,net_total:0,vat_type:'20'}],header:0});assert.equal(await s.total(),0);
+test('stale zero-value calculated lines use saved unit prices without exposing private helpers',async()=>{
+ const s=await setup({items:[{qty:1,price:100,net_total:0,vat_type:'20'}],header:0});assert.equal(await s.total(),120);
  assert.equal(await scalar("select has_function_privilege('anon','fc_invoice_document_total_v1(uuid)','execute')"),false);
 });
 

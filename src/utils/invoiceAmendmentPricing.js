@@ -2,8 +2,8 @@ import { calculateCartTotals } from "./orderTotals.js";
 import { calculateDocumentTotals } from "./documentTotals.js";
 import { normalizePriceMode, roundMoney } from "./pricing.js";
 
-// Keep the document's saved net amount (which can include a negotiated reduction)
-// when merely opening/saving an existing line. An edited qty/price recalculates.
+// Capture calculations from the invoice's own saved unit price and quantity.
+// Opening an amendment never reads current catalogue prices.
 export function captureInvoiceLinePricing(item = {}, priceMode = "VAT") {
   const qty = Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
   const price = roundMoney(item.price ?? item.unit_price ?? item.unitPrice ?? 0);

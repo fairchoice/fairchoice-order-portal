@@ -1,3 +1,4 @@
+import AgencyEarnings from "./AgencyEarnings.jsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../services/supabase.js";
 import { getFcSessionState } from "../../services/fcSession.js";
@@ -33,16 +34,19 @@ export default function AgencyPerformanceReport({ currentUser }) {
         p_date_from: selection.from || null, p_date_to: selection.to || null,
         p_postcode_prefix: selection.prefix.trim() || null, p_city: selection.city.trim() || null, p_performance_group: selection.group,
       };
-      const [summary, customerSales] = await Promise.all([
+      const [summary, customerSales, earnings] = await Promise.all([
         supabase.rpc("fc_agency_performance_v2", args),
         supabase.rpc("fc_agency_customer_sales_v1", { ...args, p_page: page }),
+        supabase.rpc("fc_agency_earnings_v1", args),
       ]);
       const { data, error: rpcError } = summary;
       if (customerSales.error) throw customerSales.error;
+      if (earnings.error) throw earnings.error;
+      if (!earnings.data || typeof earnings.data !== "object") throw new Error("Agency earnings could not be loaded. Please refresh.");
       if (!customerSales.data || !Array.isArray(customerSales.data.rows)) throw new Error("Customer sales could not be loaded. Please refresh.");
       if (rpcError) throw rpcError;
       if (!data || typeof data !== "object") throw new Error("Agency Performance returned no report. Please refresh.");
-      if (id === request.current) { setReport({ ...data, customer_sales: customerSales.data }); setApplied({ ...selection }); }
+      if (id === request.current) { setReport({ ...data, customer_sales: customerSales.data, earnings: earnings.data }); setApplied({ ...selection }); }
     } catch (e) { if (id === request.current) { setReport(null); setError(e.message || "Could not load Agency Performance."); } }
     finally { if (id === request.current) setLoading(false); }
   }, []);
@@ -86,7 +90,7 @@ export default function AgencyPerformanceReport({ currentUser }) {
     ["Collections", money(report.collections), "Confirmed payments · selected dates and area; excludes Wallet and discounts"],
     ["Customer outstanding", money(report.outstanding), "Current account balance · selected area, including opening balances and applied Wallet credit; previous-paid status alone is not a new payment"],
     ...(report.shared_totals_visible ? [[`${country} stock level`, `${number(report.stock_units)} units`, `Current ${country} location stock · shared across Performance Groups`],
-    ["Shared business expenses", money(report.shared_expenses), "Posted expenses · selected dates, all business locations; country/city not recorded"]] : []),
+    ["Unassigned business expenses", money(report.earnings?.unassigned_expenses), "Posted expenses without an agency · selected dates; excluded from agency earnings"]] : []),
   ] : [];
 
   return <main className="agency-performance">
@@ -105,11 +109,12 @@ export default function AgencyPerformanceReport({ currentUser }) {
         <label>Customer city<select value={filters.city} onChange={change("city")}><option value="">All cities</option>{cities.map((city) => <option key={city}>{city}</option>)}</select></label>
         <button type="submit" disabled={loading}>{loading ? "Loading…" : "Filter / Refresh"}</button>
       </form>
-      <p className="agency-note">Customers are included by their saved compulsory Performance Group. Middleton England excludes South England, West England, East England and Wales. Postcode and city filters narrow the selected group. Shared expenses and country stock are shown separately because these are not allocated to Performance Groups.</p>
+      <p className="agency-note">Customers are included by their saved compulsory Performance Group. Middleton England excludes South England, West England, East England and Wales. Postcode and city filters narrow the selected group. Agency expenses are assigned in Expenses. Shared / unassigned expenses and country stock are shown separately.</p>
       {report && <>
         <p className="agency-period">{applied.from || "All dates"} to {applied.to || "today"} · {applied.prefix || "All group postcodes"} · {applied.city || "All cities"} · {number(report.customers)} customer accounts<br />Current balances and stock as at {new Date(report.as_of).toLocaleString("en-GB", { timeZone: "Europe/London" })} (UK time)</p>
         {!report.shared_totals_visible && <p className="agency-note">Shared country stock and business expenses require separate access from an administrator.</p>}
         <div className="agency-cards">{cards.map(([label, value, note]) => <article key={label}><h2>{label}</h2><strong>{value}</strong><p>{note}</p></article>)}</div>
+        <AgencyEarnings data={report.earnings} />
         <AgencyCustomerSales data={report.customer_sales} loading={loading} onPage={(nextPage) => load(applied, session, nextPage, true)} />
         <section className="agency-section"><h2>Sales and collections by postcode area</h2><p>Selected dates and filters. Add a postcode prefix or choose a saved customer city above to monitor another area.</p><div className="agency-table"><table><thead><tr><th>Area</th><th>Sales</th><th>Collections</th></tr></thead><tbody>{report.areas?.length ? report.areas.map((row) => <tr key={row.area}><th scope="row">{row.area}</th><td>{money(row.sales)}</td><td>{money(row.collections)}</td></tr>) : <tr><td colSpan={3}>No sales or collections for this selection.</td></tr>}</tbody></table></div></section>
         {report.shared_totals_visible && <section className="agency-section"><h2>Current {country} stock</h2><p>Shared country location inventory. Global stock without a country allocation is excluded. Performance Group, postcode and city filters do not allocate these quantities to an agency.</p><div className="agency-table"><table><thead><tr><th>Location</th><th>Units</th><th>Products</th><th>At/below stock alert</th></tr></thead><tbody>{report.stock_locations?.length ? report.stock_locations.map((row) => <tr key={row.location_name}><th scope="row">{row.location_name}</th><td>{number(row.units)}</td><td>{number(row.products)}</td><td>{number(row.low_stock)}</td></tr>) : <tr><td colSpan={4}>No active country location stock recorded.</td></tr>}</tbody></table></div></section>}

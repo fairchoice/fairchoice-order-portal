@@ -1,7 +1,9 @@
+import { PERFORMANCE_GROUPS } from "../../utils/performanceGroups.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "../../utils/currency";
 import {
   approvePayout,
+  assignPayoutAgency,
   createPayout,
   loadExpenseTypes,
   loadPayouts,
@@ -19,6 +21,7 @@ const field =
   "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm";
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyForm = () => ({
+  performanceGroup: "",
   payoutDate: today(),
   expenseTypeId: "",
   supplierId: "",
@@ -80,6 +83,7 @@ export default function Expenses() {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [viewingExpense, setViewingExpense] = useState(null);
+  const [allocationGroup, setAllocationGroup] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
   const [busy, setBusy] = useState(false);
@@ -176,6 +180,7 @@ export default function Expenses() {
     setViewingExpense(null);
     setEditingId(row.id);
     setForm({
+      performanceGroup: row.performance_group || "",
       payoutDate: row.payout_date,
       expenseTypeId: row.expense_type_id,
       supplierId: row.supplier_id || "",
@@ -188,6 +193,18 @@ export default function Expenses() {
       paidByStaffId: row.paid_by_staff_id || "",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveAgencyAllocation() {
+    if (busy || !viewingExpense || !hasPermission(user,"expenses.approve")) return;
+    if (!window.confirm(`Assign this posted expense to ${allocationGroup || "Shared / unassigned"}? Its amount and ledger posting will stay the same.`)) return;
+    setBusy(true);
+    try {
+      const updated = await assignPayoutAgency(viewingExpense.id, allocationGroup, user);
+      setViewingExpense(current => ({...current,performance_group:updated.performance_group}));
+      await refresh();
+    } catch (e) { window.alert(e.message || "Could not assign the expense agency."); }
+    finally { setBusy(false); }
   }
 
   async function runTransition(label, operation, reasonRequired = false) {
@@ -253,6 +270,10 @@ export default function Expenses() {
             )}
           </div>
           <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <Select label="Agency" value={form.performanceGroup} required={false} onChange={value => setForm({...form,performanceGroup:value})}>
+              <option value="">Shared / unassigned</option>
+              {PERFORMANCE_GROUPS.map(group => <option key={group}>{group}</option>)}
+            </Select>
             <Input label="Payout date" type="date" value={form.payoutDate} onChange={(value) => setForm({ ...form, payoutDate: value })} />
             <Select label="Expense type" value={form.expenseTypeId} onChange={(value) => setForm({ ...form, expenseTypeId: value })}>
               {expenseTypes.map((type) => <option key={type.id} value={type.id}>{type.expense_type_name}</option>)}
@@ -314,7 +335,7 @@ export default function Expenses() {
                     <Cell>{row.recorded_by_staff_name}</Cell>
                     <Cell>
                       <div className="flex min-w-48 flex-wrap gap-2">
-                        <button disabled={busy} className="text-slate-700 underline" onClick={() => setViewingExpense(row)}>View details</button>
+                        <button disabled={busy} className="text-slate-700 underline" onClick={() => { setViewingExpense(row); setAllocationGroup(row.performance_group || ""); }}>View details</button>
                         {["DRAFT", "REJECTED"].includes(row.status) && (
                           <button disabled={busy} className="text-blue-700 underline" onClick={() => editExpense(row)}>Edit</button>
                         )}
@@ -354,6 +375,7 @@ export default function Expenses() {
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <Detail label="Date" value={viewingExpense.payout_date} />
+                <Detail label="Agency" value={viewingExpense.performance_group || "Shared / unassigned"} />
                 <Detail label="Status" value={viewingExpense.status} />
                 <Detail label="Expense type" value={viewingExpense.expense_type_name} />
                 <Detail label="Supplier" value={viewingExpense.supplier_name || "Not applicable"} />
@@ -372,6 +394,12 @@ export default function Expenses() {
                   </div>
                 )}
               </div>
+              {viewingExpense.status === "POSTED" && !viewingExpense.voided_at && hasPermission(user,"expenses.approve") && <div className="mt-5 border-t pt-4">
+                <Select label="Assign agency" value={allocationGroup} required={false} onChange={setAllocationGroup}>
+                  <option value="">Shared / unassigned</option>{PERFORMANCE_GROUPS.map(group => <option key={group}>{group}</option>)}
+                </Select>
+                <button type="button" disabled={busy} onClick={saveAgencyAllocation} className="mt-3 rounded-lg border px-4 py-2 font-bold disabled:opacity-50">Save agency allocation</button>
+              </div>}
               {["DRAFT", "REJECTED"].includes(viewingExpense.status) && (
                 <div className="mt-5 border-t pt-4">
                   <button type="button" className="rounded-lg bg-blue-700 px-4 py-2 font-bold text-white" onClick={() => editExpense(viewingExpense)}>Edit this expense</button>

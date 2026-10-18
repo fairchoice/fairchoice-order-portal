@@ -98,21 +98,22 @@ const getDocumentItemTotals = (item = {}, { includeVat = true } = {}) => {
     };
   }
 
-  if (hasMoneyValue(savedNet)) {
-    const netTotal = money2(savedNet);
-    return {
-      netTotal,
-      grossTotal: netTotal,
-      vatRate: vatRate ?? 0,
-    };
-  }
-
+  // Invoice unit prices are authoritative; stored line amounts can be stale or zero.
   if (hasMoneyValue(savedPrice) && qty > 0 && vatRate !== null) {
     const netTotal = money2(Number(savedPrice) * qty);
     return {
       netTotal,
       grossTotal: netTotal,
       vatRate,
+    };
+  }
+
+  if (hasMoneyValue(savedNet)) {
+    const netTotal = money2(savedNet);
+    return {
+      netTotal,
+      grossTotal: netTotal,
+      vatRate: vatRate ?? 0,
     };
   }
 

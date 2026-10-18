@@ -117,3 +117,31 @@ with known invoices, collections and England stock. Confirm failed refreshes
 show an error rather than stale totals. A production release must include the report and Performance Group
 migrations, customer sales pagination and agency access migrations, and the
 UI/navigation changes after approval.
+
+## 18 October: ten-customer pages, agency earnings and expense allocation
+
+The new earnings migration `20261018114102_agency_earnings_and_expense_groups.sql`
+is installed on V4 only. Customer pages now contain ten accounts, with First,
+Previous, Next and Last navigation. Existing invoice sales totals remain gross;
+the separate earnings section uses revenue excluding VAT and confirmed customer
+return credits, less estimated product costs and posted agency expenses.
+
+Costs use weighted stock receipts through the invoice date, with positive current
+product cost as fallback. Free supplied units carry costs. Missing product costs,
+unmapped invoice lines or return tax details suppress the profit and earnings
+figures instead of assuming zero cost. Returned-stock cost recovery is excluded.
+City/postcode filters suppress earnings after expenses because expenses are
+assigned to a whole agency. Gross profit still follows the selected area.
+
+Expenses now offers an optional Agency field. Existing expenses remain Shared /
+unassigned until deliberately allocated. An expense approver can assign an active
+posted expense through View details. Allocation is audited and changes no amount,
+status or financial posting. Shared totals require the existing separate permission;
+agency access and expense entry/approval permissions are unchanged.
+
+Validation: 70 focused database/UI/existing expense checks pass, production build
+passes and migration contracts pass. Hosted invalid-session rejection and private
+helper ACL checks pass. A read-only calculation against V4 October data compiled
+successfully: Middleton currently has 159 invoice lines without costs, so the profit
+cards are unavailable until those costs are populated. No test expense transactions
+were written to V4. Main and production have not received this update.
