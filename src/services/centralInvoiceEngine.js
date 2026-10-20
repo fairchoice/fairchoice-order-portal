@@ -9,7 +9,6 @@ import {
 import { isServerManagerPriceMode, roundMoney } from "../utils/pricing";
 import { formatCurrency } from "../utils/currency";
 import {
-  getCustomerInvoiceWatermark,
   normalizeInvoicePaymentStatus,
 } from "../utils/invoicePaymentStatus";
 import { sortPrintItems } from "../utils/printItemSorting";
@@ -1595,14 +1594,7 @@ const getInvoicePaymentStatus = (order = {}, totals = {}) => {
 
 
 
-const getInvoiceDocumentWatermark = (order = {}, totals = {}) =>
-  getCustomerInvoiceWatermark(
-    order._documentPaymentStatus ||
-      order.documentPaymentStatus ||
-      order.invoicePaymentStatus ||
-      order.payment_status ||
-      getInvoicePaymentStatus(order, totals)
-  );
+
 
 
 
@@ -2904,7 +2896,6 @@ export function buildStandardInvoiceHtml(
     settings.company_registration_number ||
     "16350457";
   const companyAddress = getPrintableCompanyAddress(settings.companyAddress);
-  const paymentStatus = getInvoiceDocumentWatermark(invoiceOrder, totals);
   const vatGroups = (totals.vatGroups || totals.vat_groups || []).filter(
     (group) => Number(group.net_total ?? group.netTotal ?? 0) || Number(group.vat_total ?? group.vatTotal ?? 0)
   );
@@ -3008,49 +2999,6 @@ export function buildStandardInvoiceHtml(
             position: relative;
           }
           .content { flex: 1 0 auto; }
-          .watermark {
-            position: fixed;
-            top: 43%;
-            left: 50%;
-            transform: translate(-50%, -50%) rotate(-28deg);
-            color: rgba(217, 119, 6, 0.14);
-            border: 4px solid rgba(217, 119, 6, 0.18);
-            padding: 10mm 18mm;
-            font-size: 46px;
-            font-weight: 900;
-            letter-spacing: 0;
-            z-index: 3;
-            pointer-events: none;
-            background: transparent;
-          }
-        .watermark.paid {
-  color: rgba(22, 163, 74, 0.14);
-  border-color: rgba(22, 163, 74, 0.18);
-}
-
-
-
-
-
-
-
-
-.watermark.part-paid {
-  color: rgba(124, 58, 237, 0.14);
-  border-color: rgba(124, 58, 237, 0.18);
-}
-
-
-
-
-
-
-
-
-.watermark.in-progress {
-  color: rgba(217, 119, 6, 0.16);
-  border-color: rgba(217, 119, 6, 0.20);
-}
           .content,
           .footer {
             position: relative;
@@ -3326,13 +3274,6 @@ export function buildStandardInvoiceHtml(
       </head>
       <body>
         <div class="page">
-          ${
-            !isOrderForm && !isDeliveryNote
-              ? `<div class="watermark ${paymentStatus
-                  .toLowerCase()
-                  .replace(/\s+/g, "-")}">${escapeHtml(paymentStatus)}</div>`
-              : ""
-          }
           <main class="content">
             ${
               showHeaderFooter
@@ -3871,50 +3812,10 @@ export async function createManualInvoice({
 
 
 
-export async function amendInvoice({
-  order,
-  reason = "",
-  currentUser,
-  previousTotal,
-  newTotal,
-  changedItems = [],
-} = {}) {
-  const oldTotal = previousTotal ?? getInvoiceTotal(order);
-  const invoice = await createInvoice({ order, confirmedBy: currentUser?.name || currentUser?.username, currentUser });
-  const latestTotal = newTotal ?? getInvoiceTotal(order);
-
-
-
-
-
-
-
-
-  await recordInvoiceVersion({
-    order,
-    reason,
-    previousTotal: oldTotal,
-    newTotal: latestTotal,
-    changedItems,
-    currentUser,
-  });
-
-
-
-
-
-
-
-
-  return invoice;
+// Historical invoices cannot be amended through the legacy browser-write path.
+export async function amendInvoice() {
+  throw new Error("Issued invoices are read-only. Use the authenticated nisstaj_admin amendment action.");
 }
-
-
-
-
-
-
-
 
 export async function createReturnInvoice({ order, confirmedBy, currentUser } = {}) {
   const invoice = await createInvoice({ order, confirmedBy, currentUser });
@@ -4446,24 +4347,14 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
   const existingInvoice = Array.isArray(existing.data) ? existing.data[0] : existing.data;
+  if (existingInvoice?.id) return existingInvoice;
 
-
-
-
-
-
-
-
-  if (existingInvoice?.id) {
-    const paidAmount = roundMoney(
-      Number(existingInvoice.paid_amount || existingInvoice.paidAmount || 0)
-    );
-    payload.paid_amount = paidAmount;
-    payload.remaining_amount = roundMoney(payload.invoice_total - paidAmount);
-    payload.invoice_status = getInvoiceStatusFromAmounts(
-      payload.invoice_total,
-      paidAmount
-    );
+  const canonical = await supabase.from("customer_invoices").select("*")
+    .eq("invoice_number", referenceNo).maybeSingle();
+  if (canonical.error) throw canonical.error;
+  if (canonical.data?.id) return canonical.data;
+  if (!Number.isFinite(Number(payload.invoice_total)) || Number(payload.invoice_total) <= 0) {
+    throw new Error("A new invoice must have a positive saved total. Existing invoices remain read-only.");
   }
 
 
@@ -4473,16 +4364,8 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-  let query = existingInvoice?.id
-    ? supabase.from("customer_ledger").update(payload).eq("id", existingInvoice.id)
-    : supabase.from("customer_ledger").insert(payload);
 
-
-
-
-
-
-
+  let query = supabase.from("customer_ledger").insert(payload);
 
   let { data, error } = await query.select().single();
 
@@ -4495,9 +4378,7 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
   if (error) {
     const fallbackPayload = stripUnsupportedColumns(payload, error.message || error.details || "");
-    query = existingInvoice?.id
-      ? supabase.from("customer_ledger").update(fallbackPayload).eq("id", existingInvoice.id)
-      : supabase.from("customer_ledger").insert(fallbackPayload);
+    query = supabase.from("customer_ledger").insert(fallbackPayload);
 
 
 

@@ -32,11 +32,6 @@ test("orders writes discard read-side compatibility total aliases", () => {
 test("active explicit order-total writes use the real five-column schema", () => {
   const extracts = [
     [
-      new URL("../pages/AdminSetup/InvoicesPortal.jsx", import.meta.url),
-      'const { error: orderUpdateError }',
-      'if (orderUpdateError)',
-    ],
-    [
       new URL("../pages/CustomerOrder.jsx", import.meta.url),
       "const saveOrderTotalsToDatabase",
       "const getCalculatedOrderItemForSave",
@@ -71,4 +66,14 @@ test("active explicit order-total writes use the real five-column schema", () =>
       /(?:finalTotal|final_total|totalAmount|total_amount|(?<![A-Za-z0-9_])total)\s*:/
     );
   }
+});
+
+
+test("historical invoice amendments use the atomic owner RPC rather than direct order-total writes", () => {
+  const portal = fs.readFileSync(new URL("../pages/AdminSetup/InvoicesPortal.jsx", import.meta.url), "utf8");
+  const start = portal.indexOf("const saveAmendment = async");
+  const save = portal.slice(start, portal.indexOf("const updateCatalogPriceForLine", start));
+  assert.match(save, /saveIssuedInvoiceAmendment/);
+  assert.match(save, /isNisstajAdmin/);
+  assert.doesNotMatch(save, /\.from\("(?:orders|order_items|customer_invoices|customer_ledger)"\)/);
 });

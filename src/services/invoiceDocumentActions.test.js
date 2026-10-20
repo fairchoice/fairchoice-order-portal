@@ -58,18 +58,10 @@ test("preview and download share the fresh-order and resolved-status path", () =
   assert.match(actionSource, /Could not \$\{download \? "download" : "open"\} invoice/);
 });
 
-test("central invoice HTML renders the resolved three-state watermark", () => {
-  assert.match(
-    invoiceEngineSource,
-    /getCustomerInvoiceWatermark\(\s*order\._documentPaymentStatus/
-  );
-  assert.match(invoiceEngineSource, /\.watermark\.in-progress/);
-  assert.match(invoiceEngineSource, /\.watermark\.part-paid/);
-  assert.match(invoiceEngineSource, /\.watermark\.paid/);
-  assert.match(
-    invoiceEngineSource,
-    /paymentStatus\s*\.toLowerCase\(\)\s*\.replace\(\/\\s\+\/g, "-"\)/
-  );
+test("central invoice HTML does not render payment watermark overlays", () => {
+  assert.doesNotMatch(invoiceEngineSource, /class="watermark/);
+  assert.doesNotMatch(invoiceEngineSource, /\.watermark(?:[\s.{])/);
+  assert.doesNotMatch(invoiceEngineSource, /getInvoiceDocumentWatermark/);
 });
 
 test("document ledger status uses full references and customer scope", () => {
