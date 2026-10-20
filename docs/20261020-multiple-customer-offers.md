@@ -25,3 +25,11 @@ No invoice records, invoice totals, or saved order prices are updated by assignm
 The first version only listed Sub Codes as offers, which excluded existing Base Codes such as ENGDRN01 and RCCASH01. Existing active codes are now available as additional offers without changing their code type. Additional codes use only exact product prices; their percentage discounts are not stacked. A compatible parent is still required for a Sub Code.
 
 The customer assignment page distinguishes **Set Base Code** (replaces the main code) from **Add as Offer Code** (keeps existing codes). After changing assignments, the main order page reloads customer accounts and refreshes the selected customer's current price mode. No customer assignments were changed automatically by this correction.
+
+## City exclusions for every code assignment
+
+Both the Base Code assignment tab and the Offer Codes / Geographic Rules tab now include **Exclude towns / cities**. Choose a country (or all countries), tick cities to leave out, then check the filtered customer list and count before assigning or removing a code. Exclusions are also named in confirmation dialogs. Changing country clears the previous city exclusions; Clear city exclusions restores the full selected scope.
+
+This is a filter for the current bulk action, available for every selected code. It does not create an automatic rule for future customers, remove existing code assignments in excluded cities, or change the customer's VAT mode. Base assignment, additional-offer assignment, and both bulk removal actions share the same filtered list. Single-customer removal still acts on the explicitly selected customer.
+
+Five scope tests cover England exclusions, all-country exclusions, multiple cities, case/whitespace matching, conflicting included/excluded cities, search, inactive customers and clearing exclusions. All 26 focused scope/pricing tests and the production build pass. Browser interaction testing remains unavailable in this environment.

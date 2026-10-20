@@ -1,3 +1,4 @@
+import { filterCustomerCodeScope } from "../../utils/customerCodeScope.js";
 import { canAssignCustomerOfferCode, getCustomerOfferCodeIds, saveCustomerOfferCode } from "../../utils/customerOfferCodes.js";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -38,6 +39,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerCountry, setCustomerCountry] = useState("All");
   const [customerCity, setCustomerCity] = useState("All");
+  const [excludedCustomerCities, setExcludedCustomerCities] = useState([]);
   const [customerBaseMode, setCustomerBaseMode] = useState("VAT");
   const [includeInactiveCustomers, setIncludeInactiveCustomers] = useState(false);
 
@@ -112,18 +114,42 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     return [...new Set(scoped.map((customer) => normalizeScope(customer.town_city)).filter(Boolean))].sort();
   }, [customers, customerCountry]);
 
-  const filteredCustomers = useMemo(() => {
-    const term = String(customerSearch || "").trim().toLowerCase();
-    return customers.filter((customer) => {
-      if (!includeInactiveCustomers && customer.active === false) return false;
-      if (customerCountry !== "All" && normalizeScope(customer.country) !== customerCountry) return false;
-      if (customerCity !== "All" && normalizeScope(customer.town_city) !== customerCity) return false;
-      if (!term) return true;
-      return [customer.account_name, customer.town_city, customer.country, customer.postcode]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(term));
-    });
-  }, [customers, customerSearch, customerCountry, customerCity, includeInactiveCustomers]);
+  const filteredCustomers = useMemo(() => filterCustomerCodeScope(customers, {
+    country: customerCountry,
+    city: customerCity,
+    excludedCities: excludedCustomerCities,
+    search: customerSearch,
+    includeInactive: includeInactiveCustomers,
+  }), [customers, customerSearch, customerCountry, customerCity, includeInactiveCustomers, excludedCustomerCities]);
+
+  const excludedCityNote = excludedCustomerCities.length
+    ? ` Excluding towns / cities: ${excludedCustomerCities.join(", ")}.`
+    : "";
+
+  const cityExclusions = (
+    <details style={{ marginTop: 12, padding: 12, border: "1px solid #dbe4ee", borderRadius: 8 }}>
+      <summary style={{ cursor: "pointer", fontWeight: 800, color: "#16324f" }}>
+        Exclude towns / cities ({excludedCustomerCities.length} selected)
+      </summary>
+      <p style={{ fontSize: 13, color: "#64748b" }}>
+        Choose cities to leave out of this action for the selected code. The customer list and count below exclude them. Existing assignments in excluded cities are kept.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8, maxHeight: 220, overflowY: "auto" }}>
+        {customerCities.map((city) => <label key={city} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13 }}>
+          <input type="checkbox" checked={excludedCustomerCities.includes(city)} disabled={customerSaving}
+            onChange={(event) => setExcludedCustomerCities((current) => event.target.checked
+              ? [...new Set([...current, city])]
+              : current.filter((item) => item !== city))} />
+          {city}
+        </label>)}
+        {customerCities.length === 0 && <span>No towns / cities in this country.</span>}
+      </div>
+      {excludedCustomerCities.length > 0 && <div style={{ marginTop: 12, fontSize: 13 }}>
+        <strong>Excluded:</strong> {excludedCustomerCities.join(", ")}
+        <button type="button" disabled={customerSaving} onClick={() => setExcludedCustomerCities([])} style={{ ...tabButtonStyle, marginLeft: 10 }}>Clear city exclusions</button>
+      </div>}
+    </details>
+  );
 
   const getCustomerCodeLabel = (customer) => {
     const code = codes.find((item) => String(item.id) === String(customer.customer_price_code_id || ""));
@@ -265,7 +291,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
       : customerCountry !== "All"
       ? customerCountry
       : "the current filtered customer list";
-    if (!window.confirm(`Apply ${selectedCode?.code || "this code"} to ${targets.length} customers in ${scopeLabel}?`)) return;
+    if (!window.confirm(`Apply ${selectedCode?.code || "this code"} to ${targets.length} customers in ${scopeLabel}?${excludedCityNote}`)) return;
 
     setCustomerSaving(true);
     setMessage("");
@@ -301,7 +327,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
       setMessage("No coded customers match the selected filters.");
       return;
     }
-    if (!window.confirm(`Remove customer price codes from ${targets.length} filtered customers?`)) return;
+    if (!window.confirm(`Remove customer price codes from ${targets.length} filtered customers?${excludedCityNote}`)) return;
 
     setCustomerSaving(true);
     setMessage("");
@@ -353,7 +379,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
       !getCustomerOfferCodeIds(customer).includes(String(subCode.id))
     );
     if (!targets.length) { setMessage("No new matching customers. Set a Base Code first; choose a different additional code. Sub Codes require their parent Base Code. Duplicate offers are skipped."); return; }
-    if (!window.confirm(`Add ${subCode.code} to ${targets.length} customers? Existing codes will be kept. The lowest matching offer price wins.`)) return;
+    if (!window.confirm(`Add ${subCode.code} to ${targets.length} customers? Existing codes will be kept. The lowest matching offer price wins.${excludedCityNote}`)) return;
     await changeCustomerOfferCode(targets, subCode.id);
   };
 
@@ -362,7 +388,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     if (!subCode) { setMessage("Select the offer code to remove first."); return; }
     const targets = filteredCustomers.filter((customer) => customer.id && getCustomerOfferCodeIds(customer).includes(String(subCode.id)));
     if (!targets.length) { setMessage("No customers in these filters have the selected offer code."); return; }
-    if (!window.confirm(`Remove only ${subCode.code} from ${targets.length} customers? Other offers and Base Codes will be kept.`)) return;
+    if (!window.confirm(`Remove only ${subCode.code} from ${targets.length} customers? Other offers and Base Codes will be kept.${excludedCityNote}`)) return;
     await changeCustomerOfferCode(targets, subCode.id, true);
   };
 
@@ -543,7 +569,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
             </label>
             <label style={fieldStyle}>
               <span style={labelStyle}>Country</span>
-              <select value={customerCountry} onChange={(e) => { setCustomerCountry(e.target.value); setCustomerCity("All"); }} style={inputStyle}>
+              <select value={customerCountry} onChange={(e) => { setCustomerCountry(e.target.value); setCustomerCity("All"); setExcludedCustomerCities([]); }} style={inputStyle}>
                 <option value="All">All countries</option>
                 {customerCountries.map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
@@ -560,6 +586,10 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
               <input value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} placeholder="Customer, city or postcode" style={inputStyle} />
             </label>
           </div>
+          {cityExclusions}
+          {excludedCustomerCities.length > 0 && <p role="status" style={{ fontSize: 13, color: "#075985" }}>
+            {excludedCityNote.trim()} {filteredCustomers.length} customers remain in the filtered list.
+          </p>}
           <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
             <label style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 13, fontWeight: 700, color: "#334155" }}>
               <input type="checkbox" checked={includeInactiveCustomers} onChange={(e) => setIncludeInactiveCustomers(e.target.checked)} />
@@ -636,7 +666,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
             </label>
             <label style={fieldStyle}>
               <span style={labelStyle}>Country</span>
-              <select value={customerCountry} onChange={(e) => { setCustomerCountry(e.target.value); setCustomerCity("All"); }} style={inputStyle}>
+              <select value={customerCountry} onChange={(e) => { setCustomerCountry(e.target.value); setCustomerCity("All"); setExcludedCustomerCities([]); }} style={inputStyle}>
                 <option value="All">All countries</option>
                 {customerCountries.map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
@@ -653,9 +683,13 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
               <input value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} placeholder="Customer, city or postcode" style={inputStyle} />
             </label>
           </div>
+          {cityExclusions}
+          {excludedCustomerCities.length > 0 && <p role="status" style={{ fontSize: 13, color: "#075985" }}>
+            {excludedCityNote.trim()} {filteredCustomers.length} customers remain in the filtered list.
+          </p>}
           <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 10 }}>
             <button type="button" onClick={applySubCodeToFilteredCustomers} disabled={!selectedCodeId || customerSaving || customerLoading} style={{ ...saveButtonStyle, minHeight: 40 }}>
-              {customerSaving ? "Applying..." : `Add Offer Code to Matching Customers`}
+              {customerSaving ? "Applying..." : `Add Offer Code to ${filteredCustomers.filter((customer) => canAssignCustomerOfferCode(customer, selectedCode) && !getCustomerOfferCodeIds(customer).includes(String(selectedCodeId))).length} Customers`}
             </button>
             <button type="button" onClick={clearSubCodeFromFilteredCustomers} disabled={customerSaving || customerLoading} style={{ ...clearButtonStyle, minHeight: 40 }}>Remove Selected Offer from Filtered</button>
           </div>
