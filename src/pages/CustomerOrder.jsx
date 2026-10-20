@@ -3413,6 +3413,16 @@ useEffect(() => {
 
 
 
+  const refreshCustomerPricing = async () => {
+    const [customers, freshCodes] = await Promise.all([
+      getCustomerAccounts({operationalOnly:!isCustomer}),getCustomerPriceCodes(),
+    ]);
+    setCustomerAccounts(customers || []);
+    setPricingSettings(current=>({...current,price_codes:freshCodes || []}));
+    const refreshed=(customers || []).find(customer=>String(customer.id)===String(selectedCustomerAccount?.id));
+    if(refreshed){setSelectedCustomerAccount(refreshed);setPriceMode(getCustomerPriceModeValue(refreshed,{...pricingSettings,price_codes:freshCodes || []}));}
+  };
+
 const fetchOrders = async ({ throwOnError = false } = {}) => {
   try {
     // Orders and the processing queue are independent reads. Start both together
@@ -6231,7 +6241,7 @@ const backOfficeContent = comingSoonTitle ? (
 
 
 
-    {page === "customers" && <Customers />}
+    {page === "customers" && <Customers onPricingChanged={refreshCustomerPricing} />}
     {page === "salesRouteSetup" && <SalesRouteSetup currentUser={activeUser} />}
     {page === "homePageImages" && <HomePageImages currentUser={activeUser} />}
 
@@ -6337,18 +6347,7 @@ const backOfficeContent = comingSoonTitle ? (
         products={products}
         pricingSettings={pricingSettings}
         fetchProducts={fetchProducts}
-        onCustomerCodesChanged={async () => {
-          const [customers, freshCodes] = await Promise.all([
-            getCustomerAccounts({ operationalOnly: !isCustomer }), getCustomerPriceCodes(),
-          ]);
-          setCustomerAccounts(customers || []);
-          setPricingSettings(current=>({...current, price_codes:freshCodes || []}));
-          const refreshed = (customers || []).find((customer) => String(customer.id) === String(selectedCustomerAccount?.id));
-          if (refreshed) {
-            setSelectedCustomerAccount(refreshed);
-            setPriceMode(getCustomerPriceModeValue(refreshed, {...pricingSettings,price_codes:freshCodes || []}));
-          }
-        }}
+        onCustomerCodesChanged={refreshCustomerPricing}
       />
     )}
     {page === "promotions" && (
@@ -6948,7 +6947,7 @@ const portalPageIsAllowed = page === "order" && !isCustomer
             ? [
                 "vat",
                 "inc vat",
-                ...(pricingSettings.price_codes || []).map((priceCode) => makePriceCodeMode(priceCode.id)),
+                ...(pricingSettings.price_codes || []).filter(code=>!code.customer_account_id || String(code.customer_account_id)===String(customer.id)).map((priceCode) => makePriceCodeMode(priceCode.id,customer.default_price_mode || "VAT")),
               ]
             : getAllowedPriceModesForCustomer(customer, pricingSettings);
 

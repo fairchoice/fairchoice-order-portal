@@ -1,5 +1,4 @@
-import CustomerOfferCodes from "../../components/CustomerOfferCodes.jsx";
-import { priceCodeMatchesCustomer } from "../../utils/customerCodeEligibility.js";
+import IndividualCustomerCode from "../../components/IndividualCustomerCode.jsx";
 import { useEffect, useState } from "react";
 import {
   saveCustomerAccount,
@@ -582,31 +581,13 @@ export default function CustomerForm({
                 </p>
               </div>
 
-              <div>
-                <label className={labelClass}>Base Customer Price Code (one)</label>
-                <select
-                  className={inputClass}
-                  value={form.customer_price_code_id || ""}
-                  onChange={(e) => updateField("customer_price_code_id", e.target.value)}
-                >
-                  <option value="">Normal pricing (no customer code)</option>
-                  {priceCodes.map((priceCode) => (
-                    <option
-                      key={priceCode.id}
-                      value={priceCode.id}
-                      disabled={String(form.customer_price_code_id) !== String(priceCode.id) && (!priceCodeMatchesCustomer(form,priceCode) || String(priceCode.code_type || "base").toLowerCase() === "sub")}
-                    >
-                      {priceCode.code} - {Number(priceCode.discount_percent || 0)}%{priceCode.active === false ? " (Inactive)" : ""}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-1 text-xs text-slate-500">
-                  Selecting here replaces only the Base Code. To keep it and apply another product code, use Add Offer Code below.
-                </p>
-              </div>
-              <CustomerOfferCodes key={editingCustomer?.id || "new"} customer={editingCustomer}
-                priceCodes={priceCodes} pendingMode={form.default_price_mode}
-                pendingBaseCode={form.customer_price_code_id} onChanged={onCodesChanged} />
+              <IndividualCustomerCode key={editingCustomer?.id || "new"} customer={editingCustomer}
+                codes={priceCodes} pendingMode={form.default_price_mode}
+                onChanged={(state,code)=>{
+                  setForm(current=>({...current,customer_price_code_id:state.customer_price_code_id}));
+                  setPriceCodes(current=>[...current.filter(item=>item.id!==code.id),code]);
+                  return onCodesChanged?.(state,code);
+                }} />
             </div>
           )}
         </div>

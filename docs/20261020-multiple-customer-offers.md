@@ -1,3 +1,5 @@
+> Superseded for new work by [One individual customer price code](20261020-individual-customer-codes.md). Existing legacy pricing remains compatible until explicit customer code generation.
+
 # Multiple customer offer codes
 
 Customers may keep one Base Code and can now receive multiple existing price codes as exact-price offers, as well as compatible Sub Codes. Adding an offer keeps existing assignments. Repeated assignment is ignored. If multiple offers price the same product, the lowest exact offer price wins; percentages are never stacked. Products without a matching offer use their existing Base Code pricing.

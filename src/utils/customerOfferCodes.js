@@ -45,7 +45,7 @@ export async function saveCustomerOfferCode(client, customer, codeId, remove=fal
 
 export function getCustomerCodePriceMode(customer, codes=[]) {
  const base=codes.find(code=>String(code.id)===String(customer?.customer_price_code_id) && priceCodeMatchesCustomer(customer,code));
- const offers=getActiveCustomerOfferCodeIds(customer,codes);
+ const offers=base?.customer_account_id ? [] : getActiveCustomerOfferCodeIds(customer,codes);
  const mode=customerVatMode(customer?.default_price_mode || 'VAT');
  if(!base && !offers.length)return mode==='inc vat'?'inc vat':'vat';
  return `code:${base?.id || 'offers'}|${mode}${offers.length ? '|overlay:'+offers.join(',') : ''}`;

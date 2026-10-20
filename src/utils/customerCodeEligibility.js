@@ -10,5 +10,5 @@ export const priceCodeMatchesMode = (code, mode) => {
  const applies=code.applies_to_price_mode ?? 'both';
  return applies === 'both' || applies === customerVatMode(mode);
 };
-export const priceCodeMatchesCustomer = (customer,code) => priceCodeMatchesMode(code,customer?.default_price_mode || 'VAT');
+export const priceCodeMatchesCustomer = (customer,code) => (!code?.customer_account_id || String(code.customer_account_id)===String(customer?.id)) && priceCodeMatchesMode(code,customer?.default_price_mode || 'VAT');
 export const priceModeLabel = (mode) => mode === 'both' ? 'Inc.VAT & Ex.VAT' : customerVatMode(mode)==='inc vat' ? 'Inc.VAT' : 'Ex.VAT';
