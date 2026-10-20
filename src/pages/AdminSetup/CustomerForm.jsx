@@ -1,3 +1,5 @@
+import CustomerOfferCodes from "../../components/CustomerOfferCodes.jsx";
+import { priceCodeMatchesCustomer } from "../../utils/customerCodeEligibility.js";
 import { useEffect, useState } from "react";
 import {
   saveCustomerAccount,
@@ -28,6 +30,7 @@ export default function CustomerForm({
   editingCustomer,
   onClose,
   onSaved,
+  onCodesChanged,
 }) {
   const [form, setForm] = useState({
     id: editingCustomer?.id,
@@ -580,7 +583,7 @@ export default function CustomerForm({
               </div>
 
               <div>
-                <label className={labelClass}>Customer Price Code</label>
+                <label className={labelClass}>Base Customer Price Code (one)</label>
                 <select
                   className={inputClass}
                   value={form.customer_price_code_id || ""}
@@ -591,16 +594,19 @@ export default function CustomerForm({
                     <option
                       key={priceCode.id}
                       value={priceCode.id}
-                      disabled={priceCode.active === false && String(form.customer_price_code_id) !== String(priceCode.id)}
+                      disabled={String(form.customer_price_code_id) !== String(priceCode.id) && (!priceCodeMatchesCustomer(form,priceCode) || String(priceCode.code_type || "base").toLowerCase() === "sub")}
                     >
                       {priceCode.code} - {Number(priceCode.discount_percent || 0)}%{priceCode.active === false ? " (Inactive)" : ""}
                     </option>
                   ))}
                 </select>
                 <p className="mt-1 text-xs text-slate-500">
-                  If this code has an exact product price, that price is used first. Otherwise the code percentage is calculated automatically.
+                  Selecting here replaces only the Base Code. To keep it and apply another product code, use Add Offer Code below.
                 </p>
               </div>
+              <CustomerOfferCodes key={editingCustomer?.id || "new"} customer={editingCustomer}
+                priceCodes={priceCodes} pendingMode={form.default_price_mode}
+                pendingBaseCode={form.customer_price_code_id} onChanged={onCodesChanged} />
             </div>
           )}
         </div>

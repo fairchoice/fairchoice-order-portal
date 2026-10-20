@@ -75,3 +75,26 @@ through delivery; all temporary customers/codes/orders/invoices/sessions were
 rolled back. Build passes. Existing lint findings in bulk effects/pricing
 helpers remain; the new helper/service/metadata code has no new lint findings.
 A manual signed-in UI check is still required for tonight's test.
+
+## Customer edit screen: show and manage every offer
+
+The Payment Details tab now labels its single selector **Base Customer Price
+Code (one)** and shows **Additional Offer Codes** separately. Existing offers
+are displayed by name, with individual Remove buttons and an Add Offer Code
+picker limited to compatible codes. These explicit offer actions save through
+the existing audited RPC immediately and never invoke the full customer-save
+or order-address synchronization path. Unsaved Base Code / Price Mode edits
+block offer actions until saved or cancelled. The parent customer list and
+current edit snapshot refresh after each successful action, so switching tabs
+retains the latest saved offer list.
+
+Read-only investigation of Billington on the test project found ENGDRN01 as
+its Base Code and an empty additional-offer list. Its live account has
+SKECASHALL as its Base Code and no offers. Neither account was modified by
+this investigation. Previously choosing another Base Code replaces the single
+assignment; a second code must be explicitly added as an offer. No missing
+code was inferred from the other environment.
+
+Four rendered-component checks cover multiple saved offers, an empty list,
+unsaved pricing changes and VAT-mode eligibility. Component lint and production
+build pass. No new migration or production release is part of this UI fix.

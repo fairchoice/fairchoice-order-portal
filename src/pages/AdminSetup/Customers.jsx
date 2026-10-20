@@ -1227,6 +1227,7 @@ export default function Customers() {
       {showCustomerForm && (
         <CustomerForm
           editingCustomer={editingCustomer}
+          onCodesChanged={(state) => { setEditingCustomer(current => ({ ...current, ...state })); void loadCustomers(); }}
           onClose={() => {
             setShowCustomerForm(false);
             setEditingCustomer(null);
