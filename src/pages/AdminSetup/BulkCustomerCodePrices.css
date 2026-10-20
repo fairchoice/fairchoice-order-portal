@@ -89,3 +89,24 @@
   .customer-code-prices .customer-code-filters { grid-template-columns: minmax(0, 1fr); }
   .customer-code-prices > nav button { flex: 1; }
 }
+.customer-code-prices .customer-code-editor-filters {
+  display: grid;
+  grid-template-columns: 1fr 1.7fr 1fr 1fr 1fr;
+  gap: 12px;
+}
+.customer-code-editor-filters input,
+.customer-code-editor-filters select,
+.customer-code-series input { display: block; width: 100%; margin-top: 5px; }
+.customer-code-series { border-top: 1px solid #d4e2f1; padding-top: 12px; }
+.customer-code-product-table table { min-width: 1450px; }
+.customer-code-product-table th:last-child { width: auto; }
+.customer-code-product-table th:nth-child(3) { min-width: 230px; }
+.customer-code-product-table th:nth-child(8) { min-width: 190px; }
+.customer-code-product-table td:nth-child(8) input { width: 100%; }
+.customer-code-product-table td:last-child { white-space: nowrap; }
+@media (max-width: 1000px) {
+  .customer-code-prices .customer-code-editor-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .customer-code-prices .customer-code-editor-filters { grid-template-columns: minmax(0, 1fr); }
+}
