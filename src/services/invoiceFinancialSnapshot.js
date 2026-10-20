@@ -26,6 +26,7 @@ export function withInvoiceFinancialState(order = {}, state) {
     ...order,
     invoice_id: state.id,
     invoice_number: state.invoice_number,
+    invoice_total: state.invoice_total ?? order.invoice_total,
     wallet_applied_amount: Number(state.wallet_applied_amount || 0),
     wallet_application_mode: state.wallet_application_mode,
     wallet_preserve_paid_watermark: state.wallet_preserve_paid_watermark,

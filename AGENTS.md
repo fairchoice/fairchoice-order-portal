@@ -23,3 +23,19 @@
 - The production Supabase project (`naobitwzrkovmwvzvgvf`) must not receive test
   migrations or test transactions.
 - Never commit environment files, credentials, or session tokens.
+
+## Issued invoice history
+
+- Existing issued invoices and their original order lines are read-only. Never
+  repair, reprice, amend, delete, zero, resynchronize or backfill historical
+  invoice contents as a side effect of opening, printing, downloading, changing
+  catalogue prices or ordinary operational code.
+- Existing zero/missing-value exceptions must be reported, not automatically
+  repaired. Do not infer a new invoice amount from unavailable/removed lines.
+- An explicit edit must use the verified `nisstaj_admin` FC-session amendment RPC,
+  with a reason, a current revision and an atomic before/after audit. A general
+  admin role, client-side username or service routine is not edit authorization.
+- Preserve the immutable original archive even after an authorized amendment.
+  Payment collection and settlement are separate from invoice content.
+- Apply only the reviewed protection migration. Do not replay older migrations
+  containing historical invoice-total backfills against existing invoice data.

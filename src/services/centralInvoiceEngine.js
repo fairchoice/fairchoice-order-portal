@@ -1,6 +1,6 @@
 import {loadInvoiceFinancialSnapshot,withInvoiceFinancialState,currentInvoiceNotes} from "./invoiceFinancialSnapshot.js";
 import { supabase } from "./supabase";
-import { calculateDocumentTotals } from "../utils/documentTotals";
+import { calculateDocumentTotals, isSavedInvoiceDocument } from "../utils/documentTotals";
 import {
   calculateCartOrderItems,
   calculateCartTotals,
@@ -446,6 +446,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
   const orderItems = await fetchAllOrderItemsForOrderIds([order.id]);
+  const savedDocument = isSavedInvoiceDocument(order) || isSavedInvoiceDocument(rowOrReference);
   const customerAccountId = order.customer_account_id || rowOrReference.customer_account_id;
   const customerBranchId =
     order.customer_branch_id ||
@@ -470,7 +471,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     supabase
       .from("customer_invoices")
       .select("id, invoice_number, invoice_total, wallet_applied_amount, amount_to_collect, wallet_application_mode, wallet_preserve_paid_watermark")
-      .eq("order_id", order.id)
+      .eq("invoice_number", order.invoice_number || order.order_number)
       .neq("status", "CANCELLED")
       .order("created_at", { ascending: false })
       .limit(1)
@@ -507,7 +508,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-  if (productIds.length) {
+  if (!savedDocument && productIds.length) {
     const { data: products, error: productsError } = await supabase
       .from("products")
       .select("id, product_code")
@@ -550,7 +551,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-  if (missingCodeNames.length) {
+  if (!savedDocument && missingCodeNames.length) {
     const { data: namedProducts, error: namedProductsError } = await supabase
       .from("products")
       .select("id, product_name, product_code")
@@ -1193,6 +1194,7 @@ const getProductCodeFromInvoiceItem = (item = {}) =>
 
 
 const withProductCodeFallbacks = async (order = {}) => {
+  if (isSavedInvoiceDocument(order)) return order;
   const items = order.items || order.order_items || [];
   const missingProductIds = [
     ...new Set(
@@ -3812,50 +3814,10 @@ export async function createManualInvoice({
 
 
 
-export async function amendInvoice({
-  order,
-  reason = "",
-  currentUser,
-  previousTotal,
-  newTotal,
-  changedItems = [],
-} = {}) {
-  const oldTotal = previousTotal ?? getInvoiceTotal(order);
-  const invoice = await createInvoice({ order, confirmedBy: currentUser?.name || currentUser?.username, currentUser });
-  const latestTotal = newTotal ?? getInvoiceTotal(order);
-
-
-
-
-
-
-
-
-  await recordInvoiceVersion({
-    order,
-    reason,
-    previousTotal: oldTotal,
-    newTotal: latestTotal,
-    changedItems,
-    currentUser,
-  });
-
-
-
-
-
-
-
-
-  return invoice;
+// Historical invoices cannot be amended through the legacy browser-write path.
+export async function amendInvoice() {
+  throw new Error("Issued invoices are read-only. Use the authenticated nisstaj_admin amendment action.");
 }
-
-
-
-
-
-
-
 
 export async function createReturnInvoice({ order, confirmedBy, currentUser } = {}) {
   const invoice = await createInvoice({ order, confirmedBy, currentUser });
@@ -4387,24 +4349,14 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
   const existingInvoice = Array.isArray(existing.data) ? existing.data[0] : existing.data;
+  if (existingInvoice?.id) return existingInvoice;
 
-
-
-
-
-
-
-
-  if (existingInvoice?.id) {
-    const paidAmount = roundMoney(
-      Number(existingInvoice.paid_amount || existingInvoice.paidAmount || 0)
-    );
-    payload.paid_amount = paidAmount;
-    payload.remaining_amount = roundMoney(payload.invoice_total - paidAmount);
-    payload.invoice_status = getInvoiceStatusFromAmounts(
-      payload.invoice_total,
-      paidAmount
-    );
+  const canonical = await supabase.from("customer_invoices").select("*")
+    .eq("invoice_number", referenceNo).maybeSingle();
+  if (canonical.error) throw canonical.error;
+  if (canonical.data?.id) return canonical.data;
+  if (!Number.isFinite(Number(payload.invoice_total)) || Number(payload.invoice_total) <= 0) {
+    throw new Error("A new invoice must have a positive saved total. Existing invoices remain read-only.");
   }
 
 
@@ -4414,16 +4366,8 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
 
 
-  let query = existingInvoice?.id
-    ? supabase.from("customer_ledger").update(payload).eq("id", existingInvoice.id)
-    : supabase.from("customer_ledger").insert(payload);
 
-
-
-
-
-
-
+  let query = supabase.from("customer_ledger").insert(payload);
 
   let { data, error } = await query.select().single();
 
@@ -4436,9 +4380,7 @@ export async function createOrUpdateInvoiceForDeliveredOrder({ order, confirmedB
 
   if (error) {
     const fallbackPayload = stripUnsupportedColumns(payload, error.message || error.details || "");
-    query = existingInvoice?.id
-      ? supabase.from("customer_ledger").update(fallbackPayload).eq("id", existingInvoice.id)
-      : supabase.from("customer_ledger").insert(fallbackPayload);
+    query = supabase.from("customer_ledger").insert(fallbackPayload);
 
 
 

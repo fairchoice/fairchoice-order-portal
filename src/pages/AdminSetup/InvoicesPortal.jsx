@@ -1,3 +1,4 @@
+import { prepareIssuedInvoiceAmendment, saveIssuedInvoiceAmendment } from "../../services/issuedInvoiceProtection.js";
 import { captureInvoiceLinePricing, calculateInvoiceAmendmentTotals } from "../../utils/invoiceAmendmentPricing.js";
 import {loadInvoiceFinancialSnapshot} from "../../services/invoiceFinancialSnapshot.js";
 import { isActiveReturnCredit } from "../../services/returnHeaderPersistence.js";
@@ -8,7 +9,6 @@ import { formatCurrency } from "../../utils/currency";
 import { getActiveCustomerBranches } from "../../utils/customerBranchScope";
 import { formatDisplayOrderId } from "../../utils/orderDisplay";
 import {
-  amendInvoice,
   createManualInvoice,
   downloadInvoice,
   fetchInvoiceOrderFromDb,
@@ -36,7 +36,6 @@ import {
   sumResolvedInvoiceOutstanding,
 } from "../../services/invoiceAllocationStatus";
 import {
-  calculateCartOrderItems,
   calculateCartTotals,
   getOrderItemProductCode,
 } from "../../utils/orderTotals";
@@ -526,6 +525,7 @@ export default function InvoicesPortal() {
     lines: [],
   });
   const [amendOrder, setAmendOrder] = useState(null);
+  const [amendRevision, setAmendRevision] = useState("");
   const [voidInvoiceRow, setVoidInvoiceRow] = useState(null);
   const [voidPreview, setVoidPreview] = useState(null);
   const [voidReason, setVoidReason] = useState("");
@@ -833,14 +833,21 @@ export default function InvoicesPortal() {
 
 
   const openAmendForm = async (row) => {
-    if (!isAdminUser) {
-      alert("Only admin users can amend invoices.");
+    if (!isNisstajAdmin) {
+      alert("Issued invoices are read-only. Only nisstaj_admin can request an audited amendment.");
       return;
     }
     const order = await getOrderForInvoice(row);
     if (!order) return;
 
 
+    try {
+      const preparation = await prepareIssuedInvoiceAmendment(order, loggedInUser);
+      setAmendRevision(preparation.revision);
+    } catch (error) {
+      alert(error.message || "Could not verify owner authorization.");
+      return;
+    }
     setAmendOrder(order);
     setWorkbenchMode("amend");
     setForm({
@@ -1071,273 +1078,31 @@ export default function InvoicesPortal() {
 
 
   const saveAmendment = async () => {
-    if (!isAdminUser) {
-      alert("Only admin users can amend invoices.");
-      return;
+    if (!isNisstajAdmin) return alert("Issued invoices are read-only. Only nisstaj_admin can request an audited amendment.");
+    if (!amendOrder || !amendRevision) return alert("Reopen the invoice before requesting an amendment.");
+    if (!form.customerName.trim() || !form.lines.length || form.notes.trim().length < 5) {
+      return alert("Customer, saved invoice lines and a specific amendment reason are required.");
     }
-    if (!amendOrder) return;
-    if (!form.customerName.trim()) {
-      alert("Customer name is required.");
-      return;
-    }
-    if (!form.lines.length) {
-      alert("Invoice must contain at least one line.");
-      return;
-    }
-    if (!form.notes.trim()) {
-      alert("Amendment reason / notes are required.");
-      return;
-    }
-
-
+    if (!window.confirm("Apply this explicit owner amendment? The original invoice snapshot will be kept and every change audited.")) return;
     setSaving(true);
     try {
-      const previousTotals = { grandTotal: getInvoiceTotal(amendOrder) };
-      const invoiceLines = filterActiveInvoiceLines(form.lines);
-      const totals = calculateInvoiceAmendmentTotals(invoiceLines, { ...amendOrder, priceMode: form.priceMode });
-      const calculatedItems = calculateCartOrderItems(invoiceLines, {
-        priceMode: form.priceMode,
-        preserveSavedLineTotals: true,
+      await saveIssuedInvoiceAmendment({
+        order: amendOrder, user: loggedInUser, revision: amendRevision, reason: form.notes,
+        header: {
+          company_name: form.customerName.trim(), delivery_address: form.deliveryAddress.trim(),
+          delivery_postcode: form.deliveryPostcode.trim(), price_mode: form.priceMode || "VAT", notes: form.notes,
+        },
+        lines: filterActiveInvoiceLines(form.lines),
       });
-      const activeDbIds = new Set(
-        calculatedItems.map((line) => String(line.dbId || "")).filter(Boolean)
-      );
-      const previousItemsById = new Map(
-        (amendOrder.items || []).map((item) => [
-          String(item.product_id || item.productId || item.id),
-          item,
-        ])
-      );
-      const changedItems = calculatedItems.map((line) => {
-        const previous = previousItemsById.get(String(line.id || line.productId));
-        return {
-          productId: line.id || line.productId,
-          productName: line.name || line.productName || line.product_name,
-          previousQty: Number(previous?.qty || previous?.quantity || 0),
-          newQty: Number(line.qty || 0),
-          previousPrice: Number(previous?.price || previous?.unit_price || 0),
-          newPrice: Number(line.price || 0),
-        };
-      });
-      const removedAuditItems = (amendOrder.items || [])
-        .filter(
-          (item) =>
-            item.id &&
-            !form.lines.some((line) => String(line.dbId || "") === String(item.id))
-        )
-        .map((item) => ({
-          productId: item.product_id || item.productId,
-          productName: item.product_name || item.productName || item.name,
-          previousQty: Number(item.qty || item.quantity || 0),
-          newQty: 0,
-          previousPrice: Number(item.price || item.unit_price || 0),
-          newPrice: 0,
-          action: "Removed",
-        }));
-
-
-      const { error: orderUpdateError } = await supabase
-        .from("orders")
-        .update({
-          company_name: form.customerName.trim(),
-          delivery_address: form.deliveryAddress.trim(),
-          delivery_postcode: form.deliveryPostcode.trim(),
-          postcode: form.deliveryPostcode.trim(),
-          price_mode: String(form.priceMode || "VAT").toUpperCase(),
-          subtotal: totals.netTotal.toFixed(2),
-          net_total: totals.netTotal.toFixed(2),
-          vat_total: totals.vatTotal.toFixed(2),
-          order_total: totals.grandTotal.toFixed(2),
-          grand_total: totals.grandTotal.toFixed(2),
-          notes: form.notes || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("order_number", amendOrder.order_number || amendOrder.orderId);
-
-
-      if (orderUpdateError) throw orderUpdateError;
-
-
-      for (const line of calculatedItems) {
-        if (line.dbId) {
-          const { error: itemUpdateError } = await supabase
-            .from("order_items")
-            .update({
-              qty: line.qty,
-              picked_qty: line.qty,
-              price: line.price.toFixed(2),
-              line_total: line.line_total.toFixed(2),
-              net_total: line.net_total.toFixed(2),
-              gross_total: line.gross_total.toFixed(2),
-              vat_total: line.vat_total.toFixed(2),
-              vat_amount: line.vat_total.toFixed(2),
-              vat_rate: line.vat_rate,
-              vat_type: line.vat_type,
-              source_status: line.sourceStatus || line.source_status || "In Stock",
-              include_in_picking: true,
-            })
-            .eq("id", line.dbId);
-
-
-          if (itemUpdateError) throw itemUpdateError;
-        } else {
-          const { data: orderRow, error: orderLookupError } = await supabase
-            .from("orders")
-            .select("id")
-            .eq("order_number", amendOrder.order_number || amendOrder.orderId)
-            .single();
-
-
-          if (orderLookupError) throw orderLookupError;
-
-
-          const { error: itemInsertError } = await supabase.from("order_items").insert({
-            order_id: orderRow?.id || amendOrder.id,
-            product_id: line.id || line.productId,
-            product_code: getOrderItemProductCode(line),
-            product_name: line.name,
-            brand: line.brand || "",
-            series: line.series || "",
-            qty: line.qty,
-            picked_qty: line.qty,
-            price: line.price.toFixed(2),
-            line_total: line.line_total.toFixed(2),
-            net_total: line.net_total.toFixed(2),
-            gross_total: line.gross_total.toFixed(2),
-            vat_total: line.vat_total.toFixed(2),
-            vat_amount: line.vat_total.toFixed(2),
-            vat_rate: line.vat_rate,
-            vat_type: line.vat_type,
-            source_status: "In Stock",
-            include_in_picking: true,
-          });
-
-
-          if (itemInsertError) throw itemInsertError;
-        }
-      }
-
-
-      const removedLines = (amendOrder.items || []).filter(
-        (item) => item.id && !activeDbIds.has(String(item.id))
-      );
-
-
-      for (const line of removedLines) {
-        const { error: removedLineError } = await supabase
-          .from("order_items")
-          .update({
-            qty: 0,
-            picked_qty: 0,
-            line_total: "0.00",
-            net_total: "0.00",
-            gross_total: "0.00",
-            vat_total: "0.00",
-            vat_amount: "0.00",
-            source_status: "Removed",
-            include_in_picking: false,
-          })
-          .eq("id", line.id);
-
-
-        if (removedLineError) throw removedLineError;
-      }
-
-
-      const amendedOrder = {
-        ...amendOrder,
-        companyName: form.customerName.trim(),
-        company_name: form.customerName.trim(),
-        deliveryAddress: form.deliveryAddress.trim(),
-        delivery_address: form.deliveryAddress.trim(),
-        deliveryPostcode: form.deliveryPostcode.trim(),
-        delivery_postcode: form.deliveryPostcode.trim(),
-        postcode: form.deliveryPostcode.trim(),
-        priceMode: String(form.priceMode || "VAT").toUpperCase(),
-        price_mode: String(form.priceMode || "VAT").toUpperCase(),
-        items: calculatedItems,
-        order_items: calculatedItems,
-        order_total: totals.grandTotal,
-        net_total: totals.netTotal,
-        vat_total: totals.vatTotal,
-        subtotal: totals.netTotal,
-        notes: form.notes,
-      };
-      const freshAmendedOrder =
-        (await fetchInvoiceOrderFromDb(amendOrder.order_number || amendOrder.orderId)) ||
-        amendedOrder;
-      const invoiceReference =
-        amendOrder.order_number ||
-        amendOrder.orderId ||
-        freshAmendedOrder.order_number;
-
-
-      if (invoiceReference) {
-        const updatedAt = new Date().toISOString();
-        const { error: customerInvoiceUpdateError } = await supabase
-          .from("customer_invoices")
-          .update({
-            invoice_total: totals.grandTotal,
-            price_mode: String(form.priceMode || "VAT").toUpperCase(),
-            updated_at: updatedAt,
-          })
-          .eq("invoice_number", invoiceReference);
-
-
-        if (
-          customerInvoiceUpdateError &&
-          !isSchemaCompatibilityError(customerInvoiceUpdateError)
-        ) {
-          throw customerInvoiceUpdateError;
-        }
-
-
-        const { error: ledgerUpdateError } = await supabase
-          .from("customer_ledger")
-          .update({
-            customer_name: form.customerName.trim(),
-            price_mode: String(form.priceMode || "VAT").toUpperCase(),
-            debit: totals.grandTotal,
-            amount: totals.grandTotal,
-            invoice_amount: totals.grandTotal,
-            remaining_amount: Math.max(
-              0,
-              totals.grandTotal -
-                Number(
-                  amendOrder.paid_amount ||
-                    amendOrder.paidAmount ||
-                    0
-                )
-            ),
-            updated_at: updatedAt,
-          })
-          .eq("reference_no", invoiceReference)
-          .eq("entry_type", "INVOICE");
-
-
-        if (ledgerUpdateError && !isSchemaCompatibilityError(ledgerUpdateError)) {
-          throw ledgerUpdateError;
-        }
-      }
-
-
-      await amendInvoice({
-        order: freshAmendedOrder,
-        reason: form.notes.trim(),
-        previousTotal: previousTotals.grandTotal,
-        newTotal: totals.grandTotal,
-        changedItems: [...changedItems, ...removedAuditItems],
-        currentUser: loggedInUser,
-      });
+      const freshOrder = await fetchInvoiceOrderFromDb(amendOrder);
       await loadInvoices();
+      setAmendRevision("");
       resetForm();
-      previewInvoice(freshAmendedOrder);
-    } catch (err) {
-      console.error("Amend invoice error:", err);
-      alert(err.message || "Could not amend invoice.");
-    } finally {
-      setSaving(false);
-    }
+      if (freshOrder) previewInvoice(freshOrder);
+    } catch (error) {
+      console.error("Owner invoice amendment failed:", error);
+      alert(error.message || "Invoice was not amended.");
+    } finally { setSaving(false); }
   };
 
 
@@ -2712,8 +2477,8 @@ const runInvoiceAction = async (row, action) => {
                           {!financiallyVoided && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
                             <button type="button" onClick={() => openReturnPrintDialog(row)} className="bg-emerald-700 text-white px-3 py-1 rounded-lg text-xs font-bold">Add Return</button>
                           )}
-                          {isAdminUser && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
-                            <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Amend</button>
+                          {isNisstajAdmin && String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" && (
+                            <button type="button" onClick={() => openAmendForm(row)} className="bg-amber-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Owner Amendment</button>
                           )}
                           {isNisstajAdmin &&
                             String(row.entry_type || "").toUpperCase() !== "RETURN_INVOICE" &&

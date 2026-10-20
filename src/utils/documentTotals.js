@@ -6,6 +6,13 @@ const money2 = (value) =>
 const hasMoneyValue = (value) =>
   value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 
+export const isSavedInvoiceDocument = (order = {}) => Boolean(
+  order.invoice_id || order.invoiceId || order.invoice_number || order.invoiceNo ||
+  ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
+    String(order.status || "").trim().toLowerCase()
+  )
+);
+
 const getQuantity = (item = {}) =>
   Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
 
@@ -253,18 +260,28 @@ export function calculateDocumentTotals(items = [], order = {}) {
   const discountAmount = money2(order.discount_amount ?? order.discountAmount ?? 0);
   const discountPercent = Number(order.discount_percent ?? order.discountPercent ?? 0);
 
+  // Issued history is a saved document, not a new pricing calculation. In
+  // particular, zero is a saved value and must never trigger a repair/fallback.
+  const issued = isSavedInvoiceDocument(order);
+  const issuedGrand = [order.invoice_total, order.invoiceTotal, order.order_total,
+    order.orderTotal, order.totalAmount, order.total, order.grand_total, order.finalTotal]
+    .find(hasMoneyValue);
+  const issuedNet = [order.net_total, order.netTotal, order.subtotal].find(hasMoneyValue);
+  const issuedVat = [order.vat_total, order.vatTotal].find(hasMoneyValue);
+  const preserveGrand = issued && hasMoneyValue(issuedGrand);
+
   return {
     invoiceItems: printableItems,
     totalLines,
     totalQty: totalQuantity,
     totalQuantity,
-    netTotal,
-    vatTotal,
+    netTotal: issued && hasMoneyValue(issuedNet) ? money2(issuedNet) : netTotal,
+    vatTotal: issued && hasMoneyValue(issuedVat) ? money2(issuedVat) : vatTotal,
     vatGroups,
     vat_groups: vatGroups,
-    grossTotal,
-    grandTotal,
-    totalAmount: grandTotal,
+    grossTotal: preserveGrand ? money2(issuedGrand) : grossTotal,
+    grandTotal: preserveGrand ? money2(issuedGrand) : grandTotal,
+    totalAmount: preserveGrand ? money2(issuedGrand) : grandTotal,
     discountAmount,
     discountPercent,
   };
