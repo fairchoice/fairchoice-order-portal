@@ -1,0 +1,91 @@
+/* Scoped presentation only: customer targeting and price writes stay in the component. */
+.customer-code-prices {
+  color: #17334d;
+  font-size: 14px;
+}
+.customer-code-prices > header h2 { font-size: 22px; font-weight: 500; }
+.customer-code-prices > header p { margin-top: 6px; color: #526785; }
+.customer-code-prices > nav { flex-wrap: wrap; gap: 8px; }
+.customer-code-prices > nav button {
+  border: 1px solid #b6cbe2;
+  background: white;
+  color: #17334d;
+}
+.customer-code-prices > nav button[aria-pressed="true"] {
+  background: #17334d;
+  color: white;
+}
+.customer-code-prices > section {
+  border: 1px solid #b6cbe2;
+  border-radius: 12px;
+  padding: 16px;
+}
+.customer-code-prices label { display: block; font-size: 12px; }
+.customer-code-prices input:not([type="checkbox"]),
+.customer-code-prices select {
+  min-height: 40px;
+  border: 1px solid #b6cbe2;
+  border-radius: 7px;
+  background: white;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 400;
+}
+.customer-code-prices input:focus-visible,
+.customer-code-prices select:focus-visible,
+.customer-code-prices button:focus-visible,
+.customer-code-prices summary:focus-visible { outline: 2px solid #1959ef; outline-offset: 2px; }
+.customer-code-prices button {
+  min-height: 38px;
+  border-radius: 7px;
+}
+.customer-code-prices button.bg-blue-700 { background: #1959ef; }
+.customer-code-prices > nav button[aria-pressed="true"] { background: #17334d; }
+.customer-code-prices > nav button[aria-pressed="false"] { background: white; }
+.customer-code-prices .customer-code-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1.7fr;
+  gap: 12px;
+}
+.customer-code-filters input,
+.customer-code-filters select { width: 100%; margin-top: 5px; }
+.customer-code-prices details {
+  border-top: 1px solid #d4e2f1;
+  padding-top: 12px;
+}
+.customer-code-prices details label { font-size: 13px; font-weight: 400; }
+.customer-code-prices .customer-code-target-table { max-height: 190px; }
+.customer-code-prices .customer-code-product-table,
+.customer-code-prices .customer-code-target-table {
+  border: 1px solid #b6cbe2;
+  border-radius: 10px;
+}
+.customer-code-prices table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.customer-code-prices thead { background: #edf4f9; }
+.customer-code-prices th {
+  padding: 12px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.customer-code-prices td {
+  border-top: 1px solid #d4e2f1;
+  padding: 10px;
+  font-size: 13px;
+}
+.customer-code-prices tr { border: 0; }
+.customer-code-prices tbody tr:hover { background: #f7faff; }
+.customer-code-product-table table { min-width: 640px; }
+.customer-code-product-table th:first-child { width: 70px; }
+.customer-code-product-table th:last-child { width: 28%; }
+.customer-code-product-table td:last-child input { width: 100%; }
+.customer-code-target-table thead { position: sticky; top: 0; z-index: 1; }
+@media (max-width: 800px) {
+  .customer-code-prices .customer-code-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .customer-code-prices > section { padding: 12px; }
+}
+@media (max-width: 480px) {
+  .customer-code-prices .customer-code-filters { grid-template-columns: minmax(0, 1fr); }
+  .customer-code-prices > nav button { flex: 1; }
+}
