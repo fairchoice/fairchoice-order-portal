@@ -6361,6 +6361,15 @@ const backOfficeContent = comingSoonTitle ? (
         products={products}
         pricingSettings={pricingSettings}
         fetchProducts={fetchProducts}
+        onCustomerCodesChanged={async () => {
+          const customers = await getCustomerAccounts({ operationalOnly: !isCustomer });
+          setCustomerAccounts(customers || []);
+          const refreshed = (customers || []).find((customer) => String(customer.id) === String(selectedCustomerAccount?.id));
+          if (refreshed) {
+            setSelectedCustomerAccount(refreshed);
+            setPriceMode(getCustomerPriceModeValue(refreshed, pricingSettings));
+          }
+        }}
       />
     )}
     {page === "promotions" && (

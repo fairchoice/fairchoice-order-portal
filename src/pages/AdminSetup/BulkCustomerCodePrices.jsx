@@ -1,4 +1,4 @@
-import { getCustomerOfferCodeIds } from "../../utils/customerOfferCodes.js";
+import { canAssignCustomerOfferCode, getCustomerOfferCodeIds, saveCustomerOfferCode } from "../../utils/customerOfferCodes.js";
 import { useEffect, useMemo, useState } from "react";
 import {
   buildProductPriceCodeMap,
@@ -15,7 +15,7 @@ const PAGE_SIZE = 40;
 
 const money = (value) => `£${Number(value || 0).toFixed(2)}`;
 
-export default function BulkCustomerCodePrices({ products = [], pricingSettings = {}, fetchProducts }) {
+export default function BulkCustomerCodePrices({ products = [], pricingSettings = {}, fetchProducts, onCustomerCodesChanged }) {
   const [codes, setCodes] = useState([]);
   const [selectedCodeId, setSelectedCodeId] = useState("");
   const [previewBaseMode, setPreviewBaseMode] = useState("inc vat");
@@ -98,10 +98,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     () => codes.filter((code) => String(code.code_type || "base").toLowerCase() !== "sub"),
     [codes]
   );
-  const subCodes = useMemo(
-    () => codes.filter((code) => String(code.code_type || "base").toLowerCase() === "sub"),
-    [codes]
-  );
+
 
   const normalizeScope = (value) => String(value || "").trim();
   const customerCountries = useMemo(
@@ -289,6 +286,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
           ? { ...customer, customer_price_code_id: selectedCodeId, default_price_mode: customerBaseMode }
           : customer
       ));
+      await onCustomerCodesChanged?.();
       setMessage(`${selectedCode?.code || "Customer code"} applied to ${targets.length} customers.`);
     } catch (error) {
       setMessage(error?.message || "Could not apply the customer code to the selected location.");
@@ -319,6 +317,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
       setCustomers((current) => current.map((customer) =>
         ids.includes(customer.id) ? { ...customer, customer_price_code_id: null } : customer
       ));
+      await onCustomerCodesChanged?.();
       setMessage(`Customer price code removed from ${targets.length} customers.`);
     } catch (error) {
       setMessage(error?.message || "Could not clear customer codes for the selected location.");
@@ -333,48 +332,33 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     let saved = 0;
     try {
       for (const customer of targets) {
-        const currentIds = getCustomerOfferCodeIds(customer);
-        const nextIds = remove
-          ? currentIds.filter((id) => id !== String(codeId))
-          : [...new Set([...currentIds, String(codeId)])];
-        // Compare both stored fields and Base Code to avoid overwriting another admin's edit.
-        let query = supabase.from("customer_accounts").update({
-          customer_price_overlay_code_ids: nextIds,
-          customer_price_overlay_code_id: nextIds[0] || null,
-        }).eq("id", customer.id)
-          .eq("customer_price_overlay_code_ids", `{${(customer.customer_price_overlay_code_ids || []).join(",")}}`);
-        query = customer.customer_price_overlay_code_id
-          ? query.eq("customer_price_overlay_code_id", customer.customer_price_overlay_code_id)
-          : query.is("customer_price_overlay_code_id", null);
-        query = customer.customer_price_code_id
-          ? query.eq("customer_price_code_id", customer.customer_price_code_id)
-          : query.is("customer_price_code_id", null);
-        const { data, error } = await query.select("id").single();
-        if (error || !data) throw error || new Error("Customer changed. Refresh and try again.");
+        await saveCustomerOfferCode(supabase, customer, codeId, remove);
         saved += 1;
       }
       await loadCustomers();
+      await onCustomerCodesChanged?.();
       setMessage(`Offer code ${remove ? "removed from" : "added to"} ${saved} customers. Other offer codes were kept.`);
     } catch (error) {
       await loadCustomers();
+      await onCustomerCodesChanged?.();
       setMessage(`${saved} customers updated before stopping. Refresh and retry the remaining customers. ${error?.message || "Could not save offer codes."}`);
     } finally { setCustomerSaving(false); }
   };
 
   const applySubCodeToFilteredCustomers = async () => {
-    const subCode = subCodes.find((code) => String(code.id) === String(selectedCodeId));
-    if (!subCode) { setMessage("Select an offer / Sub Code first."); return; }
+    const subCode = codes.find((code) => String(code.id) === String(selectedCodeId));
+    if (!subCode) { setMessage("Select an additional offer code first."); return; }
     const targets = filteredCustomers.filter((customer) =>
-      customer.id && String(customer.customer_price_code_id || "") === String(subCode.parent_price_code_id || "") &&
+      customer.id && canAssignCustomerOfferCode(customer, subCode) &&
       !getCustomerOfferCodeIds(customer).includes(String(subCode.id))
     );
-    if (!targets.length) { setMessage("No new matching customers. Offers require their parent Base Code and cannot be added twice."); return; }
+    if (!targets.length) { setMessage("No new matching customers. Set a Base Code first; choose a different additional code. Sub Codes require their parent Base Code. Duplicate offers are skipped."); return; }
     if (!window.confirm(`Add ${subCode.code} to ${targets.length} customers? Existing codes will be kept. The lowest matching offer price wins.`)) return;
     await changeCustomerOfferCode(targets, subCode.id);
   };
 
   const clearSubCodeFromFilteredCustomers = async () => {
-    const subCode = subCodes.find((code) => String(code.id) === String(selectedCodeId));
+    const subCode = codes.find((code) => String(code.id) === String(selectedCodeId));
     if (!subCode) { setMessage("Select the offer code to remove first."); return; }
     const targets = filteredCustomers.filter((customer) => customer.id && getCustomerOfferCodeIds(customer).includes(String(subCode.id)));
     if (!targets.length) { setMessage("No customers in these filters have the selected offer code."); return; }
@@ -583,12 +567,13 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
             </label>
             <div style={{ flex: 1 }} />
             <button type="button" onClick={applyCodeToFilteredCustomers} disabled={!selectedCodeId || customerSaving || customerLoading} style={{ ...saveButtonStyle, minHeight: 40 }}>
-              {customerSaving ? "Applying..." : `Apply Code to ${filteredCustomers.length} Customers`}
+              {customerSaving ? "Applying..." : `Set Base Code for ${filteredCustomers.length} Customers`}
             </button>
+            <button type="button" onClick={applySubCodeToFilteredCustomers} disabled={!selectedCodeId || customerSaving || customerLoading} style={{ ...saveButtonStyle, minHeight: 40 }}>Add as Offer Code</button>
             <button type="button" onClick={clearCodeFromFilteredCustomers} disabled={customerSaving || customerLoading} style={{ ...clearButtonStyle, minHeight: 40 }}>Clear Code from Filtered</button>
           </div>
           <div style={{ marginTop: 10, color: "#64748b", fontSize: 13 }}>
-            Country and Town / City use the customer account address. Applying a code updates every customer currently matching these filters.
+            Set Base Code replaces the main code. Add as Offer Code keeps the Base Code and adds this code alongside existing offers. Country and Town / City use the account address.
           </div>
         </section>
 
@@ -635,17 +620,17 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
           <div style={{ marginBottom: 12 }}>
             <h3 style={{ margin: 0, fontSize: 18 }}>Multiple Offer Codes</h3>
             <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 13 }}>
-              Keep one Base Code and add multiple offer / Sub Codes. Each offer applies only to its exact product prices; the lowest matching offer price wins. Other products use the Base Code.
+              Keep one Base Code and add other existing price codes or Sub Codes as offers. Additional codes use exact product prices only, without stacking percentages. The lowest matching offer price wins; other products use the Base Code.
             </p>
           </div>
           <div style={{ ...toolbarStyle, alignItems: "end" }}>
             <label style={fieldStyle}>
-              <span style={labelStyle}>Sub Code</span>
+              <span style={labelStyle}>Additional Offer Code</span>
               <select value={selectedCodeId} onChange={(e) => setSelectedCodeId(e.target.value)} style={inputStyle}>
-                <option value="">Select Sub Code</option>
-                {subCodes.map((code) => {
+                <option value="">Select offer code</option>
+                {codes.map((code) => {
                   const parent = baseCodes.find((item) => String(item.id) === String(code.parent_price_code_id));
-                  return <option key={code.id} value={code.id}>{code.code} → {parent?.code || "No parent"}</option>;
+                  return <option key={code.id} value={code.id}>{code.code}{String(code.code_type || "base").toLowerCase() === "sub" ? ` → ${parent?.code || "No parent"}` : " (existing code / exact offers)"}</option>;
                 })}
               </select>
             </label>
@@ -691,7 +676,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
                     <td style={{ ...tdStyle, fontWeight: 700 }}>{customer.account_name || "Unnamed Customer"}</td>
                     <td style={tdStyle}>{customer.country || "-"}</td><td style={tdStyle}>{customer.town_city || "-"}</td>
                     <td style={tdStyle}>{baseCode?.code || "Normal"}</td><td style={{ ...tdStyle, fontWeight: 800 }}>{offerCodes.length ? offerCodes.map((code) => <span key={code.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, margin: 3, padding: "3px 7px", background: "#edf3f9", borderRadius: 6 }}>
-                      {code.code}{String(code.parent_price_code_id) !== String(customer.customer_price_code_id) ? " (different Base Code)" : ""}
+                      {code.code}{!canAssignCustomerOfferCode(customer, code) ? " (not applicable)" : ""}
                       <button type="button" aria-label={`Remove ${code.code} from ${customer.account_name}`} disabled={customerSaving}
                         onClick={() => { if (window.confirm(`Remove ${code.code} from ${customer.account_name}?`)) void changeCustomerOfferCode([customer], code.id, true); }}
                         style={{ border: 0, background: "transparent", color: "#9f1239", cursor: "pointer" }}>×</button>
