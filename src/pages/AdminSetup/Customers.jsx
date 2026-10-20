@@ -1,3 +1,5 @@
+import IndividualCustomerCode from "../../components/IndividualCustomerCode.jsx";
+import { getCustomerPriceCodes } from "../../services/priceCodes.js";
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import {
@@ -116,8 +118,9 @@ const makeTemporaryPassword = () =>
     100 + Math.random() * 900
   )}`;
 
-export default function Customers() {
+export default function Customers({onPricingChanged}) {
   const [customers, setCustomers] = useState([]);
+  const [individualCodes, setIndividualCodes] = useState([]);
   const [loading, setLoading] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -147,8 +150,8 @@ export default function Customers() {
   const loadCustomers = async () => {
     setLoading(true);
     try {
-      const data = await getCustomerAccounts();
-      setCustomers(data || []);
+      const [data,codes] = await Promise.all([getCustomerAccounts(),getCustomerPriceCodes({includeInactive:true})]);
+      setCustomers(data || []);setIndividualCodes(codes || []);
     } catch (error) {
       console.error("Customer load error:", error);
       alert("Could not load customers.");
@@ -1138,6 +1141,7 @@ export default function Customers() {
                   <th className="px-2 py-2 text-left">Status</th>
                   <th className="px-2 py-2 text-right">Credit Limit</th>
                   <th className="px-2 py-2 text-left">Price Mode</th>
+                  <th className="px-2 py-2 text-left">Customer Code</th>
                   <th className="px-2 py-2 text-center">Actions</th>
                 </tr>
               </thead>
@@ -1166,6 +1170,7 @@ export default function Customers() {
                {formatCurrency(customer.credit_limit)}
                     </td>
                     <td className="px-2 py-2">{displayPriceMode(customer.default_price_mode)}</td>
+                    <td className="px-2 py-2"><IndividualCustomerCode key={customer.id} compact customer={customer} codes={individualCodes} onChanged={()=>Promise.all([loadCustomers(),onPricingChanged?.()])} /></td>
                     <td className="px-2 py-2 text-center">
                       <button
                         type="button"
@@ -1183,7 +1188,7 @@ export default function Customers() {
 
                 {pagedCustomers.length === 0 && (
                   <tr>
-                    <td colSpan="9" className="p-4 text-center text-sm text-slate-500">
+                    <td colSpan="11" className="p-4 text-center text-sm text-slate-500">
                       No customers found.
                     </td>
                   </tr>
@@ -1227,6 +1232,7 @@ export default function Customers() {
       {showCustomerForm && (
         <CustomerForm
           editingCustomer={editingCustomer}
+          onCodesChanged={(state) => { setEditingCustomer(current => ({ ...current, ...state })); return Promise.all([loadCustomers(),onPricingChanged?.()]); }}
           onClose={() => {
             setShowCustomerForm(false);
             setEditingCustomer(null);

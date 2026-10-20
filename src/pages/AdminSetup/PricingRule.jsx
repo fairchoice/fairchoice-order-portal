@@ -1,7 +1,8 @@
+import { editIndividualCustomerPercent } from "../../services/individualCustomerCodes.js";
+import { priceModeLabel } from "../../utils/customerCodeEligibility.js";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
 import {
-  createCustomerPriceCode,
   getCustomerPriceCodes,
   updateCustomerPriceCode,
 } from "../../services/priceCodes";
@@ -12,16 +13,11 @@ import { normalizeRole } from "../../security/accessControlRegistry";
 const PRICING_PASSWORD_SETTING_KEY = "pricing_super_admin_password";
 const CODE_PAGE_SIZE = 15;
 
-export default function Pricing() {
+export default function Pricing({fetchPricingSettings}) {
   const [form, setForm] = useState({ vat_percent: 20, server_discount_percent: 0 });
   const [priceCodes, setPriceCodes] = useState([]);
+  const [codeCustomers, setCodeCustomers] = useState([]);
   const [codePage, setCodePage] = useState(1);
-  const [showNewCode, setShowNewCode] = useState(false);
-  const [newCode, setNewCode] = useState("");
-  const [newCodePercent, setNewCodePercent] = useState("");
-  const [newCodeType, setNewCodeType] = useState("base");
-  const [newCodeParentId, setNewCodeParentId] = useState("");
-  const [savingCode, setSavingCode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [pricingUnlocked, setPricingUnlocked] = useState(false);
@@ -55,8 +51,12 @@ export default function Pricing() {
 
   async function loadPriceCodes() {
     try {
-      const rows = await getCustomerPriceCodes({ includeInactive: true });
-      setPriceCodes(rows || []);
+      const [rows,customers] = await Promise.all([
+        getCustomerPriceCodes({ includeInactive: true }),
+        supabase.from("customer_accounts").select("id,account_name,default_price_mode,customer_price_code_id,customer_price_overlay_code_id,customer_price_overlay_code_ids").order("account_name"),
+      ]);
+      if(customers.error)throw customers.error;
+      setPriceCodes(rows || []);setCodeCustomers(customers.data || []);
     } catch (error) {
       console.error("Customer price codes load error:", error);
       setPriceCodes([]);
@@ -159,43 +159,6 @@ export default function Pricing() {
     });
   }
 
-  async function addPriceCode() {
-    if (!pricingUnlocked) return alert("Unlock Pricing first.");
-    const code = newCode.trim();
-    const percent = Number(newCodePercent || 0);
-    const isSubCode = newCodeType === "sub";
-    if (!code) return alert("Enter a customer price code.");
-    if (!isSubCode && (!Number.isFinite(percent) || percent < 0 || percent > 100)) return alert("Enter a percentage from 0 to 100.");
-    if (isSubCode && !newCodeParentId) return alert("Select the Base Code for this Sub Code.");
-    setSavingCode(true);
-    try {
-      const created = await createCustomerPriceCode({
-        code,
-        discountPercent: isSubCode ? 0 : percent,
-        codeType: isSubCode ? "sub" : "base",
-        parentPriceCodeId: isSubCode ? newCodeParentId : null,
-        exactOnly: isSubCode,
-      });
-      await logAction({
-        user: loggedInUser,
-        action_type: "Customer price code created",
-        page_module: "Pricing",
-        old_value: null,
-        new_value: created,
-      });
-      setNewCode("");
-      setNewCodePercent("");
-      setNewCodeType("base");
-      setNewCodeParentId("");
-      setShowNewCode(false);
-      await loadPriceCodes();
-    } catch (error) {
-      alert("Could not create price code: " + (error.message || error));
-    } finally {
-      setSavingCode(false);
-    }
-  }
-
   async function renamePriceCode(priceCode) {
     if (!pricingUnlocked) return alert("Unlock Pricing first.");
     const nextCode = window.prompt("Rename customer price code", priceCode.code || "");
@@ -204,7 +167,7 @@ export default function Pricing() {
     if (!cleanCode || cleanCode === priceCode.code) return;
     try {
       await updateCustomerPriceCode(priceCode.id, { code: cleanCode });
-      await loadPriceCodes();
+      await Promise.all([loadPriceCodes(),fetchPricingSettings?.()]);
     } catch (error) {
       alert("Rename failed: " + (error.message || error));
     }
@@ -217,11 +180,21 @@ export default function Pricing() {
     const percent = Number(nextPercent);
     if (!Number.isFinite(percent) || percent < 0 || percent > 100) return alert("Enter a percentage from 0 to 100.");
     try {
-      await updateCustomerPriceCode(priceCode.id, { discountPercent: percent });
-      await loadPriceCodes();
+      if(priceCode.customer_account_id) await editIndividualCustomerPercent(priceCode,percent,loggedInUser);
+      else await updateCustomerPriceCode(priceCode.id, { discountPercent: percent });
+      await Promise.all([loadPriceCodes(),fetchPricingSettings?.()]);
     } catch (error) {
       alert("Percentage update failed: " + (error.message || error));
     }
+  }
+
+  async function changeCodeVatMode(priceCode, appliesToPriceMode) {
+    if (!pricingUnlocked || !requirePermission(loggedInUser, "can_edit_pricing")) return;
+    if (!window.confirm(`Apply ${priceCode.code} only to ${priceModeLabel(appliesToPriceMode)} customers? Customer VAT modes and saved invoices will not change.`)) return;
+    try {
+      await updateCustomerPriceCode(priceCode.id, { appliesToPriceMode });
+      await Promise.all([loadPriceCodes(),fetchPricingSettings?.()]);
+    } catch (error) { alert(error.message || "Could not save code applicability."); }
   }
 
   async function togglePriceCode(priceCode) {
@@ -230,7 +203,7 @@ export default function Pricing() {
     if (!window.confirm(`${nextActive ? "Activate" : "Make inactive"} code ${priceCode.code}?`)) return;
     try {
       await updateCustomerPriceCode(priceCode.id, { active: nextActive });
-      await loadPriceCodes();
+      await Promise.all([loadPriceCodes(),fetchPricingSettings?.()]);
     } catch (error) {
       alert("Status update failed: " + (error.message || error));
     }
@@ -292,83 +265,21 @@ export default function Pricing() {
           <div>
             <h2 className="text-xl font-bold">Customer Price Codes</h2>
             <p className="text-sm text-slate-600">
-              Base Codes can use percentage or exact prices. Sub Codes are exact-price-only overlays linked to a Base Code.
+              Each individual code belongs to the customer shown. Edit its percentage against the customer’s Ex.VAT or Inc.VAT price mode. Exact product prices take priority. Generate codes under Customers.
             </p>
           </div>
-          <button
-            type="button"
-            disabled={!pricingUnlocked}
-            onClick={() => setShowNewCode((old) => !old)}
-            className="bg-green-700 text-white font-bold px-5 py-3 rounded-xl disabled:bg-slate-400"
-          >
-            + New Code
-          </button>
         </div>
-
-        {showNewCode && (
-          <div className="mb-4 grid grid-cols-1 md:grid-cols-[1fr_150px_1fr_170px_auto] gap-3 rounded-xl border bg-slate-50 p-4">
-            <input
-              className="border rounded-xl p-3 font-bold"
-              placeholder="Customer price code"
-              value={newCode}
-              onChange={(e) => setNewCode(e.target.value)}
-            />
-            <select
-              className="border rounded-xl p-3 font-bold bg-white"
-              value={newCodeType}
-              onChange={(e) => { setNewCodeType(e.target.value); setNewCodeParentId(""); }}
-            >
-              <option value="base">Base Code</option>
-              <option value="sub">Sub Code</option>
-            </select>
-            {newCodeType === "sub" ? (
-              <select
-                className="border rounded-xl p-3 font-bold bg-white"
-                value={newCodeParentId}
-                onChange={(e) => setNewCodeParentId(e.target.value)}
-              >
-                <option value="">Select Base Code</option>
-                {priceCodes.filter((code) => String(code.code_type || "base").toLowerCase() !== "sub" && code.active !== false).map((code) => (
-                  <option key={code.id} value={code.id}>{code.code}</option>
-                ))}
-              </select>
-            ) : (
-              <div className="flex items-center gap-2">
-                <input
-                  className="border rounded-xl p-3 w-full font-bold"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  placeholder="Percentage"
-                  value={newCodePercent}
-                  onChange={(e) => setNewCodePercent(e.target.value)}
-                />
-                <span className="font-bold">%</span>
-              </div>
-            )}
-            <div className="rounded-xl border bg-white px-3 py-2 text-xs font-bold text-slate-600 flex items-center">
-              {newCodeType === "sub" ? "Exact prices only" : "Percentage + exact overrides"}
-            </div>
-            <button
-              type="button"
-              onClick={addPriceCode}
-              disabled={savingCode}
-              className="bg-blue-700 text-white font-bold px-5 py-3 rounded-xl disabled:bg-slate-400"
-            >
-              {savingCode ? "Adding..." : "Add Code"}
-            </button>
-          </div>
-        )}
 
         <div className="overflow-x-auto rounded-xl border">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-100 text-left">
               <tr>
+                <th className="p-3">Customer</th>
                 <th className="p-3">Code</th>
                 <th className="p-3">Type</th>
                 <th className="p-3">Parent</th>
                 <th className="p-3">Percentage</th>
+                <th className="p-3">Applies to</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Actions</th>
               </tr>
@@ -376,16 +287,23 @@ export default function Pricing() {
             <tbody>
               {visibleCodes.map((priceCode) => (
                 <tr key={priceCode.id} className="border-t">
+                  <td className="p-3">{codeCustomers.filter(customer => priceCode.customer_account_id
+                    ? customer.id===priceCode.customer_account_id
+                    : customer.customer_price_code_id===priceCode.id || customer.customer_price_overlay_code_id===priceCode.id || (customer.customer_price_overlay_code_ids || []).includes(priceCode.id))
+                    .map(customer=>customer.account_name).join(", ") || "Unassigned legacy code"}</td>
                   <td className="p-3 font-bold">{priceCode.code}</td>
-                  <td className="p-3 font-bold">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? "Sub Code" : "Base Code"}</td>
+                  <td className="p-3 font-bold">{priceCode.customer_account_id ? "Individual customer" : String(priceCode.code_type || "base").toLowerCase() === "sub" ? "Legacy Sub Code" : "Legacy shared code"}</td>
                   <td className="p-3">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? (priceCodes.find((item) => String(item.id) === String(priceCode.parent_price_code_id))?.code || "-") : "-"}</td>
                   <td className="p-3">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? "Exact only" : `${Number(priceCode.discount_percent || 0)}%`}</td>
+                  <td className="p-3">{priceCode.customer_account_id ? priceModeLabel(codeCustomers.find(customer=>customer.id===priceCode.customer_account_id)?.default_price_mode || "VAT") : <select aria-label={`${priceCode.code} applies to`} disabled={!pricingUnlocked} value={priceCode.applies_to_price_mode || "both"} onChange={e=>changeCodeVatMode(priceCode,e.target.value)} className="border rounded-lg p-2">
+                    <option value="inc vat">Inc.VAT</option><option value="ex vat">Ex.VAT</option><option value="both">Both</option>
+                  </select>}</td>
                   <td className="p-3">{priceCode.active === false ? "Inactive" : "Active"}</td>
                   <td className="p-3">
                     <div className="flex flex-wrap gap-2">
-                      <button type="button" disabled={!pricingUnlocked} onClick={() => renamePriceCode(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">Rename</button>
-                      {String(priceCode.code_type || "base").toLowerCase() !== "sub" && <button type="button" disabled={!pricingUnlocked} onClick={() => editPriceCodePercent(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">Edit %</button>}
-                      <button type="button" disabled={!pricingUnlocked} onClick={() => togglePriceCode(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">
+                      <button type="button" disabled={!pricingUnlocked || Boolean(priceCode.customer_account_id)} onClick={() => renamePriceCode(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">Rename</button>
+                      {String(priceCode.code_type || "base").toLowerCase() !== "sub" && <button type="button" disabled={!pricingUnlocked} onClick={() => editPriceCodePercent(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">Edit percentage</button>}
+                      <button type="button" disabled={!pricingUnlocked || Boolean(priceCode.customer_account_id)} onClick={() => togglePriceCode(priceCode)} className="border rounded-lg px-3 py-2 font-bold disabled:opacity-40">
                         {priceCode.active === false ? "Activate" : "Inactive"}
                       </button>
                     </div>
@@ -393,7 +311,7 @@ export default function Pricing() {
                 </tr>
               ))}
               {visibleCodes.length === 0 && (
-                <tr><td colSpan="6" className="p-6 text-center text-slate-500">No customer price codes yet.</td></tr>
+                <tr><td colSpan="8" className="p-6 text-center text-slate-500">No customer price codes yet.</td></tr>
               )}
             </tbody>
           </table>

@@ -1,3 +1,4 @@
+import { normalizeOfferCodeIds } from "../utils/customerOfferCodes.js";
 import { supabase } from "./supabase";
 
 const normalizeBasePriceMode = (basePriceMode) => {
@@ -9,13 +10,14 @@ const normalizeBasePriceMode = (basePriceMode) => {
 export const makePriceCodeMode = (priceCodeId, basePriceMode = "inc vat", overlayPriceCodeId = "") => {
   if (!priceCodeId) return "";
   const base = `code:${String(priceCodeId)}|${normalizeBasePriceMode(basePriceMode)}`;
-  return overlayPriceCodeId ? `${base}|overlay:${String(overlayPriceCodeId)}` : base;
+  const ids = normalizeOfferCodeIds(overlayPriceCodeId);
+  return ids.length ? `${base}|overlay:${ids.join(",")}` : base;
 };
 
 export const getPriceCodeModeParts = (priceMode) => {
   const value = String(priceMode || "").trim();
   if (!value.toLowerCase().startsWith("code:")) {
-    return { priceCodeId: "", basePriceMode: "ex vat", overlayPriceCodeId: "" };
+    return { priceCodeId: "", basePriceMode: "ex vat", overlayPriceCodeId: "", overlayPriceCodeIds: [] };
   }
   const parts = value.slice(5).split("|");
   const priceCodeId = parts[0] || "";
@@ -24,7 +26,8 @@ export const getPriceCodeModeParts = (priceMode) => {
   return {
     priceCodeId,
     basePriceMode,
-    overlayPriceCodeId: overlayPart ? overlayPart.slice("overlay:".length) : "",
+    overlayPriceCodeId: normalizeOfferCodeIds(overlayPart?.slice("overlay:".length))[0] || "",
+    overlayPriceCodeIds: normalizeOfferCodeIds(overlayPart?.slice("overlay:".length)),
   };
 };
 
@@ -43,7 +46,7 @@ export async function getCustomerPriceCodes({ includeInactive = false } = {}) {
   return data || [];
 }
 
-export async function createCustomerPriceCode({ code, discountPercent, codeType = "base", parentPriceCodeId = null, exactOnly = false }) {
+export async function createCustomerPriceCode({ code, discountPercent, codeType = "base", parentPriceCodeId = null, exactOnly = false, appliesToPriceMode = "both" }) {
   const cleanCode = String(code || "").trim();
   if (!cleanCode) throw new Error("Price code is required.");
 
@@ -56,6 +59,7 @@ export async function createCustomerPriceCode({ code, discountPercent, codeType 
       parent_price_code_id: codeType === "sub" ? parentPriceCodeId || null : null,
       exact_only: codeType === "sub" ? true : exactOnly === true,
       active: true,
+      applies_to_price_mode: appliesToPriceMode,
     })
     .select()
     .single();
@@ -86,6 +90,10 @@ export async function updateCustomerPriceCode(id, changes = {}) {
   if (Object.prototype.hasOwnProperty.call(changes, "exactOnly")) {
     payload.exact_only = changes.exactOnly === true;
   }
+  if (Object.prototype.hasOwnProperty.call(changes, "appliesToPriceMode")) {
+    if (!["inc vat", "ex vat", "both"].includes(changes.appliesToPriceMode)) throw new Error("Select Inc.VAT, Ex.VAT or both.");
+    payload.applies_to_price_mode = changes.appliesToPriceMode;
+  }
   payload.updated_at = new Date().toISOString();
 
   const { data, error } = await supabase
@@ -111,14 +119,14 @@ export async function getProductPriceCodeRows(productIds = []) {
 
   const chunkRows = await Promise.all(
     chunks.map(async (chunk) => {
-      const { data, error } = await supabase
-        .from("product_price_code_prices")
-        .select("id, product_id, price_code_id, price, active")
-        .in("product_id", chunk)
-        .eq("active", true);
-
-      if (error) throw error;
-      return data || [];
+      const rows=[];
+      for(let start=0;;start+=1000){
+        const {data,error}=await supabase.from("product_price_code_prices")
+          .select("id, product_id, price_code_id, price, active").in("product_id",chunk)
+          .eq("active",true).order("id").range(start,start+999);
+        if(error)throw error;rows.push(...(data || []));if((data || []).length<1000)break;
+      }
+      return rows;
     })
   );
 
@@ -174,18 +182,22 @@ export async function syncProductPriceCodePrices(productId, entries = []) {
     }))
     .filter((entry) => entry.price_code_id && Number.isFinite(entry.price) && entry.price > 0);
 
-  const { error: deleteError } = await supabase
-    .from("product_price_code_prices")
-    .delete()
-    .eq("product_id", productId);
-
-  if (deleteError) throw deleteError;
-  if (!cleanedEntries.length) return [];
+  // Catalogue edits retain individual customer overrides. They are managed
+  // only by the verified individual-code pricing screen.
+  const sharedCodes=(await getCustomerPriceCodes({includeInactive:true})).filter(code=>!code.customer_account_id);
+  const sharedIds=sharedCodes.map(code=>String(code.id));
+  const allowedEntries=cleanedEntries.filter(entry=>sharedIds.includes(entry.price_code_id));
+  if(sharedIds.length){
+    const {error:deleteError}=await supabase.from("product_price_code_prices").delete()
+      .eq("product_id",productId).in("price_code_id",sharedIds);
+    if(deleteError)throw deleteError;
+  }
+  if (!allowedEntries.length) return [];
 
   const { data, error } = await supabase
     .from("product_price_code_prices")
     .insert(
-      cleanedEntries.map((entry) => ({
+      allowedEntries.map((entry) => ({
         product_id: productId,
         price_code_id: entry.price_code_id,
         price: entry.price,

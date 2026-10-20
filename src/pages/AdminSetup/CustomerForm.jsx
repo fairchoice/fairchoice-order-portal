@@ -1,3 +1,4 @@
+import IndividualCustomerCode from "../../components/IndividualCustomerCode.jsx";
 import { useEffect, useState } from "react";
 import {
   saveCustomerAccount,
@@ -28,6 +29,7 @@ export default function CustomerForm({
   editingCustomer,
   onClose,
   onSaved,
+  onCodesChanged,
 }) {
   const [form, setForm] = useState({
     id: editingCustomer?.id,
@@ -579,28 +581,13 @@ export default function CustomerForm({
                 </p>
               </div>
 
-              <div>
-                <label className={labelClass}>Customer Price Code</label>
-                <select
-                  className={inputClass}
-                  value={form.customer_price_code_id || ""}
-                  onChange={(e) => updateField("customer_price_code_id", e.target.value)}
-                >
-                  <option value="">Normal pricing (no customer code)</option>
-                  {priceCodes.map((priceCode) => (
-                    <option
-                      key={priceCode.id}
-                      value={priceCode.id}
-                      disabled={priceCode.active === false && String(form.customer_price_code_id) !== String(priceCode.id)}
-                    >
-                      {priceCode.code} - {Number(priceCode.discount_percent || 0)}%{priceCode.active === false ? " (Inactive)" : ""}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-1 text-xs text-slate-500">
-                  If this code has an exact product price, that price is used first. Otherwise the code percentage is calculated automatically.
-                </p>
-              </div>
+              <IndividualCustomerCode key={editingCustomer?.id || "new"} customer={editingCustomer}
+                codes={priceCodes} pendingMode={form.default_price_mode}
+                onChanged={(state,code)=>{
+                  setForm(current=>({...current,customer_price_code_id:state.customer_price_code_id}));
+                  setPriceCodes(current=>[...current.filter(item=>item.id!==code.id),code]);
+                  return onCodesChanged?.(state,code);
+                }} />
             </div>
           )}
         </div>

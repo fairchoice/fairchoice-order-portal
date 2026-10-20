@@ -188,7 +188,7 @@ const [codePricePage, setCodePricePage] = useState(1);
     fetchStockLocations();
     fetchHomepageItems();
     getCustomerPriceCodes({ includeInactive: true })
-      .then((rows) => setCustomerPriceCodes(rows || []))
+      .then((rows) => setCustomerPriceCodes((rows || []).filter(code=>!code.customer_account_id)))
       .catch((error) => console.error("Customer price code load error:", error));
       }, []);
 
@@ -1357,7 +1357,7 @@ const removeProductCodePriceDraft = async (priceCodeId) => {
                 <div className="rounded-xl border border-slate-300 p-3">
                   <div className="mb-2 text-sm font-bold">Customer Code Product Price</div>
                   <p className="mb-3 text-xs text-slate-500">
-                    Exact Product + Customer Code price is checked first. If no exact price exists, the system uses that customer code percentage against the customer's Ex.VAT / Inc.VAT price mode.
+                    Shared legacy code prices are shown here. Manage individual customer product prices in Customer Code Prices; they are retained when saving this product.
                   </p>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_130px_auto]">
                     <select
