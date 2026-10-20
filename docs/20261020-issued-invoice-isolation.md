@@ -3,7 +3,9 @@
 ## Read-only live audit
 
 Inspected `fairchoice-order-system` (`naobitwzrkovmwvzvgvf`) on 20 October 2026.
-No live INSERT, UPDATE, DELETE, repair, backfill or migration was executed.
+The audit made no invoice/order/line/ledger/payment edits. After explicit user
+authorization, the protection schema was installed without changing any existing
+row in those tables; only immutable original archive copies were added.
 
 - 442 canonical invoices; 440 positive totals, two zero totals, no NULL or negative totals.
 - Stored invoice totals sum to £196,412.41.
@@ -21,7 +23,7 @@ The two pre-existing zero exceptions remain unchanged:
 Raw quantity × price on unavailable lines is not an amount to charge. No price,
 quantity, classification, amendment or replacement total has been inferred.
 
-## Protection prepared on test branch
+## Installed protection
 
 The database migration archives each existing original invoice/header/line
 snapshot into a new private, RLS-protected table. It does not UPDATE or DELETE
@@ -54,24 +56,52 @@ only the enumerated payment/collection fields for ordinary updates. Existing
 legacy cancellation, void and deletion routines cannot bypass these guards;
 a separate reviewed owner workflow would be required to support those actions.
 
-## Validation and release status
+## Validation and live verification
 
 - 15 local integration tests pass against isolated PostgreSQL (PGlite) and the
-  real client invoice modules. Tests verify no installation data changes,
-  protected content, direct SQL/TRUNCATE rejection, unforgeable edit context,
-  exact-owner/session checks, atomic owner edits, immutable originals, zero
-  rejection, stale versions, cross-invoice rollback, separate payments and
-  repeat view/sync with no write.
-- Thirteen focused invoice/action/status/totals tests pass. Production build
-  passes. The broad suite has 65 failures with the same failing test names as
-  the unchanged baseline; the change introduces no new broad-suite failures.
-  Existing UI-lint findings remain outside this protection change.
+  real client invoice modules. Thirteen focused invoice/action/status/totals
+  tests and the production build pass. The broad suite retains the same 65
+  failing test names as the unchanged baseline.
 - Run `npm ci`, `npm ci --prefix tests/invoice-isolation`, then
   `npm test --prefix tests/invoice-isolation` to reproduce the integration tests.
-- Hosted test-database verification was blocked by automatic approval review:
-  the read-only checksum request targeted the test project rather than the
-  live project authorized for this audit. No hosted migration was attempted.
-- These new guards are NOT installed on live. Approval is required to verify
-  the exact migration on Fairchoice-V4-test, then install and release only this
-  invoice-protection change on live after successful hosted checks. Do not
-  include the unrelated customer-offer/city-exclusion changes in that release.
+- On Fairchoice-V4-test, all 412 original invoices were archived. Full-row
+  checksums of invoices, orders, items and ledger matched before and after.
+  Five attempted historical mutations were rejected. The real delivery trigger
+  created exactly one positive invoice, one ledger entry and an original
+  snapshot; repeat sync kept a single ledger entry. All fixture writes rolled back.
+- A temporary new hosted test invoice and synthetic, transaction-local owner
+  session verified the real FC session validator, owner amendment, financial
+  audit and immutable original. Invalid tokens and idle-expired sessions were
+  rejected. All fixtures and the synthetic session were rolled back.
+- The owner amendment helper uses `fc_require_session_permission_v2`, checking
+  revocation, idle and absolute expiry, auth version, active identity and
+  effective invoice permissions, followed by the exact owner username check.
+- The live release applied the two reviewed schema files as one transaction:
+  `issued_invoice_read_only_guards` and `issued_invoice_owner_session_v2`.
+  It used short write locks, a 5-second lock timeout and a 90-second statement
+  timeout, with an in-transaction assertion that every original row checksum
+  remained unchanged. No live test transactions or invoice repairs were run.
+- Live verification: 442 invoices, 442 matching immutable snapshots, all four
+  content guards enabled, zero active edit contexts. Stored totals remain
+  £196,412.41 and the two pre-existing zero invoices are unchanged.
+
+The full-row live checksums match before and after installation:
+
+| Original table | MD5 |
+| --- | --- |
+| customer_invoices | aee6e5cf378e934ca2b167bf4c4b0bff |
+| orders | 5234cc9f4dade9b528029080dcd35191 |
+| order_items | 05d67c409c3cc40942191e2fa2de37b0 |
+| customer_ledger | 7301ff7e07377014f546c80327af8fd8 |
+
+The two archive/context tables deliberately have RLS with no client policies
+or grants. The guarded amendment RPCs intentionally accept the public client
+role used by FC login, but authenticate the FC session and exact owner on the
+server; a supplied username alone is never authorization. Security-advisor
+notices about those deliberate entry points were reviewed against the tested
+session checks.
+
+The accompanying application change makes existing invoice reads idempotent,
+hides amendments from ordinary admins and routes explicit owner edits through
+one atomic RPC. The production release contains only invoice protection; the
+customer-offer and city-exclusion changes remain on test.

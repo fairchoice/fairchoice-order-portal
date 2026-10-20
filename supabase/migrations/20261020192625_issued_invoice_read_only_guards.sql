@@ -149,9 +149,23 @@ grant execute on function public.sync_customer_invoice_from_order_v1(uuid) to an
 
 create or replace function public.fc_archive_issued_invoice_v1() returns trigger
 language plpgsql security definer set search_path=pg_catalog,public as $$
+declare order_data jsonb;
 begin
  insert into public.fc_issued_invoice_archive(invoice_id,invoice_number,original_document)
  values(new.id,new.invoice_number,public.fc_invoice_document_snapshot_v1(new.id)) on conflict do nothing;
+ -- First issuance must publish its ledger row in the same transaction. The
+ -- delivery trigger can create the canonical invoice before the browser sees it.
+ -- This never backfills or updates an existing invoice's ledger.
+ if upper(new.status)='ISSUED' and not exists(select 1 from public.customer_ledger l
+  where upper(coalesce(l.entry_type,''))='INVOICE' and l.reference_no=new.invoice_number
+  and l.customer_account_id=new.customer_account_id and l.customer_branch_id is not distinct from new.customer_branch_id) then
+  select to_jsonb(o) into order_data from public.orders o where o.id=new.order_id;
+  insert into public.customer_ledger(customer_name,entry_type,reference_no,order_number,customer_account_id,customer_branch_id,
+   debit,invoice_total,invoice_amount,amount,paid_amount,remaining_amount,invoice_status,price_mode,invoice_date)
+  values(coalesce(nullif(order_data->>'company_name',''),'Unknown Customer'),'INVOICE',new.invoice_number,new.invoice_number,
+   new.customer_account_id,new.customer_branch_id,new.invoice_total,new.invoice_total,new.invoice_total,new.invoice_total,
+   0,new.invoice_total,'UNPAID',new.price_mode,coalesce((to_jsonb(new)->>'invoice_date')::timestamptz,now()));
+ end if;
  return new;
 end;$$;
 revoke all on function public.fc_archive_issued_invoice_v1() from public,anon,authenticated,service_role;
