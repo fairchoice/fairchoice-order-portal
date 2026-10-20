@@ -1,3 +1,4 @@
+import { normalizeOfferCodeIds } from "../utils/customerOfferCodes.js";
 import { supabase } from "./supabase";
 
 const normalizeBasePriceMode = (basePriceMode) => {
@@ -9,13 +10,14 @@ const normalizeBasePriceMode = (basePriceMode) => {
 export const makePriceCodeMode = (priceCodeId, basePriceMode = "inc vat", overlayPriceCodeId = "") => {
   if (!priceCodeId) return "";
   const base = `code:${String(priceCodeId)}|${normalizeBasePriceMode(basePriceMode)}`;
-  return overlayPriceCodeId ? `${base}|overlay:${String(overlayPriceCodeId)}` : base;
+  const ids = normalizeOfferCodeIds(overlayPriceCodeId);
+  return ids.length ? `${base}|overlay:${ids.join(",")}` : base;
 };
 
 export const getPriceCodeModeParts = (priceMode) => {
   const value = String(priceMode || "").trim();
   if (!value.toLowerCase().startsWith("code:")) {
-    return { priceCodeId: "", basePriceMode: "ex vat", overlayPriceCodeId: "" };
+    return { priceCodeId: "", basePriceMode: "ex vat", overlayPriceCodeId: "", overlayPriceCodeIds: [] };
   }
   const parts = value.slice(5).split("|");
   const priceCodeId = parts[0] || "";
@@ -24,7 +26,8 @@ export const getPriceCodeModeParts = (priceMode) => {
   return {
     priceCodeId,
     basePriceMode,
-    overlayPriceCodeId: overlayPart ? overlayPart.slice("overlay:".length) : "",
+    overlayPriceCodeId: normalizeOfferCodeIds(overlayPart?.slice("overlay:".length))[0] || "",
+    overlayPriceCodeIds: normalizeOfferCodeIds(overlayPart?.slice("overlay:".length)),
   };
 };
 

@@ -1,3 +1,5 @@
+import { normalizeOfferCodeIds } from "./customerOfferCodes.js";
+
 export const toPennies = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100);
 
@@ -34,7 +36,7 @@ export const normalizePriceMode = (priceMode) => {
 const getPriceCodeModeParts = (priceMode) => {
   const mode = normalizePriceMode(priceMode);
   if (!mode.startsWith("code:")) {
-    return { priceCodeId: "", basePriceMode: "ex vat", overlayPriceCodeId: "" };
+    return { priceCodeId: "", basePriceMode: "ex vat", overlayPriceCodeId: "", overlayPriceCodeIds: [] };
   }
   const parts = mode.slice(5).split("|");
   const base = parts[1] || "inc vat";
@@ -42,7 +44,8 @@ const getPriceCodeModeParts = (priceMode) => {
   return {
     priceCodeId: parts[0] || "",
     basePriceMode: ["inc vat", "inc.vat", "incvat", "server"].includes(base) ? "inc vat" : "ex vat",
-    overlayPriceCodeId: overlayPart ? overlayPart.slice("overlay:".length) : "",
+    overlayPriceCodeId: normalizeOfferCodeIds(overlayPart?.slice("overlay:".length))[0] || "",
+    overlayPriceCodeIds: normalizeOfferCodeIds(overlayPart?.slice("overlay:".length)),
   };
 };
 
@@ -287,12 +290,14 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
   const ownerOfferMode = ["owner offer", "manager", "manager offer"].includes(mode);
   const adminMode = ["admin", "admin offer"].includes(mode);
   const longCustomerMode = ["long customer", "long customers", "super"].includes(mode);
-  const { priceCodeId, basePriceMode: codeBasePriceMode, overlayPriceCodeId } = getPriceCodeModeParts(mode);
+  const { priceCodeId, basePriceMode: codeBasePriceMode, overlayPriceCodeIds } = getPriceCodeModeParts(mode);
   const codeMode = Boolean(priceCodeId);
   const productPriceCodeMap = product.priceCodePrices || product.price_code_prices || {};
-  const overlayCodeOverride = overlayPriceCodeId
-    ? validPositiveMoney(productPriceCodeMap[overlayPriceCodeId])
-    : 0;
+  // Offer codes supply exact product prices only; discounts are never stacked.
+  const offerPrices = overlayPriceCodeIds
+    .map((id) => validPositiveMoney(productPriceCodeMap[id]))
+    .filter((price) => price > 0);
+  const overlayCodeOverride = offerPrices.length ? Math.min(...offerPrices) : 0;
   const baseProductCodeOverride = priceCodeId
     ? validPositiveMoney(productPriceCodeMap[priceCodeId])
     : 0;

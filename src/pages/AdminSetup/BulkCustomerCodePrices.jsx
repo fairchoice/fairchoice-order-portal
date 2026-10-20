@@ -1,3 +1,4 @@
+import { getCustomerOfferCodeIds } from "../../utils/customerOfferCodes.js";
 import { useEffect, useMemo, useState } from "react";
 import {
   buildProductPriceCodeMap,
@@ -64,7 +65,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     try {
       const { data, error } = await supabase
         .from("customer_accounts")
-        .select("id, account_name, town_city, country, postcode, active, status, customer_price_code_id, customer_price_overlay_code_id, default_price_mode")
+        .select("id, account_name, town_city, country, postcode, active, status, customer_price_code_id, customer_price_overlay_code_id, customer_price_overlay_code_ids, default_price_mode")
         .order("account_name", { ascending: true });
       if (error) throw error;
       setCustomers(data || []);
@@ -326,58 +327,59 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     }
   };
 
-  const applySubCodeToFilteredCustomers = async () => {
-    const subCode = subCodes.find((code) => String(code.id) === String(selectedCodeId));
-    if (!subCode) { setMessage("Select a Sub Code first."); return; }
-    const targets = filteredCustomers.filter((customer) =>
-      customer.id && String(customer.customer_price_code_id || "") === String(subCode.parent_price_code_id || "")
-    );
-    if (!targets.length) {
-      setMessage("No customers in this location use the Sub Code's parent Base Code.");
-      return;
-    }
-    const scopeLabel = customerCity !== "All"
-      ? `${customerCity}${customerCountry !== "All" ? `, ${customerCountry}` : ""}`
-      : customerCountry !== "All" ? customerCountry : "the filtered customer list";
-    if (!window.confirm(`Apply Sub Code ${subCode.code} to ${targets.length} customers in ${scopeLabel}? Only exact Sub Code product prices will override the Base Code.`)) return;
-    setCustomerSaving(true); setMessage("");
+  const changeCustomerOfferCode = async (targets, codeId, remove = false) => {
+    setCustomerSaving(true);
+    setMessage("");
+    let saved = 0;
     try {
-      const ids = targets.map((customer) => customer.id);
-      for (let index = 0; index < ids.length; index += 100) {
-        const { error } = await supabase.from("customer_accounts")
-          .update({ customer_price_overlay_code_id: subCode.id })
-          .in("id", ids.slice(index, index + 100));
-        if (error) throw error;
+      for (const customer of targets) {
+        const currentIds = getCustomerOfferCodeIds(customer);
+        const nextIds = remove
+          ? currentIds.filter((id) => id !== String(codeId))
+          : [...new Set([...currentIds, String(codeId)])];
+        // Compare both stored fields and Base Code to avoid overwriting another admin's edit.
+        let query = supabase.from("customer_accounts").update({
+          customer_price_overlay_code_ids: nextIds,
+          customer_price_overlay_code_id: nextIds[0] || null,
+        }).eq("id", customer.id)
+          .eq("customer_price_overlay_code_ids", `{${(customer.customer_price_overlay_code_ids || []).join(",")}}`);
+        query = customer.customer_price_overlay_code_id
+          ? query.eq("customer_price_overlay_code_id", customer.customer_price_overlay_code_id)
+          : query.is("customer_price_overlay_code_id", null);
+        query = customer.customer_price_code_id
+          ? query.eq("customer_price_code_id", customer.customer_price_code_id)
+          : query.is("customer_price_code_id", null);
+        const { data, error } = await query.select("id").single();
+        if (error || !data) throw error || new Error("Customer changed. Refresh and try again.");
+        saved += 1;
       }
-      setCustomers((current) => current.map((customer) => ids.includes(customer.id)
-        ? { ...customer, customer_price_overlay_code_id: subCode.id }
-        : customer));
-      setMessage(`${subCode.code} applied as a geographic Sub Code to ${targets.length} customers.`);
+      await loadCustomers();
+      setMessage(`Offer code ${remove ? "removed from" : "added to"} ${saved} customers. Other offer codes were kept.`);
     } catch (error) {
-      setMessage(error?.message || "Could not apply the geographic Sub Code.");
+      await loadCustomers();
+      setMessage(`${saved} customers updated before stopping. Refresh and retry the remaining customers. ${error?.message || "Could not save offer codes."}`);
     } finally { setCustomerSaving(false); }
   };
 
+  const applySubCodeToFilteredCustomers = async () => {
+    const subCode = subCodes.find((code) => String(code.id) === String(selectedCodeId));
+    if (!subCode) { setMessage("Select an offer / Sub Code first."); return; }
+    const targets = filteredCustomers.filter((customer) =>
+      customer.id && String(customer.customer_price_code_id || "") === String(subCode.parent_price_code_id || "") &&
+      !getCustomerOfferCodeIds(customer).includes(String(subCode.id))
+    );
+    if (!targets.length) { setMessage("No new matching customers. Offers require their parent Base Code and cannot be added twice."); return; }
+    if (!window.confirm(`Add ${subCode.code} to ${targets.length} customers? Existing codes will be kept. The lowest matching offer price wins.`)) return;
+    await changeCustomerOfferCode(targets, subCode.id);
+  };
+
   const clearSubCodeFromFilteredCustomers = async () => {
-    const targets = filteredCustomers.filter((customer) => customer.id && customer.customer_price_overlay_code_id);
-    if (!targets.length) { setMessage("No Sub Code overlays match the selected filters."); return; }
-    if (!window.confirm(`Remove Sub Code overlays from ${targets.length} filtered customers? Their Base Code will remain unchanged.`)) return;
-    setCustomerSaving(true); setMessage("");
-    try {
-      const ids = targets.map((customer) => customer.id);
-      for (let index = 0; index < ids.length; index += 100) {
-        const { error } = await supabase.from("customer_accounts")
-          .update({ customer_price_overlay_code_id: null })
-          .in("id", ids.slice(index, index + 100));
-        if (error) throw error;
-      }
-      setCustomers((current) => current.map((customer) => ids.includes(customer.id)
-        ? { ...customer, customer_price_overlay_code_id: null }
-        : customer));
-      setMessage(`Sub Code overlay removed from ${targets.length} customers.`);
-    } catch (error) {
-      setMessage(error?.message || "Could not clear Sub Code overlays.");
-    } finally { setCustomerSaving(false); }
+    const subCode = subCodes.find((code) => String(code.id) === String(selectedCodeId));
+    if (!subCode) { setMessage("Select the offer code to remove first."); return; }
+    const targets = filteredCustomers.filter((customer) => customer.id && getCustomerOfferCodeIds(customer).includes(String(subCode.id)));
+    if (!targets.length) { setMessage("No customers in these filters have the selected offer code."); return; }
+    if (!window.confirm(`Remove only ${subCode.code} from ${targets.length} customers? Other offers and Base Codes will be kept.`)) return;
+    await changeCustomerOfferCode(targets, subCode.id, true);
   };
 
   const clearExact = async (product) => {
@@ -413,7 +415,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         <button type="button" onClick={() => setActiveTab("products")} style={activeTab === "products" ? activeTabButtonStyle : tabButtonStyle}>Product Code Prices</button>
         <button type="button" onClick={() => setActiveTab("customers")} style={activeTab === "customers" ? activeTabButtonStyle : tabButtonStyle}>Assign Base Code to Customers</button>
-        <button type="button" onClick={() => setActiveTab("geo")} style={activeTab === "geo" ? activeTabButtonStyle : tabButtonStyle}>Geographic / Sub-Code Rules</button>
+        <button type="button" onClick={() => setActiveTab("geo")} style={activeTab === "geo" ? activeTabButtonStyle : tabButtonStyle}>Offer Codes / Geographic Rules</button>
       </div>
 
       {activeTab === "products" && (<>
@@ -599,7 +601,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
                   <th style={thStyle}>Country</th>
                   <th style={thStyle}>Town / City</th>
                   <th style={thStyle}>Postcode</th>
-                  <th style={thStyle}>Current Code</th>
+                  <th style={thStyle}>Base Code / Offers</th>
                   <th style={thStyle}>Base Mode</th>
                 </tr>
               </thead>
@@ -612,7 +614,10 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
                     <td style={tdStyle}>{customer.country || "-"}</td>
                     <td style={tdStyle}>{customer.town_city || "-"}</td>
                     <td style={tdStyle}>{customer.postcode || "-"}</td>
-                    <td style={{ ...tdStyle, fontWeight: 800 }}>{getCustomerCodeLabel(customer)}</td>
+                    <td style={{ ...tdStyle, fontWeight: 800 }}>{getCustomerCodeLabel(customer)}
+                      <div style={{ fontWeight: 400, marginTop: 4 }}>{getCustomerOfferCodeIds(customer).map((id) => codes.find((code) => String(code.id) === id)?.code).filter(Boolean).join(", ") || "No offer codes"}</div>
+                      <button type="button" onClick={() => { setCustomerSearch(customer.account_name || ""); setActiveTab("geo"); }} style={tabButtonStyle}>Manage Offers</button>
+                    </td>
                     <td style={tdStyle}>{String(customer.default_price_mode || "VAT").toLowerCase() === "server" ? "Inc.VAT" : "Ex.VAT"}</td>
                   </tr>
                 ))}
@@ -628,9 +633,9 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
       {activeTab === "geo" && (<>
         <section style={cardStyle}>
           <div style={{ marginBottom: 12 }}>
-            <h3 style={{ margin: 0, fontSize: 18 }}>Geographic Sub-Code Rule</h3>
+            <h3 style={{ margin: 0, fontSize: 18 }}>Multiple Offer Codes</h3>
             <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 13 }}>
-              A Sub Code never replaces the customer's Base Code. It only overrides products that have an exact Sub Code price.
+              Keep one Base Code and add multiple offer / Sub Codes. Each offer applies only to its exact product prices; the lowest matching offer price wins. Other products use the Base Code.
             </p>
           </div>
           <div style={{ ...toolbarStyle, alignItems: "end" }}>
@@ -665,9 +670,9 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
           </div>
           <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 10 }}>
             <button type="button" onClick={applySubCodeToFilteredCustomers} disabled={!selectedCodeId || customerSaving || customerLoading} style={{ ...saveButtonStyle, minHeight: 40 }}>
-              {customerSaving ? "Applying..." : `Apply Sub Code to Matching Customers`}
+              {customerSaving ? "Applying..." : `Add Offer Code to Matching Customers`}
             </button>
-            <button type="button" onClick={clearSubCodeFromFilteredCustomers} disabled={customerSaving || customerLoading} style={{ ...clearButtonStyle, minHeight: 40 }}>Clear Sub Code from Filtered</button>
+            <button type="button" onClick={clearSubCodeFromFilteredCustomers} disabled={customerSaving || customerLoading} style={{ ...clearButtonStyle, minHeight: 40 }}>Remove Selected Offer from Filtered</button>
           </div>
         </section>
 
@@ -675,17 +680,22 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 850 }}>
               <thead><tr style={{ background: "#edf3f9", textAlign: "left" }}>
-                <th style={thStyle}>Customer</th><th style={thStyle}>Country</th><th style={thStyle}>Town / City</th><th style={thStyle}>Base Code</th><th style={thStyle}>Sub Code</th>
+                <th style={thStyle}>Customer</th><th style={thStyle}>Country</th><th style={thStyle}>Town / City</th><th style={thStyle}>Base Code</th><th style={thStyle}>Offer Codes</th>
               </tr></thead>
               <tbody>
                 {customerLoading && <tr><td colSpan="5" style={{ padding: 28, textAlign: "center" }}>Loading customers...</td></tr>}
                 {!customerLoading && filteredCustomers.map((customer) => {
                   const baseCode = baseCodes.find((item) => String(item.id) === String(customer.customer_price_code_id || ""));
-                  const overlayCode = subCodes.find((item) => String(item.id) === String(customer.customer_price_overlay_code_id || ""));
+                  const offerCodes = getCustomerOfferCodeIds(customer).map((id) => codes.find((item) => String(item.id) === id)).filter(Boolean);
                   return <tr key={customer.id} style={{ borderTop: "1px solid #dbe4ee" }}>
                     <td style={{ ...tdStyle, fontWeight: 700 }}>{customer.account_name || "Unnamed Customer"}</td>
                     <td style={tdStyle}>{customer.country || "-"}</td><td style={tdStyle}>{customer.town_city || "-"}</td>
-                    <td style={tdStyle}>{baseCode?.code || "Normal"}</td><td style={{ ...tdStyle, fontWeight: 800 }}>{overlayCode?.code || "-"}</td>
+                    <td style={tdStyle}>{baseCode?.code || "Normal"}</td><td style={{ ...tdStyle, fontWeight: 800 }}>{offerCodes.length ? offerCodes.map((code) => <span key={code.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, margin: 3, padding: "3px 7px", background: "#edf3f9", borderRadius: 6 }}>
+                      {code.code}{String(code.parent_price_code_id) !== String(customer.customer_price_code_id) ? " (different Base Code)" : ""}
+                      <button type="button" aria-label={`Remove ${code.code} from ${customer.account_name}`} disabled={customerSaving}
+                        onClick={() => { if (window.confirm(`Remove ${code.code} from ${customer.account_name}?`)) void changeCustomerOfferCode([customer], code.id, true); }}
+                        style={{ border: 0, background: "transparent", color: "#9f1239", cursor: "pointer" }}>×</button>
+                    </span>) : "-"}</td>
                   </tr>;
                 })}
               </tbody>

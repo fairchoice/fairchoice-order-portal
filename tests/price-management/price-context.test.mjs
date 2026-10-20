@@ -40,3 +40,12 @@ test('failed pricing inputs and unavailable codes stop repricing instead of savi
  assert.throws(()=>buildPriceOrderPreview([order],context.products,['p'],{...context.settings,price_codes:[]}),/Customer price code is unavailable/);
  await assert.rejects(loadOrderPricingContext(['missing'],{client:fakeClient()}),/selected product is unavailable/);
 });
+
+
+test('multiple customer offers remain usable in Received and Warehouse price reviews',()=>{
+ const settings={price_codes:[{id:code,active:true},{id:'offer-one',active:true},{id:'offer-two',active:true}]};
+ const products=[{id:'p',vat_price:20,vat_type:'0.2',priceCodePrices:{[code]:18,'offer-one':17,'offer-two':16}}];
+ const multi={...order,price_mode:`code:${code}|inc vat|overlay:offer-one,offer-two`};
+ assert.equal(buildPriceOrderPreview([multi],products,['p'],settings)[0].newPrice,16);
+ assert.throws(()=>buildPriceOrderPreview([multi],products,['p'],{price_codes:settings.price_codes.slice(0,2)}),/unavailable/);
+});

@@ -1,3 +1,4 @@
+import { normalizeOfferCodeIds } from "./customerOfferCodes.js";
 import { getProductPriceForMode, getPriceModeLabel, normalizePriceMode, getVatRate, isVatPriceMode, roundMoney } from "./pricing.js";
 
 export const activePriceOrderStages = (stage = "both") => {
@@ -16,7 +17,7 @@ export function buildPriceOrderPreview(orders = [], products = [], productIds = 
     const mode = normalizePriceMode(order.price_mode || "vat");
     if (mode.startsWith("code:")) {
       const parts = mode.slice(5).split("|");
-      const codeIds = [parts[0], ...parts.filter(part => part.startsWith("overlay:")).map(part => part.slice(8))];
+      const codeIds = [parts[0], ...parts.filter(part => part.startsWith("overlay:")).flatMap(part => normalizeOfferCodeIds(part.slice(8)))];
       if (codeIds.some(id => !(settings.price_codes || []).some(code => String(code.id).toLowerCase() === id && code.active !== false))) {
         throw new Error(`Customer price code is unavailable for ${order.order_number || order.id}. Refresh pricing rules before updating prices.`);
       }

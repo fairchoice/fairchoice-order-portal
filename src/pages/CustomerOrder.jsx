@@ -1,3 +1,4 @@
+import { getActiveCustomerOfferCodeIds } from "../utils/customerOfferCodes.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabase.js";
 import {
@@ -640,17 +641,8 @@ const getCustomerPriceModeValue = (customer, pricingSettings = {}) => {
         priceCode.active !== false
     );
     if (activeCode) {
-      const overlayId = customer?.customer_price_overlay_code_id || "";
-      const activeOverlay = overlayId
-        ? (pricingSettings.price_codes || []).find(
-            (priceCode) =>
-              String(priceCode.id) === String(overlayId) &&
-              priceCode.active !== false &&
-              String(priceCode.code_type || "").toLowerCase() === "sub" &&
-              String(priceCode.parent_price_code_id || "") === String(activeCode.id)
-          )
-        : null;
-      return makePriceCodeMode(activeCode.id, basePriceMode, activeOverlay?.id || "");
+      const offerIds = getActiveCustomerOfferCodeIds(customer, pricingSettings.price_codes || []);
+      return makePriceCodeMode(activeCode.id, basePriceMode, offerIds);
     }
   }
 
