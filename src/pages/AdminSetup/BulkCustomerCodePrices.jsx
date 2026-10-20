@@ -1,5 +1,7 @@
+import { getFcSessionState } from "../../services/fcSession.js";
+import { priceCodeMatchesCustomer, priceModeLabel } from "../../utils/customerCodeEligibility.js";
 import { filterCustomerCodeScope } from "../../utils/customerCodeScope.js";
-import { canAssignCustomerOfferCode, getCustomerOfferCodeIds, saveCustomerOfferCode } from "../../utils/customerOfferCodes.js";
+import { canAssignCustomerOfferCode, getCustomerOfferCodeIds, saveCustomerCodeAssignment } from "../../utils/customerOfferCodes.js";
 import { useEffect, useMemo, useState } from "react";
 import {
   buildProductPriceCodeMap,
@@ -8,6 +10,7 @@ import {
   getProductPriceCodeRows,
   makePriceCodeMode,
   upsertProductPriceCodePrice,
+  updateCustomerPriceCode,
 } from "../../services/priceCodes";
 import { getProductPriceForMode } from "../../utils/pricing";
 import { supabase } from "../../services/supabase";
@@ -16,7 +19,7 @@ const PAGE_SIZE = 40;
 
 const money = (value) => `£${Number(value || 0).toFixed(2)}`;
 
-export default function BulkCustomerCodePrices({ products = [], pricingSettings = {}, fetchProducts, onCustomerCodesChanged }) {
+export default function BulkCustomerCodePrices({ products = [], pricingSettings = {}, fetchProducts, onCustomerCodesChanged, currentUser }) {
   const [codes, setCodes] = useState([]);
   const [selectedCodeId, setSelectedCodeId] = useState("");
   const [previewBaseMode, setPreviewBaseMode] = useState("inc vat");
@@ -40,7 +43,8 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
   const [customerCountry, setCustomerCountry] = useState("All");
   const [customerCity, setCustomerCity] = useState("All");
   const [excludedCustomerCities, setExcludedCustomerCities] = useState([]);
-  const [customerBaseMode, setCustomerBaseMode] = useState("VAT");
+  const [historyCustomer, setHistoryCustomer] = useState(null);
+  const [history, setHistory] = useState([]);
   const [includeInactiveCustomers, setIncludeInactiveCustomers] = useState(false);
 
   const loadData = async () => {
@@ -276,100 +280,76 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     } catch (error) { setMessage(error?.message || "Could not apply the Series price."); } finally { setSeriesSaving(false); }
   };
 
+  const assignmentSession = () => {
+    const session=getFcSessionState(currentUser);
+    if(!session.valid)throw new Error("Sign in again before changing customer codes.");
+    return session;
+  };
+  const changeCustomerCode = async (targets, codeId, remove=false, kind="offer") => {
+    setCustomerSaving(true);setMessage("");let saved=0;
+    let skipped=remove ? 0 : filteredCustomers.filter(customer=>!priceCodeMatchesCustomer(customer,codes.find(code=>String(code.id)===String(codeId)))).length;
+    try {
+      const session=assignmentSession();
+      for(const customer of targets) {
+        const result=await saveCustomerCodeAssignment(supabase,customer,codeId,{kind,remove,session});
+        if(result.status==='skipped')skipped++;else saved++;
+      }
+      await loadCustomers();await onCustomerCodesChanged?.();
+      setMessage(`${saved} customers updated; ${skipped} skipped. Customer VAT modes were kept. Other offer codes were kept.`);
+    } catch(error) {
+      await loadCustomers();await onCustomerCodesChanged?.();
+      setMessage(`${saved} saved before stopping. ${error.message || "Could not save customer codes."}`);
+    } finally {setCustomerSaving(false);}
+  };
   const applyCodeToFilteredCustomers = async () => {
-    if (!selectedCodeId) {
-      setMessage("Select a customer price code first.");
-      return;
-    }
-    const targets = filteredCustomers.filter((customer) => customer.id);
-    if (!targets.length) {
-      setMessage("No customers match the selected country / city filters.");
-      return;
-    }
-    const scopeLabel = customerCity !== "All"
-      ? `${customerCity}${customerCountry !== "All" ? `, ${customerCountry}` : ""}`
-      : customerCountry !== "All"
-      ? customerCountry
-      : "the current filtered customer list";
-    if (!window.confirm(`Apply ${selectedCode?.code || "this code"} to ${targets.length} customers in ${scopeLabel}?${excludedCityNote}`)) return;
-
-    setCustomerSaving(true);
-    setMessage("");
-    try {
-      const ids = targets.map((customer) => customer.id);
-      for (let index = 0; index < ids.length; index += 100) {
-        const { error } = await supabase
-          .from("customer_accounts")
-          .update({
-            customer_price_code_id: selectedCodeId,
-            default_price_mode: customerBaseMode,
-          })
-          .in("id", ids.slice(index, index + 100));
-        if (error) throw error;
-      }
-      setCustomers((current) => current.map((customer) =>
-        ids.includes(customer.id)
-          ? { ...customer, customer_price_code_id: selectedCodeId, default_price_mode: customerBaseMode }
-          : customer
-      ));
-      await onCustomerCodesChanged?.();
-      setMessage(`${selectedCode?.code || "Customer code"} applied to ${targets.length} customers.`);
-    } catch (error) {
-      setMessage(error?.message || "Could not apply the customer code to the selected location.");
-    } finally {
-      setCustomerSaving(false);
-    }
+    if(!selectedCode)return setMessage("Select a customer price code first.");
+    const targets=filteredCustomers.filter(customer=>customer.id && priceCodeMatchesCustomer(customer,selectedCode));
+    const skipped=filteredCustomers.length-targets.length;
+    if(!targets.length)return setMessage("No customers match this code's VAT mode. No changes made.");
+    if(!window.confirm(`Set ${selectedCode.code} as Base Code for ${targets.length} matching customers? ${skipped} VAT-mode mismatches will be skipped. Customer VAT modes will stay unchanged.${excludedCityNote}`))return;
+    await changeCustomerCode(targets,selectedCode.id,false,"base");
   };
-
   const clearCodeFromFilteredCustomers = async () => {
-    const targets = filteredCustomers.filter((customer) => customer.id && customer.customer_price_code_id);
-    if (!targets.length) {
-      setMessage("No coded customers match the selected filters.");
-      return;
-    }
-    if (!window.confirm(`Remove customer price codes from ${targets.length} filtered customers?${excludedCityNote}`)) return;
-
-    setCustomerSaving(true);
-    setMessage("");
-    try {
-      const ids = targets.map((customer) => customer.id);
-      for (let index = 0; index < ids.length; index += 100) {
-        const { error } = await supabase
-          .from("customer_accounts")
-          .update({ customer_price_code_id: null })
-          .in("id", ids.slice(index, index + 100));
-        if (error) throw error;
-      }
-      setCustomers((current) => current.map((customer) =>
-        ids.includes(customer.id) ? { ...customer, customer_price_code_id: null } : customer
-      ));
-      await onCustomerCodesChanged?.();
-      setMessage(`Customer price code removed from ${targets.length} customers.`);
-    } catch (error) {
-      setMessage(error?.message || "Could not clear customer codes for the selected location.");
-    } finally {
-      setCustomerSaving(false);
-    }
+    const targets=filteredCustomers.filter(customer=>customer.id && customer.customer_price_code_id===selectedCodeId);
+    if(!targets.length)return setMessage("No filtered customers have this Base Code.");
+    if(!window.confirm(`Remove only ${selectedCode?.code || "this Base Code"} from ${targets.length} customers? VAT modes and other offers will stay unchanged.${excludedCityNote}`))return;
+    await changeCustomerCode(targets,selectedCodeId,true,"base");
   };
-
-  const changeCustomerOfferCode = async (targets, codeId, remove = false) => {
+  const changeCodeApplicability = async (appliesToPriceMode) => {
+    if(!selectedCode || !window.confirm(`Apply ${selectedCode.code} to ${priceModeLabel(appliesToPriceMode)} customers? This changes code eligibility only, and keeps customer VAT modes and saved invoices.`))return;
     setCustomerSaving(true);
-    setMessage("");
-    let saved = 0;
     try {
-      for (const customer of targets) {
-        await saveCustomerOfferCode(supabase, customer, codeId, remove);
-        saved += 1;
-      }
-      await loadCustomers();
-      await onCustomerCodesChanged?.();
-      setMessage(`Offer code ${remove ? "removed from" : "added to"} ${saved} customers. Other offer codes were kept.`);
-    } catch (error) {
-      await loadCustomers();
-      await onCustomerCodesChanged?.();
-      setMessage(`${saved} customers updated before stopping. Refresh and retry the remaining customers. ${error?.message || "Could not save offer codes."}`);
-    } finally { setCustomerSaving(false); }
+      assignmentSession();await updateCustomerPriceCode(selectedCode.id,{appliesToPriceMode});
+      setCodes(await getCustomerPriceCodes());await onCustomerCodesChanged?.();
+      setMessage("Code eligibility saved. No customer VAT modes or saved invoices changed.");
+    } catch(error){setMessage(error.message);}finally{setCustomerSaving(false);}
   };
+  const openHistory = async (customer) => {
+    try {
+      const session=assignmentSession();
+      const {data,error}=await supabase.rpc("fc_customer_code_history_v1",{p_username:session.username,p_session_token:session.token,p_customer_id:customer.id});
+      if(error)throw error;setHistoryCustomer(customer);setHistory(data || []);
+    } catch(error){setMessage(error.message);}
+  };
+  const reverseHistory = async (entry) => {
+    const reason=window.prompt("Reason for restoring this customer's previous pricing configuration (minimum 5 characters):");
+    if(reason===null)return;
+    if(reason.trim().length<5)return setMessage("Provide a specific reversal reason.");
+    if(!window.confirm("Restore only the pricing configuration recorded before this change? Saved orders, invoices, credit and payments will stay unchanged."))return;
+    setCustomerSaving(true);
+    try {
+      const session=assignmentSession();
+      const {error}=await supabase.rpc("fc_reverse_customer_code_change_v1",{p_username:session.username,p_session_token:session.token,p_change_id:entry.id,p_reason:reason.trim()});
+      if(error)throw error;setHistoryCustomer(null);await loadCustomers();await onCustomerCodesChanged?.();
+      setMessage("Previous customer pricing configuration restored and audited. No saved invoices changed.");
+    } catch(error){setMessage(error.message);}finally{setCustomerSaving(false);}
+  };
+  const applicabilityControl = <label style={fieldStyle}>
+    <span style={labelStyle}>Code applies to</span>
+    <select aria-label="Code applies to" value={selectedCode?.applies_to_price_mode || "both"} disabled={!selectedCode || customerSaving} onChange={e=>changeCodeApplicability(e.target.value)} style={inputStyle}>
+      <option value="inc vat">Inc.VAT</option><option value="ex vat">Ex.VAT</option><option value="both">Both</option>
+    </select>
+  </label>;
 
   const applySubCodeToFilteredCustomers = async () => {
     const subCode = codes.find((code) => String(code.id) === String(selectedCodeId));
@@ -378,9 +358,9 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
       customer.id && canAssignCustomerOfferCode(customer, subCode) &&
       !getCustomerOfferCodeIds(customer).includes(String(subCode.id))
     );
-    if (!targets.length) { setMessage("No new matching customers. Set a Base Code first; choose a different additional code. Sub Codes require their parent Base Code. Duplicate offers are skipped."); return; }
+    if (!targets.length) { setMessage("No new matching customers. The customer VAT mode must match the code. Sub Codes also require their parent Base Code. Duplicate offers are skipped."); return; }
     if (!window.confirm(`Add ${subCode.code} to ${targets.length} customers? Existing codes will be kept. The lowest matching offer price wins.${excludedCityNote}`)) return;
-    await changeCustomerOfferCode(targets, subCode.id);
+    await changeCustomerCode(targets, subCode.id);
   };
 
   const clearSubCodeFromFilteredCustomers = async () => {
@@ -389,7 +369,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
     const targets = filteredCustomers.filter((customer) => customer.id && getCustomerOfferCodeIds(customer).includes(String(subCode.id)));
     if (!targets.length) { setMessage("No customers in these filters have the selected offer code."); return; }
     if (!window.confirm(`Remove only ${subCode.code} from ${targets.length} customers? Other offers and Base Codes will be kept.${excludedCityNote}`)) return;
-    await changeCustomerOfferCode(targets, subCode.id, true);
+    await changeCustomerCode(targets, subCode.id, true);
   };
 
   const clearExact = async (product) => {
@@ -550,6 +530,20 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
       </section>
       </>)}
 
+      {historyCustomer && <section style={cardStyle}>
+        <h3>Pricing history: {historyCustomer.account_name}</h3>
+        <p>Only changes recorded after this update can be restored. Older VAT modes are not inferred from invoices.</p>
+        <button type="button" onClick={()=>setHistoryCustomer(null)} style={tabButtonStyle}>Close history</button>
+        {history.length===0 && <p>No recorded changes for this customer.</p>}
+        {history.map(entry=><div key={entry.id} style={{padding:10,borderBottom:"1px solid #ddd"}}>
+          <strong>{new Date(entry.changed_at).toLocaleString("en-GB")}</strong> — {entry.changed_by}<br />
+          VAT: {priceModeLabel(entry.before_state.default_price_mode)} → {priceModeLabel(entry.after_state.default_price_mode)}<br />
+          Base Code: {codes.find(code=>code.id===entry.before_state.customer_price_code_id)?.code || "Normal"} → {codes.find(code=>code.id===entry.after_state.customer_price_code_id)?.code || "Normal"}<br />
+          Offers: {entry.before_state.customer_price_overlay_code_ids.map(id=>codes.find(code=>code.id===id)?.code || "Unavailable code").join(", ") || "None"} → {entry.after_state.customer_price_overlay_code_ids.map(id=>codes.find(code=>code.id===id)?.code || "Unavailable code").join(", ") || "None"}<br />
+          {entry.reason}<br /><button type="button" disabled={customerSaving} onClick={()=>reverseHistory(entry)} style={clearButtonStyle}>Restore before this change</button>
+        </div>)}
+      </section>}
+
       {activeTab === "customers" && (<>
         <section style={cardStyle}>
           <div style={{ ...toolbarStyle, alignItems: "end" }}>
@@ -560,13 +554,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
                 {baseCodes.map((code) => <option key={code.id} value={code.id}>{code.code} ({Number(code.discount_percent || 0)}%)</option>)}
               </select>
             </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Base Price Mode</span>
-              <select value={customerBaseMode} onChange={(e) => setCustomerBaseMode(e.target.value)} style={inputStyle}>
-                <option value="VAT">Ex.VAT</option>
-                <option value="Server">Inc.VAT</option>
-              </select>
-            </label>
+            {applicabilityControl}
             <label style={fieldStyle}>
               <span style={labelStyle}>Country</span>
               <select value={customerCountry} onChange={(e) => { setCustomerCountry(e.target.value); setCustomerCity("All"); setExcludedCustomerCities([]); }} style={inputStyle}>
@@ -597,13 +585,13 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
             </label>
             <div style={{ flex: 1 }} />
             <button type="button" onClick={applyCodeToFilteredCustomers} disabled={!selectedCodeId || customerSaving || customerLoading} style={{ ...saveButtonStyle, minHeight: 40 }}>
-              {customerSaving ? "Applying..." : `Set Base Code for ${filteredCustomers.length} Customers`}
+              {customerSaving ? "Applying..." : `Set Base Code for ${filteredCustomers.filter(customer=>priceCodeMatchesCustomer(customer,selectedCode)).length} Matching Customers`}
             </button>
             <button type="button" onClick={applySubCodeToFilteredCustomers} disabled={!selectedCodeId || customerSaving || customerLoading} style={{ ...saveButtonStyle, minHeight: 40 }}>Add as Offer Code</button>
             <button type="button" onClick={clearCodeFromFilteredCustomers} disabled={customerSaving || customerLoading} style={{ ...clearButtonStyle, minHeight: 40 }}>Clear Code from Filtered</button>
           </div>
           <div style={{ marginTop: 10, color: "#64748b", fontSize: 13 }}>
-            Set Base Code replaces the main code. Add as Offer Code keeps the Base Code and adds this code alongside existing offers. Country and Town / City use the account address.
+            Code assignment never changes customer VAT mode. Mismatches are skipped. Set Base Code replaces only the main code; Add as Offer Code keeps existing codes. Country and Town / City use the account address.
           </div>
         </section>
 
@@ -625,7 +613,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
                 {!customerLoading && filteredCustomers.length === 0 && <tr><td colSpan="6" style={{ padding: 28, textAlign: "center", color: "#64748b" }}>No customers match these filters.</td></tr>}
                 {!customerLoading && filteredCustomers.map((customer) => (
                   <tr key={customer.id} style={{ borderTop: "1px solid #dbe4ee" }}>
-                    <td style={{ ...tdStyle, fontWeight: 700 }}>{customer.account_name || "Unnamed Customer"}{customer.active === false ? " (Inactive)" : ""}</td>
+                    <td style={{ ...tdStyle, fontWeight: 700 }}>{customer.account_name || "Unnamed Customer"}{currentUser?.username === "nisstaj_admin" && <button type="button" onClick={()=>openHistory(customer)} style={tabButtonStyle}>History / Restore</button>}{customer.active === false ? " (Inactive)" : ""}</td>
                     <td style={tdStyle}>{customer.country || "-"}</td>
                     <td style={tdStyle}>{customer.town_city || "-"}</td>
                     <td style={tdStyle}>{customer.postcode || "-"}</td>
@@ -633,7 +621,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
                       <div style={{ fontWeight: 400, marginTop: 4 }}>{getCustomerOfferCodeIds(customer).map((id) => codes.find((code) => String(code.id) === id)?.code).filter(Boolean).join(", ") || "No offer codes"}</div>
                       <button type="button" onClick={() => { setCustomerSearch(customer.account_name || ""); setActiveTab("geo"); }} style={tabButtonStyle}>Manage Offers</button>
                     </td>
-                    <td style={tdStyle}>{String(customer.default_price_mode || "VAT").toLowerCase() === "server" ? "Inc.VAT" : "Ex.VAT"}</td>
+                    <td style={tdStyle}>{priceModeLabel(customer.default_price_mode || "VAT")}</td>
                   </tr>
                 ))}
               </tbody>
@@ -664,6 +652,7 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
                 })}
               </select>
             </label>
+            {applicabilityControl}
             <label style={fieldStyle}>
               <span style={labelStyle}>Country</span>
               <select value={customerCountry} onChange={(e) => { setCustomerCountry(e.target.value); setCustomerCity("All"); setExcludedCustomerCities([]); }} style={inputStyle}>
@@ -707,12 +696,12 @@ export default function BulkCustomerCodePrices({ products = [], pricingSettings 
                   const baseCode = baseCodes.find((item) => String(item.id) === String(customer.customer_price_code_id || ""));
                   const offerCodes = getCustomerOfferCodeIds(customer).map((id) => codes.find((item) => String(item.id) === id)).filter(Boolean);
                   return <tr key={customer.id} style={{ borderTop: "1px solid #dbe4ee" }}>
-                    <td style={{ ...tdStyle, fontWeight: 700 }}>{customer.account_name || "Unnamed Customer"}</td>
+                    <td style={{ ...tdStyle, fontWeight: 700 }}>{customer.account_name || "Unnamed Customer"}<div>{priceModeLabel(customer.default_price_mode || "VAT")}{!priceCodeMatchesCustomer(customer,selectedCode) ? " — code skipped" : " — code matches"}</div>{currentUser?.username === "nisstaj_admin" && <button type="button" onClick={()=>openHistory(customer)} style={tabButtonStyle}>History / Restore</button>}</td>
                     <td style={tdStyle}>{customer.country || "-"}</td><td style={tdStyle}>{customer.town_city || "-"}</td>
                     <td style={tdStyle}>{baseCode?.code || "Normal"}</td><td style={{ ...tdStyle, fontWeight: 800 }}>{offerCodes.length ? offerCodes.map((code) => <span key={code.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, margin: 3, padding: "3px 7px", background: "#edf3f9", borderRadius: 6 }}>
                       {code.code}{!canAssignCustomerOfferCode(customer, code) ? " (not applicable)" : ""}
                       <button type="button" aria-label={`Remove ${code.code} from ${customer.account_name}`} disabled={customerSaving}
-                        onClick={() => { if (window.confirm(`Remove ${code.code} from ${customer.account_name}?`)) void changeCustomerOfferCode([customer], code.id, true); }}
+                        onClick={() => { if (window.confirm(`Remove ${code.code} from ${customer.account_name}?`)) void changeCustomerCode([customer], code.id, true); }}
                         style={{ border: 0, background: "transparent", color: "#9f1239", cursor: "pointer" }}>×</button>
                     </span>) : "-"}</td>
                   </tr>;

@@ -46,7 +46,7 @@ export async function getCustomerPriceCodes({ includeInactive = false } = {}) {
   return data || [];
 }
 
-export async function createCustomerPriceCode({ code, discountPercent, codeType = "base", parentPriceCodeId = null, exactOnly = false }) {
+export async function createCustomerPriceCode({ code, discountPercent, codeType = "base", parentPriceCodeId = null, exactOnly = false, appliesToPriceMode = "both" }) {
   const cleanCode = String(code || "").trim();
   if (!cleanCode) throw new Error("Price code is required.");
 
@@ -59,6 +59,7 @@ export async function createCustomerPriceCode({ code, discountPercent, codeType 
       parent_price_code_id: codeType === "sub" ? parentPriceCodeId || null : null,
       exact_only: codeType === "sub" ? true : exactOnly === true,
       active: true,
+      applies_to_price_mode: appliesToPriceMode,
     })
     .select()
     .single();
@@ -88,6 +89,10 @@ export async function updateCustomerPriceCode(id, changes = {}) {
   }
   if (Object.prototype.hasOwnProperty.call(changes, "exactOnly")) {
     payload.exact_only = changes.exactOnly === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "appliesToPriceMode")) {
+    if (!["inc vat", "ex vat", "both"].includes(changes.appliesToPriceMode)) throw new Error("Select Inc.VAT, Ex.VAT or both.");
+    payload.applies_to_price_mode = changes.appliesToPriceMode;
   }
   payload.updated_at = new Date().toISOString();
 

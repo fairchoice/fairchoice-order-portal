@@ -1,6 +1,6 @@
 import {loadInvoiceFinancialSnapshot,withInvoiceFinancialState,currentInvoiceNotes} from "./invoiceFinancialSnapshot.js";
 import { supabase } from "./supabase";
-import { calculateDocumentTotals } from "../utils/documentTotals";
+import { calculateDocumentTotals, isSavedInvoiceDocument } from "../utils/documentTotals";
 import {
   calculateCartOrderItems,
   calculateCartTotals,
@@ -446,6 +446,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
   const orderItems = await fetchAllOrderItemsForOrderIds([order.id]);
+  const savedDocument = isSavedInvoiceDocument(order) || isSavedInvoiceDocument(rowOrReference);
   const customerAccountId = order.customer_account_id || rowOrReference.customer_account_id;
   const customerBranchId =
     order.customer_branch_id ||
@@ -470,7 +471,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
     supabase
       .from("customer_invoices")
       .select("id, invoice_number, invoice_total, wallet_applied_amount, amount_to_collect, wallet_application_mode, wallet_preserve_paid_watermark")
-      .eq("order_id", order.id)
+      .eq("invoice_number", order.invoice_number || order.order_number)
       .neq("status", "CANCELLED")
       .order("created_at", { ascending: false })
       .limit(1)
@@ -507,7 +508,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-  if (productIds.length) {
+  if (!savedDocument && productIds.length) {
     const { data: products, error: productsError } = await supabase
       .from("products")
       .select("id, product_code")
@@ -550,7 +551,7 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
 
 
-  if (missingCodeNames.length) {
+  if (!savedDocument && missingCodeNames.length) {
     const { data: namedProducts, error: namedProductsError } = await supabase
       .from("products")
       .select("id, product_name, product_code")
@@ -1193,6 +1194,7 @@ const getProductCodeFromInvoiceItem = (item = {}) =>
 
 
 const withProductCodeFallbacks = async (order = {}) => {
+  if (isSavedInvoiceDocument(order)) return order;
   const items = order.items || order.order_items || [];
   const missingProductIds = [
     ...new Set(

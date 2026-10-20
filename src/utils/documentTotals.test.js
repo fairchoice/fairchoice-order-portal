@@ -48,3 +48,19 @@ test("inclusive-VAT invoice prices remain inclusive, and absent prices retain sa
  assert.equal(calculateDocumentTotals([{qty:2,price:18.50,net_total:0,vat_type:'20'}],{price_mode:'SERVER'}).grandTotal,37);
  assert.equal(calculateDocumentTotals([{qty:1,net_total:10,vat_type:'20'}],{price_mode:'VAT'}).grandTotal,12);
 });
+
+test('issued documents always retain saved grand totals, including known line-status exceptions and zero',()=>{
+ const items=[{qty:1,price:999,vat_rate:20,source_status:'In Stock'}];
+ for(const status of ['Delivered','Confirmed','Delivery Confirmed','Completed']) {
+  const order={status,price_mode:'VAT',invoice_total:337.07,order_total:25.91,net_total:280.89,vat_total:56.18,
+   company_name:'Saved customer',credit_limit:500,payment_amount:10,wallet_applied_amount:5};
+  const before=structuredClone({items,order});
+  const result=calculateDocumentTotals(items,order);
+  assert.equal(result.grandTotal,337.07);assert.equal(result.grossTotal,337.07);assert.equal(result.totalAmount,337.07);
+  assert.equal(result.netTotal,280.89);assert.equal(result.vatTotal,56.18);
+  assert.deepEqual({items,order},before);
+ }
+ assert.equal(calculateDocumentTotals(items,{invoice_number:'SAVED-ZERO',invoice_total:0,order_total:100,price_mode:'VAT'}).grandTotal,0);
+ assert.equal(calculateDocumentTotals(items,{invoice_id:'saved',order_total:125.86,price_mode:'VAT'}).grandTotal,125.86);
+ assert.equal(calculateDocumentTotals(items,{status:'Received',order_total:25.91,price_mode:'VAT'}).grandTotal,1198.8);
+});

@@ -27,12 +27,29 @@ const before=await snapshot();
 const names=await readdir(new URL('../../supabase/migrations/',import.meta.url));
 await db.exec(await readFile(new URL('../../supabase/migrations/'+names.find(n=>n.endsWith('issued_invoice_read_only_guards.sql')),import.meta.url),'utf8'));
 await db.exec(await readFile(new URL('../../supabase/migrations/'+names.find(n=>n.endsWith('issued_invoice_owner_session_v2.sql')),import.meta.url),'utf8'));
+await db.exec(await readFile(new URL('../../supabase/migrations/'+names.find(n=>n.endsWith('issued_invoice_saved_print_values.sql')),import.meta.url),'utf8'));
 const scalar=async(sql,params=[])=>{const value=Object.values((await db.query(sql,params)).rows[0])[0];return typeof value==='string' && /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : value;};
 const prepare=async()=>JSON.parse(JSON.stringify(await scalar('select fc_prepare_issued_invoice_edit_v1($1,$2,$3)',['nisstaj_admin','fixture-owner-session',o1])));
 const amend=async(revision,lines,username='nisstaj_admin',token='fixture-owner-session')=>scalar('select fc_amend_issued_invoice_v1($1,$2,$3,$4,$5,$6,$7)',[username,token,o1,revision,'Explicit owner fixture amendment',JSON.stringify({price_mode:'Server'}),JSON.stringify(lines)]);
 const line=(price=12,id=l1)=>({db_id:id,qty:2,price,vat_rate:20,source_status:'In Stock'});
 
 test('installing protection leaves every existing order, invoice, item and ledger row unchanged',async()=>{assert.equal(await snapshot(),before);assert.equal(await scalar('select count(*) from fc_issued_invoice_archive'),2);});
+test('legacy invoices linked only by invoice number protect their source and repeated sync',async()=>{
+ const id='77777777-7777-4777-8777-777777777777';
+ await db.exec('begin');
+ try {
+  await db.exec(`insert into orders(id,order_number,customer_account_id,status,order_total) values('${id}','LEGACY-LINK','${o1}','Delivered',25);
+   insert into order_items(order_id,qty,price,source_status) values('${id}',1,25,'In Stock');
+   insert into customer_invoices(invoice_number,customer_account_id,invoice_total,status) values('LEGACY-LINK','${o1}',25,'ISSUED');`);
+  const saved=await snapshot();
+  // Savepoints keep the fixture transaction usable after each expected denial.
+  for(const sql of [`update orders set order_total=0 where id='${id}'`,`update orders set company_name='changed' where id='${id}'`,`update order_items set price=999 where order_id='${id}'`,`delete from order_items where order_id='${id}'`,`insert into order_items(order_id,qty,price) values('${id}',1,999)`]) {
+   await db.exec('savepoint denied');await assert.rejects(db.exec(sql),/read-only/);await db.exec('rollback to denied');
+  }
+  await db.query('select sync_customer_invoice_from_order_v1($1)',[id]);
+  assert.equal(await snapshot(),saved);
+ } finally { await db.exec('rollback'); }
+});
 test('direct changes and deletion are blocked, including source line insertion and reparenting',async()=>{
  for(const sql of [
  `update customer_invoices set invoice_total=0 where id='${i1}'`,

@@ -1,4 +1,4 @@
-import { getActiveCustomerOfferCodeIds } from "../utils/customerOfferCodes.js";
+import { getCustomerCodePriceMode } from "../utils/customerOfferCodes.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabase.js";
 import {
@@ -624,33 +624,8 @@ const customerMatchesSearch = (customer, searchTerm) => {
 
 
 
-const getCustomerPriceModeValue = (customer, pricingSettings = {}) => {
-  const mode = normalizePriceMode(customer?.default_price_mode || "vat");
-  const basePriceMode =
-    ["server", "inc vat", "inc.vat", "royalty", "owner offer", "manager", "manager offer"].includes(mode)
-      ? "inc vat"
-      : "ex vat";
-
-
-
-
-  if (customer?.customer_price_code_id) {
-    const activeCode = (pricingSettings.price_codes || []).find(
-      (priceCode) =>
-        String(priceCode.id) === String(customer.customer_price_code_id) &&
-        priceCode.active !== false
-    );
-    if (activeCode) {
-      const offerIds = getActiveCustomerOfferCodeIds(customer, pricingSettings.price_codes || []);
-      return makePriceCodeMode(activeCode.id, basePriceMode, offerIds);
-    }
-  }
-
-
-
-
-  return basePriceMode === "inc vat" ? "inc vat" : "vat";
-};
+const getCustomerPriceModeValue = (customer, pricingSettings = {}) =>
+  getCustomerCodePriceMode(customer, pricingSettings.price_codes || []);
 
 
 
@@ -6358,16 +6333,20 @@ const backOfficeContent = comingSoonTitle ? (
     )}
     {page === "customerCodePrices" && (
       <BulkCustomerCodePrices
+        currentUser={loggedInUser}
         products={products}
         pricingSettings={pricingSettings}
         fetchProducts={fetchProducts}
         onCustomerCodesChanged={async () => {
-          const customers = await getCustomerAccounts({ operationalOnly: !isCustomer });
+          const [customers, freshCodes] = await Promise.all([
+            getCustomerAccounts({ operationalOnly: !isCustomer }), getCustomerPriceCodes(),
+          ]);
           setCustomerAccounts(customers || []);
+          setPricingSettings(current=>({...current, price_codes:freshCodes || []}));
           const refreshed = (customers || []).find((customer) => String(customer.id) === String(selectedCustomerAccount?.id));
           if (refreshed) {
             setSelectedCustomerAccount(refreshed);
-            setPriceMode(getCustomerPriceModeValue(refreshed, pricingSettings));
+            setPriceMode(getCustomerPriceModeValue(refreshed, {...pricingSettings,price_codes:freshCodes || []}));
           }
         }}
       />

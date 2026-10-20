@@ -1,3 +1,4 @@
+import { customerVatMode, priceCodeMatchesCustomer } from "./customerCodeEligibility.js";
 // Keep the legacy single offer alongside the new list until all clients are upgraded.
 export const getCustomerOfferCodeIds = (customer = {}) => [...new Set([
   customer.customer_price_overlay_code_id,
@@ -5,7 +6,7 @@ export const getCustomerOfferCodeIds = (customer = {}) => [...new Set([
 ].filter(Boolean).map(String))];
 
 export const canAssignCustomerOfferCode = (customer, code) => {
-  if (!customer?.customer_price_code_id || !code || code.active === false) return false;
+  if (!customer || !priceCodeMatchesCustomer(customer, code)) return false;
   if (String(code.id) === String(customer.customer_price_code_id)) return false;
   return String(code.code_type || "base").toLowerCase() !== "sub" ||
     String(code.parent_price_code_id || "") === String(customer.customer_price_code_id);
@@ -21,24 +22,31 @@ export const normalizeOfferCodeIds = (value) => [...new Set(
     .map((id) => String(id).trim()).filter(Boolean)
 )];
 
-// Use the loaded assignment as a compare-and-set guard for concurrent edits.
-export async function saveCustomerOfferCode(client, customer, codeId, remove = false) {
-  const currentIds = getCustomerOfferCodeIds(customer);
-  const nextIds = remove
-    ? currentIds.filter((id) => id !== String(codeId))
-    : [...new Set([...currentIds, String(codeId)])];
-  let query = client.from("customer_accounts").update({
-    customer_price_overlay_code_ids: nextIds,
-    customer_price_overlay_code_id: nextIds[0] || null,
-  }).eq("id", customer.id)
-    .eq("customer_price_overlay_code_ids", `{${(customer.customer_price_overlay_code_ids || []).join(",")}}`);
-  query = customer.customer_price_overlay_code_id
-    ? query.eq("customer_price_overlay_code_id", customer.customer_price_overlay_code_id)
-    : query.is("customer_price_overlay_code_id", null);
-  query = customer.customer_price_code_id
-    ? query.eq("customer_price_code_id", customer.customer_price_code_id)
-    : query.is("customer_price_code_id", null);
-  const { data, error } = await query.select("id").single();
-  if (error || !data) throw error || new Error("Customer changed. Refresh and try again.");
-  return nextIds;
+// Server-side matching, session verification, audit and compare-and-set are atomic.
+export const customerCodeState = (customer) => ({
+ default_price_mode: customer.default_price_mode ?? null,
+ customer_price_code_id: customer.customer_price_code_id ?? null,
+ customer_price_overlay_code_id: customer.customer_price_overlay_code_id ?? null,
+ customer_price_overlay_code_ids: customer.customer_price_overlay_code_ids || [],
+});
+export async function saveCustomerCodeAssignment(client, customer, codeId, {kind='offer', remove=false, session}={}) {
+ if(!session?.username || !session?.token) throw new Error('Sign in again before changing customer codes.');
+ const {data,error}=await client.rpc('fc_assign_customer_price_code_v1', {
+  p_username:session.username,p_session_token:session.token,p_customer_id:customer.id,
+  p_code_id:codeId || null,p_kind:kind,p_remove:remove,p_expected:customerCodeState(customer),
+ });
+ if(error)throw error;
+ if(!data)throw new Error('Customer changed. Refresh and try again.');
+ return data;
+}
+export async function saveCustomerOfferCode(client, customer, codeId, remove=false, session) {
+ return saveCustomerCodeAssignment(client,customer,codeId,{kind:'offer',remove,session});
+}
+
+export function getCustomerCodePriceMode(customer, codes=[]) {
+ const base=codes.find(code=>String(code.id)===String(customer?.customer_price_code_id) && priceCodeMatchesCustomer(customer,code));
+ const offers=getActiveCustomerOfferCodeIds(customer,codes);
+ const mode=customerVatMode(customer?.default_price_mode || 'VAT');
+ if(!base && !offers.length)return mode==='inc vat'?'inc vat':'vat';
+ return `code:${base?.id || 'offers'}|${mode}${offers.length ? '|overlay:'+offers.join(',') : ''}`;
 }

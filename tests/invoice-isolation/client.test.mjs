@@ -36,3 +36,22 @@ test('a canonical invoice without a cached ledger row is also returned without a
 test('opening the invoice template cannot write or reprice even when repeated',()=>{
  const html=engine.buildStandardInvoiceHtml(order);assert.equal(engine.buildStandardInvoiceHtml(order),html);assert.match(html,/Saved item/);assert.doesNotMatch(html,/class="watermark/);
 });
+
+test('printing an issued invoice preserves canonical grand total, customer, credit and payments without database access',()=>{
+ const saved={...order,status:'Delivered',invoice_number:'SAVED-HISTORY',invoice_total:337.07,order_total:25.91,
+  company_name:'Original customer',companyName:'Original customer',delivery_address:'Original address',
+  net_total:280.89,vat_total:56.18,credit_limit:500,paid_amount:50,payment_amount:50,wallet_applied_amount:10,
+  items:[{...order.items[0],price:999,qty:1}]};
+ const before=structuredClone(saved);
+ supabase.from=()=>{throw new Error('Printing must not query or write the database');};
+ supabase.rpc=()=>{throw new Error('Printing must not invoke a database function');};
+ assert.equal(engine.getInvoiceTotal(saved),337.07);
+ const html=engine.buildStandardInvoiceHtml(saved);
+ assert.match(html,/337\.07/);assert.match(html,/Original customer/);assert.match(html,/Original address/);
+ const opened=[];globalThis.window={open(){const doc={write(html){opened.push(html);},close(){}};return {document:doc};}};
+ try {
+  engine.previewInvoice(saved);engine.printInvoice(saved);engine.downloadInvoice(saved);engine.printDeliveryNote(saved);
+  assert.equal(opened.length,4);for(const output of opened.slice(0,3))assert.match(output,/337\.07/);
+ } finally {delete globalThis.window;}
+ assert.deepEqual(saved,before);
+});

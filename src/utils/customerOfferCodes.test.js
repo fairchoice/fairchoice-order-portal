@@ -6,7 +6,7 @@ import { calculateProductPrice } from "./pricing.js";
 const product = { vat_price: 10, vat_type: "0.2", price_code_prices: { base: 9, one: 8, two: 7 } };
 const price = (offers, baseMode = "ex vat", overrides = {}) => calculateProductPrice({
   product: { ...product, ...overrides }, priceMode: `code:base|${baseMode}${offers ? `|overlay:${offers}` : ""}`,
-  pricingSettings: { price_codes: [{ id: "base", discount_percent: 10 }] },
+  pricingSettings: { price_codes: [{ id: "base", discount_percent: 10 },{id:"one"},{id:"two"}] },
 });
 
 test("legacy and multiple assignments are merged without duplicates", () => {
@@ -61,20 +61,19 @@ test("existing customer codes can be combined without converting them to Sub Cod
  const customer={customer_price_code_id:"RCCASH01"};
  assert.equal(canAssignCustomerOfferCode(customer,{id:"ENGDRN01",code_type:"base",active:true}),true);
  assert.equal(canAssignCustomerOfferCode(customer,{id:"RCCASH01",code_type:"base",active:true}),false);
- assert.equal(canAssignCustomerOfferCode({}, {id:"ENGDRN01",code_type:"base"}),false);
+ assert.equal(canAssignCustomerOfferCode({}, {id:"ENGDRN01",code_type:"base"}),true);
 });
 
-test("assignment saves preserve existing offers and remove only the selected offer", async () => {
- const customer={id:"shop",customer_price_code_id:"base",customer_price_overlay_code_id:"one",customer_price_overlay_code_ids:["one"]};
- let payload;const filters=[];
- const client={from(table){assert.equal(table,"customer_accounts");return this;},update(value){payload=value;return this;},eq(...filter){filters.push(filter);return this;},is(...filter){filters.push(filter);return this;},select(){return this;},async single(){return {data:{id:"shop"}};}};
- assert.deepEqual(await saveCustomerOfferCode(client,customer,"two"),["one","two"]);
- assert.deepEqual(payload.customer_price_overlay_code_ids,["one","two"]);
- assert.ok(filters.some(([column,value])=>column==="customer_price_overlay_code_ids" && value==="{one}"));
- const updated={...customer,...payload};
- assert.deepEqual(await saveCustomerOfferCode(client,updated,"one",true),["two"]);
- assert.equal(payload.customer_price_overlay_code_id,"two");
- assert.deepEqual(await saveCustomerOfferCode(client,{...customer,...payload},"two"),["two"]);
- client.single=async()=>({data:null});
- await assert.rejects(saveCustomerOfferCode(client,customer,"two"),/Customer changed/);
+test("assignment calls a single verified RPC with expected mode and preserves all other fields", async () => {
+ const customer={id:"shop",default_price_mode:"VAT",customer_price_code_id:"base",customer_price_overlay_code_id:"one",customer_price_overlay_code_ids:["one"],credit_limit:500};
+ const before=structuredClone(customer);const calls=[];
+ const client={async rpc(name,payload){calls.push({name,payload});return {data:{status:"saved",state:{...payload.p_expected,customer_price_overlay_code_ids:["one","two"]}}};}};
+ await assert.rejects(saveCustomerOfferCode(client,customer,"two"),/Sign in/);
+ await saveCustomerOfferCode(client,customer,"two",false,{username:"nisstaj_admin",token:"fixture"});
+ assert.equal(calls[0].name,"fc_assign_customer_price_code_v1");
+ assert.equal(calls[0].payload.p_expected.default_price_mode,"VAT");
+ assert.equal(calls[0].payload.p_code_id,"two");assert.equal(calls[0].payload.p_remove,false);
+ assert.deepEqual(customer,before);
+ client.rpc=async()=>({error:new Error("Customer changed")});
+ await assert.rejects(saveCustomerOfferCode(client,customer,"two",false,{username:"nisstaj_admin",token:"fixture"}),/Customer changed/);
 });

@@ -105,3 +105,33 @@ The accompanying application change makes existing invoice reads idempotent,
 hides amendments from ordinary admins and routes explicit owner edits through
 one atomic RPC. The production release contains only invoice protection; the
 customer-offer and city-exclusion changes remain on test.
+
+## Saved totals and print rollout, 20 October 2026
+
+Issued/delivery-confirmed document totals now use the saved canonical
+`invoice_total` before source-order totals. Saved zero values are retained and
+flagged for owner review; printing never repairs them. Standard print, preview,
+download, delivery note and thermal receipt share the protected totals helper.
+Saved net/VAT headers are retained. Product-code lookups against the current
+catalogue are skipped for issued history. Customer resolution and payment,
+credit, wallet and settlement logic are unchanged.
+
+The follow-up `issued_invoice_saved_print_values` migration closes legacy
+invoice-number links where `customer_invoices.order_id` is NULL. It replaces
+only the guard and existing-invoice sync functions; it neither backfills those
+links nor rewrites the immutable archive. Four legacy invoices resolve to their
+source orders by exact invoice number. Their source rows are now protected too.
+
+Validation: 17 local database/client isolation tests and 17 focused document,
+payment-status and saved-total tests pass; production build passes. Hosted test
+project guard checks rejected customer and line-price updates on eight existing
+invoiced orders. No production mutation tests were run.
+
+The live migration acquired shared locks and compared full-row fingerprints
+inside its transaction, aborting on any existing-row change. Before/after
+fingerprints match across 20 tables: orders, items, invoices, customers/accounts/
+branches, ledger, payments/allocations, wallet/returns, opening balances, central
+payment balances/archive/audit, invoice audit/history and immutable archive.
+There remain 442 invoices and 442 archive records. Saved invoice grand totals
+remain £196,412.41, including three voided invoices and two historical zero totals.
+The six previously reported line-status discrepancies were not repaired.

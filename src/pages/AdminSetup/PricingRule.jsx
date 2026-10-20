@@ -1,3 +1,4 @@
+import { priceModeLabel } from "../../utils/customerCodeEligibility.js";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabase";
 import {
@@ -20,6 +21,7 @@ export default function Pricing() {
   const [newCode, setNewCode] = useState("");
   const [newCodePercent, setNewCodePercent] = useState("");
   const [newCodeType, setNewCodeType] = useState("base");
+  const [newCodeVatMode, setNewCodeVatMode] = useState("both");
   const [newCodeParentId, setNewCodeParentId] = useState("");
   const [savingCode, setSavingCode] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -175,6 +177,7 @@ export default function Pricing() {
         codeType: isSubCode ? "sub" : "base",
         parentPriceCodeId: isSubCode ? newCodeParentId : null,
         exactOnly: isSubCode,
+        appliesToPriceMode: newCodeVatMode,
       });
       await logAction({
         user: loggedInUser,
@@ -187,6 +190,7 @@ export default function Pricing() {
       setNewCodePercent("");
       setNewCodeType("base");
       setNewCodeParentId("");
+      setNewCodeVatMode("both");
       setShowNewCode(false);
       await loadPriceCodes();
     } catch (error) {
@@ -222,6 +226,15 @@ export default function Pricing() {
     } catch (error) {
       alert("Percentage update failed: " + (error.message || error));
     }
+  }
+
+  async function changeCodeVatMode(priceCode, appliesToPriceMode) {
+    if (!pricingUnlocked || !requirePermission(loggedInUser, "can_edit_pricing")) return;
+    if (!window.confirm(`Apply ${priceCode.code} only to ${priceModeLabel(appliesToPriceMode)} customers? Customer VAT modes and saved invoices will not change.`)) return;
+    try {
+      await updateCustomerPriceCode(priceCode.id, { appliesToPriceMode });
+      await loadPriceCodes();
+    } catch (error) { alert(error.message || "Could not save code applicability."); }
   }
 
   async function togglePriceCode(priceCode) {
@@ -347,6 +360,11 @@ export default function Pricing() {
                 <span className="font-bold">%</span>
               </div>
             )}
+            <label className="text-xs font-bold">Applies to
+              <select aria-label="New code applies to" className="border rounded-xl p-3 bg-white" value={newCodeVatMode} onChange={e=>setNewCodeVatMode(e.target.value)}>
+                <option value="inc vat">Inc.VAT</option><option value="ex vat">Ex.VAT</option><option value="both">Both</option>
+              </select>
+            </label>
             <div className="rounded-xl border bg-white px-3 py-2 text-xs font-bold text-slate-600 flex items-center">
               {newCodeType === "sub" ? "Exact prices only" : "Percentage + exact overrides"}
             </div>
@@ -369,6 +387,7 @@ export default function Pricing() {
                 <th className="p-3">Type</th>
                 <th className="p-3">Parent</th>
                 <th className="p-3">Percentage</th>
+                <th className="p-3">Applies to</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Actions</th>
               </tr>
@@ -380,6 +399,9 @@ export default function Pricing() {
                   <td className="p-3 font-bold">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? "Sub Code" : "Base Code"}</td>
                   <td className="p-3">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? (priceCodes.find((item) => String(item.id) === String(priceCode.parent_price_code_id))?.code || "-") : "-"}</td>
                   <td className="p-3">{String(priceCode.code_type || "base").toLowerCase() === "sub" ? "Exact only" : `${Number(priceCode.discount_percent || 0)}%`}</td>
+                  <td className="p-3"><select aria-label={`${priceCode.code} applies to`} disabled={!pricingUnlocked} value={priceCode.applies_to_price_mode || "both"} onChange={e=>changeCodeVatMode(priceCode,e.target.value)} className="border rounded-lg p-2">
+                    <option value="inc vat">Inc.VAT</option><option value="ex vat">Ex.VAT</option><option value="both">Both</option>
+                  </select></td>
                   <td className="p-3">{priceCode.active === false ? "Inactive" : "Active"}</td>
                   <td className="p-3">
                     <div className="flex flex-wrap gap-2">
@@ -393,7 +415,7 @@ export default function Pricing() {
                 </tr>
               ))}
               {visibleCodes.length === 0 && (
-                <tr><td colSpan="6" className="p-6 text-center text-slate-500">No customer price codes yet.</td></tr>
+                <tr><td colSpan="7" className="p-6 text-center text-slate-500">No customer price codes yet.</td></tr>
               )}
             </tbody>
           </table>
