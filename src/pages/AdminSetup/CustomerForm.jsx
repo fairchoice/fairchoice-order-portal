@@ -187,7 +187,7 @@ export default function CustomerForm({
         default_price_mode: form.default_price_mode || "VAT",
         customer_price_code_id: form.customer_price_code_id || null,
       });
-      alert("Customer saved successfully.");
+      alert("Customer saved successfully. Changes apply to future orders; existing orders and invoices stay unchanged.");
       onSaved?.();
     } catch (error) {
       console.error("Customer save error:", error);

@@ -6,7 +6,6 @@ import {
   getCustomerAccounts,
   saveCustomerAccount,
   saveCustomerBranch,
-  syncCustomerAddressToOrders,
 } from "../../services/customerManagement";
 import { supabase } from "../../services/supabase";
 import CustomerForm from "./CustomerForm";
@@ -588,7 +587,7 @@ export default function Customers({onPricingChanged}) {
         `Branches created: ${customerImportPreview.branchCreates.length}`,
         `Branches updated: ${customerImportPreview.branchUpdates.length}`,
         customerImportPreview.mode === "update"
-          ? "Update matched customer accounts and refresh existing order addresses now? Branch sheet changes will be ignored."
+          ? "Update matched customer accounts for future orders only? Existing orders and invoices stay unchanged. Branch sheet changes will be ignored."
           : "Apply these changes now?",
       ].join("\n")
     );
@@ -604,7 +603,6 @@ export default function Customers({onPricingChanged}) {
         const { id, ...payload } = account;
         const { error } = await supabase.from("customer_accounts").update(payload).eq("id", id);
         if (error) throw error;
-        await syncCustomerAddressToOrders({ customerAccountId: id });
       }
 
       for (const account of customerImportPreview.accountCreates) {
@@ -622,7 +620,6 @@ export default function Customers({onPricingChanged}) {
         const { id, customer_name, email, ...payload } = branch;
         const { error } = await supabase.from("customer_branches").update(payload).eq("id", id);
         if (error) throw error;
-        await syncCustomerAddressToOrders({ customerBranchId: id });
       }
 
       for (const branch of customerImportPreview.branchCreates) {
