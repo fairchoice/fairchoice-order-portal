@@ -4695,6 +4695,19 @@ const getCustomerInvoiceStatus = (row = {}) => {
 
 
 
+  const [lastCollectionWhatsAppShare, setLastCollectionWhatsAppShare] = useState(null);
+
+  const shareLastCollectionToWhatsApp = async () => {
+    if (!lastCollectionWhatsAppShare) return;
+    const message = lastCollectionWhatsAppShare;
+    // Native sharing lets staff choose the existing customer group; no API message is sent.
+    if (navigator.share) {
+      try { await navigator.share({ text: message }); return; }
+      catch (error) { if (error?.name === "AbortError") return; }
+    }
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+  };
+
   const saveSalesRepCollection = async () => {
     if (salesCollectionSavingRef.current) return;
     const customer = selectedSalesPaymentCustomer;
@@ -4718,6 +4731,7 @@ const getCustomerInvoiceStatus = (row = {}) => {
       alert("Bank transfers stay pending until verified. Leave new invoice choices as Unpaid; previous-payment status corrections can still be saved."); return;
     }
     if (!window.confirm(`Save ${formatCurrency(amountCents / 100)} collected now and ${previousStatuses.length} previous-payment status correction(s)?`)) return;
+    setLastCollectionWhatsAppShare(null);
     salesCollectionSavingRef.current = true;
     setSavingSalesPayment(true);
     try {
@@ -4734,6 +4748,25 @@ const getCustomerInvoiceStatus = (row = {}) => {
         metadata: { manually_entered_previous_credit_amount: salesManualCreditAmount },
         allocations: salesCollectionAllocations, previousStatuses,
       });
+      if (amountCents > 0 && !bankTransfer) {
+        const invoiceLines = salesCollectionAllocations.map((item) => {
+          const invoice = item.invoice_number || item.invoiceNumber || item.order_number || item.orderNumber;
+          return invoice ? `• ${invoice}` : null;
+        }).filter(Boolean);
+        const receiptText = [
+          "*Fair Choice Cash and Carry — Payment Confirmation*",
+          `Customer: ${customer.account_name || customer.name || "Customer"}`,
+          branch ? `Branch: ${branch.branch_name || branch.name || "Branch"}` : null,
+          `Amount received: ${formatCurrency(amountCents / 100)}`,
+          `Payment method: ${salesPaymentForm.paymentType}`,
+          `Collection date: ${date || today}`,
+          `Paid by: ${salesPaymentForm.whoPaid.trim()}`,
+          invoiceLines.length ? `Invoices: ${invoiceLines.join(", ")}` : null,
+          "Payment recorded in Fair Choice Orders.",
+          "Please contact Fair Choice if any details need checking.",
+        ].filter(Boolean).join("\\n");
+        setLastCollectionWhatsAppShare(receiptText);
+      }
       // The save succeeded. Rotate the intent even if a later refresh fails.
       setSalesInvoiceSelections({});
       setSalesPreviousCreditAmount("");
@@ -7918,6 +7951,16 @@ const portalPageIsAllowed = page === "order" && !isCustomer
           ? "Saving..."
           : "Save Collection"}
       </button>
+      {lastCollectionWhatsAppShare && (
+        <div className="rounded-xl border border-green-200 bg-green-50 p-3 space-y-2">
+          <p className="text-sm font-semibold text-green-900">Collection saved. Share the confirmation with the correct customer group.</p>
+          <button type="button" onClick={shareLastCollectionToWhatsApp}
+            className="w-full bg-green-700 text-white py-3 rounded-xl font-bold">
+            Share to WhatsApp Group
+          </button>
+          <p className="text-xs text-slate-600">Choose the customer group in WhatsApp and press Send. This does not send automatically.</p>
+        </div>
+      )}
     </div>
   </fieldset>
 )}      
