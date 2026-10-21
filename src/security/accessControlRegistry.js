@@ -102,6 +102,7 @@ export const PAGE_ACCESS_SECTIONS = Object.freeze([
     title: "System",
     items: [
       page("page.system.audit_log", "Audit Log", "auditLog"),
+      page("page.system.confirmation_audit", "Confirmation Audit", "confirmationAudit", ["Admin"]),
       page("page.system.import_export", "Import / Export", "importExport"),
       page("page.system.backup", "Backup Tools", "backupTools"),
     ],
