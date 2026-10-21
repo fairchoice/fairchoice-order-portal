@@ -87,6 +87,7 @@ import StockTaking from "./AdminSetup/StockTaking";
 import CustomerCredit from "./AdminSetup/CustomerCredit";
 import CustomerWallet from "./AdminSetup/CustomerWallet";
 import CentralPayment from "./AdminSetup/CentralPayment";
+import ConfirmationAudit from "./AdminSetup/ConfirmationAudit";
 import BranchSeparation from "./AdminSetup/BranchSeparation";
 import WeeklyAccount from "./AdminSetup/WeeklyAccount";
 import Expenses from "./AdminSetup/Expenses";
@@ -6299,7 +6300,8 @@ const backOfficeContent = comingSoonTitle ? (
 
     {page === "credit" && <CustomerCredit />}
     {page === "customerWallet" && <CustomerWallet currentUser={activeUser} />}
-    {page === "centralPayment" && (
+    {page === "confirmationAudit" && isAdmin && <ConfirmationAudit />}
+      {page === "centralPayment" && (
       <CentralPayment
         currentUser={activeUser}
         onInvalidSession={onLogout}
