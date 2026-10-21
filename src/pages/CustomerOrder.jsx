@@ -4764,7 +4764,7 @@ const getCustomerInvoiceStatus = (row = {}) => {
           invoiceLines.length ? `Invoices: ${invoiceLines.join(", ")}` : null,
           "Payment recorded in Fair Choice Orders.",
           "Please contact Fair Choice if any details need checking.",
-        ].filter(Boolean).join("\\n");
+        ].filter(Boolean).join("\n");
         setLastCollectionWhatsAppShare(receiptText);
       }
       // The save succeeded. Rotate the intent even if a later refresh fails.
