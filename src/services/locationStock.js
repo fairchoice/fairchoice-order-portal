@@ -31,11 +31,17 @@ export async function getActiveStockLocations() {
 export async function getProductLocationStock(productIds = []) {
   const uniqueProductIds = [...new Set(productIds.filter(Boolean))];
   if (!uniqueProductIds.length) return [];
-  let locationRows = [];
-  for (const chunk of chunkArray(uniqueProductIds, 50)) {
-    const { data, error } = await supabase.from("product_location_stock").select("id, product_id, location_id, qty, low_stock_alert, stock_locations(id, location_name, country, active)").in("product_id", chunk);
-    if (error) throw error;
-    locationRows = [...locationRows, ...(data || [])];
+  // Bound parallel read requests to avoid serial waits on large warehouse lists.
+  // Preserve the same query, chunk size, error handling, and result ordering.
+  const chunks = chunkArray(uniqueProductIds, 50);
+  const locationRows = [];
+  for (const batch of chunkArray(chunks, 4)) {
+    const results = await Promise.all(batch.map(async (chunk) => {
+      const { data, error } = await supabase.from("product_location_stock").select("id, product_id, location_id, qty, low_stock_alert, stock_locations(id, location_name, country, active)").in("product_id", chunk);
+      if (error) throw error;
+      return data || [];
+    }));
+    for (const rows of results) locationRows.push(...rows);
   }
   return locationRows;
 }
