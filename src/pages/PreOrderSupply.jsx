@@ -248,9 +248,15 @@ export default function PreOrderSupply({
       return undefined;
     }
     let active = true;
+    let loading = false;
+    let lastRefreshStarted = 0;
 
     const refreshSharedHistory = async () => {
-      if (syncing) return;
+      if (!active || syncing || loading || document.visibilityState === "hidden") return;
+      // Focus and visibilitychange often fire together; avoid duplicate reads.
+      if (Date.now() - lastRefreshStarted < 2000) return;
+      loading = true;
+      lastRefreshStarted = Date.now();
       try {
         const historyPages = historyOnly || tab === "Purchase History" ? 20 : 1;
         const { history, events, warning } = await loadPreOrderSupplyHistory(loggedInUser, { maxPages: historyPages });
@@ -260,6 +266,8 @@ export default function PreOrderSupply({
         setHistoryEvents(events || []);
       } catch (error) {
         console.error("Pre-order supply history load error:", error);
+      } finally {
+        loading = false;
       }
     };
 
