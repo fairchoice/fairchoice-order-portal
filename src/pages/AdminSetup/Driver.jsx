@@ -1151,45 +1151,23 @@ const openCashCollection = async (order) => {
   };
 
   const confirmDelivery = async (order, confirmedBy) => {
-  try {
-    await updateOrderExtraFields(order.orderId, {
-      delivered_confirmed_by: confirmedBy,
-    });
-
-
-
-
-    const getInvoiceStatusClass = (status) => {
-  if (status === "PAID") return "status-paid";
-  if (status === "PART PAID") return "status-part-paid";
-  return "status-unpaid";
+    if (!String(confirmedBy || "").trim()) {
+      alert("Please enter who received or confirmed the delivery.");
+      return;
+    }
+    try {
+      await updateOrderExtraFields(order.orderId, {
+        delivered_confirmed_by: confirmedBy.trim(),
+      });
+      // The parent status handler creates/updates the delivered invoice once.
+      await changeOrderStatus(order.orderId, "Delivered");
+      await refreshOrders();
+      openCashCollection({ ...order, status: "Delivered", delivered_confirmed_by: confirmedBy.trim() });
+    } catch (error) {
+      console.error("Delivery confirmation error:", error);
+      alert("Could not confirm delivery: " + (error?.message || "Unknown error. Please retry after checking the order status."));
+    }
   };
-
-
-
-
-    await changeOrderStatus(order.orderId, "Delivered");
-
-
-
-
-    await createOrUpdateInvoiceForDeliveredOrder({
-      order,
-      confirmedBy,
-      currentUser: loggedInUser,
-    });
-
-
-
-
-    openCashCollection(order);
-  } catch (error) {
-    console.error("Delivery confirmation error:", error);
-    alert("Could not confirm delivery: " + error.message);
-  }
-};
-
-
 
 
 const moveBackToWarehouse = async (order) => {
