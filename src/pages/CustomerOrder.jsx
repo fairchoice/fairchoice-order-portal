@@ -3809,7 +3809,7 @@ const openBackOffice = async () => {
       }
     } catch (error) {
       console.error("Status update error:", error);
-      alert("Could not update order status.");
+      throw error;
     }
   };
 
@@ -3823,7 +3823,7 @@ const openBackOffice = async () => {
       await fetchOrders();
     } catch (error) {
       console.error("Order update error:", error);
-      alert("Could not update order details.");
+      throw error;
     }
   };
 
