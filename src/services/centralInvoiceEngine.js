@@ -598,9 +598,11 @@ export async function fetchInvoiceOrderFromDb(rowOrReference = {}) {
 
   return normalizeInvoiceOrder({
     ...withInvoiceFinancialState(order, financialState),
+    // An order number is not an issued invoice number. Preserve invoice
+    // identity/totals only when the order actually has an invoice record.
     invoice_id: invoiceRecord?.id || order.invoice_id || null,
-    invoice_number: invoiceRecord?.invoice_number || order.invoice_number || order.order_number,
-    invoice_total: Number(invoiceRecord?.invoice_total ?? order.invoice_total ?? order.order_total ?? 0),
+    invoice_number: invoiceRecord?.invoice_number || order.invoice_number || null,
+    invoice_total: invoiceRecord?.invoice_total ?? order.invoice_total ?? null,
     wallet_applied_amount: Number(
       invoiceRecord?.wallet_applied_amount ?? order.wallet_applied_amount ?? order.wallet_requested_amount ?? 0
     ),
