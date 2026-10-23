@@ -382,10 +382,12 @@ test("migration verifies every Preview stock receipt column it references", () =
 });
 
 test("Supplier Accounts extends the existing Accounts route and printable UI", () => {
+  const registrySource = read("../security/accessControlRegistry.js");
   assert.match(
-    layoutSource,
-    /title: "Accounts"[\s\S]*label: "Supplier Accounts"[\s\S]*permission: "page\.supplier_accounts"/,
+    registrySource,
+    /page\("page\.accounts\.supplier_accounts", "Supplier Accounts", "supplierAccounts"/,
   );
+  assert.match(layoutSource, /PAGE_ACCESS_SECTIONS/);
   assert.match(
     customerOrderSource,
     /page === "supplierAccounts"[\s\S]*<SupplierAccounts user=\{activeUser\}/,

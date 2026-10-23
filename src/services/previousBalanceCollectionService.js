@@ -38,7 +38,10 @@ export function buildPreviousBalanceRpcParams({
     collectorRole,
     notes,
     paymentIntentId,
-    metadata: { collection_kind: "PREVIOUS_BALANCE" },
+    metadata: {
+      collection_kind: "PREVIOUS_BALANCE",
+      payment_applies_to: "PREVIOUS_BALANCE",
+    },
   });
 }
 
@@ -51,6 +54,7 @@ export async function postPreviousBalanceCollection(input = {}) {
     metadata: {
       ...(input.metadata || {}),
       collection_kind: "PREVIOUS_BALANCE",
+      payment_applies_to: "PREVIOUS_BALANCE",
     },
   });
 }

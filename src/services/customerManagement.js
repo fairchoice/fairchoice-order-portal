@@ -2,11 +2,12 @@ import { supabase } from "./supabase";
 import { getStoredCustomerStatus } from "../utils/customerStatus";
 import { isTestAccount } from "../utils/testAccountFiltering";
 
+import { requirePerformanceGroup } from "../utils/performanceGroups.js";
+
 const normaliseStatus = getStoredCustomerStatus;
 const normalisePriceMode = (mode) => {
   const normalizedMode = String(mode || "VAT").trim().toLowerCase();
-  if (["server", "inc.vat", "inc vat"].includes(normalizedMode)) return "Server";
-  if (["super", "admin", "admin offer"].includes(normalizedMode)) return "Admin Offer";
+  if (["server", "inc.vat", "inc vat", "royalty", "owner offer", "manager", "manager offer"].includes(normalizedMode)) return "Server";
   return "VAT";
 };
 
@@ -98,6 +99,7 @@ export async function saveCustomerAccount(account) {
 
   const payload = {
     account_name: account.account_name,
+    performance_group: requirePerformanceGroup(account.performance_group),
     contact_name: account.contact_name || "",
     phone: account.phone || "",
     mobile: account.mobile || "",
@@ -113,13 +115,15 @@ export async function saveCustomerAccount(account) {
 
     payment_terms: account.payment_terms || "",
     credit_limit: Number(account.credit_limit || 0),
-    default_price_mode: defaultPriceMode === "Admin Offer" ? "VAT" : defaultPriceMode,
+    default_price_mode: defaultPriceMode,
+    customer_price_code_id: account.customer_price_code_id || null,
 
     status: normaliseStatus(account.status),
     active: account.active ?? true,
 
-    allow_vat: account.allow_vat ?? true,
-    allow_server: account.allow_server ?? false,
+    // Legacy flags remain compatible with the two normal base modes.
+    allow_vat: defaultPriceMode === "VAT",
+    allow_server: defaultPriceMode === "Server",
     allow_manager: false,
     allow_super: false,
   };
@@ -133,6 +137,7 @@ export async function saveCustomerAccount(account) {
       .single();
 
     if (error) throw error;
+    // Customer edits are defaults for future orders; existing order snapshots stay unchanged.
     return data;
   }
 
@@ -166,6 +171,7 @@ export async function saveCustomerBranch(branch) {
       .single();
 
     if (error) throw error;
+    // Branch edits apply when a new order is created.
     return data;
   }
 

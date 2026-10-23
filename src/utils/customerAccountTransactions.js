@@ -1,5 +1,6 @@
 import {
   getInvoiceAmount,
+  applyAllocationsToInvoices,
   getInvoiceDate,
   getInvoiceReference,
   getStatementCollectionType,
@@ -468,7 +469,7 @@ const inferFifoAllocations = ({
           String(invoiceTimestamp(right) || "")
         )
       )
-      .map((invoice) => [invoice, getInvoiceAmount(invoice)])
+      .map((invoice) => [invoice, money(Math.max(0, getInvoiceAmount(invoice) - Number(invoice.wallet_applied_amount || 0)))])
   );
   let openingRemaining = Math.max(0, money(openingBalance));
   const inferred = [];
@@ -534,7 +535,7 @@ const inferMissingPaymentAllocations = ({
             sum + Number(allocation.allocated_amount || allocation.allocatedAmount || 0),
           0
         );
-        return [invoice, money(Math.max(0, getInvoiceAmount(invoice) - allocated))];
+        return [invoice, money(Math.max(0, getInvoiceAmount(invoice) - Number(invoice.wallet_applied_amount || 0) - allocated))];
       })
   );
   let openingRemaining = Math.max(0, money(openingBalance));
@@ -590,6 +591,7 @@ export function buildCustomerAccountTransactionModel({
   payments = [],
   allocations = [],
   paymentAudits = [],
+  walletApplications = [],
   sortDirection = "oldest",
 } = {}) {
   const activeInvoices = (invoices || []).filter((invoice) => !isCancelledInvoice(invoice));
@@ -685,13 +687,10 @@ export function buildCustomerAccountTransactionModel({
         0
       )
     );
-    const remainingAmount = money(Math.max(0, invoiceAmount - allocatedAmount));
-    const invoiceStatus =
-      remainingAmount <= 0.009
-        ? "PAID"
-        : allocatedAmount > 0
-          ? "PART PAID"
-          : "UNPAID";
+    const settled = applyAllocationsToInvoices([invoice], invoiceAllocations)[0];
+    const settledAmount = settled?.paidAmount ?? allocatedAmount;
+    const remainingAmount = settled?.remainingAmount ?? money(Math.max(0, invoiceAmount - allocatedAmount));
+    const invoiceStatus = remainingAmount <= 0.009 ? "PAID" : settledAmount > 0 ? "PART PAID" : "UNPAID";
     const reference = getInvoiceReference(invoice);
     const orderingTimestamp = invoiceTimestamp(invoice);
 
@@ -724,7 +723,7 @@ export function buildCustomerAccountTransactionModel({
       collected_by: null,
       status: invoiceStatus,
       invoice_status: invoiceStatus,
-      allocated_amount: allocatedAmount,
+      allocated_amount: settledAmount,
       unallocated_amount: remainingAmount,
       related_invoice: reference,
       related_invoices: [reference],
@@ -846,10 +845,35 @@ export function buildCustomerAccountTransactionModel({
     };
   });
 
+  const uniqueWalletApplications = [...new Map(walletApplications.map(row => [String(row.id), row])).values()];
+  const walletRows = uniqueWalletApplications.filter(row =>
+    upper(row.status) === "ACTIVE" && upper(row.direction) === "DEBIT" && Number(row.amount) > 0 &&
+    (!customer.id || String(row.customer_account_id) === String(customer.id)) &&
+    activeInvoices.some(invoice => String(invoice.id) === String(row.invoice_id))
+  ).map(row => {
+    const invoice = activeInvoices.find(invoice => String(invoice.id) === String(row.invoice_id));
+    const reference = getInvoiceReference(invoice);
+    const amount = money(row.amount);
+    return {
+      transaction_id: `return-payment:${row.id}`, customer_account_id: row.customer_account_id,
+      customer_branch_id: row.customer_branch_id || null, transaction_type: "RETURN_PAYMENT",
+      transaction_subtype: "WALLET_APPLICATION", transaction_date: row.created_at,
+      ordering_timestamp: row.created_at, created_at: row.created_at, updated_at: null,
+      reference, invoice_id: row.invoice_id, order_id: row.order_id || invoice.order_id || null,
+      payment_id: null, allocation_id: null, description: `Return credit applied to invoice ${reference}`,
+      debit_amount: 0, credit_amount: amount, signed_amount: -amount,
+      payment_method: "Return / Wallet credit", collection_type: "RETURN_PAYMENT", collection_label: "Return Payment",
+      paid_by: null, collected_by: row.created_by || null, status: "RETURN PAID", invoice_status: null,
+      allocated_amount: amount, unallocated_amount: 0, related_invoice: reference, related_invoices: [reference],
+      notes: row.notes || null, voided: false, corrected: false, source_table: "customer_wallet_transactions",
+      source_record_id: row.id, source: row.source_type, source_record: row, audit_history: [],
+    };
+  });
   const chronologicalRows = enforceLinkedSameDayOrder([
     openingRow,
     ...invoiceRows,
     ...paymentRows,
+    ...walletRows,
   ]);
   let runningBalance = 0;
   const withBalances = chronologicalRows.map((row) => {
@@ -864,7 +888,7 @@ export function buildCustomerAccountTransactionModel({
           ? "OPENING"
           : row.transaction_type === "INVOICE"
             ? "INVOICE"
-            : "PAYMENT",
+            : row.transaction_type === "RETURN_PAYMENT" ? "RETURN PAYMENT" : "PAYMENT",
       date: row.transaction_date,
       orderingTimestamp: row.ordering_timestamp,
       amount: row.signed_amount,
@@ -893,7 +917,8 @@ export function buildCustomerAccountTransactionModel({
       .filter((row) => row.signed_amount < 0)
       .reduce((sum, row) => sum + row.credit_amount, 0)
   );
-  const closingBalance = money(openingBalance + invoiceTotal - paymentTotal);
+  const returnPaymentTotal = money(walletRows.reduce((sum, row) => sum + row.credit_amount, 0));
+  const closingBalance = money(money(openingBalance + invoiceTotal - paymentTotal) - returnPaymentTotal);
   const outstandingBalance = money(Math.max(0, closingBalance));
   const customerCredit = money(Math.max(0, -closingBalance));
   const creditLimit = money(customer.credit_limit ?? customer.creditLimit ?? 0);
@@ -945,12 +970,13 @@ export function buildCustomerAccountTransactionModel({
     paymentHistory: transactions.filter(
       (row) =>
         row.source_table === "customer_payments" ||
-        row.source_table === "customer_ledger"
+        row.source_table === "customer_ledger" || row.transaction_type === "RETURN_PAYMENT"
     ),
     summary: {
       openingBalance,
       invoiceTotal,
       paymentTotal,
+      returnPaymentTotal,
       closingBalance,
       outstanding: closingBalance,
       outstandingBalance,

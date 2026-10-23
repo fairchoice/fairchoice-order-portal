@@ -83,12 +83,12 @@ export async function getHomepageTargetOptions() {
     supabase
       .from("product_options")
       .select("option_type, option_name")
-      .in("option_type", ["main_category", "sub_category", "brand"])
+      .in("option_type", ["main_category", "sub_category", "brand", "series"])
       .eq("active", true),
     supabase
       .from("products")
       .select(
-        "id, product_code, product_name, main_category, sub_category, brand, status"
+        "id, product_code, product_name, main_category, sub_category, brand, series, status"
       ),
   ]);
 
@@ -98,24 +98,24 @@ export async function getHomepageTargetOptions() {
 
   const optionRows = optionResult.data || [];
   const productRows = productResult.data || [];
+  const activeProductRows = productRows.filter(
+    (row) => String(row.status || "Active").trim().toLowerCase() !== "inactive"
+  );
   const valuesFor = (optionType, productField) =>
     uniqueSorted([
       ...optionRows
         .filter((row) => row.option_type === optionType)
         .map((row) => row.option_name),
-      ...productRows.map((row) => row[productField]),
+      ...activeProductRows.map((row) => row[productField]),
     ]);
 
   return {
     mainCategories: valuesFor("main_category", "main_category"),
     subCategories: valuesFor("sub_category", "sub_category"),
     brands: valuesFor("brand", "brand"),
-    products: productRows
-      .filter(
-        (row) =>
-          row.id &&
-          String(row.status || "Active").trim().toLowerCase() !== "inactive"
-      )
+    series: valuesFor("series", "series"),
+    products: activeProductRows
+      .filter((row) => row.id)
       .map((row) => ({
         id: String(row.id),
         name: String(row.product_name || "").trim() || "Unnamed product",

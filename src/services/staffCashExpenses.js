@@ -5,6 +5,7 @@ const normalizeExpense = (row = {}) => ({
   amount: Number(row.amount || 0),
   collector_type: row.collector_type || "Driver",
   collector_name: row.collector_name || "",
+  collector_staff_id: row.collector_staff_id || row.paid_by_staff_id || null,
   expense_date: row.expense_date || row.created_at,
   status: String(row.status || "APPROVED").toUpperCase(),
 });
@@ -31,6 +32,7 @@ export async function saveStaffCashExpense(input) {
   }
 
   const payload = {
+    paid_by_staff_id: input.collectorStaffId || null,
     collector_type: input.collectorType,
     collector_name: String(input.collectorName).trim(),
     expense_date: input.expenseDate,
