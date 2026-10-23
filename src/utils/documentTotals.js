@@ -246,17 +246,32 @@ export function calculateDocumentTotals(items = [], order = {}) {
     savedGrandTotal > 0 &&
     (!recalculatedGrandTotal ||
       Math.abs(savedGrandTotal - recalculatedGrandTotal) <= 0.05);
-  const grandTotal = savedGrandTotalReconciles
-    ? savedGrandTotal
-    : recalculatedGrandTotal || savedGrandTotal;
+  // For recent, unissued orders with excluded warehouse items, the payable
+  // document must reconcile to its visible/supplyable lines. Never rewrite
+  // issued or delivered historical documents.
+  const orderDate = order.created_at || order.createdAt || order.order_date || order.orderDate;
+  const recentUnissuedOrder = !isSavedInvoiceDocument(order) &&
+    Boolean(orderDate) && !Number.isNaN(Date.parse(orderDate)) &&
+    Date.parse(orderDate) >= Date.parse("2026-10-19T00:00:00Z");
+  const hasExcludedSupplyLines = (items || []).some((item) =>
+    !isPrintableDocumentItem(item) && !isFreeDocumentItem(item)
+  );
+  const grandTotal = recentUnissuedOrder && hasExcludedSupplyLines
+    ? recalculatedGrandTotal
+    : savedGrandTotalReconciles
+      ? savedGrandTotal
+      : recalculatedGrandTotal || savedGrandTotal;
 
   const savedNetReconciles =
+    !(recentUnissuedOrder && hasExcludedSupplyLines) &&
     savedNetTotal > 0 &&
     !(vatTotal > 0 && grandTotal > 0 && savedNetTotal > grandTotal) &&
     (!grandTotal || !vatTotal || Math.abs(savedNetTotal + vatTotal - grandTotal) <= 0.05);
-  const netTotal = savedNetReconciles
-    ? savedNetTotal
-    : itemNetTotal || (grandTotal && vatTotal ? money2(grandTotal - vatTotal) : 0);
+  const netTotal = recentUnissuedOrder && hasExcludedSupplyLines
+    ? itemNetTotal
+    : savedNetReconciles
+      ? savedNetTotal
+      : itemNetTotal || (grandTotal && vatTotal ? money2(grandTotal - vatTotal) : 0);
   const discountAmount = money2(order.discount_amount ?? order.discountAmount ?? 0);
   const discountPercent = Number(order.discount_percent ?? order.discountPercent ?? 0);
 
