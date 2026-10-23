@@ -263,12 +263,15 @@ export function calculateDocumentTotals(items = [], order = {}) {
       : recalculatedGrandTotal || savedGrandTotal;
 
   const savedNetReconciles =
+    !(recentUnissuedOrder && hasExcludedSupplyLines) &&
     savedNetTotal > 0 &&
     !(vatTotal > 0 && grandTotal > 0 && savedNetTotal > grandTotal) &&
     (!grandTotal || !vatTotal || Math.abs(savedNetTotal + vatTotal - grandTotal) <= 0.05);
-  const netTotal = savedNetReconciles
-    ? savedNetTotal
-    : itemNetTotal || (grandTotal && vatTotal ? money2(grandTotal - vatTotal) : 0);
+  const netTotal = recentUnissuedOrder && hasExcludedSupplyLines
+    ? itemNetTotal
+    : savedNetReconciles
+      ? savedNetTotal
+      : itemNetTotal || (grandTotal && vatTotal ? money2(grandTotal - vatTotal) : 0);
   const discountAmount = money2(order.discount_amount ?? order.discountAmount ?? 0);
   const discountPercent = Number(order.discount_percent ?? order.discountPercent ?? 0);
 
