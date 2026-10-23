@@ -1537,7 +1537,7 @@ export async function withResolvedInvoicePaymentStatus(order = {}) {
       invoiceOrder = withInvoiceFinancialState(invoiceOrder, snapshot?.invoices.find(row => row.invoice_number === reference));
     } catch (error) { console.warn("Invoice financial status lookup failed", error.message); }
   }
-  const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+  const totals = calculateDocumentTotals(invoiceOrder._allSupplyItems || invoiceOrder.items || [], invoiceOrder);
   if (invoiceOrder._financialStatusVerified) return invoiceOrder;
 
 
@@ -1623,7 +1623,7 @@ export const getPrintTemplate = (priceMode) =>
 
 const getThermalReceiptRows = (order = {}) => {
   const invoiceOrder = normalizeInvoiceOrder(order);
-  const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+  const totals = calculateDocumentTotals(invoiceOrder._allSupplyItems || invoiceOrder.items || [], invoiceOrder);
   const hasVat = Number(totals.vatTotal || 0) > 0;
   const isServerManager = isServerManagerPriceMode(invoiceOrder.priceMode || invoiceOrder.price_mode);
 
@@ -2305,7 +2305,7 @@ const shouldShowInvoiceHeaderFooter = (settings = {}, order = {}) => {
 
 
 const getOrderItemsForInvoice = (order = {}) =>
-  calculateDocumentTotals(filterActiveInvoiceLines(order.items || order.order_items || []), order)
+  calculateDocumentTotals(order._allSupplyItems || order.items || order.order_items || [], order)
     .invoiceItems || [];
 
 
@@ -3924,7 +3924,7 @@ export async function recordInvoiceVersion({
 
 export function getInvoiceTotal(order = {}) {
   const invoiceOrder = normalizeInvoiceOrder(order);
-  return calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder).grandTotal;
+  return calculateDocumentTotals(invoiceOrder._allSupplyItems || invoiceOrder.items || [], invoiceOrder).grandTotal;
 }
 
 
