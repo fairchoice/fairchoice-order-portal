@@ -232,6 +232,8 @@ const normalizeInvoiceOrder = (order = {}) => {
       order.shop_name ||
       "",
     branch_name: order.branch_name || order.delivery_branch_name || order.branchName || "",
+    // Retain all source lines for supply-aware totals; only active lines print.
+    _allSupplyItems: order._allSupplyItems || order.items || order.order_items || [],
     items: activeItems,
     order_items: activeItems,
   };
@@ -2392,7 +2394,7 @@ function buildLegacyStandardInvoiceHtml(
 ) {
   const invoiceOrder = normalizeInvoiceOrder(order);
   const settings = getInvoiceSettings(settingsOverride);
-  const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+  const totals = calculateDocumentTotals(invoiceOrder._allSupplyItems || invoiceOrder.items || [], invoiceOrder);
   const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
   const isDeliveryNote = documentType === "deliveryNote";
   const isOrderForm = documentType === "orderForm";
@@ -2798,7 +2800,7 @@ export function buildStandardInvoiceHtml(
       ? "orderForm"
       : documentType;
   const settings = getInvoiceSettings(settingsOverride);
-  const totals = calculateDocumentTotals(invoiceOrder.items || [], invoiceOrder);
+  const totals = calculateDocumentTotals(invoiceOrder._allSupplyItems || invoiceOrder.items || [], invoiceOrder);
   const items = sortPrintItems(getOrderItemsForInvoice(invoiceOrder));
   const isDeliveryNote = resolvedDocumentType === "deliveryNote";
   const isOrderForm = resolvedDocumentType === "orderForm";
