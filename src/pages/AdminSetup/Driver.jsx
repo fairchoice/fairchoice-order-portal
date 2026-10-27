@@ -1156,6 +1156,27 @@ const openCashCollection = async (order) => {
       return;
     }
     try {
+      // Recheck Live status before any delivery write. Never confirm an
+      // already-delivered order again or re-trigger invoice/payment workflows.
+      const orderDbId = order.dbId || order.order_uuid || order.id;
+      const orderQuery = supabase.from("orders").select("id, status, delivered_at, delivered_confirmed_by");
+      const { data: currentOrder, error: lookupError } = await (
+        orderDbId && UUID_PATTERN.test(String(orderDbId))
+          ? orderQuery.eq("id", orderDbId).maybeSingle()
+          : orderQuery.eq("order_number", order.orderId || order.order_number).maybeSingle()
+      );
+      if (lookupError) throw lookupError;
+      if (!currentOrder) throw new Error("Order not found. Refresh before confirming delivery.");
+      if (String(currentOrder.status || "").trim().toLowerCase() === "delivered" ||
+          currentOrder.delivered_at || currentOrder.delivered_confirmed_by) {
+        await refreshOrders();
+        alert("This delivery is already recorded. No duplicate confirmation was made.");
+        return;
+      }
+      if (String(currentOrder.status || "").trim().toLowerCase() !== "ready for driver") {
+        await refreshOrders();
+        throw new Error("Order status changed. Refresh before confirming delivery.");
+      }
       await updateOrderExtraFields(order.orderId, {
         delivered_confirmed_by: confirmedBy.trim(),
       });
