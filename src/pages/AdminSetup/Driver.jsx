@@ -767,68 +767,37 @@ useEffect(() => {
 
 
 
+  // One-way route: only unconfirmed Ready For Driver orders belong in
+  // the driver queue. Delivered orders remain in history/payment ledgers,
+  // never in this operational queue.
+  const isPendingDriverDelivery = (order = {}) =>
+    String(order.status || "").trim().toLowerCase() === "ready for driver" &&
+    !order.delivered_at &&
+    !order.deliveredAt &&
+    !order.delivered_confirmed_by;
+
   const driverNames = [
     "All",
     ...new Set(
       orders
-        .filter((order) =>
-          !isPromotionRunOrder(order) &&
-          ["Ready For Driver", "Delivered"].includes(order.status)
-        )
+        .filter((order) => !isPromotionRunOrder(order) && isPendingDriverDelivery(order))
         .map((order) => order.driverName || order.driver_name)
         .filter(Boolean)
     ),
   ];
 
+  const driverOrders = promotionRunExclusionsLoaded
+    ? orders.filter((order) => {
+        if (isPromotionRunOrder(order) || !isPendingDriverDelivery(order)) return false;
+        const driverName = order.driverName || order.driver_name;
+        const matchesDriver = selectedDriver === "All" || driverName === selectedDriver;
+        const collectionCompletedLocally = completedCollectionOrderIds.has(
+          String(order.orderId || order.order_number || order.id || "")
+        );
+        return matchesDriver && !collectionCompletedLocally;
+      })
+    : [];
 
-
-
-      const driverOrders = promotionRunExclusionsLoaded
-        ? orders.filter((order) => {
-  const driverName = order.driverName || order.driver_name;
-
-
-
-
-  if (isPromotionRunOrder(order)) return false;
-
-
-
-
-  const isReadyForDriver = order.status === "Ready For Driver";
-
-
-
-
-  const isDeliveredWaitingPayment =
-    order.status === "Delivered" &&
-    !order.paymentType &&
-    !order.payment_type &&
-    !isPaymentCollected(order);
-
-
-
-
-  const matchesDriver =
-    selectedDriver === "All" || driverName === selectedDriver;
-
-
-
-
-  const collectionCompletedLocally = completedCollectionOrderIds.has(
-    String(order.orderId || order.order_number || order.id || "")
-  );
-
-
-
-
-  return (
-    (isReadyForDriver || isDeliveredWaitingPayment) &&
-    matchesDriver &&
-    !collectionCompletedLocally
-  );
-  })
-        : [];
 const loadDriverCreditOutstanding = async ({
   customerAccountId,
   customerName,
