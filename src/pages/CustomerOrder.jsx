@@ -3430,24 +3430,35 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
     // so Received Orders does not wait for one network request before starting
     // the other. This changes loading time only; merge/order behaviour is unchanged.
     const processingQueuePromise = loadProcessingQueueOrders();
-    const ordersPromise = supabase
+    // Always fetch every active order separately. A global newest-50 limit
+    // hid older Received/Warehouse orders when newer customer orders arrived.
+    // This is read-only and does not touch invoice/payment/credit records.
+    const activeStatuses = ["Received", "Warehouse Packing", "Ready For Driver"];
+    const activeOrdersPromise = supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .in("status", activeStatuses)
+      .order("created_at", { ascending: false });
+    const recentOrdersPromise = supabase
       .from("orders")
       .select("*, order_items(*)")
       .order("created_at", { ascending: false })
       .limit(50);
 
-
-
-
-    const [{ data, error }, processingQueueRaw] = await Promise.all([
-      ordersPromise,
+    const [activeResult, recentResult, processingQueueRaw] = await Promise.all([
+      activeOrdersPromise,
+      recentOrdersPromise,
       processingQueuePromise,
     ]);
-
-
-
-
-    if (error) throw error;
+    if (activeResult.error) throw activeResult.error;
+    if (recentResult.error) throw recentResult.error;
+    const uniqueOrders = new Map();
+    [...(activeResult.data || []), ...(recentResult.data || [])].forEach((order) => {
+      if (!uniqueOrders.has(String(order.id))) uniqueOrders.set(String(order.id), order);
+    });
+    const data = [...uniqueOrders.values()].sort(
+      (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+    );
 
 
 
