@@ -1420,11 +1420,16 @@ const paymentCollected = isCredit ? "No" : "Yes";
     try {
       // Verify server-side records before any wallet, payment, or credit writes.
       // An issued invoice is expected and is not by itself a duplicate.
-      const orderUuid = order.dbId || order.id || order.order_uuid || null;
       const orderNumber = String(order.orderId || order.order_number || "");
-      if (!orderUuid || !orderNumber) {
-        throw new Error("Cannot verify this Order ID. No collection was saved.");
+      if (!orderNumber) throw new Error("Cannot verify this Order ID. No collection was saved.");
+      // The driver order model may expose an order number in its id field.
+      // Resolve the canonical UUID from Live before checking linked payments.
+      const { data: verifiedOrder, error: verifiedOrderError } = await supabase
+        .from("orders").select("id,order_number").eq("order_number", orderNumber).maybeSingle();
+      if (verifiedOrderError || !verifiedOrder?.id) {
+        throw new Error("Could not verify the original order in Live. No collection was saved.");
       }
+      const orderUuid = verifiedOrder.id;
       const [paymentCheck, ledgerCheck, queueCheck] = await Promise.all([
         supabase.from("customer_payments").select("id,status").eq("order_id", orderUuid).eq("status", "POSTED").limit(1),
         supabase.from("customer_ledger").select("id,invoice_status").eq("order_number", orderNumber).eq("invoice_status", "PAID").limit(1),
