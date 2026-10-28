@@ -161,7 +161,12 @@ export default function PreOrderSupply({
   };
 
   useEffect(() => {
-    localStorage.setItem(PREORDER_SUPPLY_PENDING_KEY, JSON.stringify(pendingActions));
+    try {
+      localStorage.setItem(PREORDER_SUPPLY_PENDING_KEY, JSON.stringify(pendingActions));
+    } catch (error) {
+      console.error("Unable to save pending pre-order supply actions locally:", error);
+      setSyncMessage("Browser storage is full. Pending changes remain on this page but may be lost if you close or reload it. Please sync pending changes before leaving.");
+    }
   }, [pendingActions]);
 
   useEffect(() => {
