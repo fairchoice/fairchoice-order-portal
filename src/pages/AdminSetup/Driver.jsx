@@ -1418,6 +1418,26 @@ const paymentCollected = isCredit ? "No" : "Yes";
 
     setSavingPayment(true);
     try {
+      // Verify server-side records before any wallet, payment, or credit writes.
+      // An issued invoice is expected and is not by itself a duplicate.
+      const orderUuid = order.dbId || order.id || order.order_uuid || null;
+      const orderNumber = String(order.orderId || order.order_number || "");
+      if (!orderUuid || !orderNumber) {
+        throw new Error("Cannot verify this Order ID. No collection was saved.");
+      }
+      const [paymentCheck, ledgerCheck, queueCheck] = await Promise.all([
+        supabase.from("customer_payments").select("id,status").eq("order_id", orderUuid).eq("status", "POSTED").limit(1),
+        supabase.from("customer_ledger").select("id,invoice_status").eq("order_number", orderNumber).eq("invoice_status", "PAID").limit(1),
+        supabase.from("processing_queue").select("id").eq("order_number", orderNumber).limit(1),
+      ]);
+      if (paymentCheck.error || ledgerCheck.error || queueCheck.error) {
+        throw new Error("Unable to verify existing payment and credit records. No new collection was saved.");
+      }
+      if (paymentCheck.data?.length || ledgerCheck.data?.length || queueCheck.data?.length) {
+        alert("Duplicate transaction blocked: This Order ID already has a posted payment, paid invoice, or completed credit handoff. No new collection has been saved. Please review the existing transaction.");
+        setCashCollectionOrder(null);
+        return;
+      }
       if (deliveryWallet.useWallet && !deliveryWallet.alreadyApplied) {
         const orderUuid = order.id || order.dbId || order.order_uuid || null;
         const walletUsername = String(loggedInUser.username || loggedInUser.user_name || "").trim();
