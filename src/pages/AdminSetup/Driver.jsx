@@ -767,14 +767,19 @@ useEffect(() => {
 
 
 
-  // One-way route: only unconfirmed Ready For Driver orders belong in
-  // the driver queue. Delivered orders remain in history/payment ledgers,
-  // never in this operational queue.
-  const isPendingDriverDelivery = (order = {}) =>
-    String(order.status || "").trim().toLowerCase() === "ready for driver" &&
-    !order.delivered_at &&
-    !order.deliveredAt &&
-    !order.delivered_confirmed_by;
+  // Delivered orders with no recorded collection remain visible for review.
+  // Never reset delivery status or run delivery confirmation a second time.
+  const isPendingDriverDelivery = (order = {}) => {
+    const status = String(order.status || "").trim().toLowerCase();
+    if (status === "delivered") {
+      const deliveredAt = order.deliveredAt || order.delivered_at;
+      return Boolean(deliveredAt && new Date(deliveredAt).getTime() >= Date.parse("2026-10-19")) &&
+        !isPaymentCollected(order) &&
+        !completedCollectionOrderIds.has(String(order.orderId || order.order_number || order.id || ""));
+    }
+    return status === "ready for driver" &&
+      !order.delivered_at && !order.deliveredAt && !order.delivered_confirmed_by;
+  };
 
   const driverNames = [
     "All",
