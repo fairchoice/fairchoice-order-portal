@@ -3443,16 +3443,27 @@ const fetchOrders = async ({ throwOnError = false } = {}) => {
       .select("*, order_items(*)")
       .order("created_at", { ascending: false })
       .limit(50);
+    // Recover delivered orders whose collection was not recorded since 19 October.
+    // This is a read only query: no delivery, invoice, or payment is recreated.
+    const pendingDeliveredPromise = supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .eq("status", "Delivered")
+      .gte("delivered_at", "2026-10-19")
+      .or("payment_collected.is.null,payment_collected.eq.No")
+      .order("delivered_at", { ascending: false });
 
-    const [activeResult, recentResult, processingQueueRaw] = await Promise.all([
+    const [activeResult, recentResult, pendingDeliveredResult, processingQueueRaw] = await Promise.all([
       activeOrdersPromise,
       recentOrdersPromise,
+      pendingDeliveredPromise,
       processingQueuePromise,
     ]);
     if (activeResult.error) throw activeResult.error;
     if (recentResult.error) throw recentResult.error;
+    if (pendingDeliveredResult.error) throw pendingDeliveredResult.error;
     const uniqueOrders = new Map();
-    [...(activeResult.data || []), ...(recentResult.data || [])].forEach((order) => {
+    [...(activeResult.data || []), ...(recentResult.data || []), ...(pendingDeliveredResult.data || [])].forEach((order) => {
       if (!uniqueOrders.has(String(order.id))) uniqueOrders.set(String(order.id), order);
     });
     const data = [...uniqueOrders.values()].sort(
