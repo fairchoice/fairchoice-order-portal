@@ -2045,10 +2045,14 @@ useEffect(() => {
 
 
       if (String(customerMode).toLowerCase().startsWith("code:")) {
-        const { basePriceMode } = getPriceCodeModeParts(customerMode);
-        return basePriceMode === "inc vat"
-          ? ["vat", customerMode]
-          : [customerMode, "inc vat"];
+        const { basePriceMode, priceCodeId, overlayPriceCodeIds } = getPriceCodeModeParts(customerMode);
+        // Keep the customer's assigned code in both sales-rep modes.
+        // Eligibility is checked per product and per VAT mode by the pricing calculator.
+        const alternateMode = basePriceMode === "inc vat" ? "ex vat" : "inc vat";
+        return [
+          customerMode,
+          makePriceCodeMode(priceCodeId, alternateMode, overlayPriceCodeIds),
+        ];
       }
 
 
