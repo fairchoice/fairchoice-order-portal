@@ -296,7 +296,7 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
   const codeMode = Boolean(priceCodeId);
   const baseCode = codeDefinitions.find(code => String(code.id) === String(priceCodeId));
   const baseEligible = priceCodeMatchesMode(baseCode, codeBasePriceMode);
-  if (codeMode && !baseEligible) pricingPercent = getPricingPercent(codeBasePriceMode === "inc vat" ? "inc vat" : "vat", pricingSettings);
+  if (codeMode && !baseEligible) pricingPercent = 0;
   const productPriceCodeMap = product.priceCodePrices || product.price_code_prices || {};
   // Offer codes supply exact product prices only; discounts are never stacked.
   const offerPrices = overlayPriceCodeIds
@@ -330,12 +330,12 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
       }
       appliedSpecialPriceType = overlayCodeOverride > 0 ? "sub_price_code" : "price_code";
     } else if (codeBasePriceMode === "inc vat") {
-      unitPrice = applyIncVatQuarterDiscount(incVatBasePrice, pricingPercent);
+      unitPrice = applyIncVatQuarterDiscount(incVatBasePrice, 0);
       grossPrice = unitPrice;
       vatAmount = 0;
       appliedRule = "customer_price_code_percent_inc_vat";
     } else {
-      unitPrice = applyCustomerCodeDiscount(exVatPrice, pricingPercent);
+      unitPrice = applyCustomerCodeDiscount(exVatPrice, 0);
       grossPrice = getGrossPrice(unitPrice, vatRate);
       vatAmount = roundMoney(grossPrice - unitPrice);
       appliedRule = "customer_price_code_percent_ex_vat";
