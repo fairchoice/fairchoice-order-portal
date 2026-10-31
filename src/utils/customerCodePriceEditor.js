@@ -12,6 +12,6 @@ export function codeProductPreview(product,codes,mode,pricingSettings={}) {
  const calculatedProduct={...product,priceCodePrices:{},price_code_prices:{}};
  const settings={...pricingSettings,price_codes:codes};
  const calculated=codes.map(code=>getProductPriceForMode(calculatedProduct,`code:${code.id}|${mode}`,'',settings));
- const exact=codes.map(code=>Number(map[code.id])>0?Number(map[code.id]):null);
+ const exact=codes.map(code=>{const entry=map[code.id];const price=Number(entry && typeof entry==='object'?entry.price:entry);const scope=entry && typeof entry==='object'?String(entry.price_mode || 'both').toLowerCase():'both';return price>0 && (scope==='both' || scope===mode)?price:null;});
  return {calculated,exact,status:!codes.length?'Select customer code':exact.every(v=>v===null)?'Calculated':exact.every(v=>v!==null)?'Exact override':'Mixed'};
 }
