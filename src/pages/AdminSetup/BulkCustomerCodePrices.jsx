@@ -1,6 +1,7 @@
 import {useEffect,useState} from 'react';
 import {supabase} from '../../services/supabase.js';
 import {getCustomerPriceCodes} from '../../services/priceCodes.js';
+import {getProductPriceCodeRows} from '../../services/priceCodes.js';
 import {applyIndividualCustomerPrices} from '../../services/individualCustomerCodes.js';
 import {individualCodeForCustomer,individualCodeTargets,individualProductPrices} from '../../utils/individualCustomerCodes.js';
 import {filterCustomerCodeScope} from '../../utils/customerCodeScope.js';
@@ -20,11 +21,14 @@ async function readData(){
 }
 export default function BulkCustomerCodePrices({products=[],fetchProducts,onCustomerCodesChanged,currentUser,pricingSettings={}}){
  const [data,setData]=useState({codes:[],customers:[]}),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[message,setMessage]=useState('');
+ const [appliedRows,setAppliedRows]=useState([]),[appliedLoading,setAppliedLoading]=useState(false),[appliedMode,setAppliedMode]=useState('all'),[appliedSearch,setAppliedSearch]=useState(''),[appliedPage,setAppliedPage]=useState(1);
  const [tab,setTab]=useState('bulk'),[country,setCountry]=useState('All'),[city,setCity]=useState('All'),[excludedCities,setExcludedCities]=useState([]);
  const [priceMode,setPriceMode]=useState('both'),[customerSearch,setCustomerSearch]=useState(''),[codeId,setCodeId]=useState('');
  const [productSearch,setProductSearch]=useState(''),[page,setPage]=useState(1),[selected,setSelected]=useState([]),[drafts,setDrafts]=useState({}),[bulkPrice,setBulkPrice]=useState('');
  const [category,setCategory]=useState('All'),[brand,setBrand]=useState('All'),[series,setSeries]=useState('All'),[previewMode,setPreviewMode]=useState('inc vat'),[seriesPrice,setSeriesPrice]=useState('');
  useEffect(()=>{let active=true;readData().then(value=>{if(active)setData(value);}).catch(error=>{if(active)setMessage(error.message);}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[]);
+ async function loadApplied(){setAppliedLoading(true);try{const result=await getProductPriceCodeRows(products.map(p=>p.id));setAppliedRows(result);}catch(error){setMessage(error.message);}finally{setAppliedLoading(false);}}
+ useEffect(()=>{if(tab==='manage' && products.length)void loadApplied();},[tab,products]);
  async function reload(){setLoading(true);try{setData(await readData());}finally{setLoading(false);}}
  async function refresh(){await Promise.all([reload(),fetchProducts?.(),onCustomerCodesChanged?.()]);}
  const countries=[...new Set(data.customers.map(c=>c.country).filter(Boolean))].sort();
@@ -67,7 +71,12 @@ export default function BulkCustomerCodePrices({products=[],fetchProducts,onCust
  }
  return <div className="customer-code-prices space-y-4">
   <header><h2 className="text-xl font-bold">Individual Customer Code Prices</h2><p className="text-sm text-slate-600">Each customer has one code. Update product prices by country, city or individual code. Exact prices take priority over the code percentage.</p></header>
-  <nav aria-label="Customer price views" className="flex gap-2"><button type="button" aria-pressed={tab==='bulk'} className={button} disabled={saving} onClick={()=>setTab('bulk')}>Bulk / Geography</button><button type="button" aria-pressed={tab==='individual'} className={button} disabled={saving} onClick={()=>setTab('individual')}>Individual Code</button></nav>
+  <nav aria-label="Customer price views" className="flex gap-2"><button type="button" aria-pressed={tab==='bulk'} className={button} disabled={saving} onClick={()=>setTab('bulk')}>Bulk / Geography</button><button type="button" aria-pressed={tab==='individual'} className={button} disabled={saving} onClick={()=>setTab('individual')}>Individual Code</button><button type="button" aria-pressed={tab==='manage'} className={button} disabled={saving} onClick={()=>setTab('manage')}>Manage Applied Prices</button></nav>
+  {tab==='manage'?<section className="rounded-xl border bg-white p-4 space-y-3" aria-label="Manage applied prices">
+   <h3 className="font-bold">Applied product-code prices</h3><p className="text-sm text-slate-600">Inspect saved exact prices by customer, product and VAT eligibility. Changes require an authorized audited pricing action.</p>
+   <div className="flex flex-wrap gap-3"><label>VAT eligibility <select className={field} value={appliedMode} onChange={e=>{setAppliedMode(e.target.value);setAppliedPage(1);}}><option value="all">All</option><option value="both">Both</option><option value="ex vat">Ex.VAT</option><option value="inc vat">Inc.VAT</option></select></label><label>Customer / code / product <input className={field} value={appliedSearch} onChange={e=>{setAppliedSearch(e.target.value);setAppliedPage(1);}} placeholder="Search customer or product"/></label><button type="button" className={button} disabled={appliedLoading} onClick={loadApplied}>Refresh</button></div>
+   {(()=>{const byCode=new Map(data.codes.map(c=>[String(c.id),c]));const byCustomer=new Map(data.customers.map(c=>[String(c.id),c]));const byProduct=new Map(products.map(p=>[String(p.id),p]));const filtered=appliedRows.map(r=>{const code=byCode.get(String(r.price_code_id));const customer=byCustomer.get(String(code?.customer_account_id));const product=byProduct.get(String(r.product_id));return {...r,code,customer,product};}).filter(r=>(appliedMode==='all'||r.price_mode===appliedMode)&&[r.customer?.account_name,r.code?.code,r.product?.product_name,r.product?.name,r.product?.product_code].some(x=>String(x||'').toLowerCase().includes(appliedSearch.toLowerCase())));const maxPage=Math.max(1,Math.ceil(filtered.length/40));const currentPage=Math.min(appliedPage,maxPage);return <><p role="status">{appliedLoading?'Loading…':`${filtered.length} matching saved product-code prices`}</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Customer</th><th>Code</th><th>Product</th><th>Saved price</th><th>Eligibility</th></tr></thead><tbody>{filtered.slice((currentPage-1)*40,currentPage*40).map(r=><tr key={r.id} className="border-t"><td className="py-2">{r.customer?.account_name||'Shared code'}</td><td>{r.code?.code||r.price_code_id}</td><td>{r.product?.product_name||r.product?.name||r.product_id}</td><td>{money(r.price)}</td><td>{priceModeLabel(r.price_mode)}</td></tr>)}</tbody></table></div><div className="flex gap-2 items-center"><button type="button" className={button} disabled={currentPage===1} onClick={()=>setAppliedPage(currentPage-1)}>Previous</button><span>{currentPage} / {maxPage}</span><button type="button" className={button} disabled={currentPage===maxPage} onClick={()=>setAppliedPage(currentPage+1)}>Next</button></div></>;})()}
+  </section>:<>
   <section className="rounded-xl border bg-white p-4 space-y-3" aria-label="Customer code targets">
    {tab==='bulk'?<>
     <div className="customer-code-filters flex flex-wrap gap-3">
@@ -102,6 +111,7 @@ export default function BulkCustomerCodePrices({products=[],fetchProducts,onCust
    <div className="flex gap-2 items-center"><button type="button" className={button} disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>Previous</button><span>{safePage} / {pages}</span><button type="button" className={button} disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>Next</button></div>
    <div className="flex flex-wrap gap-2"><button type="button" className={button} disabled={loading || saving || !selected.length || !targets.length} onClick={()=>apply()}>{saving?'Applying…':`Apply prices to ${targets.length} codes`}</button><button type="button" className="rounded-lg border px-4 py-2 text-sm font-bold disabled:opacity-40" disabled={loading || saving || !selected.length || !targets.length} onClick={()=>apply(true)}>Use percentage for selected products</button></div>
   </section>
+  </>}
   {message && <p role="status" className="rounded-lg border bg-blue-50 p-3 text-sm">{message}</p>}
  </div>;
 }
