@@ -7,6 +7,7 @@ import {
   isInvalidFcSessionError,
   mergeAuthenticatedProfile,
   readStoredFcProfile,
+  profileWithFcLoginSession,
 } from "./fcSession.js";
 
 const futureExpiry = "2099-01-01T12:00:00.000Z";
@@ -153,4 +154,27 @@ test("PostgreSQL 28000 is recognized and invalidation clears all FC storage", ()
   ]) {
     assert.equal(storage.has(key), false);
   }
+});
+
+
+test("repeated price password verifications replace every token alias with the newly issued session", () => {
+  let profile = { id: "login-1", username: "admin", fc_session_token: "original", session_token: "old-compat", sessionToken: "old-camel", department: "Pricing" };
+  for (let verification = 1; verification <= 5; verification++) {
+    profile = profileWithFcLoginSession(profile, { ok: true, session_token: `session-${verification}`, expires_at: futureExpiry,
+      profile: { id: "login-1", username: "admin", role: "Admin" } });
+    assert.equal(getFcSessionState(profile).token, `session-${verification}`);
+    assert.equal(profile.session_token, `session-${verification}`);
+    assert.equal(profile.sessionToken, `session-${verification}`);
+    assert.equal(profile.department, "Pricing");
+  }
+});
+
+test("failed, incomplete or different-login verification cannot replace the current profile", () => {
+  const profile = { id: "login-1", username: "admin", fc_session_token: "original" };
+  for (const response of [
+    { ok: false },
+    { ok: true, profile },
+    { ok: true, session_token: "new", expires_at: futureExpiry, profile: { id: "other-login", username: "other" } },
+  ]) assert.throws(() => profileWithFcLoginSession(profile, response), /valid session/);
+  assert.equal(profile.fc_session_token, "original");
 });

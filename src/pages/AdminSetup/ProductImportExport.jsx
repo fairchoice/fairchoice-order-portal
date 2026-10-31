@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../services/supabase";
+import { isActiveProduct } from "../../services/products";
+import { canPerform } from "../../security/accessControlRegistry";
+import {
+  getActiveStockLocations,
+  getProductLocationStock,
+  normalizeInventoryCountry,
+} from "../../services/locationStock";
 import {
   getMissingProductImageReason,
   getProductImageValue,
@@ -18,7 +25,8 @@ const PRODUCT_COLUMNS = [
   ["Product Special Price", "cash_price"],
   ["VAT Price", "vat_price"],
   ["Carton Size", "carton_size"],
-  ["Stock", "stock"],
+  ["Wales Stock", "wales_stock"],
+  ["England Stock", "england_stock"],
   ["Low Stock Alert", "low_stock_alert"],
   ["Status", "status"],
   ["Available In Wales", "available_in_wales"],
@@ -35,9 +43,16 @@ const PRODUCT_COLUMNS = [
   ["England Special Price", "england_special_price"],
 ];
 
+const LOCATION_STOCK_FIELDS = new Set(["wales_stock", "england_stock"]);
+
 const EDITABLE_PRODUCT_FIELDS = PRODUCT_COLUMNS
   .map(([, field]) => field)
-  .filter((field) => field !== "id" && field !== "product_code");
+  .filter(
+    (field) =>
+      field !== "id" &&
+      field !== "product_code" &&
+      !LOCATION_STOCK_FIELDS.has(field)
+  );
 
 const PRODUCT_FIELD_LABELS = PRODUCT_COLUMNS.reduce((labels, [label, field]) => {
   labels[field] = label;
@@ -47,7 +62,8 @@ const PRODUCT_FIELD_LABELS = PRODUCT_COLUMNS.reduce((labels, [label, field]) => 
 const NUMBER_FIELDS = new Set([
   "cash_price",
   "vat_price",
-  "stock",
+  "wales_stock",
+  "england_stock",
   "low_stock_alert",
   "wales_special_price",
   "england_special_price",
@@ -99,6 +115,8 @@ const LEGACY_FIELD_ALIASES = {
   specialPrice: "cash_price",
   cartonSize: "carton_size",
   lowStockAlert: "low_stock_alert",
+  walesStock: "wales_stock",
+  englandStock: "england_stock",
   availableInWales: "available_in_wales",
   availableInEngland: "available_in_england",
   availableFromSupplier: "available_from_supplier",
@@ -212,6 +230,7 @@ const formatPreviewValue = (value) => {
 };
 
 export default function ProductImportExport({ products = [], fetchProducts }) {
+  const currentUser = JSON.parse(localStorage.getItem("loggedInUser") || localStorage.getItem("fairchoice_user") || "null");
   const [productOptions, setProductOptions] = useState([]);
   const [importing, setImporting] = useState(false);
   const [updatingCodes, setUpdatingCodes] = useState(false);
@@ -256,7 +275,6 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
 
   useEffect(() => {
     fetchProductOptions();
-    fetchDisplayMessages();
   }, []);
 
   const fetchProductOptions = async () => {
@@ -333,15 +351,16 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     }
 
     resetDisplayMessageForm();
-    fetchDisplayMessages();
   };
 
   const getProductValue = (product, camelField, dbField = camelField) =>
     product?.[camelField] ?? product?.[dbField] ?? "";
 
+  const activeProducts = (products || []).filter(isActiveProduct);
+
   const displayMessageTargetOptions = (() => {
     if (displayMessageForm.target_type === "product") {
-      return (products || [])
+      return activeProducts
         .map((product) => ({
           value: String(product.id || ""),
           label: `${getProductValue(product, "name", "product_name")}${getProductValue(product, "productCode", "product_code") ? ` (${getProductValue(product, "productCode", "product_code")})` : ""}`,
@@ -360,7 +379,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
 
     return [
       ...new Set(
-        (products || [])
+        activeProducts
           .map((product) => getProductValue(product, camelField, dbField))
           .map((value) => String(value || "").trim())
           .filter(Boolean)
@@ -387,7 +406,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   };
 
   useEffect(() => {
-    const imageCandidates = (products || []).filter(hasRealProductImage);
+    const imageCandidates = activeProducts.filter(hasRealProductImage);
     if (!imageCandidates.length) return;
 
     let cancelled = false;
@@ -426,7 +445,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   }, [products]);
 
   useEffect(() => {
-    const debugProducts = (products || []).filter((product) => {
+    const debugProducts = activeProducts.filter((product) => {
       const name = String(getProductValue(product, "name", "product_name")).toLowerCase();
       return (
         name.includes("lost mary 6k cola lime") ||
@@ -462,7 +481,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   const uniqueProductValues = (camelField, dbField = camelField) =>
     [
       ...new Set(
-        (products || [])
+        activeProducts
           .map((product) =>
             String(getProductValue(product, camelField, dbField)).trim()
           )
@@ -484,7 +503,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     }));
   };
 
-  const filteredImageProducts = (products || []).filter((product) => {
+  const filteredImageProducts = activeProducts.filter((product) => {
     const search = imageFilters.search.trim().toLowerCase();
     const productCode = String(getProductValue(product, "productCode", "product_code"));
     const productName = String(getProductValue(product, "name", "product_name"));
@@ -509,7 +528,7 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     );
   });
 
-  const filteredMissingCodeProducts = (products || []).filter((product) => {
+  const filteredMissingCodeProducts = activeProducts.filter((product) => {
     const search = missingCodeFilters.search.trim().toLowerCase();
     const productId = String(getProductValue(product, "id"));
     const productCode = getCurrentProductCode(product);
@@ -669,6 +688,8 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
         const numberValue = toNumberValue(rawValue);
         if (numberValue === null) {
           errors.push({ rowNumber, field, message: `${label} must be numeric` });
+        } else if (LOCATION_STOCK_FIELDS.has(field) && numberValue < 0) {
+          errors.push({ rowNumber, field, message: `${label} cannot be negative` });
         } else {
           parsed[field] = numberValue;
         }
@@ -725,12 +746,60 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
       const workbook = XLSX.read(data);
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const headerRow = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        range: 0,
+        blankrows: false,
+      })[0] || [];
+      const normalizedHeaders = new Set(headerRow.map(normalizeHeader));
+      const requiredInventoryHeaders = ["Wales Stock", "England Stock"];
+      const missingInventoryHeaders = requiredInventoryHeaders.filter(
+        (header) => !normalizedHeaders.has(normalizeHeader(header))
+      );
+      if (missingInventoryHeaders.length) {
+        throw new Error(
+          `The workbook must contain both inventory columns: Wales Stock and England Stock. Missing: ${missingInventoryHeaders.join(", ")}. Export a fresh product workbook before importing.`
+        );
+      }
 
       const { data: dbProducts, error: dbError } = await supabase
         .from("products")
         .select("*");
 
       if (dbError) throw dbError;
+
+      const activeLocations = await getActiveStockLocations();
+      const locationsByCountry = activeLocations.reduce((map, location) => {
+        const country = normalizeInventoryCountry(location.country);
+        if (!country) return map;
+        if (!map[country]) map[country] = [];
+        map[country].push(location);
+        return map;
+      }, {});
+
+      const walesLocations = locationsByCountry.Wales || [];
+      const englandLocations = locationsByCountry.England || [];
+      if (walesLocations.length !== 1) {
+        throw new Error(
+          `Expected exactly one active Wales stock location, found ${walesLocations.length}.`
+        );
+      }
+      if (englandLocations.length !== 1) {
+        throw new Error(
+          `Expected exactly one active England stock location, found ${englandLocations.length}.`
+        );
+      }
+
+      const locationRows = await getProductLocationStock(
+        (dbProducts || []).map((product) => product.id)
+      );
+      const locationQtyByProductCountry = locationRows.reduce((map, row) => {
+        const country = normalizeInventoryCountry(row.stock_locations?.country);
+        if (!country || row.stock_locations?.active === false) return map;
+        if (!map[row.product_id]) map[row.product_id] = {};
+        map[row.product_id][country] = Number(row.qty ?? 0);
+        return map;
+      }, {});
 
       const byCode = new Map(
         (dbProducts || []).map((product) => [
@@ -839,7 +908,24 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
             });
           }
 
-          if (Object.keys(changes).length) {
+          const existingLocationQty = locationQtyByProductCountry[existing.id] || {};
+          const locationStockChanges = {
+            Wales: {
+              locationId: walesLocations[0].id,
+              oldQty: Number(existingLocationQty.Wales ?? 0),
+              newQty: Number(parsed.wales_stock ?? 0),
+            },
+            England: {
+              locationId: englandLocations[0].id,
+              oldQty: Number(existingLocationQty.England ?? 0),
+              newQty: Number(parsed.england_stock ?? 0),
+            },
+          };
+          const hasLocationStockChanges = Object.values(locationStockChanges).some(
+            (stock) => stock.oldQty !== stock.newQty
+          );
+
+          if (Object.keys(changes).length || hasLocationStockChanges) {
             Object.entries(changes).forEach(([field, newValue]) => {
               changedFields.push({
                 rowNumber,
@@ -852,14 +938,26 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
               });
             });
 
+            Object.entries(locationStockChanges).forEach(([country, stock]) => {
+              if (stock.oldQty === stock.newQty) return;
+              changedFields.push({
+                rowNumber,
+                productCode: parsed.product_code,
+                productName: parsed.product_name || existing.product_name || "",
+                field: country === "Wales" ? "wales_stock" : "england_stock",
+                fieldLabel: `${country} Stock`,
+                oldValue: stock.oldQty,
+                newValue: stock.newQty,
+              });
+            });
+
             updates.push({
               id: existing.id,
               rowNumber,
               productCode: parsed.product_code,
               productName: parsed.product_name || existing.product_name || "",
-              oldStock: Number(existing.stock || 0),
-              newStock: Number(parsed.stock || 0),
               changes,
+              locationStockChanges,
             });
           } else {
             unchangedCount += 1;
@@ -880,11 +978,18 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
           rowNumber,
           payload: {
             ...Object.fromEntries(
-              Object.entries(parsed).filter(([field]) => field !== "__importLabel")
+              Object.entries(parsed).filter(
+                ([field]) =>
+                  field !== "__importLabel" && !LOCATION_STOCK_FIELDS.has(field)
+              )
             ),
             ...getImportLabelFields(
               importLabelSource === "file" ? parsed.__importLabel : importLabel
             ),
+          },
+          locationStockValues: {
+            Wales: { locationId: walesLocations[0].id, qty: Number(parsed.wales_stock ?? 0) },
+            England: { locationId: englandLocations[0].id, qty: Number(parsed.england_stock ?? 0) },
           },
         });
       });
@@ -907,6 +1012,10 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
   };
 
   const confirmProductImport = async () => {
+    if (!canPerform(currentUser, "system.import_sensitive")) {
+      alert("You do not have permission to import sensitive product data.");
+      return;
+    }
     if (!productImportPreview) return;
 
     const validActionCount =
@@ -934,41 +1043,54 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     setImporting(true);
 
     try {
-      for (const item of productImportPreview.updates) {
-        const { error } = await supabase
-          .from("products")
-          .update(item.changes)
-          .eq("id", item.id);
+      const locationStockRows = [];
 
-        if (error) throw error;
+      for (const item of productImportPreview.updates) {
+        if (Object.keys(item.changes || {}).length) {
+          const { error } = await supabase
+            .from("products")
+            .update(item.changes)
+            .eq("id", item.id);
+
+          if (error) throw error;
+        }
+
+        Object.values(item.locationStockChanges || {}).forEach((stock) => {
+          if (stock.oldQty === stock.newQty) return;
+          locationStockRows.push({
+            product_id: item.id,
+            location_id: stock.locationId,
+            qty: stock.newQty,
+            updated_at: new Date().toISOString(),
+          });
+        });
       }
 
       if (productImportPreview.mode !== "update" && productImportPreview.creates.length) {
-        const payload = productImportPreview.creates.map((item) => {
+        for (const item of productImportPreview.creates) {
           const { id, ...productPayload } = item.payload;
-          return productPayload;
-        });
+          const { data: createdProduct, error } = await supabase
+            .from("products")
+            .insert(productPayload)
+            .select("id")
+            .single();
+          if (error) throw error;
 
-        const { error } = await supabase.from("products").insert(payload);
-        if (error) throw error;
+          Object.values(item.locationStockValues || {}).forEach((stock) => {
+            locationStockRows.push({
+              product_id: createdProduct.id,
+              location_id: stock.locationId,
+              qty: stock.qty,
+              updated_at: new Date().toISOString(),
+            });
+          });
+        }
       }
 
-      const stockMovements = productImportPreview.updates
-        .filter((item) => item.oldStock !== item.newStock)
-        .map((item) => ({
-          product_id: item.id,
-          movement_type: "IMPORT",
-          qty: item.newStock - item.oldStock,
-          stock_before: item.oldStock,
-          stock_after: item.newStock,
-          note: "Excel Import",
-        }));
-
-      if (stockMovements.length) {
+      if (locationStockRows.length) {
         const { error } = await supabase
-          .from("stock_movements")
-          .insert(stockMovements);
-
+          .from("product_location_stock")
+          .upsert(locationStockRows, { onConflict: "product_id,location_id" });
         if (error) throw error;
       }
 
@@ -1045,44 +1167,61 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
     e.target.value = "";
   };
 
-  const handleExportExcel = () => {
-    const exportData = products.map((p) => ({
-      "Product ID": p.id,
-      "Product Code": p.productCode,
-      "Product Name": p.name,
-      "Main Category": p.category,
-      "Sub Category": p.subCategory,
-      Brand: p.brand,
-      Series: p.series,
-      "Cash Price": p.cashPrice,
-      "VAT Price": p.vatPrice,
-      "Carton Size": p.cartonSize,
-      Stock: p.stock,
-      "Low Stock Alert": p.lowStockAlert,
-      Status: p.active === false ? "Inactive" : "Active",
-      "Available In Wales": p.availableInWales,
-      "Available In England": p.availableInEngland,
-      "Available From Supplier": p.availableFromSupplier,
-      "Image URL": hasProductImage(p) ? getProductImageValue(p) : "",
-      New: p.isNew,
-      "Promotion Label": p.isPromotion,
-      Reduced: p.isReduced,
-      "Coming Soon": p.comingSoon,
-      Recommended: p.recommended,
-      "Top Seller": p.topSeller,
-      "Wales Special Price": p.walesSpecialPrice,
-      "England Special Price": p.englandSpecialPrice,
-    }));
+  const handleExportExcel = async () => {
+    if (!canPerform(currentUser, "system.export_sensitive")) {
+      alert("You do not have permission to export sensitive product data.");
+      return;
+    }
+    try {
+      const productIds = products.map((product) => product.id).filter(Boolean);
+      const locationRows = await getProductLocationStock(productIds);
+      const stockByProductCountry = locationRows.reduce((map, row) => {
+        const country = normalizeInventoryCountry(row.stock_locations?.country);
+        if (!country || row.stock_locations?.active === false) return map;
+        if (!map[row.product_id]) map[row.product_id] = {};
+        map[row.product_id][country] = Number(row.qty ?? 0);
+        return map;
+      }, {});
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
+      const exportData = products.map((p) => ({
+        "Product ID": p.id,
+        "Product Code": p.productCode,
+        "Product Name": p.name,
+        "Main Category": p.category,
+        "Sub Category": p.subCategory,
+        Brand: p.brand,
+        Series: p.series,
+        "Cash Price": p.cashPrice,
+        "VAT Price": p.vatPrice,
+        "Carton Size": p.cartonSize,
+        "Wales Stock": Number(stockByProductCountry[p.id]?.Wales ?? 0),
+        "England Stock": Number(stockByProductCountry[p.id]?.England ?? 0),
+        "Low Stock Alert": p.lowStockAlert,
+        Status: p.active === false ? "Inactive" : "Active",
+        "Available In Wales": p.availableInWales,
+        "Available In England": p.availableInEngland,
+        "Available From Supplier": p.availableFromSupplier,
+        "Image URL": hasProductImage(p) ? getProductImageValue(p) : "",
+        New: p.isNew,
+        "Promotion Label": p.isPromotion,
+        Reduced: p.isReduced,
+        "Coming Soon": p.comingSoon,
+        Recommended: p.recommended,
+        "Top Seller": p.topSeller,
+        "Wales Special Price": p.walesSpecialPrice,
+        "England Special Price": p.englandSpecialPrice,
+      }));
 
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Products");
-
-    XLSX.writeFile(
-      workbook,
-      `fairchoice-products-${new Date().toISOString().slice(0, 10)}.xlsx`
-    );
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Products");
+      XLSX.writeFile(
+        workbook,
+        `fairchoice-products-${new Date().toISOString().slice(0, 10)}.xlsx`
+      );
+    } catch (error) {
+      alert("Product export failed: " + error.message);
+    }
   };
 
   const downloadProductTemplate = () => {
@@ -1133,7 +1272,6 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
           ["import", "Import File"],
           ["codes", "Bulk Product Code"],
           ["images", "Add Images"],
-          ["messages", "Display Message"],
           ["missingCodes", "Missing Product Code"],
         ].map(([key, label]) => (
           <button
@@ -1256,178 +1394,6 @@ export default function ProductImportExport({ products = [], fetchProducts }) {
             </div>
           )}
         </div>
-        )}
-
-        {activeSection === "messages" && (
-          <div className="bg-white rounded-2xl shadow-sm p-5">
-            <h3 className="text-xl font-bold mb-4">Display Message</h3>
-            {displayMessageSetupError && (
-              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
-                {displayMessageSetupError}
-              </div>
-            )}
-            <p className="mb-3 text-sm text-slate-600">
-              Use Main Category for a broad group, or choose Brand / Series for a more specific group message.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-              <select
-                className="input-box"
-                value={displayMessageForm.target_type}
-                onChange={(event) =>
-                  setDisplayMessageForm({
-                    ...displayMessageForm,
-                    target_type: event.target.value,
-                    target_value: "",
-                  })
-                }
-              >
-                <option value="main_category">Main Category</option>
-                <option value="sub_category">Sub Category</option>
-                <option value="brand">Brand</option>
-                <option value="series">Series</option>
-                <option value="product">Individual Product</option>
-              </select>
-
-              <select
-                className="input-box"
-                value={displayMessageForm.target_value}
-                onChange={(event) =>
-                  setDisplayMessageForm({
-                    ...displayMessageForm,
-                    target_value: event.target.value,
-                  })
-                }
-              >
-                <option value="">Select target</option>
-                {displayMessageTargetOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-
-              <input
-                className="input-box md:col-span-2"
-                value={displayMessageForm.message}
-                maxLength={120}
-                onChange={(event) =>
-                  setDisplayMessageForm({
-                    ...displayMessageForm,
-                    message: event.target.value,
-                  })
-                }
-                placeholder="Due to shipment issue IVG price has gone up"
-              />
-
-              <select
-                className="input-box"
-                value={displayMessageForm.color}
-                onChange={(event) =>
-                  setDisplayMessageForm({
-                    ...displayMessageForm,
-                    color: event.target.value,
-                  })
-                }
-              >
-                <option value="red">Red</option>
-                <option value="navy">Navy Blue</option>
-              </select>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-2 text-sm font-bold">
-                <input
-                  type="checkbox"
-                  checked={displayMessageForm.active}
-                  onChange={(event) =>
-                    setDisplayMessageForm({
-                      ...displayMessageForm,
-                      active: event.target.checked,
-                    })
-                  }
-                />
-                Active
-              </label>
-              <button
-                type="button"
-                onClick={saveDisplayMessage}
-                disabled={Boolean(displayMessageSetupError)}
-                className="bg-blue-600 text-white px-5 py-3 rounded-xl font-bold disabled:bg-slate-300"
-              >
-                {displayMessageForm.id ? "Update Message" : "Save Message"}
-              </button>
-              {displayMessageForm.id && (
-                <button
-                  type="button"
-                  onClick={resetDisplayMessageForm}
-                  className="border px-5 py-3 rounded-xl font-bold"
-                >
-                  Cancel Edit
-                </button>
-              )}
-            </div>
-
-            <div className="mt-5 overflow-x-auto">
-              <table className="w-full text-sm border">
-                <thead className="bg-slate-800 text-white">
-                  <tr>
-                    <th className="p-2 text-left">Target</th>
-                    <th className="p-2 text-left">Message</th>
-                    <th className="p-2 text-left">Colour</th>
-                    <th className="p-2 text-left">Status</th>
-                    <th className="p-2 text-left">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayMessages.map((message) => (
-                    <tr key={message.id} className="border-t">
-                      <td className="p-2">
-                        {message.target_type.replaceAll("_", " ")}: {message.target_value}
-                      </td>
-                      <td className="p-2 font-bold">{message.message}</td>
-                      <td className="p-2">{message.color}</td>
-                      <td className="p-2">{message.active ? "Active" : "Hidden"}</td>
-                      <td className="p-2">
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setDisplayMessageForm(message)}
-                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const { error } = await supabase
-                                .from("product_display_messages")
-                                .update({ active: !message.active })
-                                .eq("id", message.id);
-                              if (error) {
-                                alert("Message update failed: " + error.message);
-                                return;
-                              }
-                              fetchDisplayMessages();
-                            }}
-                            className="bg-slate-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
-                          >
-                            {message.active ? "Hide" : "Show"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {displayMessages.length === 0 && (
-                    <tr>
-                      <td className="p-4 text-center text-slate-500" colSpan={5}>
-                        No display messages yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
         )}
 
         {activeSection === "codes" && (

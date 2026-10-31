@@ -1,3 +1,4 @@
+import { PERFORMANCE_GROUPS } from "../utils/performanceGroups.js";
 import { supabase } from "./supabase";
 
 export const PAYMENT_TYPES = ["Cash", "Card", "Bank Transfer", "Cheque", "Other"];
@@ -14,6 +15,18 @@ function storedUser() {
   } catch {
     return {};
   }
+}
+
+
+function isAdminExpenseEntryBlocked(user = {}) {
+  const saved = storedUser();
+  const username = String(user.username || saved.username || "")
+    .trim()
+    .toLowerCase();
+
+  // Only the dedicated `admin` login is read-only for expense entry.
+  // Staff users with Admin/Super Admin roles are allowed to record expenses.
+  return username === "admin";
 }
 
 function sessionArguments(user = {}) {
@@ -62,13 +75,15 @@ export async function loadExpenseTypes(user = {}, includeInactive = false) {
 
 export async function loadPayouts(user = {}) {
   const data = await callExpenseRpc(
-    "fc_list_business_payouts",
+    "fc_list_business_payouts_v2",
     sessionArguments(user),
   );
   return data || [];
 }
 
-function payoutArguments(input) {
+function payoutArguments(input, user = {}) {
+  const group = String(input.performanceGroup || "").trim();
+  if (group && !PERFORMANCE_GROUPS.includes(group)) throw new Error("Select a listed expense agency or Shared / unassigned.");
   const amount = Number(input.amount);
   if (!(amount > 0)) throw new Error("Amount must be greater than zero.");
   if (!input.payoutDate) throw new Error("Payout date is required.");
@@ -76,8 +91,21 @@ function payoutArguments(input) {
   if (!PAYMENT_TYPES.includes(input.paymentMethod)) {
     throw new Error("Select a valid payment method.");
   }
+  const paidByType = String(input.paidByType || "BUSINESS")
+    .trim()
+    .toUpperCase();
+  if (!["BUSINESS", "STAFF"].includes(paidByType)) {
+    throw new Error("Select who paid the expense.");
+  }
+  const paidByStaffId =
+    input.paidByStaffId ||
+    (paidByType === "STAFF" ? user.staff_id || user.staffId || null : null);
+  if (paidByType === "STAFF" && !paidByStaffId) {
+    throw new Error("Your linked staff identity is required for a staff-paid expense.");
+  }
 
   return {
+    p_performance_group: group || null,
     p_payout_date: input.payoutDate,
     p_expense_type_id: input.expenseTypeId,
     p_supplier_id: input.supplierId || null,
@@ -86,25 +114,31 @@ function payoutArguments(input) {
     p_description: String(input.description || "").trim() || null,
     p_receipt_reference: String(input.receiptReference || "").trim() || null,
     p_receipt_url: String(input.receiptUrl || "").trim() || null,
-    p_paid_by_type: String(input.paidByType || "BUSINESS").trim(),
-    p_paid_by_staff_id: input.paidByStaffId || null,
+    p_paid_by_type: paidByType,
+    p_paid_by_staff_id: paidByStaffId,
   };
 }
 
 export async function createPayout(input, user = {}) {
-  return callExpenseRpc("fc_create_business_payout", {
+  if (isAdminExpenseEntryBlocked(user)) {
+    throw new Error("The shared admin login cannot enter or submit expenses.");
+  }
+  return callExpenseRpc("fc_create_business_payout_v2", {
     ...sessionArguments(user),
-    ...payoutArguments(input),
+    ...payoutArguments(input, user),
     p_submit: Boolean(input.submit),
   });
 }
 
 export async function updatePayout(payoutId, input, user = {}) {
+  if (isAdminExpenseEntryBlocked(user)) {
+    throw new Error("The shared admin login cannot enter or submit expenses.");
+  }
   if (!payoutId) throw new Error("Expense ID is required.");
-  return callExpenseRpc("fc_update_business_payout", {
+  return callExpenseRpc("fc_update_business_payout_v2", {
     ...sessionArguments(user),
     p_payout_id: payoutId,
-    ...payoutArguments(input),
+    ...payoutArguments(input, user),
   });
 }
 
@@ -118,6 +152,9 @@ async function transitionPayout(rpcName, payoutId, user, reason) {
 }
 
 export function submitPayout(payoutId, user = {}) {
+  if (isAdminExpenseEntryBlocked(user)) {
+    throw new Error("The shared admin login cannot enter or submit expenses.");
+  }
   return transitionPayout("fc_submit_business_payout", payoutId, user);
 }
 
@@ -150,4 +187,11 @@ export async function upsertExpenseType(input, user = {}) {
     p_active: input.active !== false,
     p_sort_order: Number(input.sortOrder || 0),
   });
+}
+
+export function assignPayoutAgency(payoutId, performanceGroup, user = {}) {
+  if (!payoutId) throw new Error("Expense ID is required.");
+  const group = String(performanceGroup || "").trim();
+  if (group && !PERFORMANCE_GROUPS.includes(group)) throw new Error("Select a listed expense agency or Shared / unassigned.");
+  return callExpenseRpc("fc_assign_business_payout_agency_v1", {...sessionArguments(user),p_payout_id:payoutId,p_performance_group:group || null});
 }

@@ -505,3 +505,75 @@ test("legacy PAYMENT matching rejects another customer and shortened references"
     assert.equal(resolved.outstanding_amount, 100);
   }
 });
+
+
+test("canonical payment linked by invoice_id resolves immediately without an allocation", () => {
+  const invoiceId = "c56aa70f-678d-4ebe-8d17-9c49b70e0a54";
+  const row = {
+    id: invoiceId,
+    invoice_number: "ORD-INVOICE-ID",
+    customer_account_id: "account-1",
+  };
+  const resolved = resolveInvoiceRowFromAllocations({
+    row,
+    allocations: [],
+    referencePayments: [{
+      id: "payment-1",
+      status: "POSTED",
+      verification_status: "CONFIRMED",
+      invoice_id: invoiceId,
+      payment_reference: "UNRELATED",
+      customer_account_id: "account-1",
+      amount: 100,
+    }],
+    invoiceTotal: 100,
+  });
+
+  assert.equal(resolved.invoice_status, "PAID");
+  assert.equal(resolved.outstanding_amount, 0);
+});
+
+test("collected order payment is reflected immediately while allocation catches up", () => {
+  const row = {
+    order_number: "ORD-COLLECTED",
+    customer_account_id: "account-1",
+    _freshOrder: {
+      order_number: "ORD-COLLECTED",
+      customer_account_id: "account-1",
+      payment_collected: "Yes",
+      payment_amount: 60,
+    },
+  };
+  const resolved = resolveInvoiceRowFromAllocations({
+    row,
+    allocations: [],
+    referencePayments: [],
+    legacyLedgerPayments: [],
+    invoiceTotal: 100,
+  });
+
+  assert.equal(resolved.invoice_status, "PART PAID");
+  assert.equal(resolved.paid_amount, 60);
+  assert.equal(resolved.outstanding_amount, 40);
+  assert.equal(resolved._operationalOrderPaidAmount, 60);
+});
+
+test("confirmed return credit stays Paid without a cash allocation to its linked sales order", () => {
+  const row = { entry_type: "RETURN_INVOICE", reference_no: "RET-example", order_number: "ORD-example",
+    invoice_total: 45.99, invoice_status: "UNPAID", paid_amount: 0,
+    _returnHeader: { status: "Confirmed", financial_disposition: "CUSTOMER_CREDIT" } };
+  const resolved = resolveInvoiceRowFromAllocations({ row, invoiceTotal: 45.99 });
+  assert.equal(resolved.invoice_status, "PAID");
+  assert.equal(resolved.paid_amount, 45.99);
+  assert.equal(resolved.outstanding_amount, 0);
+});
+
+test("return credit status does not mark reversed or no-credit returns Paid", () => {
+  for (const header of [
+    { status: "Confirmed", financial_disposition: "NO_CREDIT" },
+    { status: "Confirmed", financial_disposition: "CUSTOMER_CREDIT", reversed_at: "2026-10-16" },
+  ]) {
+    const row = { entry_type: "RETURN_INVOICE", invoice_status: "UNPAID", invoice_total: 45.99, _returnHeader: header };
+    assert.equal(resolveInvoiceRowFromAllocations({ row }).invoice_status, "UNPAID");
+  }
+});

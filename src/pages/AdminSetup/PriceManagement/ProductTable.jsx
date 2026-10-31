@@ -68,7 +68,7 @@ export default function ProductTable({
                     £{Number(currentPreview.server || 0).toFixed(2)}
                   </td>
                   <td className="border p-3 text-right">
-                    {currentPreview.serverMargin}%
+                    {currentPreview.exVatMargin}%
                   </td>
                 </tr>
               );
