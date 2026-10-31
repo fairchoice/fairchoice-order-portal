@@ -298,14 +298,22 @@ export const calculateProductPrice = (input = {}, positionalPriceMode, positiona
   const baseEligible = priceCodeMatchesMode(baseCode, codeBasePriceMode);
   if (codeMode && !baseEligible) pricingPercent = 0;
   const productPriceCodeMap = product.priceCodePrices || product.price_code_prices || {};
+  const codePriceForMode = (id) => {
+    const entry = productPriceCodeMap[id];
+    if (entry && typeof entry === "object") {
+      const scope = String(entry.price_mode || "both").toLowerCase();
+      return scope === "both" || scope === codeBasePriceMode ? validPositiveMoney(entry.price) : 0;
+    }
+    return validPositiveMoney(entry);
+  };
   // Offer codes supply exact product prices only; discounts are never stacked.
   const offerPrices = overlayPriceCodeIds
     .filter(id => priceCodeMatchesMode(codeDefinitions.find(code => String(code.id) === id), codeBasePriceMode))
-    .map((id) => validPositiveMoney(productPriceCodeMap[id]))
+    .map((id) => codePriceForMode(id))
     .filter((price) => price > 0);
   const overlayCodeOverride = offerPrices.length ? Math.min(...offerPrices) : 0;
   const baseProductCodeOverride = baseEligible
-    ? validPositiveMoney(productPriceCodeMap[priceCodeId])
+    ? codePriceForMode(priceCodeId)
     : 0;
   const productCodeOverride = overlayCodeOverride || baseProductCodeOverride;
 
