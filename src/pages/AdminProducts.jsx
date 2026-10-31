@@ -1220,19 +1220,6 @@ const removeProductCodePriceDraft = async (priceCodeId) => {
 
                 <select
                   className="input-box"
-                  value={productForm.subCategory || ""}
-                  onChange={(e) => updateField("subCategory", e.target.value)}
-                >
-                  <option value="">Select Sub Category</option>
-                  {subCategories.map((item) => (
-                    <option key={item.id} value={item.option_name}>
-                      {item.option_name}
-                    </option>
-                  ))}
-                </select>
-
-                <select
-                  className="input-box"
                   value={productForm.brand || ""}
                   onChange={(e) => updateField("brand", e.target.value)}
                 >
@@ -1251,6 +1238,19 @@ const removeProductCodePriceDraft = async (priceCodeId) => {
                 >
                   <option value="">Select Series</option>
                   {seriesList.map((item) => (
+                    <option key={item.id} value={item.option_name}>
+                      {item.option_name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="input-box"
+                  value={productForm.subCategory || ""}
+                  onChange={(e) => updateField("subCategory", e.target.value)}
+                >
+                  <option value="">Select Sub Category</option>
+                  {subCategories.map((item) => (
                     <option key={item.id} value={item.option_name}>
                       {item.option_name}
                     </option>
