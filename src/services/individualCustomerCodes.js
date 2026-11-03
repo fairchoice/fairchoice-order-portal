@@ -17,3 +17,7 @@ export const applyIndividualCustomerPrices=(customers,prices,scope,user)=>call('
 export const editIndividualCustomerPercent=(code,percent,user)=>call('fc_edit_individual_customer_percent_v1',{
  ...sessionArgs(user),p_code_id:code.id,p_percent:percent,p_expected_percent:Number(code.discount_percent || 0),
 });
+
+export const manageAppliedCodePrices=(changes,user)=>call('fc_manage_applied_code_prices_v1',{
+ ...sessionArgs(user),p_changes:changes,
+});
