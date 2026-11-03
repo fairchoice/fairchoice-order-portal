@@ -122,7 +122,7 @@ export async function getProductPriceCodeRows(productIds = []) {
       const rows=[];
       for(let start=0;;start+=1000){
         const {data,error}=await supabase.from("product_price_code_prices")
-          .select("id, product_id, price_code_id, price, active").in("product_id",chunk)
+          .select("id, product_id, price_code_id, price, active, price_mode").in("product_id",chunk)
           .eq("active",true).order("id").range(start,start+999);
         if(error)throw error;rows.push(...(data || []));if((data || []).length<1000)break;
       }
@@ -138,7 +138,7 @@ export function buildProductPriceCodeMap(rows = []) {
     const priceCodeId = String(row.price_code_id || "");
     if (!productId || !priceCodeId) return result;
     if (!result[productId]) result[productId] = {};
-    result[productId][priceCodeId] = Number(row.price || 0);
+    result[productId][priceCodeId] = { price: Number(row.price || 0), price_mode: row.price_mode || "both" };
     return result;
   }, {});
 }
