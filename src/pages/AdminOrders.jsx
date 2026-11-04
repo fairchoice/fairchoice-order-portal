@@ -44,7 +44,8 @@ export default function AdminOrders({
   const [editedQty, setEditedQty] = useState({});
 
 
-  const [editedStatus] = useState({});
+  const [editedStatus, setEditedStatus] = useState({});
+  const [savingStatus, setSavingStatus] = useState({});
   const [refreshFilters, setRefreshFilters] = useState({});
 
 
@@ -449,7 +450,10 @@ const updatePreparedItem = async (order, item, changes) => {
   // Warehouse/Driver quantities remain final unless the order was explicitly
   // returned to Received. That workflow reset re-opens this current order only.
   captureStableOrderItems(order);
-  await updateOrderItem(order.orderId, item.dbId, changes);
+  const updated = await updateOrderItem(order.orderId, item.dbId, changes);
+  if (updated === false || updated?.error) {
+    throw new Error(updated?.error?.message || "The item status was not saved.");
+  }
   await logAction({
     user: loggedInUser,
     action_type: "Status changed",
@@ -1011,21 +1015,38 @@ const savedUnitPrice = isFreeLine ? 0 : getSavedOrderItemPrice(item);
           <div className="received-status-cell">
             <select
               className="received-status-select"
-              value={item.sourceStatus || "In Stock"}
-              disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE)}
-              onChange={(e) =>
-                updatePreparedItem(order, item, {
-                  sourceStatus: e.target.value,
-                  includeInPicking:
-                    e.target.value === "Need Supplier" ||
-                    e.target.value === "Cannot Supply"
-                      ? false
-                      : true,
-                  ...(e.target.value === "Free"
-                    ? { price: 0, selectedPrice: 0, unit_price: 0, unitPrice: 0 }
-                    : {}),
-                })
-              }
+              value={editedStatus[item.dbId] ?? item.sourceStatus ?? "In Stock"}
+              disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE) || !!savingStatus[item.dbId]}
+              onChange={async (e) => {
+                const status = e.target.value;
+                const itemId = item.dbId;
+                setEditedStatus((previous) => ({ ...previous, [itemId]: status }));
+                setSavingStatus((previous) => ({ ...previous, [itemId]: true }));
+                try {
+                  await updatePreparedItem(order, item, {
+                    sourceStatus: status,
+                    includeInPicking: status !== "Need Supplier" && status !== "Cannot Supply",
+                    ...(status === "Free"
+                      ? { price: 0, selectedPrice: 0, unit_price: 0, unitPrice: 0 }
+                      : {}),
+                  });
+                  // Persisted successfully: keep the selection visible immediately.
+                  // Refresh in the background; the saved value remains selected
+                  // even if the parent order list has not caught up yet.
+                  Promise.resolve().then(() => fetchOrders()).catch((refreshError) => {
+                    console.warn("Received Orders refresh failed after status save:", refreshError);
+                  });
+                } catch (error) {
+                  setEditedStatus((previous) => {
+                    const next = { ...previous };
+                    delete next[itemId];
+                    return next;
+                  });
+                  alert("Could not save item status: " + (error?.message || String(error)));
+                } finally {
+                  setSavingStatus((previous) => ({ ...previous, [itemId]: false }));
+                }
+              }}
             >
               <option value="In Stock">In Stock</option>
               <option value="Need Supplier">Pre-Order</option>
