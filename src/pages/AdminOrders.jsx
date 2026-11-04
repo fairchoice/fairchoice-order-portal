@@ -44,7 +44,8 @@ export default function AdminOrders({
   const [editedQty, setEditedQty] = useState({});
 
 
-  const [editedStatus] = useState({});
+  const [editedStatus, setEditedStatus] = useState({});
+  const [savingStatus, setSavingStatus] = useState({});
   const [refreshFilters, setRefreshFilters] = useState({});
 
 
@@ -1011,21 +1012,38 @@ const savedUnitPrice = isFreeLine ? 0 : getSavedOrderItemPrice(item);
           <div className="received-status-cell">
             <select
               className="received-status-select"
-              value={item.sourceStatus || "In Stock"}
-              disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE)}
-              onChange={(e) =>
-                updatePreparedItem(order, item, {
-                  sourceStatus: e.target.value,
-                  includeInPicking:
-                    e.target.value === "Need Supplier" ||
-                    e.target.value === "Cannot Supply"
-                      ? false
-                      : true,
-                  ...(e.target.value === "Free"
-                    ? { price: 0, selectedPrice: 0, unit_price: 0, unitPrice: 0 }
-                    : {}),
-                })
-              }
+              value={editedStatus[item.dbId] ?? item.sourceStatus ?? "In Stock"}
+              disabled={!hasPermission(loggedInUser, FC_PERMISSIONS.ORDERS_AMOUNT_CHANGE) || !!savingStatus[item.dbId]}
+              onChange={async (e) => {
+                const status = e.target.value;
+                const itemId = item.dbId;
+                setEditedStatus((previous) => ({ ...previous, [itemId]: status }));
+                setSavingStatus((previous) => ({ ...previous, [itemId]: true }));
+                try {
+                  await updatePreparedItem(order, item, {
+                    sourceStatus: status,
+                    includeInPicking: status !== "Need Supplier" && status !== "Cannot Supply",
+                    ...(status === "Free"
+                      ? { price: 0, selectedPrice: 0, unit_price: 0, unitPrice: 0 }
+                      : {}),
+                  });
+                  await fetchOrders();
+                  setEditedStatus((previous) => {
+                    const next = { ...previous };
+                    delete next[itemId];
+                    return next;
+                  });
+                } catch (error) {
+                  setEditedStatus((previous) => {
+                    const next = { ...previous };
+                    delete next[itemId];
+                    return next;
+                  });
+                  alert("Could not save item status: " + (error?.message || String(error)));
+                } finally {
+                  setSavingStatus((previous) => ({ ...previous, [itemId]: false }));
+                }
+              }}
             >
               <option value="In Stock">In Stock</option>
               <option value="Need Supplier">Pre-Order</option>
