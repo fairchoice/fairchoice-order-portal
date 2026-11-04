@@ -1027,12 +1027,10 @@ const savedUnitPrice = isFreeLine ? 0 : getSavedOrderItemPrice(item);
                       ? { price: 0, selectedPrice: 0, unit_price: 0, unitPrice: 0 }
                       : {}),
                   });
+                  // Keep the saved selection visible until the parent order data
+                  // catches up. Clearing it here can briefly restore the stale
+                  // item.sourceStatus, making users refresh the whole page.
                   await fetchOrders();
-                  setEditedStatus((previous) => {
-                    const next = { ...previous };
-                    delete next[itemId];
-                    return next;
-                  });
                 } catch (error) {
                   setEditedStatus((previous) => {
                     const next = { ...previous };
