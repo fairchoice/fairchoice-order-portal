@@ -161,10 +161,13 @@ export function getCustomerPortalHash(
 
 export function isCustomerPortalPageAllowed(
   page,
-  { isCustomer = false, isSalesRep = false } = {}
+  { isCustomer = false, isSalesRep = false, canCollectCash = true } = {}
 ) {
   if (isCustomer) return CUSTOMER_PAGES.has(page);
-  if (isSalesRep) return SALES_REP_PAGES.has(page);
+  if (isSalesRep) {
+    if (page === "salesCashCollection" && !canCollectCash) return false;
+    return SALES_REP_PAGES.has(page);
+  }
   return KNOWN_PORTAL_PAGES.has(page);
 }
 

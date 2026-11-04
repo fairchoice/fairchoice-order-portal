@@ -1,4 +1,4 @@
-import { isVatPriceMode } from "./pricing.js";
+import { isVatPriceMode, normalizePriceMode } from "./pricing.js";
 
 const money2 = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -6,18 +6,61 @@ const money2 = (value) =>
 const hasMoneyValue = (value) =>
   value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 
+export const isSavedInvoiceDocument = (order = {}) => Boolean(
+  order.invoice_id || order.invoiceId || order.invoice_number || order.invoiceNo ||
+  ["delivered", "confirmed", "delivery confirmed", "completed"].includes(
+    String(order.status || "").trim().toLowerCase()
+  )
+);
+
 const getQuantity = (item = {}) =>
   Number(item.qty ?? item.quantity ?? item.pickedQty ?? item.picked_qty ?? 0);
 
+const isFreeDocumentItem = (item = {}) => {
+  const status = String(
+    item.sourceStatus || item.source_status || item.status || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  return (
+    status === "free" ||
+    status === "promotion free" ||
+    item.isPromotionFree === true ||
+    item.promotionFreeItem === true
+  );
+};
+
 const isPrintableDocumentItem = (item = {}) => {
+  if (isFreeDocumentItem(item)) return true;
+
   const sourceStatus = String(item.sourceStatus || item.source_status || "")
     .trim()
     .toLowerCase();
 
+  const excludedStatuses = new Set([
+    "removed",
+    "cannot supply",
+    "need supplier",
+    "pre-order",
+    "pre order",
+    "pre-order supply",
+    "pre order supply",
+    "supply needed",
+    "next supplier",
+  ]);
+
+  if (excludedStatuses.has(sourceStatus)) return false;
+
+  // Warehouse Pre-Order Supply is status-only, so an item can correctly be
+  // In Stock while retaining an old include_in_picking=false flag. Supplied
+  // status is the final authority for operational quantity/value.
+  if (sourceStatus === "in stock" || sourceStatus === "available" || sourceStatus === "supplied") {
+    return true;
+  }
+
   return item.includeInPicking !== false &&
-    item.include_in_picking !== false &&
-    sourceStatus !== "removed" &&
-    sourceStatus !== "cannot supply";
+    item.include_in_picking !== false;
 };
 
 const getSavedVatRate = (item = {}) => {
@@ -40,6 +83,14 @@ const getSavedVatRate = (item = {}) => {
 };
 
 const getDocumentItemTotals = (item = {}, { includeVat = true } = {}) => {
+  if (isFreeDocumentItem(item)) {
+    return {
+      netTotal: 0,
+      grossTotal: 0,
+      vatRate: 0,
+    };
+  }
+
   const savedNet = item.net_total ?? item.netTotal;
   const savedPrice = item.price ?? item.unit_price ?? item.unitPrice;
   const vatRate = includeVat ? getSavedVatRate(item) : 0;
@@ -54,24 +105,22 @@ const getDocumentItemTotals = (item = {}, { includeVat = true } = {}) => {
     };
   }
 
-  if (
-    hasMoneyValue(savedNet) &&
-    Number(savedNet) > 0
-  ) {
-    const netTotal = money2(savedNet);
-    return {
-      netTotal,
-      grossTotal: netTotal,
-      vatRate: vatRate ?? 0,
-    };
-  }
-
+  // Invoice unit prices are authoritative; stored line amounts can be stale or zero.
   if (hasMoneyValue(savedPrice) && qty > 0 && vatRate !== null) {
     const netTotal = money2(Number(savedPrice) * qty);
     return {
       netTotal,
       grossTotal: netTotal,
       vatRate,
+    };
+  }
+
+  if (hasMoneyValue(savedNet)) {
+    const netTotal = money2(savedNet);
+    return {
+      netTotal,
+      grossTotal: netTotal,
+      vatRate: vatRate ?? 0,
     };
   }
 
@@ -129,19 +178,21 @@ const buildVatGroups = (items = [], includeVat = true) => {
 };
 
 export const getCustomerDocumentType = (priceMode = "") => {
-  const mode = String(priceMode || "").trim().toLowerCase();
-
-  const isOrderForm =
-    mode === "server" ||
-    mode === "manager" ||
-    mode.includes("server") ||
-    mode.includes("manager");
+  const mode = normalizePriceMode(priceMode);
+  const isOrderForm = [
+    "royalty", "server", "inc vat",
+    "owner offer", "manager", "manager offer"
+  ].includes(mode);
 
   return isOrderForm ? "order_form" : "invoice";
 };
 
 export function calculateDocumentTotals(items = [], order = {}) {
-  const includeVat = isVatPriceMode(order.priceMode || order.price_mode);
+  const priceMode = order.priceMode || order.price_mode;
+  const mode = normalizePriceMode(priceMode);
+  const includeVat =
+    isVatPriceMode(priceMode) ||
+    ["admin", "admin offer", "long customer", "long customers", "super"].includes(mode);
   const printableItems = (items || [])
     .filter(isPrintableDocumentItem)
     .map((item) => {
@@ -195,32 +246,57 @@ export function calculateDocumentTotals(items = [], order = {}) {
     savedGrandTotal > 0 &&
     (!recalculatedGrandTotal ||
       Math.abs(savedGrandTotal - recalculatedGrandTotal) <= 0.05);
-  const grandTotal = savedGrandTotalReconciles
-    ? savedGrandTotal
-    : recalculatedGrandTotal || savedGrandTotal;
+  // For recent, unissued orders with excluded warehouse items, the payable
+  // document must reconcile to its visible/supplyable lines. Never rewrite
+  // issued or delivered historical documents.
+  const orderDate = order.created_at || order.createdAt || order.order_date || order.orderDate;
+  const recentUnissuedOrder = !isSavedInvoiceDocument(order) &&
+    Boolean(orderDate) && !Number.isNaN(Date.parse(orderDate)) &&
+    Date.parse(orderDate) >= Date.parse("2026-10-19T00:00:00Z");
+  const hasExcludedSupplyLines = (items || []).some((item) =>
+    !isPrintableDocumentItem(item) && !isFreeDocumentItem(item)
+  );
+  const grandTotal = recentUnissuedOrder && hasExcludedSupplyLines
+    ? recalculatedGrandTotal
+    : savedGrandTotalReconciles
+      ? savedGrandTotal
+      : recalculatedGrandTotal || savedGrandTotal;
 
   const savedNetReconciles =
+    !(recentUnissuedOrder && hasExcludedSupplyLines) &&
     savedNetTotal > 0 &&
     !(vatTotal > 0 && grandTotal > 0 && savedNetTotal > grandTotal) &&
     (!grandTotal || !vatTotal || Math.abs(savedNetTotal + vatTotal - grandTotal) <= 0.05);
-  const netTotal = savedNetReconciles
-    ? savedNetTotal
-    : itemNetTotal || (grandTotal && vatTotal ? money2(grandTotal - vatTotal) : 0);
+  const netTotal = recentUnissuedOrder && hasExcludedSupplyLines
+    ? itemNetTotal
+    : savedNetReconciles
+      ? savedNetTotal
+      : itemNetTotal || (grandTotal && vatTotal ? money2(grandTotal - vatTotal) : 0);
   const discountAmount = money2(order.discount_amount ?? order.discountAmount ?? 0);
   const discountPercent = Number(order.discount_percent ?? order.discountPercent ?? 0);
+
+  // Issued history is a saved document, not a new pricing calculation. In
+  // particular, zero is a saved value and must never trigger a repair/fallback.
+  const issued = isSavedInvoiceDocument(order);
+  const issuedGrand = [order.invoice_total, order.invoiceTotal, order.order_total,
+    order.orderTotal, order.totalAmount, order.total, order.grand_total, order.finalTotal]
+    .find(hasMoneyValue);
+  const issuedNet = [order.net_total, order.netTotal, order.subtotal].find(hasMoneyValue);
+  const issuedVat = [order.vat_total, order.vatTotal].find(hasMoneyValue);
+  const preserveGrand = issued && hasMoneyValue(issuedGrand);
 
   return {
     invoiceItems: printableItems,
     totalLines,
     totalQty: totalQuantity,
     totalQuantity,
-    netTotal,
-    vatTotal,
+    netTotal: issued && hasMoneyValue(issuedNet) ? money2(issuedNet) : netTotal,
+    vatTotal: issued && hasMoneyValue(issuedVat) ? money2(issuedVat) : vatTotal,
     vatGroups,
     vat_groups: vatGroups,
-    grossTotal,
-    grandTotal,
-    totalAmount: grandTotal,
+    grossTotal: preserveGrand ? money2(issuedGrand) : grossTotal,
+    grandTotal: preserveGrand ? money2(issuedGrand) : grandTotal,
+    totalAmount: preserveGrand ? money2(issuedGrand) : grandTotal,
     discountAmount,
     discountPercent,
   };

@@ -394,7 +394,7 @@ test("Sales Rep reloads canonical outstanding without clearing the selected acco
     saveStart
   );
   const saveSource = customerOrderComponentSource.slice(saveStart, saveEnd);
-  const postIndex = saveSource.indexOf("await postCanonicalCustomerPayment");
+  const postIndex = saveSource.indexOf("await saveInvoiceCollection");
   const refreshIndex = saveSource.indexOf(
     "await loadSalesRepOutstanding",
     postIndex
@@ -413,15 +413,13 @@ test("Sales Rep reloads canonical outstanding without clearing the selected acco
     /const loadSalesRepOutstanding[\s\S]*?loadCentralPaymentSnapshot\(\{/
   );
   assert.match(saveSource, /customerId:\s*customer\.id/);
-  assert.match(saveSource, /branchId:\s*selectedSalesBranch\?\.id \|\| ""/);
+  assert.match(saveSource, /branchId:\s*branch\?\.id \|\| ""/);
   assert.equal(
-    saveSource.match(/await postCanonicalCustomerPayment\(/g)?.length,
+    saveSource.match(/await saveInvoiceCollection\(/g)?.length,
     1
   );
-  assert.match(saveSource, /collectorName:\s*activeUser\.staff_name/);
-  assert.match(saveSource, /collectorStaffId:\s*activeUser\.staff_id/);
-  assert.match(saveSource, /collectorRole:\s*activeUser\.role/);
-  assert.doesNotMatch(saveSource, /collectorName:\s*loggedInUser/);
+  assert.match(saveSource, /allocations: salesCollectionAllocations, previousStatuses/);
+  assert.doesNotMatch(saveSource, /collectorName:|collectorStaffId:|collectorRole:/);
 });
 
 test("legacy customer_ledger invoice rows are excluded from active Customer Credit", () => {

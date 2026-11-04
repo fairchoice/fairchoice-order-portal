@@ -4,10 +4,15 @@ import { logAction } from "../utils/auditLog";
 import {
   applyLocationStockToProducts,
   buildLocationStockMap,
+  getCountryLocationStock,
   getProductLocationStock,
   resolveOrderInventoryCountry,
 } from "../services/locationStock";
 import { getPickingAvailability } from "../services/pickingAvailability";
+import {
+  getPickingMismatchActivity,
+  recordWarehouseOperationalActivity,
+} from "../services/warehouseActivity";
 import {
   completeOrderPicking,
   getOrderedQty,
@@ -135,7 +140,11 @@ function OrderPickingSession({
   useEffect(() => {
     let active = true;
     const refreshLocationStock = async () => {
-      const ids = [...new Set((order?.items || []).map(productIdOf).filter(Boolean))];
+      const ids = [...new Set(
+        (replacementItem ? products : (order?.items || []))
+          .map(productIdOf)
+          .filter(Boolean)
+      )];
       if (!ids.length) {
         setLiveProducts(products);
         return;
@@ -163,7 +172,7 @@ function OrderPickingSession({
     return () => {
       active = false;
     };
-  }, [order?.items, products, stockRefreshNonce]);
+  }, [order?.items, products, replacementItem, stockRefreshNonce]);
 
   const countryProducts = useMemo(
     () => applyLocationStockToProducts(liveProducts, inventoryCountry),
@@ -203,13 +212,31 @@ function OrderPickingSession({
   const replacementProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
     const originalProductId = productIdOf(replacementItem);
-    return countryProducts
+
+    return liveProducts
       .filter(isActiveProduct)
       .filter((product) => String(product.id) !== String(originalProductId))
-      .filter(
-        (product) =>
-          !product.inventoryLocationMissing && number(product.stock) > 0
-      )
+      .map((product) => {
+        const englandRow = getCountryLocationStock(product, "England");
+        const walesRow = getCountryLocationStock(product, "Wales");
+        const englandStock = number(englandRow?.qty);
+        const walesStock = number(walesRow?.qty);
+        const replacementStockCountry =
+          englandStock > 0 ? "England" : walesStock > 0 ? "Wales" : "";
+        const replacementStock =
+          replacementStockCountry === "England" ? englandStock : walesStock;
+
+        return {
+          ...product,
+          stock: replacementStock,
+          englandStock,
+          walesStock,
+          replacementStockCountry,
+          replacementStockLocationId:
+            (replacementStockCountry === "Wales" ? walesRow : englandRow)?.locationId || null,
+          usedWalesFallback: englandStock <= 0 && walesStock > 0,
+        };
+      })
       .filter(
         (product) =>
           !query ||
@@ -228,7 +255,7 @@ function OrderPickingSession({
           )
       )
       .slice(0, 100);
-  }, [countryProducts, replacementItem, search]);
+  }, [inventoryCountry, liveProducts, replacementItem, search]);
 
   const updateLocalItem = (itemId, updater) =>
     setItems((current) =>
@@ -276,13 +303,26 @@ function OrderPickingSession({
     const requested = forceFull
       ? remaining
       : action === "replace"
-        ? Math.min(selectedQuantity(item, stock), Math.max(0, stock), remaining)
+        ? Math.min(selectedQuantity(item, stock), remaining)
         : Math.min(selectedQuantity(item, stock), remaining);
 
     if (requested <= 0) {
       setError("No stock is available for this action.");
       return;
     }
+
+    const sourceProduct = productsById.get(String(productIdOf(item)));
+    const activityProduct = action === "replace" && replacement ? replacement : sourceProduct;
+    const mismatchActivity = getPickingMismatchActivity({
+      itemStatus: item.sourceStatus || item.source_status || "In Stock",
+      action,
+      inventoryLocationMissing:
+        action === "replace"
+          ? !replacement?.replacementStockLocationId
+          : Boolean(sourceProduct?.inventoryLocationMissing),
+      stock,
+      quantity: requested,
+    });
 
     setBusyId(itemId);
     setError("");
@@ -317,6 +357,40 @@ function OrderPickingSession({
       if (action === "in_stock" || action === "replace") {
         setStockRefreshNonce((value) => value + 1);
       }
+
+      if (mismatchActivity) {
+        try {
+          await recordWarehouseOperationalActivity(
+            {
+              order,
+              item,
+              ...mismatchActivity,
+              quantity: requested,
+              warehouseLocation: inventoryCountry || null,
+              sourceModule: "Received Order Picking",
+              metadata: {
+                mismatchType: mismatchActivity.mismatchType,
+                trackedStock: Number(stock || 0),
+                inventoryLocationMissing:
+                  action === "replace"
+                    ? !replacement?.replacementStockLocationId
+                    : Boolean(sourceProduct?.inventoryLocationMissing),
+                replacementProductId: replacement?.id || null,
+                replacementProductName:
+                  replacement?.name || replacement?.productName || replacement?.product_name || null,
+                replacementStockCountry: replacement?.replacementStockCountry || null,
+              },
+            },
+            currentUser
+          );
+        } catch (activityError) {
+          console.warn(
+            "Picking mismatch activity could not be recorded:",
+            activityError?.message || activityError
+          );
+        }
+      }
+
       await logAction({
         user: currentUser,
         action_type: action === "replace" ? "Picking replacement saved" : "Picking status changed",
@@ -534,10 +608,25 @@ function OrderPickingSession({
               stock > 0 &&
               stock < remaining &&
               selectedQty === stock;
+            const currentSourceStatus = String(
+              item.sourceStatus || item.source_status || "In Stock"
+            ).trim().toLowerCase();
+            const isPreOrderOverride = [
+              "need supplier",
+              "pre-order",
+              "pre order",
+              "next supplier",
+            ].includes(currentSourceStatus);
+            // "Pick" is the physical warehouse confirmation. If tracked
+            // location stock is missing or lower than the physical quantity, do
+            // not block packing; save the pick and record a Warehouse Activity
+            // mismatch for investigation. The database never deducts below zero.
             const canPickAll =
               remaining > 0 &&
-              !product?.inventoryLocationMissing &&
-              stock >= remaining;
+              (isPreOrderOverride ||
+                product?.inventoryLocationMissing ||
+                stock >= remaining ||
+                stock < remaining);
 
             return (
               <article
@@ -676,21 +765,75 @@ function OrderPickingSession({
                   <button
                     type="button"
                     key={product.id}
-                    onClick={() => setSelectedReplacement(product)}
+                    onClick={() =>
+                      setSelectedReplacement({
+                        ...product,
+                        stock:
+                          product.englandStock > 0
+                            ? product.englandStock
+                            : product.walesStock,
+                        replacementStockCountry:
+                          product.englandStock > 0 ? "England" : "Wales",
+                        usedWalesFallback:
+                          product.englandStock <= 0 && product.walesStock > 0,
+                      })
+                    }
                     className={`mb-2 flex w-full items-center justify-between rounded-xl border p-4 text-left ${selected ? "border-[#0f5b8d] bg-blue-50 ring-2 ring-blue-200" : "border-slate-200 hover:bg-slate-50"}`}
                   >
                     <div className="font-bold">
                       {product.name || product.productName || product.product_name}
                     </div>
-                    <div className="text-sm text-slate-500">
-                      Stock: {product.stock} ({inventoryCountry})
+                    <div className="flex flex-col items-end gap-1 text-sm">
+                      <div className="text-xs font-semibold text-slate-500">
+                        England {product.englandStock} · Wales {product.walesStock}
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedReplacement({
+                              ...product,
+                              stock: product.englandStock,
+                              replacementStockCountry: "England",
+                              usedWalesFallback: false,
+                            });
+                          }}
+                          className={`rounded-md border px-2 py-1 text-xs font-black ${
+                            selected && selectedReplacement?.replacementStockCountry === "England"
+                              ? "border-[#0f5b8d] bg-blue-100 text-[#0f5b8d]"
+                              : "border-slate-300 bg-white text-slate-700"
+                          } disabled:cursor-not-allowed disabled:opacity-35`}
+                        >
+                          England
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedReplacement({
+                              ...product,
+                              stock: product.walesStock,
+                              replacementStockCountry: "Wales",
+                              usedWalesFallback: product.englandStock <= 0,
+                            });
+                          }}
+                          className={`rounded-md border px-2 py-1 text-xs font-black ${
+                            selected && selectedReplacement?.replacementStockCountry === "Wales"
+                              ? "border-[#0f5b8d] bg-blue-100 text-[#0f5b8d]"
+                              : "border-slate-300 bg-white text-slate-700"
+                          } disabled:cursor-not-allowed disabled:opacity-35`}
+                        >
+                          Wales
+                        </button>
+                      </div>
                     </div>
                   </button>
                   );
                 })}
                 {!replacementProducts.length && (
                   <div className="p-5 text-center text-slate-500">
-                    No replacement products with {inventoryCountry || "resolved"} stock.
+                    No matching replacement products found.
                   </div>
                 )}
               </div>

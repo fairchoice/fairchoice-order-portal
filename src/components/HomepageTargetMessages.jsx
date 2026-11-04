@@ -1,32 +1,18 @@
 const noticeStyles = {
-  warning: {
-    title: "Important Price Notice",
-    icon: "⚠",
-    banner: "border-amber-400 bg-amber-50 text-amber-950",
-    iconBackground: "bg-amber-200",
-    messageText: "text-amber-900",
-  },
-  info: {
-    title: "Customer Information",
-    icon: "ℹ",
-    banner: "border-blue-400 bg-blue-50 text-blue-950",
-    iconBackground: "bg-blue-200",
-    messageText: "text-blue-900",
-  },
-  success: {
-    title: "Good News",
-    icon: "✓",
-    banner: "border-green-400 bg-green-50 text-green-950",
-    iconBackground: "bg-green-200",
-    messageText: "text-green-900",
-  },
-  danger: {
-    title: "Important Customer Alert",
-    icon: "!",
-    banner: "border-red-400 bg-red-50 text-red-950",
-    iconBackground: "bg-red-200",
-    messageText: "text-red-900",
-  },
+  warning: { title: "Important Notice", icon: "!", banner: "border-amber-500 bg-amber-100 text-amber-950", iconBackground: "bg-amber-200", messageText: "text-amber-950" },
+  info: { title: "Customer Information", icon: "i", banner: "border-blue-400 bg-blue-100 text-blue-950", iconBackground: "bg-blue-200", messageText: "text-blue-950" },
+  success: { title: "Good News", icon: "✓", banner: "border-green-500 bg-green-100 text-green-950", iconBackground: "bg-green-200", messageText: "text-green-950" },
+  danger: { title: "Customer Alert", icon: "!", banner: "border-red-500 bg-red-100 text-red-950", iconBackground: "bg-red-200", messageText: "text-red-950" },
+  info_blue: { title: "Customer Information", icon: "i", banner: "border-blue-400 bg-blue-100 text-blue-950", iconBackground: "bg-blue-200", messageText: "text-blue-950" },
+  navy: { title: "Customer Information", icon: "i", banner: "border-slate-700 bg-slate-100 text-slate-950", iconBackground: "bg-slate-300", messageText: "text-slate-950" },
+  success_green: { title: "Customer Information", icon: "✓", banner: "border-green-500 bg-green-100 text-green-950", iconBackground: "bg-green-200", messageText: "text-green-950" },
+  teal: { title: "Customer Information", icon: "i", banner: "border-teal-500 bg-teal-100 text-teal-950", iconBackground: "bg-teal-200", messageText: "text-teal-950" },
+  warning_amber: { title: "Important Notice", icon: "!", banner: "border-amber-500 bg-amber-100 text-amber-950", iconBackground: "bg-amber-200", messageText: "text-amber-950" },
+  orange: { title: "Important Notice", icon: "!", banner: "border-orange-500 bg-orange-100 text-orange-950", iconBackground: "bg-orange-200", messageText: "text-orange-950" },
+  danger_red: { title: "Customer Alert", icon: "!", banner: "border-red-500 bg-red-100 text-red-950", iconBackground: "bg-red-200", messageText: "text-red-950" },
+  purple: { title: "Customer Information", icon: "i", banner: "border-purple-500 bg-purple-100 text-purple-950", iconBackground: "bg-purple-200", messageText: "text-purple-950" },
+  pink: { title: "Customer Information", icon: "i", banner: "border-pink-500 bg-pink-100 text-pink-950", iconBackground: "bg-pink-200", messageText: "text-pink-950" },
+  plain: { title: "Customer Information", icon: "i", banner: "border-slate-400 bg-white text-slate-950", iconBackground: "bg-slate-200", messageText: "text-slate-950" },
 };
 
 export default function HomepageTargetMessages({ messages = [] }) {
@@ -34,46 +20,33 @@ export default function HomepageTargetMessages({ messages = [] }) {
 
   const orderedMessages = [...messages].sort(
     (left, right) =>
-      Number(left.sortOrder || 0) - Number(right.sortOrder || 0) ||
+      Number(left.sortOrder || 3) - Number(right.sortOrder || 3) ||
       String(left.id || "").localeCompare(String(right.id || ""))
   );
+  const visibleMessages = orderedMessages.slice(0, 2);
+  const remainingCount = Math.max(0, orderedMessages.length - visibleMessages.length);
 
   return (
-    <section
-      className="mb-5 w-full space-y-3"
-      aria-label="Customer product notices"
-      aria-live="polite"
-    >
-      {orderedMessages.map((message) => {
-        const style =
-          noticeStyles[message.messageStyle] || noticeStyles.warning;
+    <section className="mb-3 w-full space-y-2" aria-label="Customer product notices" aria-live="polite">
+      {visibleMessages.map((message) => {
+        const style = noticeStyles[message.messageStyle] || noticeStyles.warning;
+        const priority = Number(message.sortOrder || 3);
+        const priorityLabel = priority <= 1 ? "Important" : priority === 2 ? "Promotion" : style.title;
         return (
-          <div
-            key={message.id}
-            role="alert"
-            className={`w-full rounded-2xl border-2 p-4 shadow-md sm:p-5 ${style.banner}`}
-          >
-            <div className="flex items-start gap-3">
-              <div
-                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-2xl font-black ${style.iconBackground}`}
-                aria-hidden="true"
-              >
-                {style.icon}
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-base font-extrabold sm:text-lg">
-                  {style.title}
-                </h3>
-                <p
-                  className={`mt-1 text-sm font-semibold leading-6 sm:text-base ${style.messageText}`}
-                >
-                  {message.message}
-                </p>
+          <div key={message.id} role="alert" className={`w-full rounded-xl border-2 px-3 py-2 shadow-sm sm:px-4 ${style.banner}`}>
+            <div className="flex items-center gap-3">
+              <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base font-black ${style.iconBackground}`} aria-hidden="true">{style.icon}</div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-black uppercase tracking-wide opacity-80">{priorityLabel}</div>
+                <p className={`text-sm font-semibold leading-5 ${style.messageText}`}>{message.message}</p>
               </div>
             </div>
           </div>
         );
       })}
+      {remainingCount > 0 && (
+        <div className="px-1 text-xs font-bold text-slate-500">+{remainingCount} more relevant notice{remainingCount === 1 ? "" : "s"}</div>
+      )}
     </section>
   );
 }

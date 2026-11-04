@@ -17,6 +17,8 @@ export default function BulkDatabaseToOrders({
   setPage,
   toggleProduct,
   toggleAllOnPage,
+  orderStatus,
+  setOrderStatus,
   previewRows,
   loading,
   onPreview,
@@ -36,11 +38,21 @@ export default function BulkDatabaseToOrders({
   return (
     <div className="mt-6 border rounded-2xl p-5">
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        <div className="font-extrabold">Sensitive update: Database to Received Orders only</div>
+        <div className="font-extrabold">Pending database price updates</div>
         <div className="mt-1">
-          This updates only matching order items inside orders with status <b>Received</b>.
-          It never adds products, removes products, or updates Warehouse Packing, Delivered, or Cancelled orders.
+          Only products saved through the bulk or single database update appear here.
+          Apply latest prices uses each order’s pricing mode, customer price code and exact product prices in the selected Received / Warehouse stage.
+          Clear pending changes keeps the saved database prices and leaves orders unchanged.
         </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <label htmlFor="order-stage" className="font-bold text-sm">Order stage</label>
+        <select id="order-stage" className="border rounded-xl px-4 py-3" value={orderStatus} onChange={(e) => setOrderStatus(e.target.value)} disabled={loading}>
+          <option value="both">Received orders and Warehouse</option>
+          <option value="Received">Received orders</option>
+          <option value="Warehouse Packing">Warehouse</option>
+        </select>
       </div>
 
       <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -79,7 +91,7 @@ export default function BulkDatabaseToOrders({
           disabled={loading}
           className="bg-blue-600 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50"
         >
-          Refresh Current Prices
+          Refresh pending prices
         </button>
       </div>
 
@@ -89,7 +101,7 @@ export default function BulkDatabaseToOrders({
           <div className="text-2xl font-extrabold text-slate-800">{selectedIds.length}</div>
         </div>
         <div className="border rounded-xl p-4 bg-slate-50">
-          <div className="text-xs font-bold text-slate-500 uppercase">Received orders affected</div>
+          <div className="text-xs font-bold text-slate-500 uppercase">Selected-stage orders affected</div>
           <div className="text-2xl font-extrabold text-slate-800">{orderCount}</div>
         </div>
         <div className="border rounded-xl p-4 bg-slate-50">
@@ -103,7 +115,7 @@ export default function BulkDatabaseToOrders({
       </div>
 
       <div className="mt-6 text-sm font-bold text-slate-700">
-        {filteredProducts.length} product(s) found. Showing 20 per page.
+        {filteredProducts.length} pending product(s). Showing 20 per page.
       </div>
 
       <div className="mt-4 overflow-x-auto">
@@ -135,7 +147,7 @@ export default function BulkDatabaseToOrders({
               );
             })}
             {pagedProducts.length === 0 && (
-              <tr><td colSpan="4" className="border p-6 text-center text-slate-500">No products found.</td></tr>
+              <tr><td colSpan="4" className="border p-6 text-center text-slate-500">No pending database price updates. Save a product price in Bulk to DB or Single to DB first.</td></tr>
             )}
           </tbody>
         </table>
@@ -151,10 +163,10 @@ export default function BulkDatabaseToOrders({
         <button onClick={onPreview} disabled={loading || !selectedIds.length} className="bg-blue-600 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50">
           {loading ? "Checking..." : "Preview Updates"}
         </button>
-        <button onClick={onUpdate} disabled={loading || !previewRows.length} className="bg-purple-700 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50">
-          Update Received Orders
+        <button onClick={onUpdate} disabled={loading || !selectedIds.length} className="bg-purple-700 text-white font-bold px-5 py-3 rounded-xl disabled:opacity-50">
+          Apply latest prices to Received / Warehouse
         </button>
-        <button onClick={onReset} className="bg-slate-600 text-white font-bold px-5 py-3 rounded-xl">Reset Form</button>
+        <button onClick={onReset} disabled={loading} className="bg-slate-600 text-white font-bold px-5 py-3 rounded-xl">Clear pending changes</button>
       </div>
 
       {previewRows.length > 0 && (
@@ -164,6 +176,8 @@ export default function BulkDatabaseToOrders({
             <thead className="bg-slate-100">
               <tr>
                 <th className="border p-3 text-left">Order</th>
+                <th className="border p-3 text-left">Stage</th>
+                <th className="border p-3 text-left">Pricing</th>
                 <th className="border p-3 text-left">Product</th>
                 <th className="border p-3">Qty</th>
                 <th className="border p-3">Current Price</th>
@@ -178,6 +192,8 @@ export default function BulkDatabaseToOrders({
                 return (
                   <tr key={row.itemId}>
                     <td className="border p-3 font-bold">{formatDisplayOrderId(row.orderNumber)}</td>
+                    <td className="border p-3">{row.orderStatus === "Warehouse Packing" ? "Warehouse" : row.orderStatus}</td>
+                    <td className="border p-3">{row.priceModeLabel || row.expectedPriceMode}</td>
                     <td className="border p-3">{row.productName}</td>
                     <td className="border p-3 text-right">{row.qty}</td>
                     <td className="border p-3 text-right">£{Number(row.oldPrice || 0).toFixed(2)}</td>

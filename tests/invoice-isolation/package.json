@@ -1,0 +1,1 @@
+{"name":"fairchoice-invoice-isolation-tests","private":true,"type":"module","scripts":{"test":"node --test *.test.mjs"},"dependencies":{"@electric-sql/pglite":"0.3.14"}}

@@ -112,7 +112,10 @@ const buildAccountPayload = (row) => {
     default_price_mode:
       normalize(getRowValue(row, ["Default Price Mode", "default_price_mode"])) || "VAT",
     active: toBool(getRowValue(row, ["Active", "active"]), true),
-    opening_balance: toNumber(getRowValue(row, ["Opening Balance", "opening_balance"])),
+    opening_balance: (() => {
+      const value = getRowValue(row, ["Opening Balance", "opening_balance"]);
+      return value === "" ? null : toNumber(value);
+    })(),
     ...parseAllowedModes(getRowValue(row, ["Allowed Price Modes", "allowed_price_modes"])),
   };
 };
@@ -249,14 +252,18 @@ async function main() {
     const { opening_balance, id: _ignoredId, ...updatePayload } = payload;
     const { error } = await supabase.from("customer_accounts").update(updatePayload).eq("id", id);
     fail(`update customer ${payload.account_name}`, error);
-    await upsertOpeningBalance(payload.account_name, opening_balance);
+    if (opening_balance !== null) {
+      await upsertOpeningBalance(payload.account_name, opening_balance);
+    }
   }
 
   for (const { payload } of accountCreates) {
     const { opening_balance, id: _ignoredId, ...insertPayload } = payload;
     const { data, error } = await supabase.from("customer_accounts").insert(insertPayload).select().single();
     fail(`insert customer ${payload.account_name}`, error);
-    await upsertOpeningBalance(data.account_name, opening_balance);
+    if (opening_balance !== null) {
+      await upsertOpeningBalance(data.account_name, opening_balance);
+    }
   }
 
   for (const { id, payload } of branchUpdates) {

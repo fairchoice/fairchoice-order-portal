@@ -1,5 +1,9 @@
 import { supabase } from "./supabase.js";
 import { getFcSessionState } from "./fcSession.js";
+import {
+  loadWarehouseOperationalEvents,
+  recordWarehouseOperationalActivity,
+} from "./warehouseActivity.js";
 
 const safeUuid = () => {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -35,6 +39,9 @@ const normalizeEvent = (row = {}) => ({
   boughtAt: row.bought_at,
   clientActionId: row.client_action_id,
   branchName: row.metadata?.branchName || null,
+  unitCost: row.metadata?.unitCost == null ? null : Number(row.metadata.unitCost),
+  totalCost: row.metadata?.totalCost == null ? 0 : Number(row.metadata.totalCost),
+  pricingBasis: row.metadata?.pricingBasis || null,
   recalledClientActionId: row.metadata?.recalledClientActionId || null,
   recalledEventId: row.metadata?.recalledEventId || null,
   metadata: row.metadata || {},
@@ -86,6 +93,8 @@ export async function loadPreOrderSupplyHistory(user, { pageSize = 500, maxPages
         return {
           history: {},
           events: [],
+          available: false,
+          sourceVersion: "unavailable",
           warning: "Permanent Pre-order Supply history is awaiting migration.",
         };
       }
@@ -109,6 +118,8 @@ export async function loadPreOrderSupplyHistory(user, { pageSize = 500, maxPages
   return {
     history: Object.fromEntries(Object.entries(latest).filter(([, value]) => value !== null)),
     events: rows.map(normalizeEvent),
+    available: true,
+    sourceVersion: rpcName === "fc_list_preorder_supply_events_v1" ? "v1" : "v2",
     warning:
       rpcName === "fc_list_preorder_supply_events_v1"
         ? "Delivery-aware history is awaiting the latest migration."
@@ -142,7 +153,14 @@ export async function recordPreOrderSupplyEvent(action = {}, user) {
       itemSnapshot: action.itemSnapshot || null,
       changes: action.changes || null,
       branchName: action.branchName || null,
+      productCode: action.productCode || null,
+      country: action.country || null,
+      warehouseLocation: action.warehouseLocation || null,
+      reason: action.reason || null,
       allocation: action.quantity || 0,
+      unitCost: action.unitCost == null ? null : Number(action.unitCost),
+      totalCost: action.totalCost == null ? 0 : Number(action.totalCost),
+      pricingBasis: action.pricingBasis || null,
       supplierAttempt: {
         supplierId: action.supplierId || null,
         supplierName: action.supplierName || null,
@@ -159,4 +177,15 @@ export async function recordPreOrderSupplyEvent(action = {}, user) {
   });
   if (error) throw error;
   return normalizeEvent(Array.isArray(data) ? data[0] : data);
+}
+
+export async function reversePreOrderSupplyForReceivedOrder({
+  order,
+  user,
+  updateOrderItem,
+  restorePreOrderSplit,
+}) {
+  // Warehouse is the final supply-state authority. Moving an order back to
+  // Received must never reverse supplier status, ordered qty, or picked qty.
+  return [];
 }

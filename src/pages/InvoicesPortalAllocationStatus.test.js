@@ -23,7 +23,7 @@ test("exact search no longer duplicates stale order status calculation", () => {
 
 test("allocation failures do not block exact payment or ledger resolution", () => {
   assert.match(source, /customerAccountIds\.length[\s\S]*\{ data: \[\], error: null \}/);
-  assert.match(source, /allocations: customerAccountId \? allocations : \[\]/);
+  assert.match(source, /allocations: rowAccountId \? allocations : \[\]/);
   assert.match(source, /allocationsResult\.error \? \[\] : allocationsResult\.data/);
   assert.doesNotMatch(source, /if \(allocationsResult\.error\)[\s\S]{0,240}return invoiceRows/);
 });
@@ -46,9 +46,32 @@ test("normal invoice rows carry canonical UUID and full reference fields", () =>
 });
 
 test("Outstanding summary consumes allocation-resolved rows", () => {
-  assert.match(source, /sumResolvedInvoiceOutstanding\(filteredInvoices\)/);
+  assert.match(source, /sumResolvedInvoiceOutstanding\(displayedInvoices\)/);
   assert.doesNotMatch(
     source,
     /filteredInvoices\.reduce\([\s\S]{0,240}Number\(row\.debit\s*\|\|\s*getAmount\(row\)\)/
   );
+});
+
+test("secure status verification covers unfiltered and large invoice lists in safe batches", () => {
+  assert.match(source, /await loadInvoiceFinancialSnapshot\(\{ invoiceNumbers:/);
+  assert.match(source, /username:\s*invoiceVerificationUsername/);
+  assert.match(source, /token:\s*invoiceVerificationSessionToken/);
+  assert.match(source, /uniqueRefs\.slice\(index, index \+ 50\)/);
+  assert.doesNotMatch(source, /term\.length < 2/);
+  assert.doesNotMatch(source, /filteredInvoices\.length > 60/);
+});
+
+test("verified statuses use canonical amounts and leave failed or missing rows on fallback data", () => {
+  assert.match(source, /if \(error\) \{[\s\S]{0,180}continue;/);
+  assert.match(source, /const verified = verifiedByInvoice\.get\(reference\);[\s\S]{0,80}if \(!verified\) return;/);
+  assert.match(source, /remaining <= 0\.01[\s\S]{0,100}"PAID"[\s\S]{0,100}"PART PAID"[\s\S]{0,100}"UNPAID"/);
+  assert.match(source, /remaining_amount:\s*remaining/);
+  assert.match(source, /outstanding_amount:\s*remaining/);
+});
+
+test("verification deduplicates and matches complete invoice references", () => {
+  assert.match(source, /const uniqueRefs = \[\.\.\.new Set\(refs\.map\(\(\{ reference \}\) => reference\)\)\]/);
+  assert.match(source, /verifiedByInvoice\.get\(reference\)/);
+  assert.doesNotMatch(source, /verifiedByInvoice[\s\S]{0,120}startsWith\(reference\)/);
 });

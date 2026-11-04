@@ -4,6 +4,7 @@ export const HOMEPAGE_MESSAGE_TARGET_TYPES = [
   "main_category",
   "sub_category",
   "brand",
+  "series",
   "product",
 ];
 
@@ -54,6 +55,7 @@ export function getMatchingHomepageMessages(
     selectedCategory = "",
     selectedSubCategory = "",
     selectedBrand = "",
+    selectedSeries = "",
     selectedProductId = "",
     now = new Date(),
   } = {}
@@ -62,6 +64,7 @@ export function getMatchingHomepageMessages(
     main_category: normalizedText(selectedCategory),
     sub_category: normalizedText(selectedSubCategory),
     brand: normalizedText(selectedBrand),
+    series: normalizedText(selectedSeries),
     product: normalizedText(selectedProductId),
   };
 

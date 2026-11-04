@@ -130,3 +130,22 @@ export function clearFcSessionStorage(storage = globalThis?.localStorage) {
     storage.removeItem(key);
   }
 }
+
+// Password re-verification through fc_login_v2 issues a new session, so callers
+// must adopt it instead of continuing to use a session the login limit can revoke.
+export function profileWithFcLoginSession(currentProfile, response) {
+  if (response?.ok !== true || !response.session_token || !response.expires_at ||
+      !profilesShareLoginIdentity(currentProfile, response.profile)) {
+    throw new Error("Admin verification did not return a valid session for the current login.");
+  }
+  return {
+    ...mergeAuthenticatedProfile(currentProfile, response.profile),
+    fc_session_token: response.session_token,
+    fc_session_expires_at: response.expires_at,
+    fc_session_idle_expires_at: response.idle_expires_at || null,
+    // Keep legacy consumers on the same newly authenticated session.
+    session_token: response.session_token,
+    sessionToken: response.session_token,
+    session_expires_at: response.expires_at,
+  };
+}

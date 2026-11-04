@@ -75,3 +75,13 @@ test("partial pick can be followed by pre-order or replacement for the remainder
   assert.match(source, /const canResolveRemainder = remaining > 0 && pickedQty > 0/);
   assert.match(source, /hasSavedAction && !canResolveRemainder/);
 });
+
+
+test("physical warehouse stock can be picked despite a location mismatch and is audited", () => {
+  const source = fs.readFileSync(new URL("./OrderPicking.jsx", import.meta.url), "utf8");
+  assert.match(source, /const isPreOrderOverride = \[/);
+  assert.match(source, /"need supplier"[\s\S]*"pre-order"[\s\S]*"pre order"[\s\S]*"next supplier"/);
+  assert.match(source, /const canPickAll =[\s\S]*product\?\.inventoryLocationMissing[\s\S]*stock >= remaining[\s\S]*stock < remaining/);
+  assert.match(source, /getPickingMismatchActivity\([\s\S]*inventoryLocationMissing[\s\S]*quantity: requested/);
+  assert.match(source, /recordWarehouseOperationalActivity\([\s\S]*mismatchType[\s\S]*trackedStock/);
+});

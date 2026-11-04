@@ -1,10 +1,19 @@
-import React, { useMemo, useState } from "react";
+import { loadOrderPricingContext } from "../../services/orderPricingContext.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { getFcSessionState, profileWithFcLoginSession, readStoredFcProfile } from "../../services/fcSession.js";
 
 import { supabase } from "../../supabaseClient";
-import { getProductPriceForMode, getProductPricePreview, getVatRate, isVatPriceMode, roundMoney } from "../../utils/pricing";
+import { getProductPricePreview, roundMoney } from "../../utils/pricing";
+import PriceApprovalDialog from "./PriceManagement/PriceApprovalDialog.jsx";
+import { activePriceOrderStages, buildPriceOrderPreview } from "../../utils/priceManagementOrders.js";
 import BulkToDatabase from "./PriceManagement/BulkToDatabase";
 import BulkDatabaseToOrders from "./PriceManagement/BulkDatabaseToOrders";
-import SingleDatabaseToOrder from "./PriceManagement/SingleDatabaseToOrder";
+import { mergePendingPriceUpdates, removePendingPriceUpdates, readPendingPriceUpdates, writePendingPriceUpdates } from "../../utils/priceUpdateQueue.js";
+import {
+  loadSupplierSetup,
+  loadSupplierProductPricing,
+  saveSupplierProductPricing,
+} from "../../services/suppliers";
 
 const PRICE_PAGE_SIZE = 20;
 
@@ -12,10 +21,74 @@ export default function PriceManagement({
   products = [],
   fetchProducts,
   pricingSettings = {},
+  user = null,
+  onProfileRefresh,
 }) {
   const safeProducts = Array.isArray(products) ? products : [];
 
   const [activeTab, setActiveTab] = useState("bulkPrice");
+  const [orderStatus, setOrderStatus] = useState("both");
+  const [approval, setApproval] = useState(null);
+  const approvalResolve = useRef(null);
+  const approvalBusy = useRef(false);
+  const previewRequest = useRef(0);
+  useEffect(() => () => { approvalResolve.current?.(false); approvalResolve.current = null; }, []);
+
+  // Read the live FC profile rather than freezing a token when this page mounts.
+  const userRef = useRef(user);
+  userRef.current = user;
+  const currentUser = readStoredFcProfile() || user;
+  const { username: supplierUsername, token: supplierSessionToken } = getFcSessionState(currentUser);
+  const pendingQueueKey = `fairchoice_pending_price_updates:${currentUser?.login_user_id || currentUser?.id || supplierUsername || "unknown"}`;
+  const [pendingProductIds, setPendingProductIds] = useState(() => readPendingPriceUpdates(pendingQueueKey));
+  const pendingIdsRef = useRef(pendingProductIds);
+  const [pendingCatalogProducts, setPendingCatalogProducts] = useState([]);
+  const [reviewMessage, setReviewMessage] = useState("");
+  function savePendingProducts(ids) {
+    // Save the pending decision before leaving the database update screen.
+    writePendingPriceUpdates(pendingQueueKey, ids);
+    pendingIdsRef.current = ids;
+    setPendingProductIds(ids);
+  }
+  useEffect(() => {
+    const ids = readPendingPriceUpdates(pendingQueueKey);
+    pendingIdsRef.current = ids;
+    setPendingProductIds(ids);
+    setOrderSelectedIds(ids);
+    setBulkOrderPreviewRows([]);
+  }, [pendingQueueKey]);
+  useEffect(() => {
+    const syncQueue = event => {
+      if (event.key !== pendingQueueKey) return;
+      const ids = readPendingPriceUpdates(pendingQueueKey);
+      pendingIdsRef.current = ids;
+      setPendingProductIds(ids);
+      setOrderSelectedIds(ids);
+      setBulkOrderPreviewRows([]);
+      previewRequest.current++;
+    };
+    window.addEventListener("storage", syncQueue);
+    return () => window.removeEventListener("storage", syncQueue);
+  }, [pendingQueueKey]);
+  useEffect(() => {
+    let active = true;
+    if (!pendingProductIds.length) { setPendingCatalogProducts([]); return undefined; }
+    supabase.from("products").select("*").in("id", pendingProductIds).then(({ data, error }) => {
+      if (!active) return;
+      if (error) setReviewMessage(`Pending products could not be refreshed: ${error.message}`);
+      else setPendingCatalogProducts(data || []);
+    });
+    return () => { active = false; };
+  }, [pendingProductIds]);
+
+  const [supplierReload, setSupplierReload] = useState(0);
+  const [supplierListLoading, setSupplierListLoading] = useState(false);
+  const [supplierListError, setSupplierListError] = useState("");
+
+  const [suppliers, setSuppliers] = useState([]);
+  const [supplierId, setSupplierId] = useState("");
+  const [supplierPricingRows, setSupplierPricingRows] = useState([]);
+  const [supplierPricingLoading, setSupplierPricingLoading] = useState(false);
 
   const [brand, setBrand] = useState("");
   const [series, setSeries] = useState("");
@@ -25,36 +98,52 @@ export default function PriceManagement({
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkNewPrice, setBulkNewPrice] = useState("");
   const [bulkCostPrice, setBulkCostPrice] = useState("");
+  const [bulkCostVatMode, setBulkCostVatMode] = useState("ex");
 
   const [singleSearch, setSingleSearch] = useState("");
   const [singleProductId, setSingleProductId] = useState("");
   const [singleNewPrice, setSingleNewPrice] = useState("");
   const [singleCostPrice, setSingleCostPrice] = useState("");
+  const [singleCostVatMode, setSingleCostVatMode] = useState("ex");
   const [singleViewProduct, setSingleViewProduct] = useState(null);
 
   const [orderBrand, setOrderBrand] = useState("");
   const [orderSeries, setOrderSeries] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
   const [orderPage, setOrderPage] = useState(1);
-  const [orderSelectedIds, setOrderSelectedIds] = useState([]);
+  const [orderSelectedIds, setOrderSelectedIds] = useState(() => readPendingPriceUpdates(pendingQueueKey));
   const [bulkOrderPreviewRows, setBulkOrderPreviewRows] = useState([]);
   const [bulkOrderLoading, setBulkOrderLoading] = useState(false);
-
-  const [singleOrderSearch, setSingleOrderSearch] = useState("");
-  const [singleOrderProductId, setSingleOrderProductId] = useState("");
-  const [singleOrderPreviewRows, setSingleOrderPreviewRows] = useState([]);
-  const [singleOrderLoading, setSingleOrderLoading] = useState(false);
 
   const brands = useMemo(() => {
     return [...new Set(safeProducts.map((p) => p.brand).filter(Boolean))].sort();
   }, [safeProducts]);
 
   const seriesList = useMemo(() => {
-    return [...new Set(safeProducts.map((p) => p.series).filter(Boolean))].sort();
-  }, [safeProducts]);
+    return [
+      ...new Set(
+        safeProducts
+          .filter((p) => !brand || String(p.brand || "") === brand)
+          .map((p) => p.series)
+          .filter(Boolean)
+      ),
+    ].sort();
+  }, [safeProducts, brand]);
+
+  const orderSeriesList = useMemo(() => {
+    return [
+      ...new Set(
+        safeProducts
+          .filter((p) => pendingProductIds.includes(String(getProductId(p))) && (!orderBrand || String(p.brand || "") === orderBrand))
+          .map((p) => p.series)
+          .filter(Boolean)
+      ),
+    ].sort();
+  }, [safeProducts, orderBrand, pendingProductIds]);
 
   function getProductId(product) {
-    return product.id || product.product_id || product.code || product.product_code;
+    if (!product) return "";
+    return product.id || product.product_id || product.code || product.product_code || "";
   }
 
   function productName(product) {
@@ -70,7 +159,143 @@ export default function PriceManagement({
   }
 
   function costPrice(product) {
+    if (supplierId) {
+      return Number(supplierCostRow(getProductId(product))?.unit_cost || 0);
+    }
     return Number(product.cost_price || 0);
+  }
+
+  function normalizeVatInput(value, vatMode) {
+    const amount = Number(value || 0);
+    return vatMode === "inc" ? roundMoney(amount / 1.2) : amount;
+  }
+
+  useEffect(() => {
+    let active = true;
+    let retryTimer;
+    let attempt = 0;
+    const load = async () => {
+      setSupplierListLoading(true);
+      setSupplierListError("");
+      try {
+        const profile = readStoredFcProfile() || userRef.current;
+        const session = getFcSessionState(profile);
+        if (!session.username || !session.token) {
+          throw new Error("Your session is unavailable. Refresh suppliers after signing in.");
+        }
+        const rows = await loadSupplierSetup(profile, { includeInactive: false });
+        if (!Array.isArray(rows)) throw new Error("The supplier list could not be read. Please refresh suppliers.");
+        if (active) setSuppliers(rows.filter((supplier) => supplier.active !== false));
+      } catch (error) {
+        if (!active) return;
+        setSupplierListError(error.message || "Suppliers could not be loaded. Please refresh suppliers.");
+        // Retry a temporary read failure once; permission/session failures remain visible.
+        const transient = Number(error.status) >= 500 ||
+          ["PGRST000", "PGRST001", "PGRST002", "PGRST003", "57014", "53300"].includes(error.code) ||
+          /fetch|network|timeout|timed out/i.test(error.message || "");
+        if (transient && attempt++ === 0) retryTimer = window.setTimeout(load, 1200);
+      } finally {
+        if (active) setSupplierListLoading(false);
+      }
+    };
+    void load();
+    return () => { active = false; window.clearTimeout(retryTimer); };
+  }, [supplierUsername, supplierSessionToken, supplierReload]);
+
+  useEffect(() => {
+    const refresh = () => setSupplierReload(value => value + 1);
+    const visible = () => { if (document.visibilityState === "visible") refresh(); };
+    const storageChanged = (event) => {
+      if (!event.key || ["loggedInUser", "fairchoice_user"].includes(event.key)) refresh();
+    };
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    window.addEventListener("storage", storageChanged);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("storage", storageChanged);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, []);
+
+  const refreshSelectedSupplierPricing = async (selectedSupplierId = supplierId) => {
+    if (!selectedSupplierId || !currentUser) {
+      setSupplierPricingRows([]);
+      return [];
+    }
+
+    setSupplierPricingLoading(true);
+    try {
+      const data = await loadSupplierProductPricing(readStoredFcProfile() || user, selectedSupplierId, false);
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      setSupplierPricingRows(rows);
+      return rows;
+    } finally {
+      setSupplierPricingLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshSelectedSupplierPricing(supplierId).catch((error) =>
+      console.error("Supplier pricing loading error:", error)
+    );
+  }, [supplierId, supplierUsername, supplierSessionToken]);
+
+  function supplierCostRow(productId) {
+    return supplierPricingRows
+      .filter(
+        (row) =>
+          String(row.product_id || row.productId || "") === String(productId || "") &&
+          row.active !== false &&
+          !row.effective_to
+      )
+      .sort((a, b) =>
+        String(b.effective_from || "").localeCompare(String(a.effective_from || ""))
+      )
+      .find((row) => String(row.pricing_basis || "").toUpperCase() === "STANDARD") || null;
+  }
+
+  function finishApproval(approved) {
+    const resolve = approvalResolve.current;
+    approvalResolve.current = null;
+    approvalBusy.current = false;
+    setApproval(null);
+    resolve?.(approved);
+  }
+
+  function requireAdminPassword(action) {
+    if (approvalResolve.current) return Promise.resolve(false);
+    return new Promise(resolve => {
+      approvalResolve.current = resolve;
+      setApproval({ action, password: "", busy: false, error: "" });
+    });
+  }
+
+  async function approvePriceUpdate() {
+    if (!approval || approvalBusy.current || !approval.password) return;
+    approvalBusy.current = true;
+    setApproval(value => ({ ...value, busy: true, error: "" }));
+    try {
+      const profile = readStoredFcProfile() || user;
+      const username = String(profile?.username || "").trim();
+      if (!username) throw new Error("Current login is unavailable. Please sign in again.");
+      const { data, error } = await supabase.rpc("fc_login_v2", { p_username: username, p_password: approval.password });
+      if (!approvalResolve.current) return;
+      if (error || data?.ok !== true) throw new Error(data?.error || error?.message || "Invalid admin password.");
+      const role = String(data.profile?.role || data.profile?.access_level || "").trim().toLowerCase();
+      if (!["admin", "administrator", "super admin"].includes(role)) throw new Error("An Admin or Super Admin password is required.");
+      const refreshedProfile = profileWithFcLoginSession(profile, data);
+      localStorage.setItem("fairchoice_user", JSON.stringify(refreshedProfile));
+      localStorage.setItem("loggedInUser", JSON.stringify(refreshedProfile));
+      onProfileRefresh?.(refreshedProfile);
+      setSupplierReload(value => value + 1);
+      finishApproval(true);
+    } catch (error) {
+      approvalBusy.current = false;
+      setApproval(value => value && ({ ...value, busy: false, password: "", error: error.message || "Approval failed." }));
+    }
   }
 
   const filteredProducts = useMemo(() => {
@@ -97,9 +322,11 @@ export default function PriceManagement({
     safePage * PRICE_PAGE_SIZE
   );
 
+  const bulkSavedExVatCost = normalizeVatInput(bulkCostPrice, bulkCostVatMode);
+
   const bulkPreviewProduct = {
     vat_price: Number(bulkNewPrice || 0),
-    cost_price: Number(bulkCostPrice || 0),
+    cost_price: bulkSavedExVatCost,
     vat_type: "20",
   };
 
@@ -125,8 +352,23 @@ export default function PriceManagement({
     (p) => String(getProductId(p)) === String(singleProductId)
   );
 
+  useEffect(() => {
+    if (!singleProductId || !supplierId) return;
+    const row = supplierCostRow(singleProductId);
+    setSingleCostPrice(row ? String(row.unit_cost ?? "") : "");
+  }, [singleProductId, supplierId, supplierPricingRows]);
+
   const selectedSingleCurrent = selectedSingleProduct
-    ? getProductPricePreview(selectedSingleProduct, "", pricingSettings)
+    ? getProductPricePreview(
+        {
+          ...selectedSingleProduct,
+          cost_price: supplierId
+            ? Number(supplierCostRow(getProductId(selectedSingleProduct))?.unit_cost || 0)
+            : Number(selectedSingleProduct?.cost_price || 0),
+        },
+        "",
+        pricingSettings
+      )
     : null;
 
   const singlePreviewProduct = {
@@ -137,7 +379,9 @@ export default function PriceManagement({
         : Number(selectedSingleProduct?.vat_price || 0),
     cost_price:
       singleCostPrice !== ""
-        ? Number(singleCostPrice)
+        ? normalizeVatInput(singleCostPrice, singleCostVatMode)
+        : supplierId
+        ? Number(supplierCostRow(getProductId(selectedSingleProduct))?.unit_cost || 0)
         : Number(selectedSingleProduct?.cost_price || 0),
   };
 
@@ -147,10 +391,21 @@ export default function PriceManagement({
     pricingSettings
   );
 
+  const pendingProducts = useMemo(() => {
+    const ids = new Set(pendingProductIds.map(String));
+    const byId = new Map(safeProducts.filter(product => ids.has(String(getProductId(product)))).map(product => [String(getProductId(product)), product]));
+    pendingCatalogProducts.forEach(product => {
+      if (ids.has(String(getProductId(product)))) byId.set(String(getProductId(product)), product);
+    });
+    return [...byId.values()];
+  }, [safeProducts, pendingProductIds, pendingCatalogProducts]);
+
+  const pendingBrands = [...new Set(pendingProducts.map(product => product.brand).filter(Boolean))].sort();
+
   const filteredOrderProducts = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
 
-    return safeProducts.filter((p) => {
+    return pendingProducts.filter((p) => {
       const matchBrand = !orderBrand || String(p.brand || "") === orderBrand;
       const matchSeries = !orderSeries || String(p.series || "") === orderSeries;
 
@@ -161,7 +416,7 @@ export default function PriceManagement({
 
       return matchBrand && matchSeries && matchSearch;
     });
-  }, [safeProducts, orderBrand, orderSeries, orderSearch]);
+  }, [pendingProducts, orderBrand, orderSeries, orderSearch]);
 
   const orderTotalPages = Math.max(
     1,
@@ -172,22 +427,6 @@ export default function PriceManagement({
   const pagedOrderProducts = filteredOrderProducts.slice(
     (orderSafePage - 1) * PRICE_PAGE_SIZE,
     orderSafePage * PRICE_PAGE_SIZE
-  );
-
-  const singleOrderProducts = useMemo(() => {
-    const q = singleOrderSearch.trim().toLowerCase();
-
-    return safeProducts.filter((p) => {
-      return (
-        !q ||
-        String(productName(p)).toLowerCase().includes(q) ||
-        String(productCode(p)).toLowerCase().includes(q)
-      );
-    });
-  }, [safeProducts, singleOrderSearch]);
-
-  const selectedSingleOrderProduct = safeProducts.find(
-    (p) => String(getProductId(p)) === String(singleOrderProductId)
   );
 
   function toggleProduct(id) {
@@ -208,6 +447,7 @@ export default function PriceManagement({
   }
 
   function toggleOrderProduct(id) {
+    previewRequest.current++;
     setOrderSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
@@ -215,6 +455,7 @@ export default function PriceManagement({
   }
 
   function toggleAllOrderProductsOnPage() {
+    previewRequest.current++;
     const pageIds = pagedOrderProducts.map(getProductId);
     const allSelected = pageIds.every((id) => orderSelectedIds.includes(id));
 
@@ -243,158 +484,113 @@ export default function PriceManagement({
       return;
     }
 
-    const updateData = {};
-
-    if (bulkNewPrice !== "") {
-      updateData.vat_price = Number(bulkNewPrice);
-    }
-
-    if (bulkCostPrice !== "") {
-      updateData.cost_price = Number(bulkCostPrice);
-    }
-
-    const { error } = await supabase
-      .from("products")
-      .update(updateData)
-      .in("id", selectedIds);
-
-    if (error) {
-      alert(error.message);
+    if (bulkCostPrice !== "" && !supplierId) {
+      alert("Select a supplier before saving a cost price.");
       return;
     }
 
-    alert("Bulk price updated in database.");
-    resetBulkEdit();
-    await refreshProducts();
-  }
+    if (!(await requireAdminPassword("Save bulk product prices to the database"))) return;
+    const updatedProductIds = [...selectedIds];
 
-  function getOrderItemQty(item = {}) {
-    return Number(item.picked_qty ?? item.qty ?? item.quantity ?? 0);
-  }
-
-  async function loadFreshPricingSettings() {
-    const { data, error } = await supabase
-      .from("pricing_settings")
-      .select("*")
-      .eq("id", 1)
-      .maybeSingle();
-
-    if (error) {
-      console.warn("Could not load latest pricing settings for order price refresh:", error.message);
-      return pricingSettings;
-    }
-
-    return data || pricingSettings;
-  }
-
-  function buildOrderItemPricingUpdate(product, order, item, activePricingSettings = pricingSettings) {
-    const priceMode = order?.price_mode || order?.priceMode || "vat";
-    const country = order?.customer_country || order?.country || "";
-    const qty = getOrderItemQty(item);
-    const newPrice = getProductPriceForMode(product, priceMode, country, activePricingSettings);
-    const lineTotal = roundMoney(qty * newPrice);
-    const vatRate = getVatRate(product?.vat_type ?? product?.vatType);
-    const grossTotal = isVatPriceMode(priceMode)
-      ? roundMoney(lineTotal * (1 + vatRate / 100))
-      : lineTotal;
-
-    return {
-      price: newPrice,
-      line_total: lineTotal,
-      net_total: lineTotal,
-      gross_total: grossTotal,
-    };
-  }
-
-  async function loadReceivedOrderMatches(productIds) {
-    const ids = [...new Set((productIds || []).filter(Boolean).map(String))];
-
-    if (!ids.length) {
-      return [];
-    }
-
-    const productMap = new Map(
-      safeProducts.map((product) => [String(getProductId(product)), product])
-    );
-    const activePricingSettings = await loadFreshPricingSettings();
-
-    const { data, error } = await supabase
-      .from("orders")
-      .select("id, order_number, status, price_mode, customer_country, order_items(*)")
-      .eq("status", "Received");
-
-    if (error) {
-      throw error;
-    }
-
-    const rows = [];
-
-    (data || []).forEach((order) => {
-      (order.order_items || []).forEach((item) => {
-        const productId = String(item.product_id || "");
-
-        if (!ids.includes(productId)) {
-          return;
-        }
-
-        const product = productMap.get(productId);
-
-        if (!product) {
-          return;
-        }
-
-        const update = buildOrderItemPricingUpdate(
-          product,
-          order,
-          item,
-          activePricingSettings
-        );
-
-        rows.push({
-          itemId: item.id,
-          orderId: order.id,
-          orderNumber: order.order_number || order.id,
-          orderStatus: order.status,
-          productId,
-          productName: item.product_name || productName(product),
-          qty: getOrderItemQty(item),
-          oldPrice: Number(item.price || 0),
-          newPrice: update.price,
-          lineTotal: update.line_total,
-          netTotal: update.net_total,
-          grossTotal: update.gross_total,
-          update,
-        });
-      });
-    });
-
-    return rows;
-  }
-
-  async function updateReceivedOrderRows(rows) {
-    const changedRows = (rows || []).filter(
-      (row) => Number(row.oldPrice || 0) !== Number(row.newPrice || 0)
-    );
-    const confirmed = window.confirm(
-      `Refresh ${rows.length} received order line(s) from the current product database?\n\n` +
-        `This will overwrite saved order item prices for ${changedRows.length} changed line(s).`
-    );
-
-    if (!confirmed) return false;
-
-    for (const row of rows) {
+    if (bulkNewPrice !== "") {
       const { error } = await supabase
-        .from("order_items")
-        .update(row.update)
-        .eq("id", row.itemId)
-        .eq("order_id", row.orderId);
+        .from("products")
+        .update({ vat_price: Number(bulkNewPrice) })
+        .in("id", selectedIds);
 
       if (error) {
-        throw error;
+        alert(error.message);
+        return;
       }
     }
 
-    return true;
+    if (bulkCostPrice !== "") {
+      for (const productId of selectedIds) {
+        await saveSupplierProductPricing(
+          {
+            supplierId,
+            productId,
+            pricingBasis: "STANDARD",
+            unitCost: bulkSavedExVatCost,
+            effectiveFrom: new Date().toISOString().slice(0, 10),
+            note: "Price Management",
+          },
+          readStoredFcProfile() || user
+        );
+      }
+      await refreshSelectedSupplierPricing();
+    }
+
+    alert(
+      bulkNewPrice !== "" && bulkCostPrice !== ""
+        ? "Selling price and supplier cost updated."
+        : bulkCostPrice !== ""
+        ? "Supplier cost updated."
+        : "Selling price updated in database."
+    );
+    resetBulkEdit();
+    await openUpdatedProductsReview(updatedProductIds);
+    await refreshProducts();
+  }
+
+  async function loadActiveOrderMatches(productIds, stage = orderStatus) {
+    const ids = [...new Set((productIds || []).filter(Boolean).map(String))];
+    if (!ids.length) return [];
+    const { settings, products: currentProducts } = await loadOrderPricingContext(ids, { client: supabase });
+    const orders = [];
+    for (let offset = 0; ; offset += 200) {
+      const result = await supabase.from("orders")
+        .select("id, order_number, status, price_mode, customer_country, financial_status, financial_voided_at, order_items!inner(*)")
+        .in("status", activePriceOrderStages(stage)).in("order_items.product_id", ids)
+        .order("id").range(offset, offset + 199);
+      if (result.error) throw result.error;
+      orders.push(...(result.data || []));
+      if ((result.data || []).length < 200) break;
+    }
+    return buildPriceOrderPreview(orders, currentProducts, ids, settings);
+  }
+
+  async function openUpdatedProductsReview(productIds) {
+    const pending = mergePendingPriceUpdates(mergePendingPriceUpdates(readPendingPriceUpdates(pendingQueueKey), pendingIdsRef.current), productIds);
+    savePendingProducts(pending);
+    setReviewMessage("Database prices saved. Choose Apply latest prices to update Received / Warehouse, or Clear pending changes to leave orders unchanged.");
+    setOrderSelectedIds(pending);
+    setOrderBrand(""); setOrderSeries(""); setOrderSearch(""); setOrderPage(1);
+    setBulkOrderPreviewRows([]);
+    setActiveTab("bulkOrder");
+    const request = ++previewRequest.current;
+    setBulkOrderLoading(true);
+    try {
+      const rows = await loadActiveOrderMatches(pending);
+      if (request === previewRequest.current) setBulkOrderPreviewRows(rows);
+    }
+    catch (error) { alert(`Product prices were saved. Preview could not load: ${error.message}`); }
+    finally { setBulkOrderLoading(false); }
+  }
+
+  function changeOrderStage(stage) {
+    previewRequest.current++;
+    setOrderStatus(stage);
+    setBulkOrderPreviewRows([]);
+  }
+
+  async function updateActiveOrderRows(productIds) {
+    // A Yes decision means use the latest database price, replacing saved line
+    // prices even when they were manually set before this decision.
+    const rows = await loadActiveOrderMatches(productIds);
+    setBulkOrderPreviewRows(rows);
+    if (!rows.length) {
+      setReviewMessage("No matching Received / Warehouse lines. Pending products are retained until you clear them.");
+      return null;
+    }
+    const changed = rows.filter(row => row.oldPrice !== row.newPrice).length;
+    if (!window.confirm(`YES: overwrite saved prices with the latest database prices for ${changed} changed line(s) (${rows.length} matching lines) in the selected Received / Warehouse stage?\n\nCancel leaves all order prices unchanged.`)) return null;
+    const session = getFcSessionState(readStoredFcProfile() || user);
+    const { data, error } = await supabase.rpc("fc_update_active_order_prices_v1", {
+      p_username: session.username, p_session_token: session.token, p_items: rows,
+    });
+    if (error) throw error;
+    return data;
   }
 
   async function handleBulkOrderPreview() {
@@ -403,13 +599,15 @@ export default function PriceManagement({
       return;
     }
 
+    const request = ++previewRequest.current;
     setBulkOrderLoading(true);
     try {
-      const rows = await loadReceivedOrderMatches(orderSelectedIds);
+      const rows = await loadActiveOrderMatches(orderSelectedIds);
+      if (request !== previewRequest.current) return;
       setBulkOrderPreviewRows(rows);
 
       if (!rows.length) {
-        alert("No matching products found in Received orders.");
+        alert("No matching products found in the selected Received / Warehouse stage.");
       }
     } catch (error) {
       alert(error.message || "Failed to preview matching orders.");
@@ -419,63 +617,20 @@ export default function PriceManagement({
   }
 
   async function handleBulkOrderUpdate() {
-    if (!bulkOrderPreviewRows.length) {
-      alert("Preview matching orders first.");
-      return;
-    }
-
+    const productIds = orderSelectedIds.filter(id => pendingIdsRef.current.includes(String(id))).map(String);
+    if (!productIds.length) { alert("No pending product updates are selected."); return; }
+    if (!(await requireAdminPassword("Apply latest database prices to Received orders / Warehouse"))) return;
     setBulkOrderLoading(true);
     try {
-      const updated = await updateReceivedOrderRows(bulkOrderPreviewRows);
+      const updated = await updateActiveOrderRows(productIds);
       if (!updated) return;
-      alert(`${bulkOrderPreviewRows.length} received order item(s) updated.`);
+      savePendingProducts(removePendingPriceUpdates(pendingIdsRef.current, productIds));
+      setReviewMessage(`${updated.updated_lines} Received / Warehouse line(s) updated to the latest database prices.`);
       setBulkOrderPreviewRows([]);
-      setOrderSelectedIds([]);
+      setOrderSelectedIds(current => current.filter(id => !productIds.includes(String(id))));
     } catch (error) {
-      alert(error.message || "Failed to update received orders.");
-    } finally {
-      setBulkOrderLoading(false);
-    }
-  }
-
-  async function handleSingleOrderPreview() {
-    if (!selectedSingleOrderProduct) {
-      alert("Please select a product first.");
-      return;
-    }
-
-    setSingleOrderLoading(true);
-    try {
-      const rows = await loadReceivedOrderMatches([getProductId(selectedSingleOrderProduct)]);
-      setSingleOrderPreviewRows(rows);
-
-      if (!rows.length) {
-        alert("No matching product found in Received orders.");
-      }
-    } catch (error) {
-      alert(error.message || "Failed to preview matching orders.");
-    } finally {
-      setSingleOrderLoading(false);
-    }
-  }
-
-  async function handleSingleOrderUpdate() {
-    if (!singleOrderPreviewRows.length) {
-      alert("Preview matching orders first.");
-      return;
-    }
-
-    setSingleOrderLoading(true);
-    try {
-      const updated = await updateReceivedOrderRows(singleOrderPreviewRows);
-      if (!updated) return;
-      alert(`${singleOrderPreviewRows.length} received order item(s) updated.`);
-      setSingleOrderPreviewRows([]);
-    } catch (error) {
-      alert(error.message || "Failed to update received orders.");
-    } finally {
-      setSingleOrderLoading(false);
-    }
+      setReviewMessage(error.message || "No prices were applied. Retry after refreshing the preview.");
+    } finally { setBulkOrderLoading(false); }
   }
 
   async function handleSingleUpdate(showView = false) {
@@ -489,31 +644,65 @@ export default function PriceManagement({
       return;
     }
 
-    const oldProduct = { ...selectedSingleProduct };
+    if (singleCostPrice !== "" && !supplierId) {
+      alert("Select a supplier before saving a cost price.");
+      return;
+    }
+
+    if (!(await requireAdminPassword("Single to DB"))) return;
+
+    const oldProduct = {
+      ...selectedSingleProduct,
+      ...(supplierId
+        ? { cost_price: Number(supplierCostRow(selectedSingleProduct.id)?.unit_cost || 0) }
+        : {}),
+    };
     const updateData = {};
 
     if (singleNewPrice !== "") {
       updateData.vat_price = Number(singleNewPrice);
+      const { error } = await supabase
+        .from("products")
+        .update(updateData)
+        .eq("id", selectedSingleProduct.id);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
     }
 
     if (singleCostPrice !== "") {
-      updateData.cost_price = Number(singleCostPrice);
-    }
-
-    const { error } = await supabase
-      .from("products")
-      .update(updateData)
-      .eq("id", selectedSingleProduct.id);
-
-    if (error) {
-      alert(error.message);
-      return;
+      await saveSupplierProductPricing(
+        {
+          supplierId,
+          productId: selectedSingleProduct.id,
+          pricingBasis: "STANDARD",
+          unitCost: normalizeVatInput(singleCostPrice, singleCostVatMode),
+          effectiveFrom: new Date().toISOString().slice(0, 10),
+          note: "Price Management",
+        },
+        readStoredFcProfile() || user
+      );
+      await refreshSelectedSupplierPricing();
     }
 
     const updatedProduct = {
       ...oldProduct,
       ...updateData,
+      ...(singleCostPrice !== "" ? { cost_price: normalizeVatInput(singleCostPrice, singleCostVatMode) } : {}),
     };
+
+    alert(
+      singleNewPrice !== "" && singleCostPrice !== ""
+        ? "Selling price and supplier cost updated."
+        : singleCostPrice !== ""
+        ? "Supplier cost updated."
+        : "Product selling price updated."
+    );
+
+    await openUpdatedProductsReview([getProductId(selectedSingleProduct)]);
+    await refreshProducts();
 
     if (showView) {
       setSingleViewProduct({
@@ -521,14 +710,12 @@ export default function PriceManagement({
         updatedProduct,
       });
     }
-
-    alert("Product updated.");
-    await refreshProducts();
   }
 
   function resetBulkEdit() {
     setBulkNewPrice("");
     setBulkCostPrice("");
+    setBulkCostVatMode("ex");
     setSelectedIds([]);
     setBrand("");
     setSeries("");
@@ -541,26 +728,24 @@ export default function PriceManagement({
     setSingleProductId("");
     setSingleNewPrice("");
     setSingleCostPrice("");
+    setSingleCostVatMode("ex");
     setSingleViewProduct(null);
   }
 
-  function resetBulkOrderForm() {
-    setOrderBrand("");
-    setOrderSeries("");
-    setOrderSearch("");
-    setOrderPage(1);
+  function clearPendingOrderUpdates() {
+    previewRequest.current++;
+    savePendingProducts([]);
     setOrderSelectedIds([]);
     setBulkOrderPreviewRows([]);
-  }
-
-  function resetSingleOrderForm() {
-    setSingleOrderSearch("");
-    setSingleOrderProductId("");
-    setSingleOrderPreviewRows([]);
+    setOrderBrand(""); setOrderSeries(""); setOrderSearch(""); setOrderPage(1);
+    setReviewMessage("Pending changes cleared. Database prices are saved; Received / Warehouse prices were not changed.");
   }
 
   return (
     <div className="bg-white rounded-2xl p-4 text-slate-900">
+      <PriceApprovalDialog approval={approval}
+        onPasswordChange={password => setApproval(value => ({ ...value, password }))}
+        onApprove={approvePriceUpdate} onCancel={() => finishApproval(false)} />
       <div className="mb-3">
         <div style={{ color: "#102033", fontSize: "26px", fontWeight: 800 }}>
           Price Management
@@ -574,8 +759,7 @@ export default function PriceManagement({
         {[
           ["bulkPrice", "Bulk to DB"],
           ["individualPrice", "Single to DB"],
-          ["bulkOrder", "DB to Order Bulk"],
-          ["individualOrder", "Single to Order"],
+          ["bulkOrder", `Update to Received / Warehouse (${pendingProductIds.length})`],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -592,10 +776,48 @@ export default function PriceManagement({
         ))}
       </div>
 
+      {["bulkPrice", "individualPrice"].includes(activeTab) && (
+        <div className="mt-4 flex flex-wrap items-center gap-3" aria-live="polite">
+          <button type="button" disabled={supplierListLoading}
+            onClick={() => setSupplierReload(value => value + 1)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold disabled:opacity-50">
+            {supplierListLoading ? "Loading suppliers..." : "Refresh suppliers"}
+          </button>
+          {supplierListError ? (
+            <span role="alert" className="text-sm font-semibold text-red-700">{supplierListError}</span>
+          ) : !supplierListLoading && suppliers.length === 0 ? (
+            <span className="text-sm text-slate-600">No active suppliers are available.</span>
+          ) : null}
+        </div>
+      )}
+
       {activeTab === "bulkPrice" && (
-  <BulkToDatabase
+        <>
+          <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3">
+            <label className="text-sm font-bold text-slate-700">
+              Supplier for cost price
+              <select
+                value={supplierId}
+                onChange={(e) => setSupplierId(e.target.value)}
+                className="ml-3 min-w-[260px] rounded-lg border border-slate-300 bg-white px-3 py-2"
+              >
+                <option value="">Select supplier</option>
+                {suppliers.map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>
+                    {supplier.supplier_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="text-xs font-semibold text-slate-600">
+              {supplierPricingLoading
+                ? "Loading supplier costs..."
+                : "Cost is stored per supplier. Selling price can be saved without a cost price."}
+            </span>
+          </div>
+          <BulkToDatabase
     brand={brand}
-    setBrand={setBrand}
+    setBrand={(value) => { setBrand(value); setSeries(""); setPage(1); }}
     series={series}
     setSeries={setSeries}
     search={search}
@@ -609,6 +831,9 @@ export default function PriceManagement({
     setBulkNewPrice={setBulkNewPrice}
     bulkCostPrice={bulkCostPrice}
     setBulkCostPrice={setBulkCostPrice}
+    bulkCostVatMode={bulkCostVatMode}
+    setBulkCostVatMode={setBulkCostVatMode}
+    bulkSavedExVatCost={bulkSavedExVatCost}
     bulkPreview={bulkPreview}
     safePage={safePage}
     totalPages={totalPages}
@@ -625,18 +850,23 @@ export default function PriceManagement({
     costPrice={costPrice}
     pricingSettings={pricingSettings}
   />
+        </>
 )}
 
       {activeTab === "bulkOrder" && (
+        <>
+        {reviewMessage && <div role="status" className="mt-4 rounded-xl bg-blue-50 p-3 text-sm text-blue-900">{reviewMessage}</div>}
         <BulkDatabaseToOrders
+          orderStatus={orderStatus}
+          setOrderStatus={changeOrderStage}
           brand={orderBrand}
-          setBrand={setOrderBrand}
+          setBrand={(value) => { setOrderBrand(value); setOrderSeries(""); setOrderPage(1); }}
           series={orderSeries}
           setSeries={setOrderSeries}
           search={orderSearch}
           setSearch={setOrderSearch}
-          brands={brands}
-          seriesList={seriesList}
+          brands={pendingBrands}
+          seriesList={orderSeriesList}
           filteredProducts={filteredOrderProducts}
           pagedProducts={pagedOrderProducts}
           selectedIds={orderSelectedIds}
@@ -653,44 +883,31 @@ export default function PriceManagement({
             await refreshProducts();
             setBulkOrderPreviewRows([]);
           }}
-          onReset={resetBulkOrderForm}
+          onReset={clearPendingOrderUpdates}
           getProductId={getProductId}
           productCode={productCode}
           productName={productName}
           vatPrice={vatPrice}
         />
-      )}
-
-      {activeTab === "individualOrder" && (
-        <SingleDatabaseToOrder
-          search={singleOrderSearch}
-          setSearch={setSingleOrderSearch}
-          productId={singleOrderProductId}
-          setProductId={(value) => {
-            setSingleOrderProductId(value);
-            setSingleOrderPreviewRows([]);
-          }}
-          products={singleOrderProducts}
-          selectedProduct={selectedSingleOrderProduct}
-          previewRows={singleOrderPreviewRows}
-          loading={singleOrderLoading}
-          onPreview={handleSingleOrderPreview}
-          onUpdate={handleSingleOrderUpdate}
-          onRefreshPrices={async () => {
-            await refreshProducts();
-            setSingleOrderPreviewRows([]);
-          }}
-          onReset={resetSingleOrderForm}
-          getProductId={getProductId}
-          productCode={productCode}
-          productName={productName}
-          vatPrice={vatPrice}
-        />
+        </>
       )}
 
       {activeTab === "individualPrice" && (
         <div className="mt-6 border rounded-2xl p-5">
           <div className="flex flex-wrap gap-3">
+            <select
+              value={supplierId}
+              onChange={(e) => setSupplierId(e.target.value)}
+              className="border rounded-xl px-4 py-3 min-w-[280px]"
+            >
+              <option value="">Supplier for cost price</option>
+              {suppliers.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.supplier_name}
+                </option>
+              ))}
+            </select>
+
             <input
               value={singleSearch}
               onChange={(e) => setSingleSearch(e.target.value)}
@@ -700,7 +917,7 @@ export default function PriceManagement({
 
             <select
               value={singleProductId}
-              onChange={(e) => setSingleProductId(e.target.value)}
+              onChange={(e) => { setSingleProductId(e.target.value); setSingleCostPrice(""); }}
               className="border rounded-xl px-4 py-3 min-w-[320px]"
             >
               <option value="">Select product</option>
@@ -715,36 +932,30 @@ export default function PriceManagement({
           {selectedSingleProduct && (
             <div className="mt-4 font-bold text-slate-700">
               Current Price: £{vatPrice(selectedSingleProduct).toFixed(2)}
-              {" "} | Current Margin: {selectedSingleCurrent?.serverMargin}%
+              {" "} | Current Supplier Cost: £{Number(
+                supplierId
+                  ? supplierCostRow(getProductId(selectedSingleProduct))?.unit_cost || 0
+                  : selectedSingleProduct?.cost_price || 0
+              ).toFixed(2)}
+              {" "} | Current Margin: {selectedSingleCurrent?.exVatMargin}%
             </div>
           )}
 
-          <div className="mt-4 flex flex-wrap gap-3 items-center">
-            <input
-              value={singleNewPrice}
-              onChange={(e) => setSingleNewPrice(e.target.value)}
-              placeholder="New Price"
-              type="number"
-              step="0.01"
-              className="border rounded-xl px-4 py-3 min-w-[220px]"
-            />
-
-            <input
-              value={singleCostPrice}
-              onChange={(e) => setSingleCostPrice(e.target.value)}
-              placeholder="Cost Price"
-              type="number"
-              step="0.01"
-              className="border rounded-xl px-4 py-3 min-w-[220px]"
-            />
-
-            <div className="font-bold text-slate-700">
-              New Inc.VAT Price: £{Number(singlePreview.server || 0).toFixed(2)}
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+              <div className="mb-2 font-extrabold text-slate-800">Selling Price</div>
+              <input value={singleNewPrice} onChange={(e) => setSingleNewPrice(e.target.value)} placeholder="New Ex.VAT Selling Price" type="number" step="0.01" className="w-full border rounded-xl px-4 py-3" />
+              <div className="mt-2 text-sm font-bold text-slate-700">Inc.VAT Selling Price: £{Number(singlePreview.server || 0).toFixed(2)}</div>
             </div>
-
-            <div className="font-bold text-slate-700">
-              New Margin: {singlePreview.serverMargin}%
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <div className="mb-2 font-extrabold text-slate-800">Supplier Cost Price</div>
+              <div className="flex flex-wrap gap-2">
+                <select value={singleCostVatMode} onChange={(e) => setSingleCostVatMode(e.target.value)} className="border rounded-xl px-4 py-3 min-w-[170px] bg-white"><option value="ex">Ex.VAT Cost</option><option value="inc">Inc.VAT Cost</option></select>
+                <input value={singleCostPrice} onChange={(e) => setSingleCostPrice(e.target.value)} placeholder={singleCostVatMode === "inc" ? "Inc.VAT Cost Price" : "Ex.VAT Cost Price"} type="number" step="0.01" className="flex-1 border rounded-xl px-4 py-3 min-w-[220px] bg-white" />
+              </div>
+              {singleCostVatMode === "inc" && singleCostPrice !== "" && (<div className="mt-2 text-sm font-bold text-slate-700">Saved Ex.VAT Cost: £{normalizeVatInput(singleCostPrice, singleCostVatMode).toFixed(2)}</div>)}
             </div>
+            <div className="font-bold text-slate-700 lg:col-span-2">New Margin: {singlePreview.exVatMargin}%</div>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-3">
@@ -803,7 +1014,7 @@ export default function PriceManagement({
                           {productName(singleViewProduct.updatedProduct)}
                         </td>
                         <td className="border p-3 text-right">
-                          £{costPrice(singleViewProduct.updatedProduct).toFixed(2)}
+                          £{Number(singleViewProduct.updatedProduct?.cost_price || 0).toFixed(2)}
                         </td>
                         <td className="border p-3 text-right">
                           £{vatPrice(singleViewProduct.oldProduct).toFixed(2)}
@@ -812,7 +1023,7 @@ export default function PriceManagement({
                           £{vatPrice(singleViewProduct.updatedProduct).toFixed(2)}
                         </td>
                         <td className="border p-3 text-right">
-                          {updatedPreview.serverMargin}%
+                          {updatedPreview.exVatMargin}%
                         </td>
                       </tr>
                     );
