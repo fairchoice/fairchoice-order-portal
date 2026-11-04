@@ -236,20 +236,48 @@ export async function saveConfirmedServerManagerOrderToProcessingQueue({
 
 export async function getOrders() {
 
-  const { data, error } = await supabase
+  // Fetch the latest orders first, then their items in bounded batches.
+  // This avoids a large embedded order_items join timing out the entire page.
+  // The saved order and item records are never modified by this read path.
+  const { data: orderRows, error } = await supabase
     .from("orders")
-    .select(`
-      *,
-      order_items(*),
-      customer_accounts(*),
-      customer_branches(*)
-    `)
+    .select("*,customer_accounts(*),customer_branches(*)")
     .order("created_at", { ascending: false })
     .limit(50);
 
   if (error) throw error;
 
-  const mappedOrders = (data || []).map((order) => ({
+  const orderIds = (orderRows || []).map((order) => order.id).filter(Boolean);
+  const itemsByOrderId = new Map();
+  if (orderIds.length) {
+    // Supabase's default response limit is avoided by paging, including for
+    // orders with unusually large item counts.
+    const pageSize = 250;
+    for (let from = 0; ; from += pageSize) {
+      const { data: items, error: itemsError } = await supabase
+        .from("order_items")
+        .select("*")
+        .in("order_id", orderIds)
+        .order("order_id", { ascending: true })
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (itemsError) throw itemsError;
+      for (const item of items || []) {
+        const existing = itemsByOrderId.get(item.order_id) || [];
+        existing.push(item);
+        itemsByOrderId.set(item.order_id, existing);
+      }
+      if ((items || []).length < pageSize) break;
+    }
+  }
+
+  const data = (orderRows || []).map((order) => ({
+    ...order,
+    order_items: itemsByOrderId.get(order.id) || [],
+  }));
+
+  const mappedOrders = data.map((order) => ({
     ...order,
 
     orderId: order.order_number,
