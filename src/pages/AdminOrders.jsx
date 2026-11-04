@@ -450,7 +450,10 @@ const updatePreparedItem = async (order, item, changes) => {
   // Warehouse/Driver quantities remain final unless the order was explicitly
   // returned to Received. That workflow reset re-opens this current order only.
   captureStableOrderItems(order);
-  await updateOrderItem(order.orderId, item.dbId, changes);
+  const updated = await updateOrderItem(order.orderId, item.dbId, changes);
+  if (updated === false || updated?.error) {
+    throw new Error(updated?.error?.message || "The item status was not saved.");
+  }
   await logAction({
     user: loggedInUser,
     action_type: "Status changed",
@@ -1027,10 +1030,12 @@ const savedUnitPrice = isFreeLine ? 0 : getSavedOrderItemPrice(item);
                       ? { price: 0, selectedPrice: 0, unit_price: 0, unitPrice: 0 }
                       : {}),
                   });
-                  // Keep the saved selection visible until the parent order data
-                  // catches up. Clearing it here can briefly restore the stale
-                  // item.sourceStatus, making users refresh the whole page.
-                  await fetchOrders();
+                  // Persisted successfully: keep the selection visible immediately.
+                  // Refresh in the background; the saved value remains selected
+                  // even if the parent order list has not caught up yet.
+                  Promise.resolve().then(() => fetchOrders()).catch((refreshError) => {
+                    console.warn("Received Orders refresh failed after status save:", refreshError);
+                  });
                 } catch (error) {
                   setEditedStatus((previous) => {
                     const next = { ...previous };
