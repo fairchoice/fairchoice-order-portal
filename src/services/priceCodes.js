@@ -107,7 +107,25 @@ export async function updateCustomerPriceCode(id, changes = {}) {
   return data;
 }
 
-export async function getProductPriceCodeRows(productIds = []) {
+// Share only concurrent identical reads; never cache resolved prices, so
+// subsequent requests always see the latest customer-code changes.
+const pendingProductPriceCodeReads = new Map();
+export function getProductPriceCodeRows(productIds = []) {
+  const ids = [...new Set((productIds || []).filter(Boolean).map(String))].sort();
+  if (!ids.length) return Promise.resolve([]);
+  const key = JSON.stringify(ids);
+  const existing = pendingProductPriceCodeReads.get(key);
+  if (existing) return existing;
+  const pending = fetchProductPriceCodeRows(ids);
+  pendingProductPriceCodeReads.set(key, pending);
+  void pending.finally(() => {
+    if (pendingProductPriceCodeReads.get(key) === pending) {
+      pendingProductPriceCodeReads.delete(key);
+    }
+  }).catch(() => {});
+  return pending;
+}
+async function fetchProductPriceCodeRows(productIds = []) {
   const ids = [...new Set((productIds || []).filter(Boolean))];
   if (!ids.length) return [];
 
