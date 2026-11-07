@@ -1610,12 +1610,9 @@ const getInvoicePaymentStatus = (order = {}, totals = {}) => {
 
 
 export const getPrintTemplate = (priceMode) =>
-  String(priceMode || "").trim().toLowerCase().startsWith("code:") &&
-  shouldAddVatForPriceMode(priceMode)
-    ? "salesInvoice"
-    : isServerManagerPriceMode(priceMode)
-      ? "orderForm"
-      : "salesInvoice";
+  isServerManagerPriceMode(priceMode)
+    ? "orderForm"
+    : "salesInvoice";
 
 
 
@@ -2798,7 +2795,16 @@ export function buildStandardInvoiceHtml(
   } = {}
 ) {
   const invoiceOrder = normalizeInvoiceOrder(order);
-  const printTemplate = getPrintTemplate(invoiceOrder.priceMode || invoiceOrder.price_mode);
+  const documentPriceMode = invoiceOrder.priceMode || invoiceOrder.price_mode;
+  const activeExVatCodeOrder = !isSavedInvoiceDocument(invoiceOrder) &&
+    ["received", "warehouse packing", "ready for driver"].includes(
+      String(invoiceOrder.status || "").trim().toLowerCase()
+    ) &&
+    String(documentPriceMode || "").trim().toLowerCase().startsWith("code:") &&
+    shouldAddVatForPriceMode(documentPriceMode);
+  const printTemplate = activeExVatCodeOrder
+    ? "salesInvoice"
+    : getPrintTemplate(documentPriceMode);
   const resolvedDocumentType =
     documentType === "invoice" &&
     printTemplate === "orderForm"
