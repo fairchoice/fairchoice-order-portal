@@ -6,7 +6,7 @@ import {
   calculateCartTotals,
   getOrderItemProductCode,
 } from "../utils/orderTotals";
-import { isServerManagerPriceMode, roundMoney } from "../utils/pricing";
+import { isServerManagerPriceMode, shouldAddVatForPriceMode, roundMoney } from "../utils/pricing";
 import { formatCurrency } from "../utils/currency";
 import {
   normalizeInvoicePaymentStatus,
@@ -1611,7 +1611,7 @@ const getInvoicePaymentStatus = (order = {}, totals = {}) => {
 
 export const getPrintTemplate = (priceMode) =>
   String(priceMode || "").trim().toLowerCase().startsWith("code:") &&
-  /\\|ex[ ._-]*vat(?:\\||$)/i.test(String(priceMode || ""))
+  shouldAddVatForPriceMode(priceMode)
     ? "salesInvoice"
     : isServerManagerPriceMode(priceMode)
       ? "orderForm"
