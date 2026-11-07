@@ -1,4 +1,4 @@
-import { isVatPriceMode, normalizePriceMode } from "./pricing.js";
+import { isVatPriceMode, normalizePriceMode, shouldAddVatForPriceMode } from "./pricing.js";
 
 const money2 = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -179,6 +179,10 @@ const buildVatGroups = (items = [], includeVat = true) => {
 
 export const getCustomerDocumentType = (priceMode = "") => {
   const mode = normalizePriceMode(priceMode);
+  // Code customers follow their saved underlying VAT mode, not the code prefix.
+  if (mode.startsWith("code:")) {
+    return shouldAddVatForPriceMode(priceMode) ? "invoice" : "order_form";
+  }
   const isOrderForm = [
     "royalty", "server", "inc vat",
     "owner offer", "manager", "manager offer"
