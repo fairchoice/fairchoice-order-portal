@@ -1610,9 +1610,12 @@ const getInvoicePaymentStatus = (order = {}, totals = {}) => {
 
 
 export const getPrintTemplate = (priceMode) =>
-  isServerManagerPriceMode(priceMode)
-    ? "orderForm"
-    : "salesInvoice";
+  String(priceMode || "").trim().toLowerCase().startsWith("code:") &&
+  /\\|ex[ ._-]*vat(?:\\||$)/i.test(String(priceMode || ""))
+    ? "salesInvoice"
+    : isServerManagerPriceMode(priceMode)
+      ? "orderForm"
+      : "salesInvoice";
 
 
 
